@@ -1,6 +1,6 @@
-# NeuronTransportIGA CUDA Solver
+# NeuronTransportIGA-CUDA
 
-This directory is the GPU-native successor to `iga_solver_v2`. It keeps Bézier
+This directory is the GPU-native successor to `NeuronTransportIGA-CPU`. It keeps Bézier
 extraction, quadrature, stabilized weak forms, boundary conditions, time
 integration, sparse assembly, and Krylov iteration in project-owned C++/CUDA
 code. CUDA Runtime and cuBLAS provide only device memory and vector primitives.
@@ -10,7 +10,7 @@ The implementation targets FP64 scientific computing. V100-32GB is the default b
 Set the independent solver and legacy-case locations once per shell:
 
 ```bash
-export IGA_CUDA_ROOT=/ocean/projects/mch260002p/thsieh1/iga_solver_cuda
+export IGA_CUDA_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA-CUDA
 export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
 ```
 

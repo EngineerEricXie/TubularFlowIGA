@@ -15,7 +15,7 @@ cd "${case_root}"
 module load openmpi/4.0.5-gcc10.2.0
 
 output=".nsvms_diagnostics/cuda-validation-42861850/transport-step1-cpu.txt"
-/usr/bin/time -v mpiexec -np 8 "${repo_root}/../iga_solver_v2/iga_transport" \
+/usr/bin/time -v mpiexec -np 8 "${repo_root}/../NeuronTransportIGA-CPU/iga_transport" \
   .nsvms_diagnostics/cylinder-8.ntiga example/cylinder 1 "${output}" \
   example/cylinder/velocityfield.txt
 

@@ -1,6 +1,6 @@
 NVCC ?= nvcc
 CUDA_ARCHS ?= 70 80 89 90
-CPPFLAGS ?= -Iinclude -I../iga_solver_v2/include
+CPPFLAGS ?= -Iinclude -I../NeuronTransportIGA-CPU/include
 NVCCFLAGS ?= -O3 -std=c++17 -lineinfo
 HOSTWARN ?= -Wall,-Wextra
 GENCODE := $(foreach arch,$(CUDA_ARCHS),-gencode arch=compute_$(arch),code=sm_$(arch))
