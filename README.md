@@ -1,11 +1,11 @@
-# NeuronTransportIGA Solver v2
+# NeuronTransportIGA-CPU
 
 This directory contains the project-owned C++ IGA Navier–Stokes and transport solvers. PETSc supplies distributed sparse matrices and Krylov methods; Bézier extraction, basis derivatives, quadrature, stabilized weak forms, boundary conditions, and time integration remain implemented here.
 
 Set the repository and legacy-case locations once per shell:
 
 ```bash
-export IGA_V2_ROOT=/ocean/projects/mch260002p/thsieh1/iga_solver_v2
+export IGA_CPU_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA-CPU
 export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
 ```
 
@@ -15,8 +15,8 @@ The default PETSc location is the optimized local build in `../petsc/arch-linux-
 
 ```bash
 module load openmpi/4.0.5-gcc10.2.0
-make -C "$IGA_V2_ROOT"
-make -C "$IGA_V2_ROOT" petsc
+make -C "$IGA_CPU_ROOT"
+make -C "$IGA_CPU_ROOT" petsc
 ```
 
 Override `PETSC_DIR` and `PETSC_ARCH` when using another installation.
@@ -27,9 +27,9 @@ Generate a partition matching the intended MPI size, convert the legacy text ext
 
 ```bash
 mpmetis "$IGA_CASE_ROOT/example/cylinder"/bzmeshinfo.txt 8
-"$IGA_V2_ROOT/iga_pack" "$IGA_CASE_ROOT/example/cylinder" 8 cylinder-8.ntiga
-"$IGA_V2_ROOT/iga_inspect" cylinder-8.ntiga
-mpiexec -np 8 "$IGA_V2_ROOT/iga_mesh_check" cylinder-8.ntiga
+"$IGA_CPU_ROOT/iga_pack" "$IGA_CASE_ROOT/example/cylinder" 8 cylinder-8.ntiga
+"$IGA_CPU_ROOT/iga_inspect" cylinder-8.ntiga
+mpiexec -np 8 "$IGA_CPU_ROOT/iga_mesh_check" cylinder-8.ntiga
 ```
 
 `iga_pack` rejects truncated or inconsistent `cmat.txt`, `bzpt.txt`, mesh, and partition data. The binary database stores sparse extraction rows, direct element offsets, and per-rank touching-element indices. Solvers also run the geometry check and collectively reject non-positive Jacobians rather than assembling a corrupt system.
@@ -37,9 +37,9 @@ mpiexec -np 8 "$IGA_V2_ROOT/iga_mesh_check" cylinder-8.ntiga
 ## Run the coupled workflow
 
 ```bash
-mpiexec -np 8 "$IGA_V2_ROOT/iga_navier_stokes" \
+mpiexec -np 8 "$IGA_CPU_ROOT/iga_navier_stokes" \
   cylinder-8.ntiga "$IGA_CASE_ROOT/example/cylinder" 8 velocity.txt
-mpiexec -np 8 "$IGA_V2_ROOT/iga_transport" \
+mpiexec -np 8 "$IGA_CPU_ROOT/iga_transport" \
   cylinder-8.ntiga "$IGA_CASE_ROOT/example/cylinder" 300 concentration.txt velocity.txt
 ```
 
@@ -53,7 +53,7 @@ Compile on the login node, but run tests and simulations inside `interact` or `s
 interact -A mch260002p -p RM-shared -t 00:30:00
 module load anaconda3
 module load openmpi/4.0.5-gcc10.2.0
-mpiexec -np 8 "$IGA_V2_ROOT/iga_mesh_check" cylinder-8.ntiga
+mpiexec -np 8 "$IGA_CPU_ROOT/iga_mesh_check" cylinder-8.ntiga
 ```
 
 Use `RM`/`RM-shared` CPU nodes for production and request memory based on a small-case benchmark. Do not launch MPI simulations on a login node.

@@ -1,4 +1,4 @@
-# Solver v2 Architecture
+# NeuronTransportIGA-CPU Architecture
 
 ## Data path
 
