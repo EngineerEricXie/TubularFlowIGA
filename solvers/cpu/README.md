@@ -115,54 +115,54 @@ are intentionally ignored.
 
 ## Build
 
-~~~bash
-export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
-export IGA_CPU_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cpu"
-module load openmpi/4.0.5-gcc10.2.0
+From the repository root:
 
-make -C "$IGA_CPU_ROOT"
-make -C "$IGA_CPU_ROOT" petsc
+~~~bash
+make cpu
+make cpu-petsc PETSC_DIR=/path/to/petsc PETSC_ARCH=your-petsc-arch
 ~~~
 
-The Makefile defaults to
-`/ocean/projects/mch260002p/thsieh1/petsc/arch-linux-c-opt`. Override
-`PETSC_DIR` and `PETSC_ARCH` for another installation.
+The first command builds `iga_pack` and `iga_inspect` with a standard C++17
+compiler. PETSc targets require an MPI-aware PETSc configuration.
+`PETSC_ARCH` may be omitted for an installed PETSc layout.
 
 ## Prepare a case
 
 Keep large cases outside this repository:
 
 ~~~bash
-export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
-CASE_DIR="$IGA_CASE_ROOT/example/cylinder"
-DATABASE="$IGA_CASE_ROOT/.nsvms_diagnostics/cylinder-8.ntiga"
+export IGA_CPU_ROOT="$(pwd)/solvers/cpu"
+export CASE_DIR=/path/to/case
+export DATABASE=/path/to/work/case-8.ntiga
+export RANKS=8
 
-mpmetis "$CASE_DIR/bzmeshinfo.txt" 8
-"$IGA_CPU_ROOT/iga_pack" "$CASE_DIR" 8 "$DATABASE"
+mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
+"$IGA_CPU_ROOT/iga_pack" "$CASE_DIR" "$RANKS" "$DATABASE"
 "$IGA_CPU_ROOT/iga_inspect" "$DATABASE"
 ~~~
 
-The partition suffix and `mpiexec -np` count must match the rank count passed to
-`iga_pack`.
+The partition suffix and `mpiexec -np` count must match the rank count passed
+to `iga_pack`.
 
-## Run on a CPU compute node
+## Run
 
-Do not run MPI simulations on a login node.
+Use an allocated compute resource on shared clusters:
 
 ~~~bash
-interact -A mch260002p -p RM-shared -t 00:30:00
-module load anaconda3
-module load openmpi/4.0.5-gcc10.2.0
-
-mpiexec -np 8 "$IGA_CPU_ROOT/iga_mesh_check" "$DATABASE"
-mpiexec -np 8 "$IGA_CPU_ROOT/iga_navier_stokes" "$DATABASE" "$CASE_DIR" 8 velocity.txt
-mpiexec -np 8 "$IGA_CPU_ROOT/iga_transport" "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_mesh_check" "$DATABASE"
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
+  "$DATABASE" "$CASE_DIR" 8 velocity.txt
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_transport" \
+  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
 ~~~
 
 Mesh label `1` is the inlet, `0` is a no-slip wall, and labels `>=2` are
 zero-pressure outlets. Navier-Stokes uses nonlinear relative tolerance `1e-5`;
 reaching the update limit without convergence returns failure. Transport uses
 relative tolerance `1e-8`.
+
+For PSC module, interactive-node, and Slurm examples, see the
+[Bridges-2 guide](../../docs/BRIDGES2.md).
 
 ## Reproducibility notes
 
@@ -171,7 +171,7 @@ relative tolerance `1e-8`.
 - Compare numerical fields as well as wall time; changing partition or
   preconditioner can alter reduction order.
 - Run `iga_mesh_check` before timing assembly or solves.
-- Benchmark from Slurm compute nodes and report both stage timers and peak RSS.
+- Benchmark from allocated compute nodes and report both stage timers and peak RSS.
 - The large validation databases and outputs are not versioned; use matching
   case snapshots when reproducing the published numbers.
 

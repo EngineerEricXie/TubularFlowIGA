@@ -22,7 +22,7 @@ Transport uses restart 50 and the same `1e-8` relative tolerance as CPU v2. A po
 
 ## GPU Strategy
 
-The default fat binary contains SM 70, 80, 89, and 90 code. V100-32GB on `GPU-shared` is the selected production target for current cases: it has strong FP64 throughput, short queue times, and ample memory. SM80 is included for portability, but this allocation currently lacks the `GPU-dev` QoS required for PSC's A100 node. H100 is optional for larger future cases; L40S is supported but not preferred for FP64 workloads.
+The default fat binary contains SM 70, 80, 89, and 90 code. Override `CUDA_ARCHS` to reduce build time and binary size for a known deployment target. Select production hardware based on problem memory, FP64 throughput, availability, and measured solver performance.
 
 ## Scaling Boundary
 

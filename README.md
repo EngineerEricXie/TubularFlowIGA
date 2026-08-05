@@ -5,10 +5,10 @@ Navier-Stokes flow and transient two-field transport in tubular and branching
 geometries. It combines MATLAB control-mesh generation, C++ Bezier extraction,
 an MPI/PETSc CPU backend, and a single-GPU CUDA backend. The IGA basis,
 quadrature, weak forms, assembly, nonlinear iteration, time integration, and
-CUDA sparse kernels are project code; PETSc and cuBLAS provide low-level linear
-algebra services.
+CUDA sparse kernels are project code; PETSc and cuBLAS provide linear-algebra
+services.
 
-This is research software specialized for tube-like networks. It is not a
+This is research software specialized for tube-like networks, not a
 general-purpose CFD package.
 
 ## Pipeline
@@ -17,7 +17,7 @@ general-purpose CFD package.
 SWC skeleton
   -> MATLAB smoothing and hexahedral control mesh
   -> controlmesh.vtk
-  -> C++ spline/Bezier extraction
+  -> C++ spline and Bezier extraction
   -> bzmeshinfo.txt + cmat.txt + bzpt.txt
   -> METIS partition + iga_pack
   -> partition-aware .ntiga database
@@ -30,72 +30,88 @@ Repository layout:
 - `meshgeneration/`: corrected MATLAB skeleton smoothing and mesh generation.
 - `preprocessing/spline/`: spline construction and Bezier extraction.
 - `solvers/cpu/`: packer, validators, Navier-Stokes, and transport with MPI/PETSc.
-- `solvers/cuda/`: FP64 single-GPU solver consuming the same `.ntiga` database.
-- `docs/`: pipeline details, validation conditions, and benchmark evidence.
+- `solvers/cuda/`: FP64 single-GPU solver using the same `.ntiga` database.
+- `docs/`: pipeline, platform notes, and benchmark evidence.
 
 Large cases and generated results are intentionally not versioned.
 
 ## Requirements
 
-- MATLAB plus the external TREES Toolbox for SWC processing. TREES is not
-  vendored; install it separately and add it to `MATLABPATH`.
-- C++11, Eigen 3, and OpenMP for spline preprocessing.
-- C++17, MPI, optimized PETSc, and METIS/`mpmetis` for CPU simulation.
-- CUDA 12.x and cuBLAS for the optional GPU backend.
+- MATLAB and the external TREES Toolbox for SWC processing.
+- A C++11 compiler, Eigen 3, and OpenMP for spline preprocessing.
+- A C++17 compiler, MPI, PETSc with C++ support, and METIS/`mpmetis` for CPU
+  simulation.
+- CUDA and cuBLAS for the optional GPU backend.
 
-## Build on PSC Bridges-2
+TREES is not vendored. Install it separately and add it to `MATLABPATH`.
 
-Compilation is allowed on a login node; simulations are not.
+## Build
+
+From the repository root:
 
 ```bash
-export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
-cd "$TUBULARFLOWIGA_ROOT"
-
-make spline
+make spline EIGEN_DIR=/path/to/eigen3
 make cpu
 
-module load openmpi/4.0.5-gcc10.2.0
-make cpu-petsc
+make cpu-petsc \
+  PETSC_DIR=/path/to/petsc \
+  PETSC_ARCH=your-petsc-arch
 
-module load cuda/12.4.0
-make cuda
+make cuda CUDA_ARCHS="70 80 89 90"
 ```
 
-Override `PETSC_DIR`, `PETSC_ARCH`, `CXX`, or `CUDA_ARCHS` when the
-site defaults do not apply.
+`PETSC_ARCH` may be omitted for an installed PETSc tree whose configuration
+is directly under `PETSC_DIR/lib/petsc/conf`. Override `CXX`, `CPPFLAGS`,
+`CXXFLAGS`, `NVCC`, or `CUDA_ARCHS` for the local toolchain.
 
-## Prepare and run a case
+## Prepare a case
 
-Keep case data outside the repository and preserve a trailing slash when calling
-the legacy spline preprocessor:
+Keep case data outside the repository. The spline preprocessor treats its
+argument as a directory prefix, so include the trailing slash:
 
 ```bash
 export CASE_DIR=/path/to/case
-export DATABASE=/path/to/work/case-16.ntiga
+export DATABASE=/path/to/work/case-8.ntiga
+export RANKS=8
 
 ./preprocessing/spline/spline "$CASE_DIR/"
-mpmetis "$CASE_DIR/bzmeshinfo.txt" 16
-./solvers/cpu/iga_pack "$CASE_DIR" 16 "$DATABASE"
+mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
+./solvers/cpu/iga_pack "$CASE_DIR" "$RANKS" "$DATABASE"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
 
-Before timing a solver, obtain a compute node and reject invalid geometry:
+The METIS partition count, packed database rank count, and CPU MPI process count
+must agree.
+
+## Validate and run
+
+Run the mesh check before either solver:
 
 ```bash
-interact -A mch260002p -p RM-shared -t 00:30:00
-module load anaconda3
-module load openmpi/4.0.5-gcc10.2.0
-
-mpiexec -np 16 ./solvers/cpu/iga_mesh_check "$DATABASE"
-mpiexec -np 16 ./solvers/cpu/iga_navier_stokes \
+mpiexec -np "$RANKS" ./solvers/cpu/iga_mesh_check "$DATABASE"
+mpiexec -np "$RANKS" ./solvers/cpu/iga_navier_stokes \
   "$DATABASE" "$CASE_DIR" 8 velocity.txt
-mpiexec -np 16 ./solvers/cpu/iga_transport \
+mpiexec -np "$RANKS" ./solvers/cpu/iga_transport \
   "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
 ```
 
-Use a GPU allocation for CUDA, then run `iga_cuda mesh-check` followed by the
-same physics stages. See [the pipeline guide](docs/PIPELINE.md) for MATLAB,
-Slurm, and file-interface details.
+For a CUDA-capable host:
+
+```bash
+./solvers/cuda/iga_cuda device-info
+./solvers/cuda/iga_cuda mesh-check "$DATABASE"
+./solvers/cuda/iga_cuda navier-stokes \
+  "$DATABASE" "$CASE_DIR" 8 velocity.txt
+./solvers/cuda/iga_cuda transport \
+  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+```
+
+Use the job scheduler required by the target cluster. Platform-specific setup
+is documented separately:
+
+- [PSC Bridges-2](docs/BRIDGES2.md)
+
+See [the pipeline guide](docs/PIPELINE.md) for MATLAB and file-interface details.
 
 ## Measured performance
 
@@ -111,7 +127,7 @@ On the 4,221-node cylinder, the optimized CPU first nonlinear update was about
 measurement was not a converged solve, so it is historical evidence rather than
 a complete solver-to-solver baseline.
 
-See [BENCHMARKS.md](docs/BENCHMARKS.md) and the backend
-[CPU validation](solvers/cpu/VALIDATION.md) and
-[CUDA validation](solvers/cuda/VALIDATION.md) for timings, job IDs, accuracy
+See [BENCHMARKS.md](docs/BENCHMARKS.md), the
+[CPU validation](solvers/cpu/VALIDATION.md), and the
+[CUDA validation](solvers/cuda/VALIDATION.md) for hardware, timings, accuracy
 gates, and limitations.

@@ -132,55 +132,37 @@ TubularFlowIGA/
 
 ## Build
 
+From the repository root:
+
 ~~~bash
-export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
-export IGA_CUDA_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cuda"
-module load cuda/12.4.0
-make -C "$IGA_CUDA_ROOT"
-"$IGA_CUDA_ROOT/iga_cuda" device-info
+make cuda CUDA_ARCHS="70 80 89 90"
+./solvers/cuda/iga_cuda device-info
 ~~~
 
-Do not run GPU commands on a login node. The build can be submitted with:
+Set `CUDA_ARCHS` to the compute capabilities needed at the deployment site.
+Run `device-info` and all solver modes only on a CUDA-capable host.
+
+## Run
 
 ~~~bash
-cd "$IGA_CUDA_ROOT"
-sbatch slurm/build_v100.sbatch
-~~~
+export IGA_CUDA_ROOT="$(pwd)/solvers/cuda"
+export CASE_DIR=/path/to/case
+export DATABASE=/path/to/work/case.ntiga
 
-## Run on a GPU compute node
-
-~~~bash
-export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
-
-interact -A mch260002p -p GPU-shared --gres=gpu:v100-32:1 -t 00:30:00
-module load cuda/12.4.0
-
-"$IGA_CUDA_ROOT/iga_cuda" mesh-check DATABASE.ntiga
-"$IGA_CUDA_ROOT/iga_cuda" navier-stokes DATABASE.ntiga CASE_DIR 8 velocity.txt
-"$IGA_CUDA_ROOT/iga_cuda" transport DATABASE.ntiga CASE_DIR 300 concentration.txt velocity.txt
+"$IGA_CUDA_ROOT/iga_cuda" mesh-check "$DATABASE"
+"$IGA_CUDA_ROOT/iga_cuda" navier-stokes \
+  "$DATABASE" "$CASE_DIR" 8 velocity.txt
+"$IGA_CUDA_ROOT/iga_cuda" transport \
+  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
 ~~~
 
 Each solver writes its text interchange field and `OUTPUT.vtk`. Navier-Stokes
 VTK contains velocity and pressure; transport VTK contains `N0` and `Nplus`.
 
-## Reproduce the Bridges-2 validations
-
-Case data and generated databases remain outside Git:
-
-~~~bash
-export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
-export IGA_CUDA_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cuda"
-export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
-cd "$IGA_CUDA_ROOT"
-
-sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_v100.sbatch
-sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_cpu_transport.sbatch
-sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/nmo_full_v100.sbatch
-~~~
-
-V100-32GB is the preferred current production target because all validated
-cases fit within 2.69 GiB device memory and it offers strong FP64 throughput.
-H100 is supported; L40S is functional but not preferred for FP64 production.
+The scripts in `slurm/` reproduce the published Bridges-2 measurements and
+require an external `IGA_CASE_ROOT`. See the
+[Bridges-2 guide](../../docs/BRIDGES2.md) for module, allocation, interactive,
+and `sbatch` commands.
 
 ## Reproducibility notes
 

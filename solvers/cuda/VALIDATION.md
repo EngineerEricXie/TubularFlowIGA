@@ -45,9 +45,9 @@ For one transport step, the final GPU solve has relative L2 difference `5.62e-6`
 ## Reproduction
 
 ```bash
-export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
+export TUBULARFLOWIGA_ROOT=/path/to/TubularFlowIGA
 export IGA_CUDA_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cuda"
-export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
+export IGA_CASE_ROOT=/path/to/case-data
 cd "$IGA_CUDA_ROOT"
 sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_v100.sbatch
 sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_cpu_transport.sbatch

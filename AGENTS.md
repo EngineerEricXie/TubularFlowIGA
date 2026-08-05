@@ -2,55 +2,48 @@
 
 ## Project Structure & Module Organization
 
-- `meshgeneration/`: MATLAB SWC smoothing and validated hexahedral control-mesh generation.
+- `meshgeneration/`: MATLAB SWC smoothing and validated hexahedral control meshes.
 - `preprocessing/spline/`: C++11 spline construction and Bezier extraction.
-- `solvers/cpu/`: C++17 MPI/PETSc packer, mesh checks, Navier-Stokes, and transport.
+- `solvers/cpu/`: C++17 MPI/PETSc packer, checks, Navier-Stokes, and transport.
 - `solvers/cuda/`: FP64 single-GPU implementation using the CPU database format.
-- `docs/`: pipeline and benchmark evidence. Keep large cases and outputs outside Git.
+- `docs/`: pipeline, platform instructions, and benchmark evidence.
 
-Preserve the interfaces `controlmesh.vtk`, `bzmeshinfo.txt`, `cmat.txt`,
-`bzpt.txt`, METIS partitions, and `.ntiga` databases.
+Preserve `controlmesh.vtk`, `bzmeshinfo.txt`, `cmat.txt`, `bzpt.txt`,
+METIS partition, velocity-field, and `.ntiga` interfaces.
 
 ## Build, Test, and Development Commands
 
 ```bash
-make spline       # build Bezier preprocessing
-make cpu          # build database utilities
-make cpu-petsc    # build MPI/PETSc solvers
-make cuda         # build the CUDA backend
+make spline EIGEN_DIR=/path/to/eigen3
+make cpu
+make cpu-petsc PETSC_DIR=/path/to/petsc PETSC_ARCH=your-arch
+make cuda CUDA_ARCHS="70 80"
 ```
 
-On PSC Bridges-2, login nodes are for editing, compilation, and submission only.
-Run CPU smoke tests interactively:
-
-```bash
-interact -A mch260002p -p RM-shared -t 00:30:00
-module load anaconda3
-module load openmpi/4.0.5-gcc10.2.0
-mpiexec -np 8 ./solvers/cpu/iga_mesh_check CASE.ntiga
-```
-
-Request a GPU node before running `iga_cuda`; use `sbatch` for production.
+Run simulations on an allocated compute resource, not a shared cluster login
+node. Follow the local scheduler policy. Bridges-2 users should use the
+interactive CPU/GPU and `sbatch` examples in
+[docs/BRIDGES2.md](docs/BRIDGES2.md).
 
 ## Coding Style & Naming Conventions
 
-Use tabs in C++, braces on separate lines, `PascalCase` for classes and
-methods, and descriptive lowercase locals. Keep CUDA kernels in `.cuh` files
-and host orchestration in `.cu`. Preserve established MATLAB function names.
-Compile with warnings enabled and resolve new warnings.
+Use tabs in C++, function braces on separate lines, `PascalCase` for classes
+and methods, and descriptive lowercase locals. Keep CUDA kernels in `.cuh`
+files and host orchestration in `.cu`. Preserve established MATLAB function
+names. Compile with warnings enabled and resolve new warnings.
 
 ## Testing Guidelines
 
-Rebuild only affected stages, then run the smallest valid case on a compute
-node. Verify exit status, rank/partition agreement, positive Jacobians,
-convergence reasons, output sizes, and numerical norms. For performance changes,
-report assembly and solve times separately, plus host RSS and CUDA peak memory.
-Compare CPU and CUDA fields using relative L2 error.
+Rebuild affected stages and run the smallest valid case. Verify exit status,
+rank/partition agreement, positive Jacobians, convergence reasons, output
+sizes, and numerical norms. For performance work, report assembly and solve
+times separately, host peak RSS, and CUDA peak allocation. Compare CPU and CUDA
+fields with relative L2 error. Run large validation cases through a scheduler.
 
 ## Commit & Pull Request Guidelines
 
 Use short imperative commits such as `Improve owned-row assembly`. Do not
 commit executables, objects, `.ntiga`, partitions, VTK results, case data, or
-Slurm logs. Pull requests should identify the pipeline stage, describe
-numerical/file-format effects, list validation commands and hardware, and
-include ParaView images for geometry changes.
+scheduler logs. Pull requests should identify the pipeline stage, describe
+numerical and file-format effects, list validation commands and hardware, link
+issues, and include geometry images when applicable.
