@@ -25,6 +25,7 @@ private:
 	vector<array<double, 3>> bzcp;//Bezier control points
 
 	void OutputMesh(const vector<BezierElement3D>& bzmesh, string fn);
+	void ExtractAndOutput(const string& fn);
 	void BezierExtract(vector<BezierElement3D>& bzmesh, vector<int>& IDBC, vector<double>& gh);
 	void BuildSplines_Unstruct();
 	void BuildElementSplines_Interior(int eid);

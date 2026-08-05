@@ -1,16 +1,210 @@
 #include "kernel.h"
 
+#include <limits>
+#include <stdexcept>
+
 typedef unsigned int uint;
+
+namespace {
+
+string VtkPointRecord(const BezierElement3D& element)
+{
+	const int corners[8] = { 0, 3, 15, 12, 48, 51, 63, 60 };
+	ostringstream out;
+	for (int corner = 0; corner < 8; corner++)
+	{
+		const array<double, 3>& point = element.pts[corners[corner]];
+		out << point[0] << " " << point[1] << " " << point[2] << "\n";
+	}
+	return out.str();
+}
+
+string ConnectivityRecord(const BezierElement3D& element)
+{
+	ostringstream out;
+	for (size_t row = 0; row < element.IEN.size(); row++)
+	{
+		if (row != 0) out << " ";
+		out << element.IEN[row] + 1;
+	}
+	out << "\n";
+	return out.str();
+}
+
+string ExtractionRecord(int eid, const BezierElement3D& element)
+{
+	ostringstream out;
+	out << eid << " " << element.IEN.size() << " " << element.type << "\n";
+	for (size_t row = 0; row < element.IEN.size(); row++)
+	{
+		if (row != 0) out << " ";
+		out << element.IEN[row];
+	}
+	out << "\n";
+	for (size_t row = 0; row < element.cmat.size(); row++)
+	{
+		for (size_t column = 0; column < element.cmat[row].size(); column++)
+		{
+			if (column != 0) out << " ";
+			out << element.cmat[row][column];
+		}
+		out << "\n";
+	}
+	return out.str();
+}
+
+string BezierPointRecord(const BezierElement3D& element)
+{
+	ostringstream out;
+	for (int point = 0; point < 64; point++)
+	{
+		out << element.pts[point][0] << " " << element.pts[point][1]
+			<< " " << element.pts[point][2] << "\n";
+	}
+	return out.str();
+}
+
+}
 
 void kernel::run(string fn_in)
 {
-	vector<BezierElement3D> bzmesh;
-	vector<int> IDBC;
-	vector<double> gh;
 	InitializeMesh(fn_in);
-	BuildSplines_Unstruct();
-	BezierExtract(bzmesh, IDBC, gh);
-	OutputMesh(bzmesh, fn_in);
+	ExtractAndOutput(fn_in);
+}
+
+void kernel::ExtractAndOutput(const string& fn)
+{
+	if (tmesh.size() > static_cast<size_t>(numeric_limits<int>::max()))
+	{
+		throw runtime_error("too many elements for OpenMP extraction loop");
+	}
+
+	vector<int> aloc(cp.size(), -1);
+	int active_points = 0;
+	for (uint i = 0; i < cp.size(); i++)
+	{
+		if (!cp[i].hex.empty()) aloc[i] = active_points++;
+	}
+
+	const size_t buffer_size = 1u << 20;
+	vector<char> vtk_buffer(buffer_size), info_buffer(buffer_size);
+	vector<char> cmat_buffer(buffer_size), point_buffer(buffer_size);
+	ofstream vtk, info, cmat, bzpt;
+	vtk.rdbuf()->pubsetbuf(vtk_buffer.data(), vtk_buffer.size());
+	info.rdbuf()->pubsetbuf(info_buffer.data(), info_buffer.size());
+	cmat.rdbuf()->pubsetbuf(cmat_buffer.data(), cmat_buffer.size());
+	bzpt.rdbuf()->pubsetbuf(point_buffer.data(), point_buffer.size());
+	vtk.open((fn + "bzmesh.vtk").c_str());
+	info.open((fn + "bzmeshinfo.txt").c_str());
+	cmat.open((fn + "cmat.txt").c_str());
+	bzpt.open((fn + "bzpt.txt").c_str());
+	if (!vtk || !info || !cmat || !bzpt)
+	{
+		throw runtime_error("cannot create spline output files under " + fn);
+	}
+
+	const size_t elements = tmesh.size();
+	vtk << "# vtk DataFile Version 2.0\nBezier mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
+	vtk << "POINTS " << 8 * elements << " float\n";
+	info << elements << "\n";
+	cmat << elements << "\n";
+	bzpt << elements * 64 << "\n";
+
+	const int chunk_size = 256;
+	const int element_count = static_cast<int>(elements);
+	cout << "# elements: " << elements << "\n";
+	cout << "Bezier extracting in chunks of " << chunk_size << "...\n";
+	for (int begin = 0; begin < element_count; begin += chunk_size)
+	{
+		const int end = min(begin + chunk_size, element_count);
+		vector<BezierElement3D> chunk(static_cast<size_t>(end - begin));
+		vector<string> vtk_records(static_cast<size_t>(end - begin));
+		vector<string> info_records(static_cast<size_t>(end - begin));
+		vector<string> cmat_records(static_cast<size_t>(end - begin));
+		vector<string> point_records(static_cast<size_t>(end - begin));
+#pragma omp parallel for schedule(static)
+		for (int eid = begin; eid < end; eid++)
+		{
+			if (tmesh[eid].type != 1) BuildElementSplines_Interior(eid);
+			else BuildElementSplines_Boundary(eid);
+
+			BezierElement3D& output = chunk[static_cast<size_t>(eid - begin)];
+			Element3D& element = tmesh[eid];
+			output.type = element.type;
+			output.bzflag = element.bzflag;
+			if (element.bzflag == 0)
+			{
+				for (int face = 0; face < 6; face++)
+				{
+					if (tmface[element.face[face]].hex.size() == 1) output.bc[face] = 1;
+				}
+				output.IEN.resize(element.IEN.size());
+				for (uint row = 0; row < element.IEN.size(); row++)
+				{
+					output.IEN[row] = aloc[element.IEN[row]];
+				}
+				output.cmat.swap(element.bemat);
+				for (uint row = 0; row < output.IEN.size(); row++)
+				{
+					const Vertex3D& control = cp[element.IEN[row]];
+					for (int column = 0; column < 64; column++)
+					{
+						const double value = output.cmat[row][column];
+						output.pts[column][0] += value * control.coor[0];
+						output.pts[column][1] += value * control.coor[1];
+						output.pts[column][2] += value * control.coor[2];
+					}
+				}
+			}
+			else
+			{
+				output.IENb.resize(element.IENb.size());
+				for (uint point = 0; point < element.IENb.size(); point++)
+				{
+					output.IENb[point] = element.IENb[point] + active_points;
+					output.pts[point] = bzcp[element.IENb[point]];
+				}
+			}
+			const size_t local = static_cast<size_t>(eid - begin);
+			vtk_records[local] = VtkPointRecord(output);
+			info_records[local] = ConnectivityRecord(output);
+			cmat_records[local] = ExtractionRecord(eid, output);
+			point_records[local] = BezierPointRecord(output);
+		}
+
+		for (int eid = begin; eid < end; eid++)
+		{
+			const size_t local = static_cast<size_t>(eid - begin);
+			vtk << vtk_records[local];
+			info << info_records[local];
+			cmat << cmat_records[local];
+			bzpt << point_records[local];
+		}
+		if (end == element_count || end % 2048 == 0)
+		{
+			cout << "processed " << end << "/" << element_count << " elements\n";
+		}
+	}
+
+	vtk << "\nCELLS " << elements << " " << 9 * elements << "\n";
+	for (size_t eid = 0; eid < elements; eid++)
+	{
+		vtk << "8 " << 8 * eid << " " << 8 * eid + 1 << " " << 8 * eid + 2 << " " << 8 * eid + 3
+			<< " " << 8 * eid + 4 << " " << 8 * eid + 5 << " " << 8 * eid + 6 << " " << 8 * eid + 7 << "\n";
+	}
+	vtk << "\nCELL_TYPES " << elements << "\n";
+	for (size_t eid = 0; eid < elements; eid++) vtk << "12\n";
+	vtk << "\nCELL_DATA " << elements << "\nSCALARS Error float 1\nLOOKUP_TABLE default\n";
+	for (size_t eid = 0; eid < elements; eid++) vtk << tmesh[eid].type << "\n";
+
+	vtk.close();
+	info.close();
+	cmat.close();
+	bzpt.close();
+	if (!vtk || !info || !cmat || !bzpt)
+	{
+		throw runtime_error("failed while writing spline output files under " + fn);
+	}
 }
 
 void kernel::BezierExtract(vector<BezierElement3D>& bzmesh, vector<int>& IDBC, vector<double>& gh)
@@ -181,7 +375,8 @@ void kernel::BuildElementSplines_Interior(int eid)
 	//find IENtmp first
 	tmesh[eid].IEN.clear();
 	uint i, j, k, hxid;
-	vector<int> loc(cp.size(), -1);
+	static thread_local vector<int> loc;
+	if (loc.size() < cp.size()) loc.resize(cp.size());
 	vector<int> hx1r(1, eid);
 	for (i = 0; i < 8; i++)
 	{
@@ -318,7 +513,8 @@ void kernel::BuildElementSplines_Boundary(int eid)
 	//find IEN first
 	tmesh[eid].IEN.clear();
 	uint i, j, k, hxid;
-	vector<int> loc(cp.size(), -1);
+	static thread_local vector<int> loc;
+	if (loc.size() < cp.size()) loc.resize(cp.size());
 	vector<int> hx1r(1, eid);
 	for (i = 0; i < 8; i++)
 	{

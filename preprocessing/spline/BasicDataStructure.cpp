@@ -173,12 +173,6 @@ Element3D::Element3D()
 	dm[1][0] = 0.; dm[1][1] = 1.;
 	dm[2][0] = 0.; dm[2][1] = 1.;
 
-	bzpt.resize(64);
-	for (int i = 0; i < 64; i++)
-	{
-		for (int j = 0; j < 3; j++) bzpt[i][j] = 0.;
-	}
-
 	kvlen[0] = 1.; kvlen[1] = 1.; kvlen[2] = 1.;
 	for (int i = 0; i < 6; i++)
 	{
@@ -245,12 +239,6 @@ void Element3D::Initialize()
 	dm[0][0] = 0.; dm[0][1] = 1.;
 	dm[1][0] = 0.; dm[1][1] = 1.;
 	dm[2][0] = 0.; dm[2][1] = 1.;
-
-	bzpt.resize(64);
-	for (int i = 0; i < 64; i++)
-	{
-		for (int j = 0; j < 3; j++) bzpt[i][j] = 0.;
-	}
 
 	kvlen[0] = 1.; kvlen[1] = 1.; kvlen[2] = 1.;
 	for (int i = 0; i < 6; i++)

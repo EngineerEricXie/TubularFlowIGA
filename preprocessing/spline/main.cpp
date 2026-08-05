@@ -1,26 +1,27 @@
 #include <iostream>
 #include "kernel.h"
-#include <sstream>
+#include <exception>
 #include <string>
-#include <stdio.h>
+
 using namespace std;
+
 int main(int argc, char **argv)
 {
-	if (argc == 2) {
-		stringstream ss;
-		string file_in;
-		ss << argv[1];
-		ss >> file_in;
+	if (argc != 2)
+	{
+		cerr << "usage: spline CASE_DIR/\n";
+		return 2;
+	}
+	try
+	{
 		kernel app;
-		app.run(file_in);
+		app.run(argv[1]);
 		cout << "DONE!\n";
-		//getchar();
+		return 0;
 	}
-	else if (argc > 2) {
-		cout << "Too many arguments.\n";
+	catch (const exception& error)
+	{
+		cerr << "spline: " << error.what() << "\n";
+		return 1;
 	}
-	else {
-		cout << "One argument expected.\n";
-	}
-	return 0;
 }

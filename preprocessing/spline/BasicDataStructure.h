@@ -247,8 +247,6 @@ public:
 	vector<vector<double>> tmat;
 	vector<array<int, 2>> IEN_act;
 
-	vector<array<double, 3>> bzpt;//tmp use only
-
 	vector<int> IENtmp;
 	vector<array<double, 5>> patch_kutmp;
 	vector<array<double, 5>> patch_kvtmp;
