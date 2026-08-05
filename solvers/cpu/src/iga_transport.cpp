@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 
 int main(int argc, char** argv)
 {
-	PetscInitialize(&argc, &argv, nullptr, "NeuronTransportIGA v2 transport solver\n");
+	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA transport solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;

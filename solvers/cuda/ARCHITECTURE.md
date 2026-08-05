@@ -1,8 +1,8 @@
-# NeuronTransportIGA-CUDA Architecture
+# TubularFlowIGA CUDA Backend Architecture
 
 ## Scope
 
-`iga_cuda` is a project-owned FP64 implementation of the same two-field transport and four-field stabilized steady Navier–Stokes formulations as `NeuronTransportIGA-CPU`. The binary `.ntiga` database remains the interchange format. CPU partition ownership is ignored by the single-GPU reader, so an existing database can be reused without repacking.
+`iga_cuda` is a project-owned FP64 implementation of the same two-field transport and four-field stabilized steady Navier–Stokes formulations as the CPU backend. The binary `.ntiga` database remains the interchange format. CPU partition ownership is ignored by the single-GPU reader, so an existing database can be reused without repacking.
 
 ## Data Layout
 

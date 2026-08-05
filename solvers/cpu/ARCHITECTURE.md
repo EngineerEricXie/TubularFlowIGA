@@ -1,4 +1,4 @@
-# NeuronTransportIGA-CPU Architecture
+# TubularFlowIGA CPU Backend Architecture
 
 ## Data path
 

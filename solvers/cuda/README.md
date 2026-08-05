@@ -1,13 +1,12 @@
-# NeuronTransportIGA-CUDA
+# TubularFlowIGA CUDA Backend
 
-A project-owned FP64 CUDA implementation of the NeuronTransportIGA
+A project-owned FP64 CUDA implementation of the TubularFlowIGA
 Navier-Stokes and transport pipeline. CUDA Runtime and cuBLAS provide device
 memory and vector primitives; Bezier extraction, quadrature, stabilized weak
 forms, sparse block assembly, preconditioning, and restarted GMRES remain
 implemented in this repository.
 
-The numerical reference and database packer live in
-[NeuronTransportIGA-CPU](https://github.com/EngineerEricXie/NeuronTransportIGA-CPU).
+The numerical reference and database packer live in [../cpu](../cpu).
 The original implementation is
 [NeuronTransportIGA](https://github.com/EngineerEricXie/NeuronTransportIGA).
 
@@ -122,19 +121,20 @@ ignored.
 - A CUDA GPU with FP64 support. The fat binary targets SM 70, 80, 89, and 90.
 - A C++17-compatible host compiler.
 - cuBLAS.
-- A sibling clone of `NeuronTransportIGA-CPU` for `IgaDatabase.hpp`.
+- The in-tree CPU backend, which provides the shared `IgaDatabase.hpp` format reader.
 
 ~~~text
-parent/
-|-- NeuronTransportIGA-CPU/
-|-- NeuronTransportIGA-CUDA/
-`-- NeuronTransportIGA/        # optional legacy cases and diagnostics
+TubularFlowIGA/
+|-- solvers/cpu/
+|-- solvers/cuda/
+`-- meshgeneration/
 ~~~
 
 ## Build
 
 ~~~bash
-export IGA_CUDA_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA-CUDA
+export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
+export IGA_CUDA_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cuda"
 module load cuda/12.4.0
 make -C "$IGA_CUDA_ROOT"
 "$IGA_CUDA_ROOT/iga_cuda" device-info
@@ -168,7 +168,8 @@ VTK contains velocity and pressure; transport VTK contains `N0` and `Nplus`.
 Case data and generated databases remain outside Git:
 
 ~~~bash
-export IGA_CUDA_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA-CUDA
+export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
+export IGA_CUDA_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cuda"
 export IGA_CASE_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA
 cd "$IGA_CUDA_ROOT"
 
@@ -197,7 +198,6 @@ H100 is supported; L40S is functional but not preferred for FP64 production.
   not implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,
   limiting solve speedup even though assembly is much faster.
-- The CUDA repository currently consumes the CPU repository database header and
-  therefore expects the documented sibling clone layout.
+- The CUDA backend consumes the in-tree CPU database header; changes to the format must be validated on both backends.
 - Validation focuses on FP64 scientific GPUs and the current IGA formulations;
   other discretizations and mixed precision are not implemented.

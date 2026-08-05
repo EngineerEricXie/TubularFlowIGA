@@ -1,4 +1,4 @@
-# NeuronTransportIGA-CPU
+# TubularFlowIGA CPU Backend
 
 A project-owned C++17 isogeometric-analysis pipeline for stabilized steady
 Navier-Stokes flow and transient two-field transport. PETSc provides distributed
@@ -6,10 +6,7 @@ sparse matrices and Krylov solvers; Bezier extraction, basis derivatives,
 quadrature, VMS/SUPG weak forms, boundary conditions, nonlinear iteration, and
 time integration are implemented in this repository.
 
-This is the CPU successor to the legacy
-[NeuronTransportIGA](https://github.com/EngineerEricXie/NeuronTransportIGA)
-solver. The matching single-GPU implementation is
-[NeuronTransportIGA-CUDA](https://github.com/EngineerEricXie/NeuronTransportIGA-CUDA).
+This backend replaces the legacy solver. The matching single-GPU implementation is in [../cuda](../cuda).
 
 ## Capabilities
 
@@ -56,7 +53,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details.
 All measurements below were collected on PSC Bridges-2 with optimized PETSc and
 OpenMPI 4.0.5. The cylinder contains 4,221 nodes and 3,600 elements.
 
-| Cylinder measurement | Legacy release | NeuronTransportIGA-CPU |
+| Cylinder measurement | Legacy release | TubularFlowIGA CPU |
 | --- | ---: | ---: |
 | Comparable first Newton update | 199 s | about 12 s |
 | First-update speedup | 1.0x | about 16.6x |
@@ -119,7 +116,8 @@ are intentionally ignored.
 ## Build
 
 ~~~bash
-export IGA_CPU_ROOT=/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA-CPU
+export TUBULARFLOWIGA_ROOT=/ocean/projects/mch260002p/thsieh1/TubularFlowIGA
+export IGA_CPU_ROOT="$TUBULARFLOWIGA_ROOT/solvers/cpu"
 module load openmpi/4.0.5-gcc10.2.0
 
 make -C "$IGA_CPU_ROOT"

@@ -19,7 +19,7 @@ namespace fs = std::filesystem;
 
 int main(int argc, char** argv)
 {
-	PetscInitialize(&argc, &argv, nullptr, "NeuronTransportIGA v2 stabilized steady Navier-Stokes solver\n");
+	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA stabilized steady Navier-Stokes solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;

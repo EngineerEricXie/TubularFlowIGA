@@ -60,7 +60,7 @@ inline Header ReadHeader(std::istream& in)
 	Read(in, h.bezier_points);
 	Read(in, h.reserved);
 	Read(in, h.rank_index_offset);
-	if (h.magic != kMagic) throw std::runtime_error("not a NeuronTransportIGA v2 database");
+	if (h.magic != kMagic) throw std::runtime_error("not a supported .ntiga database");
 	if (h.version != kVersion) throw std::runtime_error("unsupported database version");
 	if (h.bezier_points != kBezierPointCount) throw std::runtime_error("unsupported Bezier point count");
 	if (h.nodes == 0 || h.rank_index_offset == 0) throw std::runtime_error("invalid database ownership index");
