@@ -1,6 +1,8 @@
 # Compiled objects and executables
 *.o
 *.d
+/preprocessing/mesh/tubular_mesh
+/preprocessing/mesh/mesh_core_test
 /preprocessing/spline/spline
 /solvers/cpu/iga_pack
 /solvers/cpu/iga_inspect
