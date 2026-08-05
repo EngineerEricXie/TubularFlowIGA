@@ -47,10 +47,11 @@ mpiexec -np 8 ./solvers/cpu/iga_mesh_check case-8.ntiga
 ```
 
 All 31,680 extracted elements and 2,027,520 geometry samples passed:
-`min(detJ)=1.27675e-7`, with no bad elements or samples. Spline extraction took
-62.50 s and about 2.19 GiB peak RSS; packing took 30.02 s and about 4.1 MiB.
-This identifies the legacy spline extractor as the next preprocessing target
-for memory and runtime optimization.
+`min(detJ)=1.27675e-7`, with no bad elements or samples. The original spline
+extractor took 62.50 s and about 2.19 GiB peak RSS. Its optimized chunked version
+took 9.34 s and 158.1 MiB with eight OpenMP threads; all four text outputs and
+the resulting `.ntiga` database matched byte for byte. Packing remained a
+separate 26.86-second text-parsing stage with about 4.1 MiB RSS.
 
 Scheduler job IDs were 43011901 (bifurcation MATLAB reference), 43011942
 (three-bifurcation reference), 43011981 (NMO C++ mesh), and 43012005 (NMO

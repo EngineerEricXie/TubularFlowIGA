@@ -30,7 +30,7 @@ Repository layout:
 - `preprocessing/mesh/`: standalone C++ skeleton smoothing and control-mesh
   generation.
 - `meshgeneration/`: legacy MATLAB reference and template geometry assets.
-- `preprocessing/spline/`: spline construction and Bezier extraction.
+- `preprocessing/spline/`: bounded-memory OpenMP Bezier extraction.
 - `solvers/cpu/`: packer, validators, Navier-Stokes, and transport with MPI/PETSc.
 - `solvers/cuda/`: FP64 single-GPU solver using the same `.ntiga` database.
 - `docs/`: pipeline, platform notes, and benchmark evidence.
@@ -138,6 +138,7 @@ measurement was not a converged solve, so it is historical evidence rather than
 a complete solver-to-solver baseline.
 
 See [BENCHMARKS.md](docs/BENCHMARKS.md), the
+[spline extractor guide](preprocessing/spline/README.md),
 [CPU validation](solvers/cpu/VALIDATION.md), and the
 [CUDA validation](solvers/cuda/VALIDATION.md) for hardware, timings, accuracy
 gates, and limitations.

@@ -54,8 +54,12 @@ Build with `make spline`. The argument is a directory prefix, so include its
 trailing slash:
 
 ```bash
-./preprocessing/spline/spline "$CASE_DIR/"
+OMP_NUM_THREADS=8 ./preprocessing/spline/spline "$CASE_DIR/"
 ```
+
+Set the thread count to the allocated CPU cores. The extractor processes
+elements in bounded-memory chunks and formats element records in parallel while
+preserving deterministic legacy text output.
 
 It reads `controlmesh.vtk` and writes:
 

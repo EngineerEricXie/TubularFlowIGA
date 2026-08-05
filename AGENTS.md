@@ -43,6 +43,8 @@ rank/partition agreement, positive Jacobians, convergence reasons, output
 sizes, and numerical norms. For performance work, report assembly and solve
 times separately, host peak RSS, and CUDA peak allocation. Compare CPU and CUDA
 fields with relative L2 error. Run large validation cases through a scheduler.
+For spline changes, compare all four generated files against a known case and
+validate the packed `.ntiga` database.
 
 ## Commit & Pull Request Guidelines
 

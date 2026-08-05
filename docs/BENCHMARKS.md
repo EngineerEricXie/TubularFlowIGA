@@ -22,9 +22,18 @@ labels matched MATLAB exactly; coordinate differences were at most the
 Its extracted IGA geometry also passed all 2,027,520 determinant samples with
 `min(detJ)=1.27675e-7`.
 
-The legacy spline extractor, rather than mesh generation, is now the main
-preprocessing bottleneck for NMO: 62.50 s wall time and about 2.19 GiB peak RSS.
-See [the mesh validation report](MESH_CPP_VALIDATION.md) for methodology.
+The spline extractor was subsequently changed from whole-mesh dense storage to
+chunked construction and ordered streaming. On eight OpenMP threads:
+
+| NMO spline extraction | Wall time | Peak RSS | Relative result |
+| --- | ---: | ---: | ---: |
+| Legacy | 62.50 s | about 2.19 GiB | baseline |
+| Chunked OpenMP | 9.34 s | 158.1 MiB | 6.69x faster, 92.9% less memory |
+
+The four legacy output files and packed `.ntiga` database matched byte for
+byte. A repeated pre-cleanup optimized run took 7.27 s; the table uses the
+conservative final measurement from a different compute node. See the
+[mesh validation report](MESH_CPP_VALIDATION.md) for methodology.
 
 ## Legacy versus optimized CPU
 
