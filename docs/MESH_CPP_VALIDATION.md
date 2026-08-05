@@ -36,11 +36,12 @@ has 35,748 points and is stale, so it was not used as a golden mesh.
 
 ## Downstream Large-Case Gate
 
-The NMO C++ output was passed through the unmodified legacy spline extractor,
-partitioned with METIS for eight ranks, packed into `.ntiga`, and checked with:
+The NMO C++ output was passed through spline extraction, partitioned with METIS
+for eight ranks, packed into `.ntiga`, and checked with:
 
 ```bash
-./preprocessing/spline/spline "$CASE_DIR/"
+OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
+  "$CASE_DIR/" --no-legacy-text
 mpmetis "$CASE_DIR/bzmeshinfo.txt" 8
 ./solvers/cpu/iga_pack "$CASE_DIR" 8 case-8.ntiga
 mpiexec -np 8 ./solvers/cpu/iga_mesh_check case-8.ntiga
@@ -51,8 +52,11 @@ All 31,680 extracted elements and 2,027,520 geometry samples passed:
 extractor took 62.50 s and about 2.19 GiB peak RSS. Its optimized chunked version
 took 9.34 s and 158.1 MiB with eight OpenMP threads; all four text outputs and
 the resulting `.ntiga` database matched byte for byte. Packing remained a
-separate 26.86-second text-parsing stage with about 4.1 MiB RSS.
+separate 26.86-second text-parsing stage with about 4.1 MiB RSS. The subsequent
+sparse-cache path reduced extraction to 3.74 s and packing to 4.47 s, while
+producing a byte-identical `.ntiga` database. Stale and truncated cache
+regressions were rejected before packing.
 
 Scheduler job IDs were 43011901 (bifurcation MATLAB reference), 43011942
-(three-bifurcation reference), 43011981 (NMO C++ mesh), and 43012005 (NMO
-downstream validation).
+(three-bifurcation reference), 43011981 (NMO C++ mesh), 43012005 (NMO
+downstream validation), and 43012857 (sparse-cache preprocessing benchmark).

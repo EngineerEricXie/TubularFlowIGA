@@ -35,6 +35,18 @@ byte. A repeated pre-cleanup optimized run took 7.27 s; the table uses the
 conservative final measurement from a different compute node. See the
 [mesh validation report](MESH_CPP_VALIDATION.md) for methodology.
 
+The native sparse-cache path removes dense text generation and parsing:
+
+| NMO preprocessing stage | Legacy path | Sparse-cache path | Speedup |
+| --- | ---: | ---: | ---: |
+| Spline extraction | 62.50 s | 3.74 s | 16.7x |
+| Database packing | 30.02 s | 4.47 s | 6.72x |
+| Combined | 92.52 s | 8.21 s | 11.3x |
+
+The cache-only extractor used 160.3 MiB peak RSS and the packer used 4.2 MiB.
+The 329 MB cache replaces 537 MB of `cmat.txt` and `bzpt.txt`. The resulting
+31,680-element `.ntiga` database matched the legacy database byte for byte.
+
 ## Legacy versus optimized CPU
 
 Cylinder: 4,221 nodes and 3,600 elements.

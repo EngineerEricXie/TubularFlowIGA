@@ -9,8 +9,9 @@
 - `solvers/cuda/`: FP64 single-GPU implementation using the CPU database format.
 - `docs/`: pipeline, platform instructions, and benchmark evidence.
 
-Preserve `controlmesh.vtk`, `bzmeshinfo.txt`, `cmat.txt`, `bzpt.txt`,
-METIS partition, velocity-field, and `.ntiga` interfaces.
+Preserve `controlmesh.vtk`, `bzmeshinfo.txt`, `spline_cache.igacache`, optional
+legacy `cmat.txt`/`bzpt.txt`, METIS partition, velocity-field, and `.ntiga`
+interfaces.
 
 ## Build, Test, and Development Commands
 
@@ -43,13 +44,14 @@ rank/partition agreement, positive Jacobians, convergence reasons, output
 sizes, and numerical norms. For performance work, report assembly and solve
 times separately, host peak RSS, and CUDA peak allocation. Compare CPU and CUDA
 fields with relative L2 error. Run large validation cases through a scheduler.
-For spline changes, compare all four generated files against a known case and
-validate the packed `.ntiga` database.
+For spline changes, compare legacy outputs against a known case, exercise cache
+and text packing paths, reject stale/truncated caches, and compare the packed
+`.ntiga` database.
 
 ## Commit & Pull Request Guidelines
 
 Use short imperative commits such as `Improve owned-row assembly`. Do not
-commit executables, objects, `.ntiga`, partitions, VTK results, case data, or
-scheduler logs. Pull requests should identify the pipeline stage, describe
-numerical and file-format effects, list validation commands and hardware, link
+commit executables, objects, `.ntiga`, `.igacache`, partitions, VTK results,
+case data, or scheduler logs. Pull requests should identify the pipeline stage,
+describe numerical and file-format effects, list validation commands and hardware, link
 issues, and include geometry images when applicable.

@@ -54,7 +54,8 @@ Build with `make spline`. The argument is a directory prefix, so include its
 trailing slash:
 
 ```bash
-OMP_NUM_THREADS=8 ./preprocessing/spline/spline "$CASE_DIR/"
+OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
+  "$CASE_DIR/" --no-legacy-text
 ```
 
 Set the thread count to the allocated CPU cores. The extractor processes
@@ -64,9 +65,12 @@ preserving deterministic legacy text output.
 It reads `controlmesh.vtk` and writes:
 
 - `bzmeshinfo.txt`: Bezier element connectivity;
-- `cmat.txt`: extraction coefficients in the legacy interchange format;
-- `bzpt.txt`: 64 Bezier points per element;
+- `spline_cache.igacache`: versioned sparse coefficients and Bezier points;
 - `bzmesh.vtk`: visualization output.
+
+Omit `--no-legacy-text` to additionally reproduce `cmat.txt` and `bzpt.txt`.
+The binary cache records a control-mesh content hash; `iga_pack` rejects stale,
+truncated, malformed, or version-incompatible caches.
 
 ## 3. Partition and pack
 
@@ -79,7 +83,9 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
 
-The packer validates legacy text once and creates a binary database with direct
+The packer prefers `spline_cache.igacache` and falls back to legacy text when
+the cache is absent. Pass `--legacy-text` after the output path to force that
+fallback for regression testing. It creates a binary database with direct
 element offsets, sparse extraction rows, adjacency, and per-rank
 touching-element indices. Repack when changing the CPU rank count. CUDA ignores
 ownership records and may reuse any valid packed database.

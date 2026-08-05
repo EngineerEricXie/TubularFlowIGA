@@ -18,7 +18,7 @@ SWC skeleton
   -> C++ smoothing and hexahedral control mesh
   -> controlmesh.vtk
   -> C++ spline and Bezier extraction
-  -> bzmeshinfo.txt + cmat.txt + bzpt.txt
+  -> bzmeshinfo.txt + sparse preprocessing cache
   -> METIS partition + iga_pack
   -> partition-aware .ntiga database
   -> CPU (MPI/PETSc) or CUDA (single GPU)
@@ -81,7 +81,8 @@ export RANKS=8
 
 ./preprocessing/mesh/tubular_mesh pipeline \
   "$CASE_DIR" meshgeneration/template
-./preprocessing/spline/spline "$CASE_DIR/"
+OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
+  "$CASE_DIR/" --no-legacy-text
 mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_pack "$CASE_DIR" "$RANKS" "$DATABASE"
 ./solvers/cpu/iga_inspect "$DATABASE"

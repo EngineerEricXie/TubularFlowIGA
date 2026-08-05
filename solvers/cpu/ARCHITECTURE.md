@@ -2,7 +2,12 @@
 
 ## Data path
 
-MATLAB mesh generation writes `controlmesh.vtk`; `spline_src` produces `bzmeshinfo.txt`, `cmat.txt`, and `bzpt.txt`. `iga_pack` validates these files and creates an indexed `.ntiga` database. Each MPI rank seeks only the element records needed for its owned rows instead of scanning every multi-gigabyte ASCII file.
+Control-mesh generation writes `controlmesh.vtk`; spline preprocessing produces
+`bzmeshinfo.txt` and a versioned sparse `spline_cache.igacache`. `iga_pack`
+validates the mesh hash and cache records, combines them with the METIS
+partition, and creates an indexed `.ntiga` database. Legacy `cmat.txt` and
+`bzpt.txt` remain an explicit fallback. Each MPI rank seeks only the element
+records needed for its owned rows.
 
 ## Distributed assembly
 

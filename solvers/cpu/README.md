@@ -12,7 +12,7 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 
 | Executable | Purpose |
 | --- | --- |
-| `iga_pack` | Validate legacy text inputs and create an indexed `.ntiga` database |
+| `iga_pack` | Validate sparse cache or legacy text and create indexed `.ntiga` |
 | `iga_inspect` | Print database metadata and partition statistics |
 | `iga_mesh_check` | Evaluate every element at 4x4x4 quadrature points and reject non-positive Jacobians |
 | `iga_assembly_smoke` | Exercise distributed owned-row sparse assembly |
@@ -29,7 +29,7 @@ stored dense extraction data, preallocated 1,000 matrix entries per row, and
 relied on PETSc off-process insertion. This version changes the data and
 assembly path:
 
-- Pack `cmat.txt`, `bzpt.txt`, mesh, and partition data once into a binary
+- Pack the sparse preprocessing cache, mesh, and partition data into a binary
   database with direct element offsets and per-rank touching-element indices.
 - Store only nonzero Bezier extraction rows and seek directly to records needed
   by each rank.
@@ -111,7 +111,8 @@ are intentionally ignored.
 - PETSc with C++ and MPI support; the validated build uses optimized
   `arch-linux-c-opt`.
 - METIS/`mpmetis` to create a partition matching the MPI rank count.
-- Legacy spline outputs: `bzmeshinfo.txt`, `cmat.txt`, and `bzpt.txt`.
+- Spline outputs: `bzmeshinfo.txt` and `spline_cache.igacache`.
+- Optional legacy outputs: `cmat.txt` and `bzpt.txt`.
 
 ## Build
 
@@ -142,7 +143,8 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ~~~
 
 The partition suffix and `mpiexec -np` count must match the rank count passed
-to `iga_pack`.
+to `iga_pack`. The packer prefers the sparse cache. Add `--legacy-text` after
+`$DATABASE` to force the legacy reader for comparison.
 
 ## Run
 
