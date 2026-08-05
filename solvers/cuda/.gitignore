@@ -1,0 +1,8 @@
+/iga_cuda
+
+*.o
+*.d
+*.log
+*.out
+
+/slurm/*.out
