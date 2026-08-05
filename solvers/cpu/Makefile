@@ -1,6 +1,6 @@
 CXX ?= g++
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
-CPPFLAGS ?= -Iinclude
+CPPFLAGS ?= -Iinclude -I../../include
 LDLIBS ?= -lstdc++fs
 
 PETSC_DIR ?=
@@ -22,7 +22,7 @@ all: iga_pack iga_inspect
 
 petsc: iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
 
-iga_pack: src/iga_pack.cpp include/IgaDatabase.hpp
+iga_pack: src/iga_pack.cpp include/IgaDatabase.hpp ../../include/IgaPreprocessCache.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 iga_inspect: src/iga_inspect.cpp include/IgaDatabase.hpp

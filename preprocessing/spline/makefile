@@ -1,6 +1,6 @@
 CXX ?= g++
 EIGEN_DIR ?= /usr/include/eigen3
-CPPFLAGS ?= -I$(EIGEN_DIR)
+CPPFLAGS ?= -I$(EIGEN_DIR) -I../../include
 CXXFLAGS ?= -O3 -std=c++11 -Wall -Wextra -fopenmp
 LDLIBS ?= -fopenmp -lpthread -lm -ldl
 
@@ -13,6 +13,8 @@ all: $(TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(OBJECTS) -o $@ $(LDLIBS)
+
+kernel.o: ../../include/IgaPreprocessCache.hpp
 
 %.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@

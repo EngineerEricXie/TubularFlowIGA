@@ -14,7 +14,7 @@ using namespace std;
 class kernel
 {
 public:
-	void run(string fn_in);//comparison using B-splines-like
+	void run(string fn_in, bool legacy_text = true);//comparison using B-splines-like
 
 private:
 	vector<Vertex3D> cp;//control points
@@ -25,7 +25,7 @@ private:
 	vector<array<double, 3>> bzcp;//Bezier control points
 
 	void OutputMesh(const vector<BezierElement3D>& bzmesh, string fn);
-	void ExtractAndOutput(const string& fn);
+	void ExtractAndOutput(const string& fn, bool legacy_text);
 	void BezierExtract(vector<BezierElement3D>& bzmesh, vector<int>& IDBC, vector<double>& gh);
 	void BuildSplines_Unstruct();
 	void BuildElementSplines_Interior(int eid);

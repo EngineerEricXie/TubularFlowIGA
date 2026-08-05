@@ -1,11 +1,75 @@
 #include "kernel.h"
+#include "IgaPreprocessCache.hpp"
 
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
 typedef unsigned int uint;
 
 namespace {
+
+template <class T>
+void AppendBinary(string& output, const T& value)
+{
+	output.append(reinterpret_cast<const char*>(&value), sizeof(T));
+}
+
+double LegacyTextValue(double value)
+{
+	if (value == 0.0) return value;
+	char text[64];
+	const int length = std::snprintf(text, sizeof(text), "%.6g", value);
+	if (length <= 0 || static_cast<size_t>(length) >= sizeof(text))
+	{
+		throw runtime_error("cannot encode floating-point cache value");
+	}
+	char* end = nullptr;
+	const double result = std::strtod(text, &end);
+	if (end != text + length) throw runtime_error("cannot decode floating-point cache value");
+	return result;
+}
+
+string CacheRecord(std::uint64_t eid, const BezierElement3D& element)
+{
+	string output;
+	output.reserve(16384);
+	AppendBinary(output, eid);
+	AppendBinary(output, static_cast<std::int32_t>(element.type));
+	AppendBinary(output, static_cast<std::uint32_t>(element.IEN.size()));
+	for (size_t row = 0; row < element.IEN.size(); row++)
+	{
+		AppendBinary(output, static_cast<std::int32_t>(element.IEN[row]));
+	}
+	for (size_t row = 0; row < element.cmat.size(); row++)
+	{
+		array<double, igacache::kBezierPointCount> values;
+		std::uint8_t nonzeros = 0;
+		for (size_t column = 0; column < element.cmat[row].size(); column++)
+		{
+			values[column] = LegacyTextValue(element.cmat[row][column]);
+			if (values[column] != 0.0) nonzeros++;
+		}
+		AppendBinary(output, nonzeros);
+		for (std::uint8_t column = 0; column < igacache::kBezierPointCount; column++)
+		{
+			const double value = values[column];
+			if (value == 0.0) continue;
+			AppendBinary(output, column);
+			AppendBinary(output, value);
+		}
+	}
+	for (size_t point = 0; point < element.pts.size(); point++)
+	{
+		for (int direction = 0; direction < 3; direction++)
+		{
+			AppendBinary(output, LegacyTextValue(element.pts[point][direction]));
+		}
+	}
+	return output;
+}
 
 string VtkPointRecord(const BezierElement3D& element)
 {
@@ -66,13 +130,13 @@ string BezierPointRecord(const BezierElement3D& element)
 
 }
 
-void kernel::run(string fn_in)
+void kernel::run(string fn_in, bool legacy_text)
 {
 	InitializeMesh(fn_in);
-	ExtractAndOutput(fn_in);
+	ExtractAndOutput(fn_in, legacy_text);
 }
 
-void kernel::ExtractAndOutput(const string& fn)
+void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 {
 	if (tmesh.size() > static_cast<size_t>(numeric_limits<int>::max()))
 	{
@@ -87,18 +151,23 @@ void kernel::ExtractAndOutput(const string& fn)
 	}
 
 	const size_t buffer_size = 1u << 20;
-	vector<char> vtk_buffer(buffer_size), info_buffer(buffer_size);
+	vector<char> vtk_buffer(buffer_size), info_buffer(buffer_size), cache_buffer(buffer_size);
 	vector<char> cmat_buffer(buffer_size), point_buffer(buffer_size);
-	ofstream vtk, info, cmat, bzpt;
+	ofstream vtk, info, cmat, bzpt, cache;
 	vtk.rdbuf()->pubsetbuf(vtk_buffer.data(), vtk_buffer.size());
 	info.rdbuf()->pubsetbuf(info_buffer.data(), info_buffer.size());
+	cache.rdbuf()->pubsetbuf(cache_buffer.data(), cache_buffer.size());
 	cmat.rdbuf()->pubsetbuf(cmat_buffer.data(), cmat_buffer.size());
 	bzpt.rdbuf()->pubsetbuf(point_buffer.data(), point_buffer.size());
 	vtk.open((fn + "bzmesh.vtk").c_str());
 	info.open((fn + "bzmeshinfo.txt").c_str());
-	cmat.open((fn + "cmat.txt").c_str());
-	bzpt.open((fn + "bzpt.txt").c_str());
-	if (!vtk || !info || !cmat || !bzpt)
+	cache.open((fn + "spline_cache.igacache").c_str(), ios::binary | ios::trunc);
+	if (legacy_text)
+	{
+		cmat.open((fn + "cmat.txt").c_str());
+		bzpt.open((fn + "bzpt.txt").c_str());
+	}
+	if (!vtk || !info || !cache || (legacy_text && (!cmat || !bzpt)))
 	{
 		throw runtime_error("cannot create spline output files under " + fn);
 	}
@@ -107,8 +176,13 @@ void kernel::ExtractAndOutput(const string& fn)
 	vtk << "# vtk DataFile Version 2.0\nBezier mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
 	vtk << "POINTS " << 8 * elements << " float\n";
 	info << elements << "\n";
-	cmat << elements << "\n";
-	bzpt << elements * 64 << "\n";
+	igacache::WriteHeader(
+		cache, elements, cp.size(), igacache::HashFile(fn + "controlmesh.vtk"));
+	if (legacy_text)
+	{
+		cmat << elements << "\n";
+		bzpt << elements * 64 << "\n";
+	}
 
 	const int chunk_size = 256;
 	const int element_count = static_cast<int>(elements);
@@ -122,6 +196,7 @@ void kernel::ExtractAndOutput(const string& fn)
 		vector<string> info_records(static_cast<size_t>(end - begin));
 		vector<string> cmat_records(static_cast<size_t>(end - begin));
 		vector<string> point_records(static_cast<size_t>(end - begin));
+		vector<string> cache_records(static_cast<size_t>(end - begin));
 #pragma omp parallel for schedule(static)
 		for (int eid = begin; eid < end; eid++)
 		{
@@ -168,8 +243,12 @@ void kernel::ExtractAndOutput(const string& fn)
 			const size_t local = static_cast<size_t>(eid - begin);
 			vtk_records[local] = VtkPointRecord(output);
 			info_records[local] = ConnectivityRecord(output);
-			cmat_records[local] = ExtractionRecord(eid, output);
-			point_records[local] = BezierPointRecord(output);
+			cache_records[local] = CacheRecord(static_cast<std::uint64_t>(eid), output);
+			if (legacy_text)
+			{
+				cmat_records[local] = ExtractionRecord(eid, output);
+				point_records[local] = BezierPointRecord(output);
+			}
 		}
 
 		for (int eid = begin; eid < end; eid++)
@@ -177,8 +256,12 @@ void kernel::ExtractAndOutput(const string& fn)
 			const size_t local = static_cast<size_t>(eid - begin);
 			vtk << vtk_records[local];
 			info << info_records[local];
-			cmat << cmat_records[local];
-			bzpt << point_records[local];
+			cache.write(cache_records[local].data(), cache_records[local].size());
+			if (legacy_text)
+			{
+				cmat << cmat_records[local];
+				bzpt << point_records[local];
+			}
 		}
 		if (end == element_count || end % 2048 == 0)
 		{
@@ -199,9 +282,13 @@ void kernel::ExtractAndOutput(const string& fn)
 
 	vtk.close();
 	info.close();
-	cmat.close();
-	bzpt.close();
-	if (!vtk || !info || !cmat || !bzpt)
+	cache.close();
+	if (legacy_text)
+	{
+		cmat.close();
+		bzpt.close();
+	}
+	if (!vtk || !info || !cache || (legacy_text && (!cmat || !bzpt)))
 	{
 		throw runtime_error("failed while writing spline output files under " + fn);
 	}

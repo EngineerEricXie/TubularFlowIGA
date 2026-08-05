@@ -1,4 +1,5 @@
 #include "IgaDatabase.hpp"
+#include "IgaPreprocessCache.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -8,6 +9,15 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+struct InputElement
+{
+	std::uint64_t id = 0;
+	std::int32_t type = 0;
+	std::vector<std::int32_t> connectivity;
+	std::vector<std::array<double, iga::kBezierPointCount>> extraction;
+	std::array<std::array<double, 3>, iga::kBezierPointCount> bezier_points{};
+};
 
 template <class T>
 T Next(std::istream& in, const char* file, std::uint64_t element, const char* field)
@@ -32,7 +42,8 @@ std::vector<std::int32_t> ReadPartition(const fs::path& path, std::uint64_t elem
 		if (owner < 0 || owner >= ranks) throw std::runtime_error("partition contains an invalid rank");
 		owners.push_back(static_cast<std::int32_t>(owner));
 	}
-	if (owners.size() != elements) throw std::runtime_error("partition element count does not match cmat.txt");
+	if (owners.size() != elements)
+		throw std::runtime_error("partition element count does not match preprocessing data");
 	return owners;
 }
 
@@ -40,6 +51,13 @@ void RequireOnlyWhitespace(std::istream& in, const char* file)
 {
 	std::string extra;
 	if (in >> extra) throw std::runtime_error(std::string(file) + " has extra data after the declared elements");
+}
+
+void RequireCacheEnd(std::istream& in)
+{
+	char extra = 0;
+	if (in.read(&extra, 1)) throw std::runtime_error("preprocessing cache has extra trailing data");
+	if (!in.eof()) throw std::runtime_error("failed while finalizing preprocessing cache read");
 }
 
 std::uint64_t ReadNodeCount(const fs::path& path)
@@ -68,13 +86,88 @@ std::uint32_t NodeOwner(std::uint64_t node, std::uint64_t nodes, std::uint32_t r
 	return static_cast<std::uint32_t>(rem + (node - wide_end) / q);
 }
 
+InputElement ReadLegacyElement(std::istream& cmat, std::istream& bzpt, std::uint64_t expected)
+{
+	InputElement element;
+	const auto id = Next<std::uint64_t>(cmat, "cmat.txt", expected, "id");
+	const auto nen64 = Next<std::uint64_t>(cmat, "cmat.txt", expected, "basis count");
+	const auto type64 = Next<std::int64_t>(cmat, "cmat.txt", expected, "type");
+	if (id != expected) throw std::runtime_error("cmat.txt element ids are not contiguous");
+	if (nen64 == 0 || nen64 > 4096) throw std::runtime_error("invalid basis count in cmat.txt");
+	if (type64 < std::numeric_limits<std::int32_t>::min() ||
+		type64 > std::numeric_limits<std::int32_t>::max())
+		throw std::runtime_error("element type is out of range");
+	element.id = id;
+	element.type = static_cast<std::int32_t>(type64);
+	const auto nen = static_cast<std::uint32_t>(nen64);
+	element.connectivity.resize(nen);
+	element.extraction.resize(nen);
+	for (auto& node : element.connectivity) {
+		const auto input = Next<std::int64_t>(cmat, "cmat.txt", expected, "connectivity");
+		if (input < 0 || input > std::numeric_limits<std::int32_t>::max())
+			throw std::runtime_error("connectivity index is out of range");
+		node = static_cast<std::int32_t>(input);
+	}
+	for (auto& row : element.extraction)
+		for (double& value : row)
+			value = Next<double>(cmat, "cmat.txt", expected, "extraction coefficient");
+	for (auto& point : element.bezier_points)
+		for (double& value : point)
+			value = Next<double>(bzpt, "bzpt.txt", expected, "Bezier point");
+	return element;
+}
+
+InputElement ReadCacheElement(std::istream& cache, std::uint64_t expected)
+{
+	InputElement element;
+	std::uint32_t nen = 0;
+	igacache::Read(cache, element.id);
+	igacache::Read(cache, element.type);
+	igacache::Read(cache, nen);
+	if (element.id != expected) throw std::runtime_error("preprocessing cache element ids are not contiguous");
+	if (nen == 0 || nen > 4096) throw std::runtime_error("invalid basis count in preprocessing cache");
+	element.connectivity.resize(nen);
+	element.extraction.resize(nen);
+	for (auto& node : element.connectivity) {
+		igacache::Read(cache, node);
+		if (node < 0) throw std::runtime_error("negative connectivity in preprocessing cache");
+	}
+	for (auto& row : element.extraction) {
+		row.fill(0.0);
+		std::array<bool, iga::kBezierPointCount> seen{};
+		std::uint8_t nonzeros = 0;
+		igacache::Read(cache, nonzeros);
+		if (nonzeros > iga::kBezierPointCount)
+			throw std::runtime_error("too many extraction entries in preprocessing cache row");
+		for (std::uint8_t entry = 0; entry < nonzeros; entry++) {
+			std::uint8_t column = 0;
+			double value = 0.0;
+			igacache::Read(cache, column);
+			igacache::Read(cache, value);
+			if (column >= iga::kBezierPointCount || seen[column] || value == 0.0)
+				throw std::runtime_error("invalid sparse extraction entry in preprocessing cache");
+			seen[column] = true;
+			row[column] = value;
+		}
+	}
+	for (auto& point : element.bezier_points)
+		for (double& value : point)
+			igacache::Read(cache, value);
+	return element;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
 	try {
-		if (argc != 4) {
-			std::cerr << "usage: iga_pack CASE_DIR RANKS OUTPUT.ntiga\n";
+		if (argc < 4 || argc > 5) {
+			std::cerr << "usage: iga_pack CASE_DIR RANKS OUTPUT.ntiga [--legacy-text]\n";
+			return 2;
+		}
+		const bool force_legacy = argc == 5;
+		if (force_legacy && std::string(argv[4]) != "--legacy-text") {
+			std::cerr << "usage: iga_pack CASE_DIR RANKS OUTPUT.ntiga [--legacy-text]\n";
 			return 2;
 		}
 		const fs::path dir(argv[1]);
@@ -85,16 +178,34 @@ int main(int argc, char** argv)
 		const fs::path output(argv[3]);
 		const auto nodes = ReadNodeCount(dir / "controlmesh.vtk");
 
-		std::ifstream cmat(dir / "cmat.txt");
-		std::ifstream bzpt(dir / "bzpt.txt");
-		if (!cmat) throw std::runtime_error("cannot open " + (dir / "cmat.txt").string());
-		if (!bzpt) throw std::runtime_error("cannot open " + (dir / "bzpt.txt").string());
-
-		const auto elements = Next<std::uint64_t>(cmat, "cmat.txt", 0, "element count");
-		const auto point_values = Next<std::uint64_t>(bzpt, "bzpt.txt", 0, "point count");
-		if (elements == 0) throw std::runtime_error("cmat.txt declares zero elements");
-		if (point_values != elements * iga::kBezierPointCount)
-			throw std::runtime_error("bzpt.txt point count is not 64 times the element count");
+		const fs::path cache_path = dir / "spline_cache.igacache";
+		const bool use_cache = !force_legacy && fs::exists(cache_path);
+		std::ifstream cache;
+		std::ifstream cmat;
+		std::ifstream bzpt;
+		std::uint64_t elements = 0;
+		if (use_cache) {
+			cache.open(cache_path, std::ios::binary);
+			if (!cache) throw std::runtime_error("cannot open " + cache_path.string());
+			const auto header = igacache::ReadHeader(cache);
+			if (header.nodes != nodes)
+				throw std::runtime_error("preprocessing cache node count does not match controlmesh.vtk");
+			if (header.mesh_hash != igacache::HashFile((dir / "controlmesh.vtk").string()))
+				throw std::runtime_error("preprocessing cache does not match controlmesh.vtk content");
+			elements = header.elements;
+			std::cout << "using sparse preprocessing cache " << cache_path << '\n';
+		} else {
+			cmat.open(dir / "cmat.txt");
+			bzpt.open(dir / "bzpt.txt");
+			if (!cmat) throw std::runtime_error("cannot open " + (dir / "cmat.txt").string());
+			if (!bzpt) throw std::runtime_error("cannot open " + (dir / "bzpt.txt").string());
+			elements = Next<std::uint64_t>(cmat, "cmat.txt", 0, "element count");
+			const auto point_values = Next<std::uint64_t>(bzpt, "bzpt.txt", 0, "point count");
+			if (elements == 0) throw std::runtime_error("cmat.txt declares zero elements");
+			if (point_values != elements * iga::kBezierPointCount)
+				throw std::runtime_error("bzpt.txt point count is not 64 times the element count");
+			std::cout << "using legacy cmat.txt and bzpt.txt preprocessing data\n";
+		}
 
 		const auto partition = ReadPartition(
 			dir / ("bzmeshinfo.txt.epart." + std::to_string(ranks)), elements, ranks);
@@ -120,34 +231,21 @@ int main(int argc, char** argv)
 
 		for (std::uint64_t e = 0; e < elements; ++e) {
 			offsets[static_cast<std::size_t>(e)] = static_cast<std::uint64_t>(out.tellp());
-			const auto id = Next<std::uint64_t>(cmat, "cmat.txt", e, "id");
-			const auto nen64 = Next<std::uint64_t>(cmat, "cmat.txt", e, "basis count");
-			const auto type64 = Next<std::int64_t>(cmat, "cmat.txt", e, "type");
-			if (id != e) throw std::runtime_error("cmat.txt element ids are not contiguous");
-			if (nen64 == 0 || nen64 > 4096) throw std::runtime_error("invalid basis count in cmat.txt");
-			if (type64 < std::numeric_limits<std::int32_t>::min() || type64 > std::numeric_limits<std::int32_t>::max())
-				throw std::runtime_error("element type is out of range");
-			const auto nen = static_cast<std::uint32_t>(nen64);
-			iga::Write(out, id);
-			iga::Write(out, static_cast<std::int32_t>(type64));
+			const InputElement element = use_cache ? ReadCacheElement(cache, e) : ReadLegacyElement(cmat, bzpt, e);
+			const auto nen = static_cast<std::uint32_t>(element.connectivity.size());
+			iga::Write(out, element.id);
+			iga::Write(out, element.type);
 			iga::Write(out, partition[static_cast<std::size_t>(e)]);
 			iga::Write(out, nen);
 			std::set<std::uint32_t> row_owners;
-			for (std::uint32_t i = 0; i < nen; ++i) {
-				const auto node = Next<std::int64_t>(cmat, "cmat.txt", e, "connectivity");
-				if (node < 0 || node > std::numeric_limits<std::int32_t>::max())
-					throw std::runtime_error("connectivity index is out of range");
-				iga::Write(out, static_cast<std::int32_t>(node));
+			for (const auto node : element.connectivity) {
+				iga::Write(out, node);
 				row_owners.insert(NodeOwner(static_cast<std::uint64_t>(node), nodes, ranks));
 			}
 			for (auto owner : row_owners) required[owner].push_back(e);
-			for (std::uint32_t i = 0; i < nen; ++i) {
-				std::array<double, iga::kBezierPointCount> row{};
+			for (const auto& row : element.extraction) {
 				std::uint8_t nonzeros = 0;
-				for (double& value : row) {
-					value = Next<double>(cmat, "cmat.txt", e, "extraction coefficient");
-					if (value != 0.0) ++nonzeros;
-				}
+				for (const double value : row) if (value != 0.0) ++nonzeros;
 				iga::Write(out, nonzeros);
 				for (std::uint8_t column = 0; column < iga::kBezierPointCount; ++column) {
 					if (row[column] == 0.0) continue;
@@ -155,14 +253,17 @@ int main(int argc, char** argv)
 					iga::Write(out, row[column]);
 				}
 			}
-			for (std::uint32_t i = 0; i < iga::kBezierPointCount; ++i)
-				for (int d = 0; d < 3; ++d)
-					iga::Write(out, Next<double>(bzpt, "bzpt.txt", e, "Bezier point"));
+			out.write(reinterpret_cast<const char*>(element.bezier_points.data()),
+				static_cast<std::streamsize>(sizeof(element.bezier_points)));
+			if (!out) throw std::runtime_error("failed to write element record");
 			if ((e + 1) % 10000 == 0) std::cerr << "packed " << (e + 1) << '/' << elements << " elements\n";
 		}
 		offsets.back() = static_cast<std::uint64_t>(out.tellp());
-		RequireOnlyWhitespace(cmat, "cmat.txt");
-		RequireOnlyWhitespace(bzpt, "bzpt.txt");
+		if (use_cache) RequireCacheEnd(cache);
+		else {
+			RequireOnlyWhitespace(cmat, "cmat.txt");
+			RequireOnlyWhitespace(bzpt, "bzpt.txt");
+		}
 		const auto rank_index_offset = static_cast<std::uint64_t>(out.tellp());
 		std::vector<std::uint64_t> rank_offsets(static_cast<std::size_t>(ranks) + 1, 0);
 		for (std::uint32_t rank = 0; rank < ranks; ++rank)
