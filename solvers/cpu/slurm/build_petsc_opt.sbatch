@@ -11,7 +11,7 @@
 set -euo pipefail
 module load openmpi/4.0.5-gcc10.2.0
 
-PETSC_DIR=${PETSC_DIR:-/ocean/projects/mch260002p/thsieh1/petsc}
+PETSC_DIR=${PETSC_DIR:?Set PETSC_DIR to a writable PETSc source directory}
 PETSC_ARCH=${PETSC_ARCH:-arch-linux-c-opt}
 cd "$PETSC_DIR"
 

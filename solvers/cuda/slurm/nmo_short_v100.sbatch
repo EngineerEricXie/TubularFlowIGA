@@ -11,7 +11,7 @@
 
 set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-case_root=${IGA_CASE_ROOT:-/ocean/projects/mch260002p/thsieh1/NeuronTransportIGA}
+case_root=${IGA_CASE_ROOT:?Set IGA_CASE_ROOT to the external case-data directory}
 cd "${case_root}"
 module load cuda/12.4.0
 

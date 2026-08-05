@@ -3,12 +3,17 @@ CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 CPPFLAGS ?= -Iinclude
 LDLIBS ?= -lstdc++fs
 
-PETSC_DIR ?= /ocean/projects/mch260002p/thsieh1/petsc
-PETSC_ARCH ?= arch-linux-c-opt
+PETSC_DIR ?=
+PETSC_ARCH ?=
 PETSC_TARGETS := petsc iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
 
 ifneq ($(strip $(filter $(PETSC_TARGETS),$(MAKECMDGOALS))),)
--include $(PETSC_DIR)/$(PETSC_ARCH)/lib/petsc/conf/petscvariables
+ifeq ($(strip $(PETSC_DIR)),)
+$(error PETSC_DIR must be set when building PETSc targets)
+endif
+PETSC_PREFIX := $(PETSC_DIR)$(if $(strip $(PETSC_ARCH)),/$(PETSC_ARCH))
+PETSC_VARIABLES ?= $(PETSC_PREFIX)/lib/petsc/conf/petscvariables
+include $(PETSC_VARIABLES)
 endif
 
 .PHONY: all petsc clean

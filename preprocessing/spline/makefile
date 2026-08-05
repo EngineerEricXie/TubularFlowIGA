@@ -1,5 +1,6 @@
 CXX ?= g++
-CPPFLAGS ?= -I/usr/include/eigen3
+EIGEN_DIR ?= /usr/include/eigen3
+CPPFLAGS ?= -I$(EIGEN_DIR)
 CXXFLAGS ?= -O3 -std=c++11 -Wall -Wextra -fopenmp
 LDLIBS ?= -fopenmp -lpthread -lm -ldl
 
