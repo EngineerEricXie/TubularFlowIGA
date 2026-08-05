@@ -5,6 +5,27 @@ Packing and text preprocessing are excluded unless stated. Timings are
 hardware- and solver-option-specific; reproduce them from compute nodes with
 the same case snapshot.
 
+## C++ control-mesh generation
+
+The dependency-free C++ replacement was compared against the current MATLAB
+workflow, not the stale VTK snapshots in some case directories.
+
+| Case | Points | Hexes | C++ wall time | Peak RSS | Minimum scaled J |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Cylinder | 4,221 | 3,600 | 0.06 s | 4.5 MiB | 0.763084 |
+| Bifurcation | 14,565 | 12,780 | 0.21 s | 6.6 MiB | 0.382533 |
+| NMO_54499_new | 35,949 | 31,680 | 0.76 s | 10.8 MiB | 0.0315119 |
+
+For cylinder, bifurcation, and three-bifurcation regressions, connectivity and
+labels matched MATLAB exactly; coordinate differences were at most the
+`1e-6` VTK text precision. The large NMO mesh had no invalid control elements.
+Its extracted IGA geometry also passed all 2,027,520 determinant samples with
+`min(detJ)=1.27675e-7`.
+
+The legacy spline extractor, rather than mesh generation, is now the main
+preprocessing bottleneck for NMO: 62.50 s wall time and about 2.19 GiB peak RSS.
+See [the mesh validation report](MESH_CPP_VALIDATION.md) for methodology.
+
 ## Legacy versus optimized CPU
 
 Cylinder: 4,221 nodes and 3,600 elements.

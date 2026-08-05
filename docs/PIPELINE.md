@@ -11,9 +11,28 @@ A case directory starts with `skeleton_initial.swc` and
 4. target Bezier segment length;
 5. bifurcation refinement ratio.
 
-Install the MATLAB TREES Toolbox separately. Add both TREES and this repository
-recursively to the MATLAB path, set `io_path` near the top of
-`TreeSmooth.m` and `Hexmesh_main.m`, then run:
+Build and test the standalone C++ generator from the repository root:
+
+```bash
+make mesh
+make mesh-test
+./preprocessing/mesh/tubular_mesh pipeline \
+  "$CASE_DIR" meshgeneration/template
+```
+
+It writes `skeleton_smooth.swc`, `controlmesh.vtk`, and
+`initial_velocityfield.txt`. The implementation parses SWC directly, evaluates
+its own cubic B-splines, constructs tube and bifurcation hexahedra, and has no
+MATLAB, TREES, Eigen, or VTK-library dependency. It currently requires a tree
+whose nonterminal nodes have exactly two children.
+
+The smoothed SWC is intentionally written to eight decimal places and read
+back before meshing. This preserves the legacy file-interface behavior at
+layer-count boundaries.
+
+MATLAB remains as an optional reference workflow. Install TREES separately,
+add both TREES and this repository recursively to the MATLAB path, set
+`io_path` near the top of `TreeSmooth.m` and `Hexmesh_main.m`, then run:
 
 ```matlab
 cd('/path/to/TubularFlowIGA/meshgeneration')
@@ -22,9 +41,9 @@ TreeSmooth
 Hexmesh_main
 ```
 
-The scripts write `skeleton_smooth.swc`, `controlmesh.vtk`, and an initial
-velocity field. The generator rejects invalid lengths and diameters, limits
-unsafe point motion, checks element corners and 4x4x4 quadrature samples, and
+Both implementations write the same file interfaces. The C++ generator rejects
+invalid lengths and diameters, limits unsafe point motion, checks element
+corners and 4x4x4 quadrature samples, and
 stops before writing a mesh below its scaled-Jacobian floor. Inspect the result
 in ParaView as a second gate. A positive determinant is mandatory; a minimum
 scaled Jacobian above 0.1 is a practical production target.

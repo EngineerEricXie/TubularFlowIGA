@@ -2,8 +2,8 @@
 
 TubularFlowIGA is a C++ isogeometric-analysis pipeline for stabilized steady
 Navier-Stokes flow and transient two-field transport in tubular and branching
-geometries. It combines MATLAB control-mesh generation, C++ Bezier extraction,
-an MPI/PETSc CPU backend, and a single-GPU CUDA backend. The IGA basis,
+geometries. It combines dependency-free C++ control-mesh generation, C++
+Bezier extraction, an MPI/PETSc CPU backend, and a single-GPU CUDA backend. The IGA basis,
 quadrature, weak forms, assembly, nonlinear iteration, time integration, and
 CUDA sparse kernels are project code; PETSc and cuBLAS provide linear-algebra
 services.
@@ -15,7 +15,7 @@ general-purpose CFD package.
 
 ```text
 SWC skeleton
-  -> MATLAB smoothing and hexahedral control mesh
+  -> C++ smoothing and hexahedral control mesh
   -> controlmesh.vtk
   -> C++ spline and Bezier extraction
   -> bzmeshinfo.txt + cmat.txt + bzpt.txt
@@ -27,7 +27,9 @@ SWC skeleton
 
 Repository layout:
 
-- `meshgeneration/`: corrected MATLAB skeleton smoothing and mesh generation.
+- `preprocessing/mesh/`: standalone C++ skeleton smoothing and control-mesh
+  generation.
+- `meshgeneration/`: legacy MATLAB reference and template geometry assets.
 - `preprocessing/spline/`: spline construction and Bezier extraction.
 - `solvers/cpu/`: packer, validators, Navier-Stokes, and transport with MPI/PETSc.
 - `solvers/cuda/`: FP64 single-GPU solver using the same `.ntiga` database.
@@ -37,19 +39,22 @@ Large cases and generated results are intentionally not versioned.
 
 ## Requirements
 
-- MATLAB and the external TREES Toolbox for SWC processing.
+- A C++17 compiler for control-mesh generation (no geometry library required).
 - A C++11 compiler, Eigen 3, and OpenMP for spline preprocessing.
 - A C++17 compiler, MPI, PETSc with C++ support, and METIS/`mpmetis` for CPU
   simulation.
 - CUDA and cuBLAS for the optional GPU backend.
 
-TREES is not vendored. Install it separately and add it to `MATLABPATH`.
+MATLAB and the external TREES Toolbox are optional and needed only to reproduce
+the legacy reference workflow. TREES is not vendored.
 
 ## Build
 
 From the repository root:
 
 ```bash
+make mesh
+make mesh-test
 make spline EIGEN_DIR=/path/to/eigen3
 make cpu
 
@@ -74,6 +79,8 @@ export CASE_DIR=/path/to/case
 export DATABASE=/path/to/work/case-8.ntiga
 export RANKS=8
 
+./preprocessing/mesh/tubular_mesh pipeline \
+  "$CASE_DIR" meshgeneration/template
 ./preprocessing/spline/spline "$CASE_DIR/"
 mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_pack "$CASE_DIR" "$RANKS" "$DATABASE"
@@ -111,7 +118,10 @@ is documented separately:
 
 - [PSC Bridges-2](docs/BRIDGES2.md)
 
-See [the pipeline guide](docs/PIPELINE.md) for MATLAB and file-interface details.
+The case directory must initially contain `skeleton_initial.swc` and
+`mesh_parameter.txt`. See the [mesh generator guide](preprocessing/mesh/README.md),
+[validation report](docs/MESH_CPP_VALIDATION.md), and
+[pipeline guide](docs/PIPELINE.md) for assumptions and file-interface details.
 
 ## Measured performance
 

@@ -2,7 +2,8 @@
 
 ## Project Structure & Module Organization
 
-- `meshgeneration/`: MATLAB SWC smoothing and validated hexahedral control meshes.
+- `preprocessing/mesh/`: dependency-free C++ SWC smoothing and control meshes.
+- `meshgeneration/`: legacy MATLAB reference and mesh template assets.
 - `preprocessing/spline/`: C++11 spline construction and Bezier extraction.
 - `solvers/cpu/`: C++17 MPI/PETSc packer, checks, Navier-Stokes, and transport.
 - `solvers/cuda/`: FP64 single-GPU implementation using the CPU database format.
@@ -14,6 +15,8 @@ METIS partition, velocity-field, and `.ntiga` interfaces.
 ## Build, Test, and Development Commands
 
 ```bash
+make mesh
+make mesh-test
 make spline EIGEN_DIR=/path/to/eigen3
 make cpu
 make cpu-petsc PETSC_DIR=/path/to/petsc PETSC_ARCH=your-arch
@@ -34,7 +37,8 @@ names. Compile with warnings enabled and resolve new warnings.
 
 ## Testing Guidelines
 
-Rebuild affected stages and run the smallest valid case. Verify exit status,
+Run `make mesh-test` after geometry changes. Rebuild affected stages and run the
+smallest valid case. Verify exit status,
 rank/partition agreement, positive Jacobians, convergence reasons, output
 sizes, and numerical norms. For performance work, report assembly and solve
 times separately, host peak RSS, and CUDA peak allocation. Compare CPU and CUDA
