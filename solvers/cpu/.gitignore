@@ -1,0 +1,13 @@
+/iga_pack
+/iga_inspect
+/iga_mesh_check
+/iga_assembly_smoke
+/iga_transport
+/iga_navier_stokes
+
+*.o
+*.d
+*.log
+*.out
+
+/slurm/*.out
