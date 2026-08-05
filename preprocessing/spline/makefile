@@ -1,29 +1,20 @@
-# I am a comment, and I want to say that the variable CC will be
-# the compiler to use.
-Compiler=icpc
-# Hey!, I am comment number 2. I want to say that CFLAGS will be the
-# options I'll pass to the compiler.
-CFLAGS=  -c -std=c++11 -Wall
-#-DMKL_ILP64
-FLAGS_LINK = -qopenmp -lpthread -lm -ldl
+CXX ?= g++
+CPPFLAGS ?= -I/usr/include/eigen3
+CXXFLAGS ?= -O3 -std=c++11 -Wall -Wextra -fopenmp
+LDLIBS ?= -fopenmp -lpthread -lm -ldl
 
+TARGET := spline
+OBJECTS := BasicDataStructure.o kernel.o KnotInsertion.o main.o
 
-all: spline
+.PHONY: all clean
 
-spline: BasicDataStructure.o kernel.o KnotInsertion.o  main.o
-	$(Compiler) BasicDataStructure.o kernel.o KnotInsertion.o  main.o -o spline $(FLAGS_LINK)
+all: $(TARGET)
 
-BasicDataStructure.o: BasicDataStructure.cpp
-	$(Compiler)	$(CFLAGS) BasicDataStructure.cpp $(FLAGS_LINK)
+$(TARGET): $(OBJECTS)
+	$(CXX) $(OBJECTS) -o $@ $(LDLIBS)
 
-kernel.o: kernel.cpp
-	$(Compiler)	$(CFLAGS) kernel.cpp $(FLAGS_LINK)
-
-KnotInsertion.o: KnotInsertion.cpp
-	$(Compiler)	$(CFLAGS) KnotInsertion.cpp $(FLAGS_LINK)
-
-main.o: main.cpp
-	$(Compiler)	$(CFLAGS) main.cpp $(FLAGS_LINK)
+%.o: %.cpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm *o
+	$(RM) $(TARGET) $(OBJECTS)

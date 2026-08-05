@@ -1,0 +1,24 @@
+# Compiled objects and executables
+*.o
+*.d
+/preprocessing/spline/spline
+/solvers/cpu/iga_pack
+/solvers/cpu/iga_inspect
+/solvers/cpu/iga_mesh_check
+/solvers/cpu/iga_assembly_smoke
+/solvers/cpu/iga_transport
+/solvers/cpu/iga_navier_stokes
+/solvers/cuda/iga_cuda
+
+# Generated databases, results, and scheduler output
+*.ntiga
+*.out
+*.log
+/.nsvms_diagnostics/
+/cases/
+/outputs/
+
+# Editor and MATLAB artifacts
+*.asv
+.DS_Store
+.Identifier
