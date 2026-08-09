@@ -5,6 +5,9 @@ Packing and text preprocessing are excluded unless stated. Timings are
 hardware- and solver-option-specific; reproduce them from compute nodes with
 the same case snapshot.
 
+Throughout this document, **legacy** refers to the original workflow and solver
+implementation in [NeuronTransportIGA](https://github.com/EngineerEricXie/NeuronTransportIGA).
+
 ## C++ control-mesh generation
 
 The dependency-free C++ replacement was compared against the current MATLAB
