@@ -126,6 +126,9 @@ The case directory must initially contain `skeleton_initial.swc` and
 
 ## Measured performance
 
+In this section, **legacy** refers to the original implementation in
+[NeuronTransportIGA](https://github.com/EngineerEricXie/NeuronTransportIGA).
+
 On the corrected 35,949-node `NMO_54499_new` case, one V100 completed coupled
 Navier-Stokes plus 300-step transport numerical work in 279.40 s versus
 563.68 s on 16 CPU ranks (2.02x). Combined host and device peak allocation was
@@ -134,7 +137,7 @@ velocity, pressure, and transport relative L2 differences were
 `5.33e-6`, `6.07e-6`, and `7.56e-6`.
 
 On the 4,221-node cylinder, the optimized CPU first nonlinear update was about
-16.6x faster and used 77.5% less memory than the legacy solver. The legacy
+16.6x faster and used 77.5% less memory than the [legacy NeuronTransportIGA solver](https://github.com/EngineerEricXie/NeuronTransportIGA). The legacy
 measurement was not a converged solve, so it is historical evidence rather than
 a complete solver-to-solver baseline.
 
