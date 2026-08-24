@@ -7,6 +7,12 @@
 /solvers/cpu/iga_pack
 /solvers/cpu/iga_inspect
 /solvers/cpu/iga_mesh_check
+/solvers/cpu/iga_case_check
+/solvers/cpu/case_config_test
+/solvers/cpu/iga_config_check
+/solvers/cpu/iga_solve
+/solvers/cpu/simulation_config_test
+/solvers/cpu/generic_transport_test
 /solvers/cpu/iga_assembly_smoke
 /solvers/cpu/iga_transport
 /solvers/cpu/iga_navier_stokes

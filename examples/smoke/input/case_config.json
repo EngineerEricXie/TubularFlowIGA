@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "boundaries": {
+    "inherit_legacy": false,
+    "conditions": [
+      {
+        "label": 0,
+        "name": "no-slip wall",
+        "type": "wall"
+      },
+      {
+        "label": 1,
+        "name": "inlet",
+        "type": "inlet",
+        "velocity_scale": 1.0,
+        "transport": {
+          "N0": 1.0,
+          "Nplus": 2.0
+        }
+      },
+      {
+        "label": 2,
+        "name": "outlet",
+        "type": "outlet",
+        "pressure": 0.0
+      }
+    ]
+  }
+}

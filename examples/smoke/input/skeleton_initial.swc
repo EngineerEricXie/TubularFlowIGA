@@ -1,0 +1,5 @@
+# Minimal straight tube used by the public smoke test.
+# id type x y z radius parent
+1 2 0.0 0.0 0.0 0.5 -1
+2 2 5.0 0.0 0.0 0.5 1
+3 2 10.0 0.0 0.0 0.5 2
