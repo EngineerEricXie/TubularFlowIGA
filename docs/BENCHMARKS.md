@@ -1,5 +1,17 @@
 # Benchmark Results
 
+## Cross-case end-to-end runtime comparison
+
+The following reported runtime comparison covers three branching-neuron cases. It contrasts the legacy [NeuronTransportIGA](https://github.com/EngineerEricXie/NeuronTransportIGA) CPU workflow, HexSim CPU, the optimized TubularFlowIGA CPU workflow, and the TubularFlowIGA V100 backend. Each value is a case-specific end-to-end runtime in seconds; it is not a hardware-scaling study.
+
+| Case | Nodes / elements | NeuronTransportIGA CPU | HexSim CPU | TubularFlowIGA CPU | TubularFlowIGA V100 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bifurcation | 14,565 / 12,780 | 442.68 s | 71.98 s | 26.75 s | **7.87 s** |
+| NMO_54499_shrink | 16,344 / 14,040 | 589.32 s | 69.61 s | 33.03 s | **16.39 s** |
+| NMO_66748_subtree | 57,456 / 50,940 | 12,127.80 s | 137.36 s | 98.77 s | **78.52 s** |
+
+Relative to the legacy CPU workflow, the V100 runtimes correspond to **56.2x**, **36.0x**, and **154.5x** speedups for the three cases, respectively. Relative to the optimized TubularFlowIGA CPU workflow, they correspond to **3.40x**, **2.02x**, and **1.26x** speedups. Hardware, rank count, solver options, and case snapshots must be kept fixed when reproducing or extending this comparison.
+
 These measurements were collected on PSC Bridges-2 with FP64 arithmetic.
 Packing and text preprocessing are excluded unless stated. Timings are
 hardware- and solver-option-specific; reproduce them from compute nodes with
