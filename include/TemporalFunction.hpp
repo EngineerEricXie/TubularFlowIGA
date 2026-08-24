@@ -142,6 +142,34 @@ inline const TemporalFunctionDefinition& FindTemporalFunction(
 	return *found;
 }
 
+inline SimulationConfiguration MaterializeBoundaryWaveforms(
+	const SimulationConfiguration& configuration, const std::filesystem::path& case_directory,
+	double physical_time)
+{
+	SimulationConfiguration result = configuration;
+	for (auto& boundary : result.boundaries)
+		for (auto& condition : boundary.conditions) {
+			if (condition.waveform.empty()) continue;
+			const auto& function = FindTemporalFunction(configuration, condition.waveform);
+			std::vector<TemporalSample> samples;
+			const std::vector<TemporalSample>* sample_pointer = nullptr;
+			if (function.kind == TemporalFunctionKind::PeriodicTable) {
+				const std::filesystem::path relative(function.file);
+				if (relative.is_absolute())
+					throw std::runtime_error("temporal CSV path must be relative to the case directory");
+				samples = ReadTemporalCsv((case_directory/relative).string(), function.period);
+				sample_pointer = &samples;
+			}
+			const double factor = EvaluateTemporalFunction(function, physical_time, sample_pointer);
+			if (condition.profile.empty())
+				for (auto& value : condition.value) value *= factor;
+			else
+				condition.scale *= factor;
+			condition.waveform.clear();
+		}
+	return result;
+}
+
 } // namespace iga
 
 #endif

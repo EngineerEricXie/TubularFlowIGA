@@ -6,9 +6,10 @@ field names, fixed or profile-scaled velocity Dirichlet data, and scalar
 Dirichlet/no-flux/outflow/flux/Robin conditions. The CPU and CUDA
 configured-transport solvers assemble matching scalar `flux` and `robin`
 surface integrals. Named temporal waveforms can now be parsed and
-evaluated, but boundary resolvers explicitly reject their execution pending
-transient time stepping. Inlet profile scaling therefore remains constant in
-actual solver runs. Track these increments in the [development roadmap](ROADMAP.md).
+evaluated. CPU configured transport updates waveform-backed Dirichlet values at
+each step. Steady Navier–Stokes explicitly rejects waveforms pending transient
+time stepping, so cardiovascular inlet profile scaling remains constant in
+actual flow runs. Track these increments in the [development roadmap](ROADMAP.md).
 
 For configured transport, `flux` specifies the outward diffusive flux
 `D grad(c) dot n = q` and contributes `dt q N_a` to the right-hand side.

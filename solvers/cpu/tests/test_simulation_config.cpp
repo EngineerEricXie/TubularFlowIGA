@@ -72,6 +72,13 @@ int main()
 	assert(std::abs(iga::EvaluateTemporalFunction(measured, 0.125, &samples)-2.0) < 1e-14);
 	assert(std::abs(iga::EvaluateTemporalFunction(measured, 0.875, &samples)) < 1e-14);
 	assert(std::abs(iga::EvaluateTemporalFunction(measured, -0.125, &samples)) < 1e-14);
+	auto materialized = configuration;
+	materialized.boundaries[0].conditions[0].value = {1.0, 2.0, 3.0};
+	materialized = iga::MaterializeBoundaryWaveforms(materialized, ".", 7.0);
+	assert(materialized.boundaries[0].conditions[0].waveform.empty());
+	assert(std::abs(materialized.boundaries[0].conditions[0].value[0]-0.75) < 1e-14);
+	assert(std::abs(materialized.boundaries[0].conditions[0].value[1]-1.5) < 1e-14);
+	assert(std::abs(materialized.boundaries[0].conditions[0].value[2]-2.25) < 1e-14);
 	const auto compiled = iga::CompileLinearSystem(configuration, "species");
 	assert(compiled.fields.size() == 2);
 	assert(compiled.field_index.at("oxygen") == 0);

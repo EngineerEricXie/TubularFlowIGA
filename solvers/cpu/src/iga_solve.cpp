@@ -4,6 +4,7 @@
 #include "IgaDatabase.hpp"
 #include "OwnedRowAssembler.hpp"
 #include "SimulationConfig.hpp"
+#include "TemporalFunction.hpp"
 
 #include <petscksp.h>
 
@@ -35,7 +36,8 @@ int main(int argc, char** argv)
 		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
 		const auto velocity_path = argc >= 6 ? fs::path(argv[5]) : case_dir / "initial_velocityfield.txt";
 		const auto velocity = iga::ReadVelocity(velocity_path.string(), database.header().nodes);
-		const auto boundaries = iga::ResolveScalarBoundaries(configuration, system, labels);
+		const auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration, case_dir, 0.0);
+		const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
 		const auto initial = iga::InitialScalarValues(configuration, system);
 		const auto fields = system.fields.size();
 		if (rank == 0) {
@@ -125,11 +127,15 @@ int main(int argc, char** argv)
 		PetscInt total_iterations = 0;
 		const auto solve_start = std::chrono::steady_clock::now();
 		for (int step = 0; step < system.steps; ++step) {
+			const auto step_configuration = iga::MaterializeBoundaryWaveforms(
+				configuration, case_dir, (step+1)*system.dt);
+			const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels);
 			MatMult(previous, current, rhs);
 			VecAXPY(rhs, 1.0, forcing);
 			std::vector<PetscScalar> boundary_values;
 			boundary_values.reserve(boundary_rows.size());
-			for (auto row : boundary_rows) boundary_values.push_back(boundaries.value[static_cast<std::size_t>(row)]);
+			for (auto row : boundary_rows)
+				boundary_values.push_back(step_boundaries.value[static_cast<std::size_t>(row)]);
 			VecSetValues(rhs, static_cast<PetscInt>(boundary_rows.size()), boundary_rows.data(), boundary_values.data(), INSERT_VALUES);
 			iga::OwnedRowAssembler::Assemble(rhs);
 			if (step > 0) VecCopy(current, next);
