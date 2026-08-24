@@ -12,6 +12,7 @@ HEADERS := include/BlockCsr.hpp include/CudaRuntime.hpp include/DeviceMesh.hpp \
 	include/Gmres.hpp include/IgaCudaKernels.cuh include/GenericTransportKernels.cuh \
 	include/ConfiguredTransportHost.inc ../cpu/include/CaseInput.hpp ../cpu/include/GenericCaseInput.hpp \
 	../cpu/include/IgaDatabase.hpp ../../include/CaseConfig.hpp ../../include/SimulationConfig.hpp
+HEADERS += ../../include/TemporalFunction.hpp
 
 .PHONY: all clean
 

@@ -37,7 +37,7 @@ strict `time,value` CSV with samples in `[0, period)` and linear,
 periodically wrapped interpolation. Fourier `cosine` and `sine` arrays use
 one-based harmonic order. A Dirichlet condition may name one with `waveform`.
 Parsing and dependency-free evaluation are implemented, including negative-time
-and period wrapping. CPU configured transport materializes Dirichlet values at
+and period wrapping. CPU and CUDA configured transport materialize Dirichlet values at
 each physical step; a constant waveform reproduces constant-boundary results.
 Navier–Stokes still rejects waveform execution until transient flow integration
 is complete, so pulsatile flow and previous-step velocity state remain

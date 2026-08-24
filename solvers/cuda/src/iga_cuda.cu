@@ -7,6 +7,7 @@
 #include "GenericTransportKernels.cuh"
 #include "IgaCudaKernels.cuh"
 #include "IgaDatabase.hpp"
+#include "TemporalFunction.hpp"
 
 #include <cuda_runtime.h>
 

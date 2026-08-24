@@ -21,6 +21,25 @@ The configured surface-term parity gate was `1e-5`; the run passed. A version
 3 database with the same surface configuration is rejected because it has no
 packed element-face labels.
 
+## Configured Waveform Parity
+
+Job `44366806` ran a two-step constant-waveform tracer case on one
+Tesla V100-SXM2-32GB. A factor-two inlet waveform produced exactly twice the
+CPU baseline field; CUDA matched the CPU waveform result:
+
+```text
+CPU final L2:  28.91
+CUDA final L2: 28.91
+relative L2:   3.5232387432606833e-08
+CUDA assembly: 0.124109 s
+CUDA solve:    0.0787549 s
+CUDA iterations: 109
+singular diagonal blocks: 0
+```
+
+This validates configured transport boundary updates only. Navier-Stokes
+remains steady and rejects waveform-backed flow boundaries.
+
 ## Cylinder Baseline
 
 Final gate job `42863716` ran on one Bridges-2 V100-32GB with CUDA 12.4. The test used

@@ -14,7 +14,7 @@ application-specific field names in numerical kernels.
 | Configured cardiovascular flow | Working on CPU and CUDA | Stabilized, rigid-wall, steady Navier–Stokes |
 | Shared `simulation_config.json` | Working | Transport and flow still use separate CLI entry points |
 | Spatial inlet velocity profile | Working | `initial_velocityfield.txt` times a constant scale |
-| Pulsatile inlet waveform | Working for CPU configured transport | Cardiovascular flow remains steady; CUDA transport parity pending |
+| Pulsatile inlet waveform | Working for CPU and CUDA configured transport | Cardiovascular flow remains steady |
 | Transient Navier–Stokes | Not implemented | No velocity time derivative or previous flow state |
 | Flux and Robin surface terms | Working on CPU and CUDA | V100 parity relative L2 `6.03e-8` |
 | Physiological outlet models | Not implemented | No resistance or Windkessel model |
@@ -65,8 +65,9 @@ branch. Candidate waveform sources are:
 - Fourier coefficients for measured or fitted cardiac cycles.
 
 The dependency-free schema, strict periodic CSV reader, and evaluators for all
-four sources are complete. CPU configured transport materializes waveform-backed
-Dirichlet data at every step; a constant-factor integration regression is exact.
+four sources are complete. CPU and CUDA configured transport materialize
+waveform-backed Dirichlet data at every step; their constant-factor regression
+has relative L2 `3.52e-8`.
 Steady Navier–Stokes intentionally rejects waveform references until transient
 CPU and CUDA time stepping is implemented.
 

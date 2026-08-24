@@ -8,7 +8,8 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	const auto total_start = Clock::now();
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
 	const auto velocity_host = iga::ReadVelocity(velocity_path.string(), database.header().nodes);
-	const auto boundaries = iga::ResolveScalarBoundaries(configuration, system, labels);
+	const auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration, case_dir, 0.0);
+	const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
 	const auto initial = iga::InitialScalarValues(configuration, system);
 
 	std::vector<DeviceWeakTerm> host_terms;
@@ -156,6 +157,10 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	const int vector_size = static_cast<int>(host.nodes*Fields);
 	const int vector_blocks = (vector_size+255)/256;
 	for (int step = 0; step < system.steps; ++step) {
+		const auto step_configuration = iga::MaterializeBoundaryWaveforms(
+			configuration, case_dir, (step+1)*system.dt);
+		const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels);
+		boundary_value.CopyFromHost(step_boundaries.value.data(), step_boundaries.value.size());
 		BlockSpmvKernel<Fields><<<node_blocks,256>>>(pattern.view(), previous.values(), current.data(), rhs.data());
 		CheckKernel("configured transport previous MatMult");
 		AddVectorKernel<<<vector_blocks,256>>>(vector_size, forcing.data(), rhs.data());

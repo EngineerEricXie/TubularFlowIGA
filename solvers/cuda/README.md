@@ -187,8 +187,9 @@ and `sbatch` commands.
   configured `time` currently applies only to transport.
 - Configured scalar flux/Robin surface assembly matches the CPU weak form and
   requires version 4 `.ntiga` face labels.
-- Pulsatile inflow, physiological outlet models, and compliant walls are not
-  implemented.
+- Configured transport supports per-step temporal Dirichlet waveforms.
+- Pulsatile Navier-Stokes inflow, physiological outlet models, and compliant
+  walls are not implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,
   limiting solve speedup even though assembly is much faster.
 - The CUDA backend consumes the in-tree CPU database header; changes to the format must be validated on both backends.
