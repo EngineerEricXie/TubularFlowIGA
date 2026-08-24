@@ -58,6 +58,8 @@ inline ResolvedScalarBoundaries ResolveScalarBoundaries(
 		for (const auto& condition : boundary.conditions) {
 			const auto field = system.field_index.find(condition.field);
 			if (field == system.field_index.end()) continue;
+			if (!condition.waveform.empty())
+				throw std::runtime_error("time-dependent scalar boundary execution is not implemented");
 			if (condition.kind == FieldBoundaryKind::NoFlux || condition.kind == FieldBoundaryKind::AdvectiveOutflow
 				|| condition.kind == FieldBoundaryKind::Flux || condition.kind == FieldBoundaryKind::Robin) continue;
 			if (condition.kind != FieldBoundaryKind::Dirichlet)
@@ -129,6 +131,8 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 		configured_labels.insert(boundary.label);
 		for (const auto& condition : boundary.conditions) {
 			if (condition.field != velocity_name && condition.field != pressure_name) continue;
+			if (!condition.waveform.empty())
+				throw std::runtime_error("time-dependent Navier-Stokes boundary execution is not implemented");
 			if (condition.kind != FieldBoundaryKind::Dirichlet)
 				throw std::runtime_error("navier_stokes boundary field '" + condition.field
 					+ "' currently supports only dirichlet conditions");

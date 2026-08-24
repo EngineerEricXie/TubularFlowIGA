@@ -18,6 +18,7 @@ enum class FieldKind { Scalar, Vector3, Pressure };
 enum class EquationKind { LinearTransport, NavierStokes };
 enum class TermKind { TimeDerivative, Diffusion, Advection, LinearCoupling, VolumeSource };
 enum class FieldBoundaryKind { Dirichlet, NoFlux, Flux, Robin, AdvectiveOutflow };
+enum class TemporalFunctionKind { Constant, Sinusoid, PeriodicTable, Fourier };
 
 struct FieldDefinition {
 	std::string name;
@@ -56,6 +57,22 @@ struct FieldBoundaryCondition {
 	double exterior_value = 0.0;
 	std::string profile;
 	double scale = 1.0;
+	std::string waveform;
+};
+
+struct TemporalFunctionDefinition {
+	std::string name;
+	TemporalFunctionKind kind = TemporalFunctionKind::Constant;
+	std::string units;
+	double value = 1.0;
+	double mean = 0.0;
+	double amplitude = 0.0;
+	double period = 0.0;
+	double phase = 0.0;
+	std::string file;
+	std::string interpolation;
+	std::vector<double> cosine;
+	std::vector<double> sine;
 };
 
 struct NamedBoundaryDefinition {
@@ -74,6 +91,7 @@ struct SimulationConfiguration {
 	std::vector<FieldDefinition> fields;
 	std::vector<EquationSystemDefinition> equation_systems;
 	std::vector<NamedBoundaryDefinition> boundaries;
+	std::vector<TemporalFunctionDefinition> temporal_functions;
 	TimeDefinition time;
 };
 
@@ -150,6 +168,15 @@ inline FieldBoundaryKind ParseFieldBoundaryKind(const std::string& value)
 	throw std::runtime_error("simulation_config.json: unsupported boundary condition '" + value + "'");
 }
 
+inline TemporalFunctionKind ParseTemporalFunctionKind(const std::string& value)
+{
+	if (value == "constant") return TemporalFunctionKind::Constant;
+	if (value == "sinusoid") return TemporalFunctionKind::Sinusoid;
+	if (value == "periodic_table") return TemporalFunctionKind::PeriodicTable;
+	if (value == "fourier") return TemporalFunctionKind::Fourier;
+	throw std::runtime_error("simulation_config.json: unsupported temporal function kind '" + value + "'");
+}
+
 inline std::vector<double> ParseValueVector(const JsonValue& value, const std::string& context)
 {
 	if (value.type == JsonValue::Type::Number) return {RequireNumber(value, context)};
@@ -167,7 +194,8 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	using namespace simulation_detail;
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
-	RequireKnownKeys(root, {"schema_version", "fields", "equation_systems", "boundaries", "time"}, "root");
+	RequireKnownKeys(root, {"schema_version", "fields", "equation_systems", "boundaries",
+		"time", "temporal_functions"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	if (configuration.schema_version != 2)
@@ -194,6 +222,58 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	configuration.time.dt = RequireNumber(Required(time, "dt", "time"), "time.dt");
 	configuration.time.steps = RequireInteger(Required(time, "steps", "time"), "time.steps");
 	if (!(configuration.time.dt > 0.0)) throw std::runtime_error("simulation_config.json: time.dt must be positive");
+
+	std::set<std::string> temporal_names;
+	if (const auto* temporal = Find(root, "temporal_functions")) {
+		const auto& functions = RequireArray(*temporal, "temporal_functions");
+		for (std::size_t i = 0; i < functions.size(); ++i) {
+			const auto context = "temporal_functions[" + std::to_string(i) + "]";
+			const auto& object = RequireObject(functions[i], context);
+			RequireKnownKeys(object, {"name", "kind", "units", "value", "mean", "amplitude",
+				"period", "phase", "file", "interpolation", "cosine", "sine"}, context);
+			TemporalFunctionDefinition function;
+			function.name = RequireString(Required(object, "name", context), context + ".name");
+			function.kind = ParseTemporalFunctionKind(
+				RequireString(Required(object, "kind", context), context + ".kind"));
+			function.units = RequireString(Required(object, "units", context), context + ".units");
+			if (function.name.empty() || !temporal_names.insert(function.name).second)
+				throw std::runtime_error("simulation_config.json: temporal function names must be non-empty and unique");
+			if (function.units.empty())
+				throw std::runtime_error("simulation_config.json: temporal function units cannot be empty");
+			if (const auto* value = Find(object, "value"))
+				function.value = RequireNumber(*value, context + ".value");
+			if (const auto* mean = Find(object, "mean"))
+				function.mean = RequireNumber(*mean, context + ".mean");
+			if (const auto* amplitude = Find(object, "amplitude"))
+				function.amplitude = RequireNumber(*amplitude, context + ".amplitude");
+			if (const auto* period = Find(object, "period"))
+				function.period = RequireNumber(*period, context + ".period");
+			if (const auto* phase = Find(object, "phase"))
+				function.phase = RequireNumber(*phase, context + ".phase");
+			if (const auto* file = Find(object, "file"))
+				function.file = RequireString(*file, context + ".file");
+			if (const auto* interpolation = Find(object, "interpolation"))
+				function.interpolation = RequireString(*interpolation, context + ".interpolation");
+			if (const auto* cosine = Find(object, "cosine"))
+				function.cosine = ParseValueVector(*cosine, context + ".cosine");
+			if (const auto* sine = Find(object, "sine"))
+				function.sine = ParseValueVector(*sine, context + ".sine");
+			if (function.kind == TemporalFunctionKind::Constant && !Find(object, "value"))
+				throw std::runtime_error("simulation_config.json: constant temporal function requires value");
+			if (function.kind == TemporalFunctionKind::Sinusoid
+				&& (!Find(object, "mean") || !Find(object, "amplitude") || !(function.period > 0.0)))
+				throw std::runtime_error("simulation_config.json: sinusoid requires mean, amplitude, and positive period");
+			if (function.kind == TemporalFunctionKind::PeriodicTable
+				&& (function.file.empty() || !(function.period > 0.0)
+					|| function.interpolation != "linear"))
+				throw std::runtime_error("simulation_config.json: periodic_table requires file, positive period, and linear interpolation");
+			if (function.kind == TemporalFunctionKind::Fourier
+				&& (!(function.period > 0.0) || function.cosine.size() != function.sine.size()
+					|| function.cosine.empty()))
+				throw std::runtime_error("simulation_config.json: fourier requires positive period and equal non-empty cosine/sine arrays");
+			configuration.temporal_functions.push_back(std::move(function));
+		}
+	}
 
 	const auto& systems = RequireArray(Required(root, "equation_systems", "root"), "equation_systems");
 	std::set<std::string> system_names;
@@ -274,7 +354,8 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		for (std::size_t j = 0; j < conditions.size(); ++j) {
 			const auto condition_context = context + ".conditions[" + std::to_string(j) + "]";
 			const auto& condition_object = RequireObject(conditions[j], condition_context);
-			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient", "exterior_value", "profile", "scale"}, condition_context);
+			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient",
+				"exterior_value", "profile", "scale", "waveform"}, condition_context);
 			FieldBoundaryCondition condition;
 			condition.field = RequireString(Required(condition_object, "field", condition_context), condition_context + ".field");
 			condition.kind = ParseFieldBoundaryKind(RequireString(Required(condition_object, "type", condition_context), condition_context + ".type"));
@@ -285,6 +366,8 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			if (const auto* exterior = Find(condition_object, "exterior_value")) condition.exterior_value = RequireNumber(*exterior, condition_context + ".exterior_value");
 			if (const auto* profile = Find(condition_object, "profile")) condition.profile = RequireString(*profile, condition_context + ".profile");
 			if (const auto* scale = Find(condition_object, "scale")) condition.scale = RequireNumber(*scale, condition_context + ".scale");
+			if (const auto* waveform = Find(condition_object, "waveform"))
+				condition.waveform = RequireString(*waveform, condition_context + ".waveform");
 			if (condition.kind == FieldBoundaryKind::Dirichlet && condition.value.empty() && condition.profile.empty())
 				throw std::runtime_error("simulation_config.json: dirichlet requires value or profile");
 			if (!condition.value.empty() && !condition.profile.empty())
@@ -293,6 +376,10 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 				throw std::runtime_error("simulation_config.json: flux requires one value");
 			if (condition.kind == FieldBoundaryKind::Robin && condition.coefficient == 0.0)
 				throw std::runtime_error("simulation_config.json: robin requires nonzero coefficient");
+			if (!condition.waveform.empty()
+				&& (condition.kind != FieldBoundaryKind::Dirichlet
+					|| !temporal_names.count(condition.waveform)))
+				throw std::runtime_error("simulation_config.json: waveform must name a temporal function on a Dirichlet condition");
 			boundary.conditions.push_back(std::move(condition));
 		}
 		configuration.boundaries.push_back(std::move(boundary));

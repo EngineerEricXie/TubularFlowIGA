@@ -28,9 +28,19 @@ configuration; it is no longer a solver constant.
 
 The current Navier–Stokes backend is steady. The top-level `time` object drives
 configured transport only; it does not make flow transient. Velocity profiles
-are spatial data multiplied by a constant `scale`. Temporal inlet waveforms,
-pulsatile flow, and previous-step velocity state are not part of schema version
-2. See the [development roadmap](ROADMAP.md).
+are spatial data multiplied by a constant `scale`.
+
+Schema version 2 optionally accepts named `temporal_functions` of kind
+`constant`, `sinusoid`, `periodic_table`, or `fourier`. Each declares
+`units`; periodic functions declare a positive `period`. Tables name a
+strict `time,value` CSV with samples in `[0, period)` and linear,
+periodically wrapped interpolation. Fourier `cosine` and `sine` arrays use
+one-based harmonic order. A Dirichlet condition may name one with `waveform`.
+Parsing and dependency-free evaluation are implemented, including negative-time
+and period wrapping, but CPU/CUDA boundary resolvers still reject waveform
+execution until transient solver integration is complete. Pulsatile flow and
+previous-step velocity state therefore remain unavailable. See the
+[development roadmap](ROADMAP.md).
 
 ## Boundary conditions
 

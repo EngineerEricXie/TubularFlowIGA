@@ -144,12 +144,12 @@ inline SimulationConfiguration ConvertLegacyNeuronTransport(const TransportParam
 	configuration.equation_systems.push_back(std::move(system));
 	configuration.time = {p.dt, p.steps};
 	configuration.boundaries = {
-		{0, "wall", {{"N0", FieldBoundaryKind::NoFlux, {}, 0.0, 0.0, "", 1.0},
-			{"Nplus", FieldBoundaryKind::NoFlux, {}, 0.0, 0.0, "", 1.0}}},
-		{1, "inlet", {{"N0", FieldBoundaryKind::Dirichlet, {p.n0_bc}, 0.0, 0.0, "", 1.0},
-			{"Nplus", FieldBoundaryKind::Dirichlet, {p.nplus_bc}, 0.0, 0.0, "", 1.0}}},
-		{2, "outlet", {{"N0", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0},
-			{"Nplus", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0}}}
+		{0, "wall", {{"N0", FieldBoundaryKind::NoFlux, {}, 0.0, 0.0, "", 1.0, ""},
+			{"Nplus", FieldBoundaryKind::NoFlux, {}, 0.0, 0.0, "", 1.0, ""}}},
+		{1, "inlet", {{"N0", FieldBoundaryKind::Dirichlet, {p.n0_bc}, 0.0, 0.0, "", 1.0, ""},
+			{"Nplus", FieldBoundaryKind::Dirichlet, {p.nplus_bc}, 0.0, 0.0, "", 1.0, ""}}},
+		{2, "outlet", {{"N0", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""},
+			{"Nplus", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""}}}
 	};
 	return configuration;
 }

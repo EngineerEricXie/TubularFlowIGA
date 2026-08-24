@@ -6,9 +6,10 @@ field names, fixed or profile-scaled velocity Dirichlet data, and scalar
 Dirichlet/no-flux/outflow/flux/Robin conditions. The CPU configured-transport
 solver assembles scalar `flux` and `robin` surface integrals. CUDA rejects
 those two conditions until its matching surface kernels are available, so they
-are never silently omitted. Inlet profile scaling is constant in time;
-pulsatile waveforms are not yet supported. Track these increments in the
-[development roadmap](ROADMAP.md).
+are never silently omitted. Named temporal waveforms can now be parsed and
+evaluated, but boundary resolvers explicitly reject their execution pending
+transient time stepping. Inlet profile scaling therefore remains constant in
+actual solver runs. Track these increments in the [development roadmap](ROADMAP.md).
 
 For CPU transport, `flux` specifies the outward diffusive flux
 `D grad(c) dot n = q` and contributes `dt q N_a` to the right-hand side.

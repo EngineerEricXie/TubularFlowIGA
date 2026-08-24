@@ -86,8 +86,8 @@ int main()
 	assert(std::abs(PetscRealPart(custom_matrices.left[2])) > 0.0);
 	std::cout << "custom three-field assembly passed\n";
 	custom.boundaries = {{0, "wall", {
-		{"oxygen", iga::FieldBoundaryKind::Flux, {1.0}, 0.0, 0.0, "", 1.0},
-		{"drug", iga::FieldBoundaryKind::Robin, {}, 2.0, 3.0, "", 1.0}}}};
+		{"oxygen", iga::FieldBoundaryKind::Flux, {1.0}, 0.0, 0.0, "", 1.0, ""},
+		{"drug", iga::FieldBoundaryKind::Robin, {}, 2.0, 3.0, "", 1.0, ""}}}};
 	auto surface_element = element;
 	surface_element.boundary_labels[0] = 0;
 	const auto surface_matrices = iga::BuildGenericTransportElement(
