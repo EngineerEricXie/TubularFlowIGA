@@ -147,7 +147,9 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 
 The partition suffix and `mpiexec -np` count must match the rank count passed
 to `iga_pack`. The packer prefers the sparse cache. Add `--legacy-text` after
-`$DATABASE` to force the legacy reader for comparison.
+`$DATABASE` to force the legacy reader for comparison. New databases include
+per-element boundary-face labels; version 3 databases remain readable but do
+not provide surface metadata.
 
 ## Run
 

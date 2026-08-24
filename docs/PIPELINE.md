@@ -86,9 +86,12 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 The packer prefers `spline_cache.igacache` and falls back to legacy text when
 the cache is absent. Pass `--legacy-text` after the output path to force that
 fallback for regression testing. It creates a binary database with direct
-element offsets, sparse extraction rows, adjacency, and per-rank
-touching-element indices. Repack when changing the CPU rank count. CUDA ignores
-ownership records and may reuse any valid packed database.
+element offsets, sparse extraction rows, adjacency, per-rank touching-element
+indices, and six boundary-face labels per element. Version 4 writers derive
+face labels from control-mesh topology and point labels; readers remain
+compatible with version 3 databases, whose face labels are unavailable. Repack
+when changing the CPU rank count. CUDA ignores ownership records and may reuse
+any valid packed database.
 
 ## 4. Validate and solve
 

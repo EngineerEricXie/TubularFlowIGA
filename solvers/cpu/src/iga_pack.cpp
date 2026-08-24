@@ -1,8 +1,10 @@
 #include "IgaDatabase.hpp"
 #include "IgaPreprocessCache.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <set>
 #include <sstream>
 
@@ -60,19 +62,101 @@ void RequireCacheEnd(std::istream& in)
 	if (!in.eof()) throw std::runtime_error("failed while finalizing preprocessing cache read");
 }
 
-std::uint64_t ReadNodeCount(const fs::path& path)
+struct ControlMesh
+{
+	std::uint64_t nodes = 0;
+	std::vector<std::array<std::int32_t, 8>> cells;
+	std::vector<std::int32_t> labels;
+};
+
+ControlMesh ReadControlMesh(const fs::path& path)
 {
 	std::ifstream in(path);
 	if (!in) throw std::runtime_error("cannot open mesh file: " + path.string());
+	ControlMesh mesh;
 	std::string token;
 	while (in >> token) {
 		if (token == "POINTS") {
-			std::uint64_t nodes = 0;
-			if (!(in >> nodes) || nodes == 0) throw std::runtime_error("invalid POINTS record in controlmesh.vtk");
-			return nodes;
+			std::string type;
+			if (!(in >> mesh.nodes >> type) || mesh.nodes == 0)
+				throw std::runtime_error("invalid POINTS record in controlmesh.vtk");
+			double coordinate = 0.0;
+			for (std::uint64_t i = 0; i < 3*mesh.nodes; ++i)
+				if (!(in >> coordinate)) throw std::runtime_error("truncated POINTS data in controlmesh.vtk");
+		} else if (token == "CELLS") {
+			std::uint64_t cells = 0, entries = 0;
+			if (!(in >> cells >> entries) || cells == 0 || entries != 9*cells)
+				throw std::runtime_error("invalid CELLS record in controlmesh.vtk");
+			mesh.cells.resize(static_cast<std::size_t>(cells));
+			for (auto& cell : mesh.cells) {
+				int count = 0;
+				if (!(in >> count) || count != 8) throw std::runtime_error("controlmesh.vtk requires hexahedral cells");
+				for (auto& node : cell) {
+					std::int64_t value = -1;
+					if (!(in >> value) || value < 0 || static_cast<std::uint64_t>(value) >= mesh.nodes)
+						throw std::runtime_error("invalid cell connectivity in controlmesh.vtk");
+					node = static_cast<std::int32_t>(value);
+				}
+			}
+		} else if (token == "POINT_DATA") {
+			std::uint64_t count = 0;
+			std::string scalars, name, type, lookup, table;
+			int components = 0;
+			if (!(in >> count >> scalars >> name >> type >> components >> lookup >> table)
+				|| count != mesh.nodes || scalars != "SCALARS" || name != "label"
+				|| components != 1 || lookup != "LOOKUP_TABLE")
+				throw std::runtime_error("invalid point-label data in controlmesh.vtk");
+			mesh.labels.resize(static_cast<std::size_t>(mesh.nodes));
+			for (auto& label : mesh.labels)
+				if (!(in >> label)) throw std::runtime_error("truncated point labels in controlmesh.vtk");
+			break;
 		}
 	}
-	throw std::runtime_error("controlmesh.vtk has no POINTS record");
+	if (mesh.nodes == 0 || mesh.cells.empty() || mesh.labels.size() != mesh.nodes)
+		throw std::runtime_error("controlmesh.vtk is missing points, cells, or labels");
+	return mesh;
+}
+
+std::vector<std::array<std::int32_t, 6>> BoundaryFaceLabels(const ControlMesh& mesh)
+{
+	constexpr int face_nodes[6][4] = {
+		{0, 3, 2, 1}, {0, 1, 5, 4}, {1, 2, 6, 5},
+		{2, 3, 7, 6}, {0, 4, 7, 3}, {4, 5, 6, 7}
+	};
+	using FaceKey = std::array<std::int32_t, 4>;
+	using FaceLocation = std::pair<std::size_t, std::size_t>;
+	std::map<FaceKey, std::vector<FaceLocation>> incidence;
+	for (std::size_t element = 0; element < mesh.cells.size(); ++element)
+		for (std::size_t face = 0; face < 6; ++face) {
+			FaceKey key{};
+			for (std::size_t corner = 0; corner < 4; ++corner)
+				key[corner] = mesh.cells[element][face_nodes[face][corner]];
+			std::sort(key.begin(), key.end());
+			incidence[key].push_back({element, face});
+		}
+	std::vector<std::array<std::int32_t, 6>> result(mesh.cells.size());
+	for (auto& labels : result) labels.fill(-1);
+	for (const auto& item : incidence) {
+		if (item.second.size() == 2) continue;
+		if (item.second.size() != 1) throw std::runtime_error("non-manifold control-mesh face");
+		const auto [element, face] = item.second.front();
+		std::int32_t positive = -1;
+		bool all_wall = true;
+		for (std::size_t corner = 0; corner < 4; ++corner) {
+			const auto node = mesh.cells[element][face_nodes[face][corner]];
+			const auto label = mesh.labels[static_cast<std::size_t>(node)];
+			all_wall = all_wall && label == 0;
+			if (label > 0) {
+				if (positive >= 0 && positive != label)
+					throw std::runtime_error("boundary face contains multiple positive labels");
+				positive = label;
+			}
+		}
+		if (positive >= 0) result[element][face] = positive;
+		else if (all_wall) result[element][face] = 0;
+		else throw std::runtime_error("boundary face has no unambiguous mesh label");
+	}
+	return result;
 }
 
 std::uint32_t NodeOwner(std::uint64_t node, std::uint64_t nodes, std::uint32_t ranks)
@@ -176,7 +260,8 @@ int main(int argc, char** argv)
 			throw std::runtime_error("invalid rank count");
 		const auto ranks = static_cast<std::uint32_t>(ranks64);
 		const fs::path output(argv[3]);
-		const auto nodes = ReadNodeCount(dir / "controlmesh.vtk");
+		const auto control_mesh = ReadControlMesh(dir / "controlmesh.vtk");
+		const auto nodes = control_mesh.nodes;
 
 		const fs::path cache_path = dir / "spline_cache.igacache";
 		const bool use_cache = !force_legacy && fs::exists(cache_path);
@@ -206,6 +291,10 @@ int main(int argc, char** argv)
 				throw std::runtime_error("bzpt.txt point count is not 64 times the element count");
 			std::cout << "using legacy cmat.txt and bzpt.txt preprocessing data\n";
 		}
+
+		if (control_mesh.cells.size() != elements)
+			throw std::runtime_error("controlmesh cell count does not match preprocessing data");
+		const auto boundary_faces = BoundaryFaceLabels(control_mesh);
 
 		const auto partition = ReadPartition(
 			dir / ("bzmeshinfo.txt.epart." + std::to_string(ranks)), elements, ranks);
@@ -237,6 +326,8 @@ int main(int argc, char** argv)
 			iga::Write(out, element.type);
 			iga::Write(out, partition[static_cast<std::size_t>(e)]);
 			iga::Write(out, nen);
+			out.write(reinterpret_cast<const char*>(boundary_faces[static_cast<std::size_t>(e)].data()),
+				static_cast<std::streamsize>(sizeof(boundary_faces[static_cast<std::size_t>(e)])));
 			std::set<std::uint32_t> row_owners;
 			for (const auto node : element.connectivity) {
 				iga::Write(out, node);

@@ -12,7 +12,8 @@
 namespace iga {
 
 constexpr std::array<char, 8> kMagic{{'N', 'T', 'I', 'G', 'A', 'D', 'B', '2'}};
-constexpr std::uint32_t kVersion = 3;
+constexpr std::uint32_t kLegacyVersion = 3;
+constexpr std::uint32_t kVersion = 4;
 constexpr std::uint32_t kBezierPointCount = 64;
 
 struct Header {
@@ -30,6 +31,7 @@ struct Element {
 	std::uint64_t id = 0;
 	std::int32_t type = 0;
 	std::int32_t owner = 0;
+	std::array<std::int32_t, 6> boundary_labels{{-1, -1, -1, -1, -1, -1}};
 	std::vector<std::int32_t> connectivity;
 	std::vector<std::array<double, 64>> extraction;
 	std::array<std::array<double, 3>, 64> bezier_points{};
@@ -61,7 +63,8 @@ inline Header ReadHeader(std::istream& in)
 	Read(in, h.reserved);
 	Read(in, h.rank_index_offset);
 	if (h.magic != kMagic) throw std::runtime_error("not a supported .ntiga database");
-	if (h.version != kVersion) throw std::runtime_error("unsupported database version");
+	if (h.version != kLegacyVersion && h.version != kVersion)
+		throw std::runtime_error("unsupported database version");
 	if (h.bezier_points != kBezierPointCount) throw std::runtime_error("unsupported Bezier point count");
 	if (h.nodes == 0 || h.rank_index_offset == 0) throw std::runtime_error("invalid database ownership index");
 	return h;
@@ -108,6 +111,9 @@ public:
 		Read(input_, e.type);
 		Read(input_, e.owner);
 		Read(input_, nen);
+		if (header_.version >= kVersion)
+			input_.read(reinterpret_cast<char*>(e.boundary_labels.data()),
+				static_cast<std::streamsize>(sizeof(e.boundary_labels)));
 		if (nen == 0 || nen > 4096) throw std::runtime_error("invalid element basis count");
 		e.connectivity.resize(nen);
 		e.extraction.resize(nen);
