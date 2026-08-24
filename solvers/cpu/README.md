@@ -1,7 +1,7 @@
 # TubularFlowIGA CPU Backend
 
 A project-owned C++17 isogeometric-analysis pipeline for stabilized steady
-Navier-Stokes flow and transient two-field transport. PETSc provides distributed
+Navier-Stokes flow and configurable transient multi-field transport. PETSc provides distributed
 sparse matrices and Krylov solvers; Bezier extraction, basis derivatives,
 quadrature, VMS/SUPG weak forms, boundary conditions, nonlinear iteration, and
 time integration are implemented in this repository.
@@ -14,13 +14,16 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 | --- | --- |
 | `iga_pack` | Validate sparse cache or legacy text and create indexed `.ntiga` |
 | `iga_inspect` | Print database metadata and partition statistics |
+| `iga_case_check` | Validate case inputs and resolved boundary roles without PETSc |
 | `iga_mesh_check` | Evaluate every element at 4x4x4 quadrature points and reject non-positive Jacobians |
+| `iga_config_check` | Strictly validate `simulation_config.json` without PETSc |
+| `iga_solve` | Solve configured one-to-many-field transport/operator systems |
 | `iga_assembly_smoke` | Exercise distributed owned-row sparse assembly |
 | `iga_navier_stokes` | Solve the four-field stabilized steady velocity-pressure system |
-| `iga_transport` | Solve the transient two-field reaction-diffusion-advection/SUPG system |
+| `iga_transport` | Transitional old-input CLI, lowered through the generic assembler |
 
-The velocity output from `iga_navier_stokes` is accepted directly by
-`iga_transport`. Both solvers write ParaView-compatible VTK companions.
+`iga_solve` writes fields in configured order plus a `.fields` name file.
+`iga_navier_stokes` reads flow physics and boundary values from that same config.
 
 ## Why this version is faster and smaller
 
@@ -123,8 +126,8 @@ make cpu
 make cpu-petsc PETSC_DIR=/path/to/petsc PETSC_ARCH=your-petsc-arch
 ~~~
 
-The first command builds `iga_pack` and `iga_inspect` with a standard C++17
-compiler. PETSc targets require an MPI-aware PETSc configuration.
+The first command builds `iga_pack`, `iga_inspect`, and `iga_case_check` with a
+standard C++17 compiler. PETSc targets require an MPI-aware PETSc configuration.
 `PETSC_ARCH` may be omitted for an installed PETSc layout.
 
 ## Prepare a case
@@ -154,14 +157,16 @@ Use an allocated compute resource on shared clusters:
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_mesh_check" "$DATABASE"
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
   "$DATABASE" "$CASE_DIR" 8 velocity.txt
-mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_transport" \
-  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
+  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
 ~~~
 
-Mesh label `1` is the inlet, `0` is a no-slip wall, and labels `>=2` are
-zero-pressure outlets. Navier-Stokes uses nonlinear relative tolerance `1e-5`;
-reaching the update limit without convergence returns failure. Transport uses
-relative tolerance `1e-8`.
+The canonical [`simulation_config.json`](../../docs/PDE_CONFIGURATION.md) names
+fields, systems, operators, viscosity, time integration, and per-field boundary
+conditions. A velocity Dirichlet condition can use a three-component value or
+`initial_velocityfield.txt` profile plus scale. The old two-file input remains
+accepted only as a transition adapter. Navier-Stokes uses nonlinear relative
+tolerance `1e-5`; configured transport uses relative tolerance `1e-8`.
 
 For PSC module, interactive-node, and Slurm examples, see the
 [Bridges-2 guide](../../docs/BRIDGES2.md).
@@ -183,5 +188,9 @@ For PSC module, interactive-node, and Slurm examples, see the
 - Scaling has been validated to 16 MPI ranks, not exhaustively across nodes.
 - The binary database currently stores partition-specific touching-element
   indices and should be repacked when the rank count changes.
+- Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
+  configured `time` currently applies only to transport.
+- Flux/Robin surface assembly, pulsatile inflow, physiological outlet models,
+  and compliant walls are not implemented.
 - The stabilized formulations follow the legacy model; this repository does not
   claim a new physical model or discretization order.

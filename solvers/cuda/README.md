@@ -12,7 +12,7 @@ The original implementation is
 
 ## Capabilities
 
-One executable exposes four modes:
+One executable exposes five modes:
 
 | Command | Purpose |
 | --- | --- |
@@ -20,6 +20,7 @@ One executable exposes four modes:
 | `iga_cuda mesh-check DATABASE.ntiga` | Validate all 4x4x4 element quadrature Jacobians |
 | `iga_cuda navier-stokes ...` | Run the stabilized four-field steady solve |
 | `iga_cuda transport ...` | Run the transient two-field transport solve |
+| `iga_cuda solve ...` | Run configured 1–8-field transport through the generic operator graph |
 
 The database can be packed for any CPU MPI rank count. The single-GPU reader
 loads each element exactly once and ignores CPU ownership records.
@@ -152,12 +153,16 @@ export DATABASE=/path/to/work/case.ntiga
 "$IGA_CUDA_ROOT/iga_cuda" mesh-check "$DATABASE"
 "$IGA_CUDA_ROOT/iga_cuda" navier-stokes \
   "$DATABASE" "$CASE_DIR" 8 velocity.txt
-"$IGA_CUDA_ROOT/iga_cuda" transport \
-  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+"$IGA_CUDA_ROOT/iga_cuda" solve \
+  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
 ~~~
 
-Each solver writes its text interchange field and `OUTPUT.vtk`. Navier-Stokes
-VTK contains velocity and pressure; transport VTK contains `N0` and `Nplus`.
+Configured CPU and CUDA transport lower the same weak-form terms and write a
+neighboring `.fields` file recording output names. Navier-Stokes reads viscosity
+and named velocity/pressure boundaries from the same `simulation_config.json`.
+The fixed `transport` command remains only for old input compatibility. See the
+[configurable PDE guide](../../docs/PDE_CONFIGURATION.md).
+
 
 The scripts in `slurm/` reproduce the published Bridges-2 measurements and
 require an external `IGA_CASE_ROOT`. See the
@@ -178,6 +183,10 @@ and `sbatch` commands.
 
 - Execution is single process and single GPU; multi-GPU domain decomposition is
   not implemented.
+- Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
+  configured `time` currently applies only to transport.
+- Flux/Robin surface assembly, pulsatile inflow, physiological outlet models,
+  and compliant walls are not implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,
   limiting solve speedup even though assembly is much faster.
 - The CUDA backend consumes the in-tree CPU database header; changes to the format must be validated on both backends.

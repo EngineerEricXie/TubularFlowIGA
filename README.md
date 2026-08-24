@@ -1,7 +1,7 @@
 # TubularFlowIGA
 
 TubularFlowIGA is a C++ isogeometric-analysis pipeline for stabilized steady
-Navier-Stokes flow and transient two-field transport in tubular and branching
+Navier-Stokes flow and configurable transient multi-field transport in tubular and branching
 geometries. It combines dependency-free C++ control-mesh generation, C++
 Bezier extraction, an MPI/PETSc CPU backend, and a single-GPU CUDA backend. The IGA basis,
 quadrature, weak forms, assembly, nonlinear iteration, time integration, and
@@ -48,6 +48,12 @@ Large cases and generated results are intentionally not versioned.
 MATLAB and the external TREES Toolbox are optional and needed only to reproduce
 the legacy reference workflow. TREES is not vendored.
 
+Eigen, PETSc, MPI, METIS, and CUDA are external dependencies and are not
+vendored in this repository. Check a target environment with
+`./scripts/check_dependencies.sh preprocessing|cpu|cuda`. See the
+[dependency guide](docs/DEPENDENCIES.md) for component-by-component details.
+A clone without PETSc can still run the full preprocessing and packing smoke test.
+
 ## Build
 
 From the repository root:
@@ -68,6 +74,10 @@ make cuda CUDA_ARCHS="70 80 89 90"
 `PETSC_ARCH` may be omitted for an installed PETSc tree whose configuration
 is directly under `PETSC_DIR/lib/petsc/conf`. Override `CXX`, `CPPFLAGS`,
 `CXXFLAGS`, `NVCC`, or `CUDA_ARCHS` for the local toolchain.
+
+For a first run, use the included straight-tube case:
+
+    ./scripts/prepare_smoke.sh
 
 ## Prepare a case
 
@@ -93,14 +103,21 @@ must agree.
 
 ## Validate and run
 
+Cases use one `simulation_config.json` to name fields, compose supported weak-form
+operators, set viscosity and time integration, and assign field-specific boundary
+conditions to named mesh labels. See the [configurable PDE guide](docs/PDE_CONFIGURATION.md).
+The older `simulation_parameter.txt` and `case_config.json` inputs remain a
+transition adapter and do not select a different numerical model.
+
+
 Run the mesh check before either solver:
 
 ```bash
 mpiexec -np "$RANKS" ./solvers/cpu/iga_mesh_check "$DATABASE"
 mpiexec -np "$RANKS" ./solvers/cpu/iga_navier_stokes \
   "$DATABASE" "$CASE_DIR" 8 velocity.txt
-mpiexec -np "$RANKS" ./solvers/cpu/iga_transport \
-  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+mpiexec -np "$RANKS" ./solvers/cpu/iga_solve \
+  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
 ```
 
 For a CUDA-capable host:
@@ -110,8 +127,8 @@ For a CUDA-capable host:
 ./solvers/cuda/iga_cuda mesh-check "$DATABASE"
 ./solvers/cuda/iga_cuda navier-stokes \
   "$DATABASE" "$CASE_DIR" 8 velocity.txt
-./solvers/cuda/iga_cuda transport \
-  "$DATABASE" "$CASE_DIR" 300 concentration.txt velocity.txt
+./solvers/cuda/iga_cuda solve \
+  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
 ```
 
 Use the job scheduler required by the target cluster. Platform-specific setup
@@ -123,6 +140,16 @@ The case directory must initially contain `skeleton_initial.swc` and
 `mesh_parameter.txt`. See the [mesh generator guide](preprocessing/mesh/README.md),
 [validation report](docs/MESH_CPP_VALIDATION.md), and
 [pipeline guide](docs/PIPELINE.md) for assumptions and file-interface details.
+The complete fresh-clone workflow is in the [quick start](docs/QUICKSTART.md).
+
+## Current physics boundary
+
+Configured transport is transient, but Navier-Stokes is currently a steady,
+rigid-wall formulation. The inlet velocity profile and its scale are spatial
+and constant in time; pulsatile inlet waveforms, transient flow, Windkessel
+outlets, and compliant walls are not yet implemented. See the
+[development roadmap](docs/ROADMAP.md) for the staged neuron-transport and
+cardiovascular-flow plan.
 
 ## Measured performance
 

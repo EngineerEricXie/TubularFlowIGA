@@ -3,14 +3,38 @@
 This page contains optional site-specific instructions for PSC Bridges-2. The
 solver and file formats do not depend on PSC.
 
+Complete module, optimized PETSc build, dependency-check, and public smoke-case
+instructions are in the [dependency installation guide](DEPENDENCIES.md#psc-bridges-2-installation).
+
 ## Environment
 
-Login nodes are for editing, lightweight compilation, and job submission. Run
-MPI simulations and all GPU commands on allocated compute nodes. Replace the
-allocation below if you use another PSC project.
+Treat login nodes as coordination hosts only: edit, inspect, and submit jobs
+there, but do not compile large targets or run simulations. Run builds, tests,
+MPI programs, and GPU programs inside an allocated compute resource.
+
+Codex or VS Code may already have been launched inside an allocation. Check
+before requesting another one:
+
+```bash
+hostname
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  squeue -j "$SLURM_JOB_ID" -o '%.18i %.9P %.24j %.2t %.10M %.6D %R'
+fi
+```
+
+Inside an existing CPU allocation, load the toolchain and run lightweight
+serial builds, unit tests, dependency checks, or the public smoke case locally.
+Do not start a nested `interact` session. Submit large cases, long benchmarks,
+or several independent validations with `sbatch`. GPU execution still requires
+an allocation containing a GPU.
+
+The shell that launched Codex determines its inherited modules. Modules loaded
+later in a different terminal are not automatically visible to that process.
+Replace the allocation below if you use another PSC project.
 
 ```bash
 export PROJECT_ACCOUNT=mch260002p
+export PROJECT_ROOT=/ocean/projects/${PROJECT_ACCOUNT}/${USER}
 module load anaconda3
 ```
 
@@ -30,8 +54,23 @@ when necessary.
 
 ## Interactive CPU smoke test
 
+If already inside a CPU allocation, begin at the `module load` lines. Adjust
+the PETSc path if the installation is elsewhere:
+
 ```bash
-interact -A "$PROJECT_ACCOUNT" -p RM-shared -t 00:30:00
+module load anaconda3
+module load openmpi/4.0.5-gcc10.2.0
+export PETSC_DIR="$PROJECT_ROOT/petsc"
+export PETSC_ARCH=arch-linux-c-opt
+./scripts/check_dependencies.sh cpu
+make cpu-petsc PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH"
+make cpu-test
+```
+
+To request a new allocation from a login node:
+
+```bash
+interact -A "$PROJECT_ACCOUNT" -p RM-shared -N 1 -n 8 -t 00:30:00
 module load anaconda3
 module load openmpi/4.0.5-gcc10.2.0
 
@@ -60,6 +99,10 @@ production FP64 runs, select hardware based on availability, memory, and
 double-precision throughput rather than consumer-GPU peak FLOPS.
 
 ## Batch validation
+
+Use batch jobs for large cases, long simulations, published measurements, or
+multiple independent runs. A CPU allocation does not authorize GPU execution;
+submit a GPU job when no GPU was requested for the current job.
 
 The scripts under `solvers/cpu/slurm/` and `solvers/cuda/slurm/` are
 Bridges-2 examples. They contain the project allocation used for the published
