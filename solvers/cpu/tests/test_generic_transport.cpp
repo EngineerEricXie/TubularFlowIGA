@@ -61,7 +61,7 @@ int main()
 	const auto legacy = iga::BuildTransportElement(element, velocity, parameters);
 	const auto configuration = iga::ConvertLegacyNeuronTransport(parameters);
 	const auto system = iga::CompileLinearSystem(configuration, "neuron_transport");
-	const auto generic = iga::BuildGenericTransportElement(element, velocity, system);
+	const auto generic = iga::BuildGenericTransportElement(element, velocity, system, configuration);
 	RequireEqual(legacy.left, generic.left, "left matrix");
 	RequireEqual(legacy.previous, generic.previous, "previous matrix");
 	std::cout << "generic neuron transport regression passed\n";
@@ -81,18 +81,33 @@ int main()
 	};
 	custom.equation_systems.push_back(custom_definition);
 	const auto custom_system = iga::CompileLinearSystem(custom, "custom_three_field");
-	const auto custom_matrices = iga::BuildGenericTransportElement(element, velocity, custom_system);
+	const auto custom_matrices = iga::BuildGenericTransportElement(element, velocity, custom_system, custom);
 	assert(custom_matrices.left.size() == 192*192);
 	assert(std::abs(PetscRealPart(custom_matrices.left[2])) > 0.0);
 	std::cout << "custom three-field assembly passed\n";
-	custom.boundaries = {{0, "wall", {{"oxygen", iga::FieldBoundaryKind::Flux,
-		{1.0}, 0.0, 0.0, "", 1.0}}}};
-	bool rejected_surface = false;
-	try {
-		iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
-	} catch (const std::runtime_error&) {
-		rejected_surface = true;
+	custom.boundaries = {{0, "wall", {
+		{"oxygen", iga::FieldBoundaryKind::Flux, {1.0}, 0.0, 0.0, "", 1.0},
+		{"drug", iga::FieldBoundaryKind::Robin, {}, 2.0, 3.0, "", 1.0}}}};
+	auto surface_element = element;
+	surface_element.boundary_labels[0] = 0;
+	const auto surface_matrices = iga::BuildGenericTransportElement(
+		surface_element, velocity, custom_system, custom);
+	double oxygen_source = 0.0;
+	double drug_source = 0.0;
+	double drug_left = 0.0;
+	for (std::size_t a = 0; a < 64; ++a) {
+		oxygen_source += PetscRealPart(surface_matrices.source[3*a]
+			- custom_matrices.source[3*a]);
+		drug_source += PetscRealPart(surface_matrices.source[3*a+1]
+			- custom_matrices.source[3*a+1]);
+		for (std::size_t b = 0; b < 64; ++b)
+			drug_left += PetscRealPart(surface_matrices.left[(3*a+1)*192+(3*b+1)]
+				- custom_matrices.left[(3*a+1)*192+(3*b+1)]);
 	}
-	assert(rejected_surface);
-	std::cout << "unsupported scalar surface condition rejected\n";
+	assert(std::abs(oxygen_source - 0.02) < 2e-13);
+	assert(std::abs(drug_source - 0.12) < 2e-13);
+	assert(std::abs(drug_left - 0.04) < 2e-13);
+	const auto resolved = iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
+	assert(resolved.constrained_dofs == 0);
+	std::cout << "scalar flux and Robin surface assembly passed\n";
 }

@@ -58,9 +58,10 @@ inline ResolvedScalarBoundaries ResolveScalarBoundaries(
 		for (const auto& condition : boundary.conditions) {
 			const auto field = system.field_index.find(condition.field);
 			if (field == system.field_index.end()) continue;
-			if (condition.kind == FieldBoundaryKind::NoFlux || condition.kind == FieldBoundaryKind::AdvectiveOutflow) continue;
+			if (condition.kind == FieldBoundaryKind::NoFlux || condition.kind == FieldBoundaryKind::AdvectiveOutflow
+				|| condition.kind == FieldBoundaryKind::Flux || condition.kind == FieldBoundaryKind::Robin) continue;
 			if (condition.kind != FieldBoundaryKind::Dirichlet)
-				throw std::runtime_error("surface boundary assembly is not implemented for field '" + condition.field + "'");
+				throw std::runtime_error("unsupported scalar boundary condition for field '" + condition.field + "'");
 			if (condition.value.size() != 1)
 				throw std::runtime_error("scalar Dirichlet field '" + condition.field + "' requires one value");
 			for (std::size_t node = 0; node < labels.size(); ++node)

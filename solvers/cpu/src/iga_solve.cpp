@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -46,6 +47,28 @@ int main(int argc, char** argv)
 
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, fields);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
+		std::map<int, long long> surface_faces;
+		for (const auto& boundary : configuration.boundaries)
+			for (const auto& condition : boundary.conditions)
+				if (system.field_index.count(condition.field)
+					&& (condition.kind == iga::FieldBoundaryKind::Flux
+						|| condition.kind == iga::FieldBoundaryKind::Robin))
+					surface_faces.emplace(boundary.label, 0);
+		for (const auto& element : assembler.elements()) {
+			if (element.owner != rank) continue;
+			for (const auto label : element.boundary_labels) {
+				auto found = surface_faces.find(label);
+				if (found != surface_faces.end()) ++found->second;
+			}
+		}
+		for (auto& entry : surface_faces) {
+			long long global_faces = 0;
+			MPI_Allreduce(&entry.second, &global_faces, 1, MPI_LONG_LONG, MPI_SUM, PETSC_COMM_WORLD);
+			entry.second = global_faces;
+			if (global_faces == 0)
+				throw std::runtime_error("configured scalar surface boundary label "
+					+ std::to_string(entry.first) + " has no boundary faces in the .ntiga database; repack with iga_pack");
+		}
 		Mat left = assembler.CreateMatrix();
 		Mat previous = assembler.CreateMatrix();
 		MatSetOption(previous, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
@@ -53,7 +76,7 @@ int main(int argc, char** argv)
 		VecSet(forcing, 0.0);
 		const auto assembly_start = std::chrono::steady_clock::now();
 		for (const auto& element : assembler.elements()) {
-			const auto matrices = iga::BuildGenericTransportElement(element, velocity, system);
+			const auto matrices = iga::BuildGenericTransportElement(element, velocity, system, configuration);
 			assembler.AddElementMatrix(left, element, matrices.left);
 			assembler.AddElementMatrix(previous, element, matrices.previous);
 			assembler.AddElementVector(forcing, element, matrices.source);

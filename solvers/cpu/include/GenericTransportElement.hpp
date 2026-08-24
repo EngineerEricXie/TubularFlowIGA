@@ -4,6 +4,7 @@
 #include "SimulationConfig.hpp"
 #include "TransportElement.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <stdexcept>
@@ -18,7 +19,8 @@ struct GenericTransportMatrices {
 };
 
 inline GenericTransportMatrices BuildGenericTransportElement(const Element& element,
-	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system)
+	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration)
 {
 	if (system.fields.empty()) throw std::runtime_error("linear transport system has no fields");
 	if (!(system.dt > 0.0)) throw std::runtime_error("linear transport time step must be positive");
@@ -96,6 +98,51 @@ inline GenericTransportMatrices BuildGenericTransportElement(const Element& elem
 					}
 				}
 			}
+	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+	constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+	constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+	for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
+		const auto label = element.boundary_labels[face];
+		if (label < 0) continue;
+		const auto boundary = std::find_if(configuration.boundaries.begin(), configuration.boundaries.end(),
+			[label](const NamedBoundaryDefinition& item) { return item.label == label; });
+		if (boundary == configuration.boundaries.end())
+			throw std::runtime_error("element boundary face has no simulation_config.json definition");
+		for (std::size_t qi = 0; qi < 4; ++qi)
+			for (std::size_t qj = 0; qj < 4; ++qj) {
+				std::array<double, 3> coordinate{};
+				coordinate[fixed_axis[face]] = fixed_value[face];
+				coordinate[varying_axes[face][0]] = points[qi];
+				coordinate[varying_axes[face][1]] = points[qj];
+				const auto basis = EvaluateBasis(element, coordinate[0], coordinate[1], coordinate[2]);
+				double inverse_normal = 0.0;
+				for (int physical = 0; physical < 3; ++physical)
+					inverse_normal += basis.inverse_jacobian[fixed_axis[face]][physical]
+						* basis.inverse_jacobian[fixed_axis[face]][physical];
+				const auto measure = weights[qi] * weights[qj] * 2.0 * basis.determinant
+					* std::sqrt(inverse_normal);
+				for (const auto& condition : boundary->conditions) {
+					const auto field = system.field_index.find(condition.field);
+					if (field == system.field_index.end()) continue;
+					if (condition.kind != FieldBoundaryKind::Flux
+						&& condition.kind != FieldBoundaryKind::Robin) continue;
+					for (std::size_t a = 0; a < nen; ++a) {
+						const auto row = a*fields + field->second;
+						if (condition.kind == FieldBoundaryKind::Flux)
+							matrices.source[row] += system.dt * condition.value[0] * basis.value[a] * measure;
+						else {
+							matrices.source[row] += system.dt * condition.coefficient
+								* condition.exterior_value * basis.value[a] * measure;
+							for (std::size_t b = 0; b < nen; ++b) {
+								const auto column = b*fields + field->second;
+								matrices.left[row*ndof+column] += system.dt * condition.coefficient
+									* basis.value[a] * basis.value[b] * measure;
+							}
+						}
+					}
+				}
+			}
+	}
 	return matrices;
 }
 

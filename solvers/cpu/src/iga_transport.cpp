@@ -42,7 +42,7 @@ int main(int argc, char** argv)
 		MatSetOption(previous, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
 		const auto assembly_start = std::chrono::steady_clock::now();
 		for (const auto& element : assembler.elements()) {
-			auto matrices = iga::BuildGenericTransportElement(element, velocity, system);
+			auto matrices = iga::BuildGenericTransportElement(element, velocity, system, converted);
 			assembler.AddElementMatrix(left, element, matrices.left);
 			assembler.AddElementMatrix(previous, element, matrices.previous);
 		}

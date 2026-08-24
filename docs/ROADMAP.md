@@ -16,7 +16,7 @@ application-specific field names in numerical kernels.
 | Spatial inlet velocity profile | Working | `initial_velocityfield.txt` times a constant scale |
 | Pulsatile inlet waveform | Not implemented | No time-dependent boundary evaluator |
 | Transient Navier–Stokes | Not implemented | No velocity time derivative or previous flow state |
-| Flux and Robin surface terms | Schema only | Parsed and validated but not assembled |
+| Flux and Robin surface terms | Working on CPU | CUDA explicitly rejects pending surface-kernel parity |
 | Physiological outlet models | Not implemented | No resistance or Windkessel model |
 | Compliant wall / FSI | Not implemented | Current geometry is rigid |
 
@@ -41,7 +41,7 @@ on CPU, and the same case produces an agreed CPU/CUDA relative L2 result.
 
 ## Milestone 1: complete configuration and boundary execution
 
-1. Assemble scalar `flux` and `robin` surface integrals on CPU.
+1. Assemble scalar `flux` and `robin` surface integrals on CPU. **Complete.**
 2. Add the same surface operators to CUDA and compare against CPU.
 3. Ensure every field/boundary combination is executed or rejected; a
    schema-valid condition must not be silently ignored.

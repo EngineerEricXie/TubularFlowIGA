@@ -192,7 +192,9 @@ For PSC module, interactive-node, and Slurm examples, see the
   indices and should be repacked when the rank count changes.
 - Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
   configured `time` currently applies only to transport.
-- Flux/Robin surface assembly, pulsatile inflow, physiological outlet models,
-  and compliant walls are not implemented.
+- Configured scalar flux/Robin surface assembly is available in `iga_solve`
+  with a version 4 `.ntiga` database.
+- Pulsatile inflow, physiological outlet models, and compliant walls are not
+  implemented.
 - The stabilized formulations follow the legacy model; this repository does not
   claim a new physical model or discretization order.

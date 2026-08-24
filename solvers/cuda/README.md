@@ -185,8 +185,10 @@ and `sbatch` commands.
   not implemented.
 - Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
   configured `time` currently applies only to transport.
-- Flux/Robin surface assembly, pulsatile inflow, physiological outlet models,
-  and compliant walls are not implemented.
+- Flux/Robin surface assembly is not implemented; configured CUDA transport
+  rejects these conditions pending CPU-parity kernels.
+- Pulsatile inflow, physiological outlet models, and compliant walls are not
+  implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,
   limiting solve speedup even though assembly is much faster.
 - The CUDA backend consumes the in-tree CPU database header; changes to the format must be validated on both backends.

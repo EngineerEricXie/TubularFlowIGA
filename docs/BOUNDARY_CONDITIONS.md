@@ -2,13 +2,21 @@
 
 New cases should define field-specific conditions in the canonical
 [`simulation_config.json`](PDE_CONFIGURATION.md). That schema supports arbitrary
-field names, fixed or profile-scaled velocity Dirichlet data, scalar
-Dirichlet/no-flux/outflow conditions, and validated flux/Robin declarations.
-The current CPU/CUDA boundary resolvers reject `flux` and `robin`; surface
-integrals are not silently omitted. Their numerical assembly is the next
-backend increment. Inlet profile scaling is constant in time; pulsatile waveforms are
-not yet supported. Track these increments in the
+field names, fixed or profile-scaled velocity Dirichlet data, and scalar
+Dirichlet/no-flux/outflow/flux/Robin conditions. The CPU configured-transport
+solver assembles scalar `flux` and `robin` surface integrals. CUDA rejects
+those two conditions until its matching surface kernels are available, so they
+are never silently omitted. Inlet profile scaling is constant in time;
+pulsatile waveforms are not yet supported. Track these increments in the
 [development roadmap](ROADMAP.md).
+
+For CPU transport, `flux` specifies the outward diffusive flux
+`D grad(c) dot n = q` and contributes `dt q N_a` to the right-hand side.
+`robin` uses `D grad(c) dot n = h(c_ext - c)`, contributing
+`dt h N_a N_b` to the left-hand side and `dt h c_ext N_a` to the
+right-hand side. Surface execution requires a version 4 `.ntiga` database
+containing element-face labels. A configured surface label with no packed face
+is rejected with a request to rerun `iga_pack`.
 
 
 ## Transitional schema v1
