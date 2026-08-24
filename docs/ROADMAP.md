@@ -15,7 +15,7 @@ application-specific field names in numerical kernels.
 | Shared `simulation_config.json` | Working | Transport and flow still use separate CLI entry points |
 | Spatial inlet velocity profile | Working | `initial_velocityfield.txt` times a constant scale |
 | Pulsatile inlet waveform | Working for CPU and CUDA configured transport | Cardiovascular flow remains steady |
-| Transient Navier–Stokes | Not implemented | No velocity time derivative or previous flow state |
+| Transient Navier–Stokes | CPU element assembly in progress | Backward-Euler mass/stabilization terms are tested; solver time loop remains |
 | Flux and Robin surface terms | Working on CPU and CUDA | V100 parity relative L2 `6.03e-8` |
 | Physiological outlet models | Not implemented | No resistance or Windkessel model |
 | Compliant wall / FSI | Not implemented | Current geometry is rigid |
@@ -87,7 +87,9 @@ tabulated/Fourier waveforms pass value, periodicity, and restart-time tests.
 ## Milestone 3: transient cardiovascular flow
 
 1. Add density and a velocity time-derivative term to the Navier–Stokes weak
-   form; begin with backward Euler and preserve a path to BDF2.
+   form; begin with backward Euler and preserve a path to BDF2. **CPU element
+   assembly and analytic mass-term regression complete; driver integration and
+   CUDA remain.**
 2. Add previous-state storage, physical-time stepping, nonlinear checks per
    step, restart/checkpoint metadata, and time-indexed output.
 3. Re-evaluate stabilization parameters to include the temporal scale.

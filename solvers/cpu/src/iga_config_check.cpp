@@ -16,7 +16,9 @@ int main(int argc, char** argv)
 			std::cout << "system=" << system.name << " unknowns=" << system.unknowns.size();
 			if (system.kind == iga::EquationKind::LinearTransport)
 				std::cout << " kind=linear_transport terms=" << system.terms.size();
-			else std::cout << " kind=navier_stokes viscosity=" << system.viscosity;
+			else std::cout << " kind=navier_stokes viscosity=" << system.viscosity
+				<< " density=" << system.density
+				<< " time_integration=" << system.time_integration;
 			std::cout << '\n';
 		}
 		return 0;

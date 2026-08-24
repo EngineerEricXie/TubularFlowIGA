@@ -31,7 +31,8 @@ int main()
 			 "mean": 1.0, "period": 2.0, "cosine": [2.0], "sine": [3.0]}
 		],
 		"equation_systems": [
-			{"name": "flow", "kind": "navier_stokes", "unknowns": ["velocity", "pressure"], "viscosity": 0.0035},
+			{"name": "flow", "kind": "navier_stokes", "unknowns": ["velocity", "pressure"],
+			 "viscosity": 0.0035, "density": 1060.0, "time_integration": "backward_euler"},
 			{"name": "species", "kind": "linear_transport", "unknowns": ["oxygen", "drug"],
 			 "terms": [
 				{"operator": "time_derivative", "equation": "oxygen"},
@@ -56,6 +57,8 @@ int main()
 	const auto configuration = iga::ParseSimulationConfiguration(json);
 	assert(configuration.fields.size() == 4);
 	assert(configuration.equation_systems.size() == 2);
+	assert(configuration.equation_systems[0].density == 1060.0);
+	assert(configuration.equation_systems[0].time_integration == "backward_euler");
 	assert(configuration.boundaries[0].name == "vessel_wall");
 	assert(configuration.temporal_functions.size() == 4);
 	const auto& fixed = iga::FindTemporalFunction(configuration, "fixed");
@@ -120,6 +123,20 @@ int main()
 	bool rejected = false;
 	try {
 		iga::ParseSimulationConfiguration(R"json({"schema_version":2,"fields":[{"name":"c","kind":"scalar"}],"time":{"dt":1,"steps":1},"equation_systems":[{"name":"s","kind":"linear_transport","unknowns":["c"],"terms":[{"operator":"invented","equation":"c"}]}],"boundaries":[]})json");
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+	rejected = false;
+	try {
+		iga::ParseSimulationConfiguration(R"json({"schema_version":2,"fields":[{"name":"velocity","kind":"vector3"},{"name":"pressure","kind":"pressure"}],"time":{"dt":1,"steps":1},"equation_systems":[{"name":"flow","kind":"navier_stokes","unknowns":["velocity","pressure"],"viscosity":1,"density":0,"time_integration":"backward_euler"}],"boundaries":[]})json");
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+	rejected = false;
+	try {
+		iga::ParseSimulationConfiguration(R"json({"schema_version":2,"fields":[{"name":"velocity","kind":"vector3"},{"name":"pressure","kind":"pressure"}],"time":{"dt":1,"steps":1},"equation_systems":[{"name":"flow","kind":"navier_stokes","unknowns":["velocity","pressure"],"viscosity":1,"time_integration":"bdf3"}],"boundaries":[]})json");
 	} catch (const std::runtime_error&) {
 		rejected = true;
 	}

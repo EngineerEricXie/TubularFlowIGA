@@ -47,6 +47,8 @@ struct EquationSystemDefinition {
 	std::vector<WeakFormTerm> terms;
 	std::vector<StabilizationDefinition> stabilization;
 	double viscosity = 0.0;
+	double density = 1.0;
+	std::string time_integration = "steady";
 };
 
 struct FieldBoundaryCondition {
@@ -280,7 +282,8 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	for (std::size_t i = 0; i < systems.size(); ++i) {
 		const auto context = "equation_systems[" + std::to_string(i) + "]";
 		const auto& object = RequireObject(systems[i], context);
-		RequireKnownKeys(object, {"name", "kind", "unknowns", "terms", "stabilization", "viscosity"}, context);
+		RequireKnownKeys(object, {"name", "kind", "unknowns", "terms", "stabilization", "viscosity",
+			"density", "time_integration"}, context);
 		EquationSystemDefinition system;
 		system.name = RequireString(Required(object, "name", context), context + ".name");
 		system.kind = ParseEquationKind(RequireString(Required(object, "kind", context), context + ".kind"));
@@ -296,8 +299,20 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		}
 		if (system.unknowns.empty()) throw std::runtime_error("simulation_config.json: system unknowns cannot be empty");
 		if (const auto* viscosity = Find(object, "viscosity")) system.viscosity = RequireNumber(*viscosity, context + ".viscosity");
+		if (const auto* density = Find(object, "density"))
+			system.density = RequireNumber(*density, context + ".density");
+		if (const auto* integration = Find(object, "time_integration"))
+			system.time_integration = RequireString(*integration, context + ".time_integration");
 		if (system.kind == EquationKind::NavierStokes && !(system.viscosity > 0.0))
 			throw std::runtime_error("simulation_config.json: navier_stokes viscosity must be positive");
+		if (system.kind == EquationKind::NavierStokes && !(system.density > 0.0))
+			throw std::runtime_error("simulation_config.json: navier_stokes density must be positive");
+		if (system.kind == EquationKind::NavierStokes
+			&& system.time_integration != "steady" && system.time_integration != "backward_euler")
+			throw std::runtime_error("simulation_config.json: navier_stokes time_integration must be 'steady' or 'backward_euler'");
+		if (system.kind != EquationKind::NavierStokes
+			&& (Find(object, "density") || Find(object, "time_integration")))
+			throw std::runtime_error("simulation_config.json: density and time_integration apply only to navier_stokes");
 		if (const auto* terms = Find(object, "terms")) {
 			const auto& array = RequireArray(*terms, context + ".terms");
 			for (std::size_t j = 0; j < array.size(); ++j) {

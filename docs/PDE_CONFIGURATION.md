@@ -23,12 +23,18 @@ parameters. SUPG can be enabled per equation. Unsupported operator names and
 unknown field references are rejected before assembly.
 
 Navier–Stokes is selected with `kind: "navier_stokes"`. Its two unknowns are a
-`vector3` velocity followed by pressure, and `viscosity` is required in the
-configuration; it is no longer a solver constant.
+`vector3` velocity followed by pressure. `viscosity` is the positive dynamic
+viscosity and is required; `density` is positive and defaults to `1`. The
+optional `time_integration` is either `steady` (the default) or
+`backward_euler`. Backward Euler uses the top-level positive `time.dt` and
+`time.steps` values.
 
-The current Navier–Stokes backend is steady. The top-level `time` object drives
-configured transport only; it does not make flow transient. Velocity profiles
-are spatial data multiplied by a constant `scale`.
+The CPU finite-element kernel assembles the physical inertial term
+`density * (du/dt + u dot grad(u))`, the Cauchy viscous term using dynamic
+viscosity, and pressure. Its stabilization includes the backward-Euler temporal
+scale. The CPU solver driver still executes only the steady mode while physical
+time-loop and previous-state plumbing are completed. Velocity profiles are
+spatial data multiplied by a constant `scale`.
 
 Schema version 2 optionally accepts named `temporal_functions` of kind
 `constant`, `sinusoid`, `periodic_table`, or `fourier`. Each declares
@@ -39,9 +45,8 @@ one-based harmonic order. A Dirichlet condition may name one with `waveform`.
 Parsing and dependency-free evaluation are implemented, including negative-time
 and period wrapping. CPU and CUDA configured transport materialize Dirichlet values at
 each physical step; a constant waveform reproduces constant-boundary results.
-Navier–Stokes still rejects waveform execution until transient flow integration
-is complete, so pulsatile flow and previous-step velocity state remain
-unavailable. See the
+Navier–Stokes still rejects waveform execution in the solver driver until its
+physical time loop is complete, so pulsatile flow remains unavailable. See the
 [development roadmap](ROADMAP.md).
 
 ## Boundary conditions
