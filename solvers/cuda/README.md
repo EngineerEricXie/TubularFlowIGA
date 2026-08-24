@@ -185,8 +185,8 @@ and `sbatch` commands.
   not implemented.
 - Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
   configured `time` currently applies only to transport.
-- Flux/Robin surface assembly is not implemented; configured CUDA transport
-  rejects these conditions pending CPU-parity kernels.
+- Configured scalar flux/Robin surface assembly matches the CPU weak form and
+  requires version 4 `.ntiga` face labels.
 - Pulsatile inflow, physiological outlet models, and compliant walls are not
   implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,

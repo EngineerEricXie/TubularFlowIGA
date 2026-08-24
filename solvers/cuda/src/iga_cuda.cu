@@ -33,7 +33,8 @@ class ReferenceData {
 public:
 	ReferenceData()
 		: basis_(kQuadraturePoints*64), gradient_(kQuadraturePoints*64*3),
-		  hessian_(kQuadraturePoints*64*9), weight_(kQuadraturePoints)
+		  hessian_(kQuadraturePoints*64*9), weight_(kQuadraturePoints),
+		  surface_basis_(6*16*64), surface_gradient_(6*16*64*3), surface_weight_(6*16)
 	{
 		constexpr std::array<double,4> points{{0.06943184420297371, 0.33000947820757187,
 			0.6699905217924281, 0.9305681557970262}};
@@ -43,6 +44,9 @@ public:
 		std::vector<double> gradient(kQuadraturePoints*64*3);
 		std::vector<double> hessian(kQuadraturePoints*64*9);
 		std::vector<double> weight(kQuadraturePoints);
+		std::vector<double> surface_basis(6*16*64);
+		std::vector<double> surface_gradient(6*16*64*3);
+		std::vector<double> surface_weight(6*16);
 		for (int qz = 0; qz < 4; ++qz)
 			for (int qy = 0; qy < 4; ++qy)
 				for (int qx = 0; qx < 4; ++qx) {
@@ -85,17 +89,56 @@ public:
 							}
 					weight[q] = weights[qx]*weights[qy]*weights[qz];
 				}
+		constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+		constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+		constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+		for (int face = 0; face < 6; ++face)
+			for (int qj = 0; qj < 4; ++qj)
+				for (int qi = 0; qi < 4; ++qi) {
+					double coordinate[3]{};
+					coordinate[fixed_axis[face]] = fixed_value[face];
+					coordinate[varying_axes[face][0]] = points[qi];
+					coordinate[varying_axes[face][1]] = points[qj];
+					double b[3][4], db[3][4];
+					for (int d = 0; d < 3; ++d) {
+						const double x = coordinate[d];
+						b[d][0] = std::pow(1.0-x,3);
+						b[d][1] = 3.0*std::pow(1.0-x,2)*x;
+						b[d][2] = 3.0*(1.0-x)*x*x;
+						b[d][3] = x*x*x;
+						db[d][0] = -3.0*std::pow(1.0-x,2);
+						db[d][1] = 3.0-12.0*x+9.0*x*x;
+						db[d][2] = 3.0*(2.0-3.0*x)*x;
+						db[d][3] = 3.0*x*x;
+					}
+					const int q = face*16+qj*4+qi;
+					int p = 0;
+					for (int k = 0; k < 4; ++k)
+						for (int j = 0; j < 4; ++j)
+							for (int i = 0; i < 4; ++i, ++p) {
+								surface_basis[q*64+p] = b[0][i]*b[1][j]*b[2][k];
+								surface_gradient[(q*64+p)*3] = db[0][i]*b[1][j]*b[2][k];
+								surface_gradient[(q*64+p)*3+1] = b[0][i]*db[1][j]*b[2][k];
+								surface_gradient[(q*64+p)*3+2] = b[0][i]*b[1][j]*db[2][k];
+							}
+					surface_weight[q] = 0.25*weights[qi]*weights[qj];
+				}
 		basis_.CopyFromHost(basis.data(), basis.size());
 		gradient_.CopyFromHost(gradient.data(), gradient.size());
 		hessian_.CopyFromHost(hessian.data(), hessian.size());
 		weight_.CopyFromHost(weight.data(), weight.size());
-		view_ = {basis_.data(), gradient_.data(), hessian_.data(), weight_.data()};
+		surface_basis_.CopyFromHost(surface_basis.data(), surface_basis.size());
+		surface_gradient_.CopyFromHost(surface_gradient.data(), surface_gradient.size());
+		surface_weight_.CopyFromHost(surface_weight.data(), surface_weight.size());
+		view_ = {basis_.data(), gradient_.data(), hessian_.data(), weight_.data(),
+			surface_basis_.data(), surface_gradient_.data(), surface_weight_.data()};
 	}
 
 	const ReferenceView& view() const { return view_; }
 
 private:
 	DeviceBuffer<double> basis_, gradient_, hessian_, weight_;
+	DeviceBuffer<double> surface_basis_, surface_gradient_, surface_weight_;
 	ReferenceView view_;
 };
 

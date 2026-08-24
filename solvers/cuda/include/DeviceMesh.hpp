@@ -20,6 +20,7 @@ struct FlatMesh {
 	std::vector<std::uint8_t> extraction_columns;
 	std::vector<double> extraction_values;
 	std::vector<double> bezier_points;
+	std::vector<int> boundary_labels;
 	int maximum_basis = 0;
 
 	explicit FlatMesh(iga::Database& database)
@@ -50,6 +51,8 @@ struct FlatMesh {
 			element_offsets.push_back(CheckedInt(connectivity.size(), "element basis entries"));
 			for (const auto& point : element.bezier_points)
 				for (double coordinate : point) bezier_points.push_back(coordinate);
+			boundary_labels.insert(boundary_labels.end(),
+				element.boundary_labels.begin(), element.boundary_labels.end());
 		}
 		if (maximum_basis > 80)
 			throw std::runtime_error("CUDA kernels support at most 80 basis functions per element");

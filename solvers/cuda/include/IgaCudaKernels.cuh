@@ -20,6 +20,9 @@ struct ReferenceView {
 	const double* gradient = nullptr;
 	const double* hessian = nullptr;
 	const double* weight = nullptr;
+	const double* surface_basis = nullptr;
+	const double* surface_gradient = nullptr;
+	const double* surface_weight = nullptr;
 };
 
 struct GeometryView {

@@ -3,15 +3,14 @@
 New cases should define field-specific conditions in the canonical
 [`simulation_config.json`](PDE_CONFIGURATION.md). That schema supports arbitrary
 field names, fixed or profile-scaled velocity Dirichlet data, and scalar
-Dirichlet/no-flux/outflow/flux/Robin conditions. The CPU configured-transport
-solver assembles scalar `flux` and `robin` surface integrals. CUDA rejects
-those two conditions until its matching surface kernels are available, so they
-are never silently omitted. Named temporal waveforms can now be parsed and
+Dirichlet/no-flux/outflow/flux/Robin conditions. The CPU and CUDA
+configured-transport solvers assemble matching scalar `flux` and `robin`
+surface integrals. Named temporal waveforms can now be parsed and
 evaluated, but boundary resolvers explicitly reject their execution pending
 transient time stepping. Inlet profile scaling therefore remains constant in
 actual solver runs. Track these increments in the [development roadmap](ROADMAP.md).
 
-For CPU transport, `flux` specifies the outward diffusive flux
+For configured transport, `flux` specifies the outward diffusive flux
 `D grad(c) dot n = q` and contributes `dt q N_a` to the right-hand side.
 `robin` uses `D grad(c) dot n = h(c_ext - c)`, contributing
 `dt h N_a N_b` to the left-hand side and `dt h c_ext N_a` to the

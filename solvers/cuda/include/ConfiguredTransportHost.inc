@@ -27,6 +27,59 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	}
 
 	FlatMesh host(database);
+	std::vector<int> required_surface_labels;
+	for (const auto& boundary : configuration.boundaries)
+		for (const auto& condition : boundary.conditions)
+			if (system.field_index.count(condition.field)
+				&& (condition.kind == iga::FieldBoundaryKind::Flux
+					|| condition.kind == iga::FieldBoundaryKind::Robin)
+				&& std::find(required_surface_labels.begin(), required_surface_labels.end(),
+					boundary.label) == required_surface_labels.end())
+				required_surface_labels.push_back(boundary.label);
+	std::vector<int> surface_element, surface_face, surface_first_pair;
+	std::vector<double> surface_flux, surface_robin, surface_robin_source;
+	std::vector<int> found_surface_labels;
+	for (std::size_t element = 0; element < host.elements(); ++element)
+		for (int face = 0; face < 6; ++face) {
+			const int label = host.boundary_labels[element*6+static_cast<std::size_t>(face)];
+			if (label < 0) continue;
+			const auto boundary = std::find_if(configuration.boundaries.begin(), configuration.boundaries.end(),
+				[label](const iga::NamedBoundaryDefinition& item) { return item.label == label; });
+			if (boundary == configuration.boundaries.end())
+				throw std::runtime_error("element boundary face has no simulation_config.json definition");
+			std::array<double,Fields> flux{}, robin{}, robin_source{};
+			bool active_surface = false;
+			for (const auto& condition : boundary->conditions) {
+				const auto field = system.field_index.find(condition.field);
+				if (field == system.field_index.end()) continue;
+				if (condition.kind == iga::FieldBoundaryKind::Flux) {
+					flux[field->second] = condition.value[0];
+					active_surface = true;
+				} else if (condition.kind == iga::FieldBoundaryKind::Robin) {
+					robin[field->second] = condition.coefficient;
+					robin_source[field->second] = condition.coefficient*condition.exterior_value;
+					active_surface = true;
+				}
+			}
+			if (!active_surface) continue;
+			if (std::find(found_surface_labels.begin(), found_surface_labels.end(), label)
+				== found_surface_labels.end()) found_surface_labels.push_back(label);
+			const int begin = host.element_offsets[element];
+			const int nen = host.element_offsets[element+1]-begin;
+			for (int pair = 0; pair < nen*nen; pair += kPairTile) {
+				surface_element.push_back(static_cast<int>(element));
+				surface_face.push_back(face);
+				surface_first_pair.push_back(pair);
+				surface_flux.insert(surface_flux.end(), flux.begin(), flux.end());
+				surface_robin.insert(surface_robin.end(), robin.begin(), robin.end());
+				surface_robin_source.insert(surface_robin_source.end(), robin_source.begin(), robin_source.end());
+			}
+		}
+	for (const int label : required_surface_labels)
+		if (std::find(found_surface_labels.begin(), found_surface_labels.end(), label)
+			== found_surface_labels.end())
+			throw std::runtime_error("configured scalar surface boundary label "
+				+std::to_string(label)+" has no boundary faces in the .ntiga database; repack with iga_pack");
 	BlockPattern pattern_host(host);
 	PrintMesh(host, &pattern_host);
 	const auto preprocess_end = Clock::now();
@@ -44,6 +97,21 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	boundary_mask.CopyFromHost(boundaries.constrained.data(), boundaries.constrained.size());
 	DeviceBuffer<double> boundary_value(boundaries.value.size());
 	boundary_value.CopyFromHost(boundaries.value.data(), boundaries.value.size());
+	DeviceBuffer<int> surface_elements(surface_element.size());
+	DeviceBuffer<int> surface_faces(surface_face.size());
+	DeviceBuffer<int> surface_pairs(surface_first_pair.size());
+	DeviceBuffer<double> surface_flux_device(surface_flux.size());
+	DeviceBuffer<double> surface_robin_device(surface_robin.size());
+	DeviceBuffer<double> surface_robin_source_device(surface_robin_source.size());
+	surface_elements.CopyFromHost(surface_element.data(), surface_element.size());
+	surface_faces.CopyFromHost(surface_face.data(), surface_face.size());
+	surface_pairs.CopyFromHost(surface_first_pair.data(), surface_first_pair.size());
+	surface_flux_device.CopyFromHost(surface_flux.data(), surface_flux.size());
+	surface_robin_device.CopyFromHost(surface_robin.data(), surface_robin.size());
+	surface_robin_source_device.CopyFromHost(surface_robin_source.data(), surface_robin_source.size());
+	const DeviceSurfaceView surfaces{static_cast<int>(surface_element.size()),
+		surface_elements.data(), surface_faces.data(), surface_pairs.data(),
+		surface_flux_device.data(), surface_robin_device.data(), surface_robin_source_device.data()};
 	auto velocity = Flatten(velocity_host);
 
 	constexpr int linear_restart = 50;
@@ -67,6 +135,12 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		terms.data(), static_cast<int>(host_terms.size()), supg.data(), system.dt,
 		left.values(), previous.values(), forcing.data());
 	CheckKernel("AssembleGenericTransportKernel");
+	if (surfaces.count) {
+		AssembleGenericSurfaceKernel<Fields><<<surfaces.count,kPairTile>>>(
+			mesh.view(), reference.view(), surfaces, pattern.view(), system.dt,
+			left.values(), forcing.data());
+		CheckKernel("AssembleGenericSurfaceKernel");
+	}
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	ApplyGenericBoundaryKernel<Fields><<<node_blocks,256>>>(
 		pattern.view(), boundary_mask.data(), left.values(), previous.values());

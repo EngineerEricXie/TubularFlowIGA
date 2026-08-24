@@ -1,5 +1,26 @@
 # CUDA Validation
 
+## Configured Surface-Term Parity
+
+Job `44364589` ran the public 4,221-node, 3,600-element smoke database on one
+Bridges-2 Tesla V100-SXM2-32GB with CUDA 12.4. The tracer wall used
+`D grad(c) dot n = 0.5(2-c)`; both backends ran two time steps from the same
+version 4 `.ntiga` database and configuration.
+
+```text
+CPU final L2:  31.3588
+CUDA final L2: 31.3588
+relative L2:   6.0297227463691488e-08
+CUDA assembly: 0.120425 s
+CUDA solve:    0.0719532 s
+CUDA iterations: 99
+singular diagonal blocks: 0
+```
+
+The configured surface-term parity gate was `1e-5`; the run passed. A version
+3 database with the same surface configuration is rejected because it has no
+packed element-face labels.
+
 ## Cylinder Baseline
 
 Final gate job `42863716` ran on one Bridges-2 V100-32GB with CUDA 12.4. The test used

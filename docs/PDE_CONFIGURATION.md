@@ -48,9 +48,8 @@ Every mesh label is assigned a user-selected name and a list of field-specific
 conditions. Supported schema values are `dirichlet`, `no_flux`, `flux`, `robin`,
 and `advective_outflow`. The configured transport assembler executes scalar
 Dirichlet conditions and treats `no_flux` and `advective_outflow` as natural
-conditions. CPU also assembles `flux` and `robin` surface terms from packed
-element-face labels. CUDA currently rejects those two conditions pending parity;
-it never silently treats them as executed numerical terms.
+conditions. CPU and CUDA also assemble matching `flux` and `robin` surface
+terms from packed element-face labels.
 A velocity Dirichlet condition may provide a three-component `value`, or set
 `"profile": "initial_velocityfield.txt"` plus a numeric `scale`. The latter
 preserves the case-generated vessel inlet profile, as in the HexSim workflow.

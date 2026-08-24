@@ -12,6 +12,16 @@ struct DeviceWeakTerm {
 	double coefficient;
 };
 
+struct DeviceSurfaceView {
+	int count = 0;
+	const int* element = nullptr;
+	const int* face = nullptr;
+	const int* first_pair = nullptr;
+	const double* flux = nullptr;
+	const double* robin = nullptr;
+	const double* robin_source = nullptr;
+};
+
 template <int Fields>
 __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceView reference,
 	GeometryView geometry, ElementTilesView tiles, DevicePatternView pattern,
@@ -107,6 +117,82 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 			for (int field = 0; field < Fields; ++field)
 				atomicAdd(source+row*Fields+field, local_source[field]);
 		}
+	}
+}
+
+template <int Fields>
+__global__ void AssembleGenericSurfaceKernel(DeviceMeshView mesh, ReferenceView reference,
+	DeviceSurfaceView surfaces, DevicePatternView pattern, double dt,
+	double* left, double* source)
+{
+	const int tile = blockIdx.x;
+	if (tile >= surfaces.count) return;
+	const int element = surfaces.element[tile];
+	const int face = surfaces.face[tile];
+	const int begin = mesh.element_offsets[element];
+	const int nen = mesh.element_offsets[element+1]-begin;
+	const int pair = surfaces.first_pair[tile]+threadIdx.x;
+	const bool active = pair < nen*nen;
+	const int a = active ? pair/nen : 0;
+	const int b = active ? pair-a*nen : 0;
+	int block = 0;
+	if (active) {
+		const int row = mesh.connectivity[begin+a];
+		const int column = mesh.connectivity[begin+b];
+		block = FindBlock(pattern, row, column);
+	}
+	__shared__ double basis[kMaximumBasis];
+	__shared__ double measure;
+	double local_left[Fields]{};
+	double local_source[Fields]{};
+	for (int qface = 0; qface < 16; ++qface) {
+		const int q = face*16+qface;
+		if (threadIdx.x < nen) {
+			const int basis_index = begin+threadIdx.x;
+			double value = 0.0;
+			for (int entry = mesh.extraction_offsets[basis_index];
+				entry < mesh.extraction_offsets[basis_index+1]; ++entry) {
+				const int p = mesh.extraction_columns[entry];
+				value += mesh.extraction_values[entry]*reference.surface_basis[q*64+p];
+			}
+			basis[threadIdx.x] = value;
+		}
+		if (threadIdx.x == 0) {
+			constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+			double tangent[2][3]{};
+			const double* points = mesh.bezier_points+static_cast<std::size_t>(element)*64*3;
+			for (int p = 0; p < 64; ++p)
+				for (int d = 0; d < 3; ++d)
+					for (int direction = 0; direction < 2; ++direction)
+						tangent[direction][d] += points[p*3+d]
+							* reference.surface_gradient[(q*64+p)*3+varying_axes[face][direction]];
+			const double cross[3] = {
+				tangent[0][1]*tangent[1][2]-tangent[0][2]*tangent[1][1],
+				tangent[0][2]*tangent[1][0]-tangent[0][0]*tangent[1][2],
+				tangent[0][0]*tangent[1][1]-tangent[0][1]*tangent[1][0]};
+			measure = reference.surface_weight[q]
+				* sqrt(cross[0]*cross[0]+cross[1]*cross[1]+cross[2]*cross[2]);
+		}
+		__syncthreads();
+		if (active) {
+			const std::size_t condition = static_cast<std::size_t>(tile)*Fields;
+			for (int field = 0; field < Fields; ++field) {
+				local_left[field] += dt*surfaces.robin[condition+field]*basis[a]*basis[b]*measure;
+				if (b == 0)
+					local_source[field] += dt*(surfaces.flux[condition+field]
+						+surfaces.robin_source[condition+field])*basis[a]*measure;
+			}
+		}
+		__syncthreads();
+	}
+	if (!active) return;
+	double* matrix = left+static_cast<std::size_t>(block)*Fields*Fields;
+	for (int field = 0; field < Fields; ++field)
+		atomicAdd(matrix+field*Fields+field, local_left[field]);
+	if (b == 0) {
+		const int row = mesh.connectivity[begin+a];
+		for (int field = 0; field < Fields; ++field)
+			atomicAdd(source+row*Fields+field, local_source[field]);
 	}
 }
 
