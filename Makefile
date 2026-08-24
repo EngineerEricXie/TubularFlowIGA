@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-petsc cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc cuda spline clean
 
 all: cpu
 
@@ -10,6 +10,9 @@ mesh-test:
 
 cpu:
 	$(MAKE) -C solvers/cpu
+
+cpu-test:
+	$(MAKE) -C solvers/cpu test
 
 cpu-petsc:
 	$(MAKE) -C solvers/cpu petsc

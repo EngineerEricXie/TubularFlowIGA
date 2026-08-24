@@ -1,4 +1,5 @@
 #include "CaseInput.hpp"
+#include "GenericCaseInput.hpp"
 #include "IgaDatabase.hpp"
 #include "NavierStokesElement.hpp"
 #include "OwnedRowAssembler.hpp"
@@ -28,9 +29,25 @@ int main(int argc, char** argv)
 		iga::Database database(argv[1]);
 		const fs::path case_dir(argv[2]);
 		const int max_newton = argc >= 4 ? std::stoi(argv[3]) : 8;
-		const auto parameters = iga::ReadTransportParameters((case_dir / "simulation_parameter.txt").string());
 		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
 		const auto boundary_velocity = iga::ReadVelocity((case_dir / "initial_velocityfield.txt").string(), database.header().nodes);
+		iga::ResolvedBoundaryConditions boundaries;
+		double viscosity = 0.1;
+		std::string boundary_config;
+		if (fs::exists(case_dir / "simulation_config.json")) {
+			const auto configuration = iga::ReadSimulationConfiguration((case_dir / "simulation_config.json").string());
+			const auto& flow = iga::FirstNavierStokesSystem(configuration);
+			viscosity = flow.viscosity;
+			boundaries = iga::ResolveFlowBoundaries(configuration, flow, labels, boundary_velocity);
+			boundary_config = "simulation_config.json";
+		} else {
+			const auto parameters = iga::ReadTransportParameters((case_dir / "simulation_parameter.txt").string());
+			const auto case_configuration = iga::ReadCaseConfiguration((case_dir / "case_config.json").string());
+			boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, boundary_velocity, parameters);
+			boundary_config = case_configuration.present ? "case_config.json" : "legacy-defaults";
+		}
+		if (rank == 0) std::cout << "boundary_config=" << boundary_config << " viscosity=" << viscosity
+			<< " velocity_nodes=" << boundaries.velocity_nodes << " pressure_nodes=" << boundaries.pressure_nodes << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 4);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
 		Mat jacobian = assembler.CreateMatrix(true);
@@ -61,10 +78,10 @@ int main(int argc, char** argv)
 
 		std::vector<PetscInt> boundary_rows;
 		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node) {
-			const auto label = labels[static_cast<std::size_t>(node)];
-			if (label == 0 || label == 1)
+			const auto index = static_cast<std::size_t>(node);
+			if (boundaries.velocity_constrained[index])
 				for (int field = 0; field < 3; ++field) boundary_rows.push_back(static_cast<PetscInt>(4*node+field));
-			if (label >= 2) boundary_rows.push_back(static_cast<PetscInt>(4*node+3));
+			if (boundaries.pressure_constrained[index]) boundary_rows.push_back(static_cast<PetscInt>(4*node+3));
 		}
 
 		KSP solver = nullptr;
@@ -76,7 +93,6 @@ int main(int argc, char** argv)
 		PCSetType(pc, PCBJACOBI);
 		KSPSetFromOptions(solver);
 
-		const double viscosity = 0.1;
 		PetscInt total_linear_iterations = 0;
 		PetscReal initial_residual = -1.0;
 		bool converged = false;
@@ -110,9 +126,10 @@ int main(int argc, char** argv)
 			for (auto row : boundary_rows) {
 				const auto node = static_cast<std::uint64_t>(row / 4);
 				const auto field = row % 4;
-				double target = 0.0;
-				if (labels[static_cast<std::size_t>(node)] == 1 && field < 3)
-					target = parameters.vplus * boundary_velocity[static_cast<std::size_t>(node)][field];
+				const auto index = static_cast<std::size_t>(node);
+				const double target = field < 3
+					? boundaries.velocity[index][static_cast<std::size_t>(field)]
+					: boundaries.pressure[index];
 				const auto local_row = static_cast<std::size_t>(row - 4*assembler.node_begin());
 				boundary_update.push_back(target - PetscRealPart(owned_state[local_row]));
 			}

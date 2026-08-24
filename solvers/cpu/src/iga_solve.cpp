@@ -1,8 +1,9 @@
 #include "CaseInput.hpp"
+#include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
 #include "IgaDatabase.hpp"
 #include "OwnedRowAssembler.hpp"
-#include "TransportElement.hpp"
+#include "SimulationConfig.hpp"
 
 #include <petscksp.h>
 
@@ -16,45 +17,56 @@ namespace fs = std::filesystem;
 
 int main(int argc, char** argv)
 {
-	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA transport solver\n");
+	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA configured PDE solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;
 	try {
-		if (argc < 3) throw std::runtime_error("usage: iga_transport DATABASE.ntiga CASE_DIR [STEPS] [OUTPUT] [VELOCITY]");
+		if (argc < 3) throw std::runtime_error(
+			"usage: iga_solve DATABASE.ntiga CASE_DIR [SYSTEM] [OUTPUT] [VELOCITY]");
 		iga::Database database(argv[1]);
 		const fs::path case_dir(argv[2]);
-		auto parameters = iga::ReadTransportParameters((case_dir / "simulation_parameter.txt").string());
-		if (argc >= 4) parameters.steps = std::stoi(argv[3]);
-		const auto converted = iga::ConvertLegacyNeuronTransport(parameters);
-		const auto system = iga::CompileLinearSystem(converted, "neuron_transport");
+		const auto configuration = iga::ReadSimulationConfiguration(
+			(case_dir / "simulation_config.json").string());
+		const auto system_name = argc >= 4 ? std::string(argv[3])
+			: iga::FirstLinearTransportSystem(configuration);
+		const auto system = iga::CompileLinearSystem(configuration, system_name);
 		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
 		const auto velocity_path = argc >= 6 ? fs::path(argv[5]) : case_dir / "initial_velocityfield.txt";
 		const auto velocity = iga::ReadVelocity(velocity_path.string(), database.header().nodes);
-		const auto case_configuration = iga::ReadCaseConfiguration((case_dir / "case_config.json").string());
-		const auto boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, velocity, parameters);
-		if (rank == 0) std::cout << "boundary_config=" << (case_configuration.present ? "case_config.json" : "legacy-defaults")
-			<< " transport_nodes=" << boundaries.transport_nodes << '\n';
-		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 2);
+		const auto boundaries = iga::ResolveScalarBoundaries(configuration, system, labels);
+		const auto initial = iga::InitialScalarValues(configuration, system);
+		const auto fields = system.fields.size();
+		if (rank == 0) {
+			std::cout << "configuration=simulation_config.json system=" << system.name
+				<< " fields=" << fields << " dirichlet_dofs=" << boundaries.constrained_dofs << '\n';
+			for (std::size_t i = 0; i < system.fields.size(); ++i)
+				std::cout << "field[" << i << "]=" << system.fields[i] << '\n';
+		}
+
+		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, fields);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
 		Mat left = assembler.CreateMatrix();
 		Mat previous = assembler.CreateMatrix();
 		MatSetOption(previous, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
+		Vec forcing = assembler.CreateVector();
+		VecSet(forcing, 0.0);
 		const auto assembly_start = std::chrono::steady_clock::now();
 		for (const auto& element : assembler.elements()) {
-			auto matrices = iga::BuildGenericTransportElement(element, velocity, system);
+			const auto matrices = iga::BuildGenericTransportElement(element, velocity, system);
 			assembler.AddElementMatrix(left, element, matrices.left);
 			assembler.AddElementMatrix(previous, element, matrices.previous);
+			assembler.AddElementVector(forcing, element, matrices.source);
 		}
 		iga::OwnedRowAssembler::Assemble(left);
 		iga::OwnedRowAssembler::Assemble(previous);
+		iga::OwnedRowAssembler::Assemble(forcing);
 
 		std::vector<PetscInt> boundary_rows;
 		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node)
-			if (boundaries.transport_constrained[static_cast<std::size_t>(node)]) {
-				boundary_rows.push_back(static_cast<PetscInt>(2*node));
-				boundary_rows.push_back(static_cast<PetscInt>(2*node+1));
-			}
+			for (std::size_t field = 0; field < fields; ++field)
+				if (boundaries.constrained[static_cast<std::size_t>(node)*fields+field])
+					boundary_rows.push_back(static_cast<PetscInt>(node*fields+field));
 		MatZeroRows(left, static_cast<PetscInt>(boundary_rows.size()), boundary_rows.data(), 1.0, nullptr, nullptr);
 		MatZeroRows(previous, static_cast<PetscInt>(boundary_rows.size()), boundary_rows.data(), 0.0, nullptr, nullptr);
 
@@ -66,14 +78,12 @@ int main(int argc, char** argv)
 		VecSet(rhs, 0.0);
 		PetscScalar* current_array = nullptr;
 		VecGetArray(current, &current_array);
-		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node) {
-			const auto local = static_cast<std::size_t>(node - assembler.node_begin()) * 2;
-			const auto index = static_cast<std::size_t>(node);
-			if (boundaries.transport_constrained[index]) {
-				current_array[local] = boundaries.n0[index];
-				current_array[local+1] = boundaries.nplus[index];
+		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node)
+			for (std::size_t field = 0; field < fields; ++field) {
+				const auto local = static_cast<std::size_t>(node-assembler.node_begin())*fields+field;
+				const auto global = static_cast<std::size_t>(node)*fields+field;
+				current_array[local] = boundaries.constrained[global] ? boundaries.value[global] : initial[field];
 			}
-		}
 		VecRestoreArray(current, &current_array);
 
 		KSP solver = nullptr;
@@ -91,14 +101,12 @@ int main(int argc, char** argv)
 
 		PetscInt total_iterations = 0;
 		const auto solve_start = std::chrono::steady_clock::now();
-		for (int step = 0; step < parameters.steps; ++step) {
+		for (int step = 0; step < system.steps; ++step) {
 			MatMult(previous, current, rhs);
+			VecAXPY(rhs, 1.0, forcing);
 			std::vector<PetscScalar> boundary_values;
 			boundary_values.reserve(boundary_rows.size());
-			for (auto row : boundary_rows) {
-				const auto node = static_cast<std::size_t>(row / 2);
-				boundary_values.push_back(row % 2 == 0 ? boundaries.n0[node] : boundaries.nplus[node]);
-			}
+			for (auto row : boundary_rows) boundary_values.push_back(boundaries.value[static_cast<std::size_t>(row)]);
 			VecSetValues(rhs, static_cast<PetscInt>(boundary_rows.size()), boundary_rows.data(), boundary_values.data(), INSERT_VALUES);
 			iga::OwnedRowAssembler::Assemble(rhs);
 			if (step > 0) VecCopy(current, next);
@@ -106,15 +114,14 @@ int main(int argc, char** argv)
 			KSPSolve(solver, rhs, next);
 			KSPConvergedReason reason;
 			KSPGetConvergedReason(solver, &reason);
-			if (reason <= 0) throw std::runtime_error("transport KSP did not converge at step " + std::to_string(step));
+			if (reason <= 0) throw std::runtime_error("KSP did not converge at step " + std::to_string(step));
 			PetscInt iterations = 0;
 			KSPGetIterationNumber(solver, &iterations);
 			total_iterations += iterations;
 			VecSwap(current, next);
 		}
 		const auto solve_end = std::chrono::steady_clock::now();
-		PetscReal norm = 0.0;
-		VecNorm(current, NORM_2, &norm);
+
 		if (argc >= 5) {
 			Vec root = nullptr;
 			VecScatter scatter = nullptr;
@@ -125,27 +132,32 @@ int main(int argc, char** argv)
 				const PetscScalar* values = nullptr;
 				VecGetArrayRead(root, &values);
 				std::ofstream output(argv[4]);
-				if (!output) throw std::runtime_error("cannot create final state output");
+				std::ofstream metadata(std::string(argv[4]) + ".fields");
+				if (!output || !metadata) throw std::runtime_error("cannot create configured PDE output");
 				output.precision(17);
-				for (std::uint64_t node = 0; node < database.header().nodes; ++node)
-					output << node << ' ' << PetscRealPart(values[2*node]) << ' ' << PetscRealPart(values[2*node+1]) << '\n';
+				for (const auto& name : system.fields) metadata << name << '\n';
+				for (std::uint64_t node = 0; node < database.header().nodes; ++node) {
+					output << node;
+					for (std::size_t field = 0; field < fields; ++field)
+						output << ' ' << PetscRealPart(values[node*fields+field]);
+					output << '\n';
+				}
 				VecRestoreArrayRead(root, &values);
 			}
 			VecScatterDestroy(&scatter);
 			VecDestroy(&root);
 		}
-		if (rank == 0) {
-			const auto assembly_seconds = std::chrono::duration<double>(assembly_end-assembly_start).count();
-			const auto solve_seconds = std::chrono::duration<double>(solve_end-solve_start).count();
-			std::cout << "transport_v2 nodes=" << database.header().nodes << " elements=" << database.header().elements
-				<< " steps=" << parameters.steps << " assembly_s=" << assembly_seconds << " solve_s=" << solve_seconds
-				<< " total_iterations=" << total_iterations << " final_l2=" << norm << '\n';
-		}
+		PetscReal norm = 0.0;
+		VecNorm(current, NORM_2, &norm);
+		if (rank == 0) std::cout << "iga_solve system=" << system.name << " steps=" << system.steps
+			<< " assembly_s=" << std::chrono::duration<double>(assembly_end-assembly_start).count()
+			<< " solve_s=" << std::chrono::duration<double>(solve_end-solve_start).count()
+			<< " total_iterations=" << total_iterations << " final_l2=" << norm << '\n';
 		KSPDestroy(&solver);
-		VecDestroy(&rhs); VecDestroy(&next); VecDestroy(&current);
+		VecDestroy(&rhs); VecDestroy(&next); VecDestroy(&current); VecDestroy(&forcing);
 		MatDestroy(&previous); MatDestroy(&left);
-	} catch (const std::exception& e) {
-		std::cerr << "rank " << rank << ": " << e.what() << '\n';
+	} catch (const std::exception& error) {
+		std::cerr << "rank " << rank << ": " << error.what() << '\n';
 		status = 1;
 	}
 	int global_status = 0;
