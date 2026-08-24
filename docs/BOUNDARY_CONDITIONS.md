@@ -4,8 +4,9 @@ New cases should define field-specific conditions in the canonical
 [`simulation_config.json`](PDE_CONFIGURATION.md). That schema supports arbitrary
 field names, fixed or profile-scaled velocity Dirichlet data, scalar
 Dirichlet/no-flux/outflow conditions, and validated flux/Robin declarations.
-The current volume assembler does not yet assemble `flux` or `robin` surface
-integrals. Inlet profile scaling is constant in time; pulsatile waveforms are
+The current CPU/CUDA boundary resolvers reject `flux` and `robin`; surface
+integrals are not silently omitted. Their numerical assembly is the next
+backend increment. Inlet profile scaling is constant in time; pulsatile waveforms are
 not yet supported. Track these increments in the
 [development roadmap](ROADMAP.md).
 

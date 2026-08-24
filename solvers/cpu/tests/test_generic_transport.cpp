@@ -1,4 +1,5 @@
 #include "CaseInput.hpp"
+#include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
 
 #include <algorithm>
@@ -84,4 +85,14 @@ int main()
 	assert(custom_matrices.left.size() == 192*192);
 	assert(std::abs(PetscRealPart(custom_matrices.left[2])) > 0.0);
 	std::cout << "custom three-field assembly passed\n";
+	custom.boundaries = {{0, "wall", {{"oxygen", iga::FieldBoundaryKind::Flux,
+		{1.0}, 0.0, 0.0, "", 1.0}}}};
+	bool rejected_surface = false;
+	try {
+		iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
+	} catch (const std::runtime_error&) {
+		rejected_surface = true;
+	}
+	assert(rejected_surface);
+	std::cout << "unsupported scalar surface condition rejected\n";
 }

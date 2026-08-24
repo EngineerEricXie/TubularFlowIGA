@@ -37,7 +37,7 @@ iga_config_check: src/iga_config_check.cpp ../../include/SimulationConfig.hpp ..
 case_config_test: tests/test_case_config.cpp include/CaseInput.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-simulation_config_test: tests/test_simulation_config.cpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+simulation_config_test: tests/test_simulation_config.cpp include/GenericCaseInput.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 generic_transport_test: tests/test_generic_transport.cpp include/GenericTransportElement.hpp include/TransportElement.hpp include/CaseInput.hpp ../../include/SimulationConfig.hpp

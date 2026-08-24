@@ -1,9 +1,12 @@
 #include "SimulationConfig.hpp"
+#include "GenericCaseInput.hpp"
 
+#include <array>
 #include <cassert>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 int main()
 {
@@ -49,6 +52,18 @@ int main()
 	assert(compiled.field_index.at("drug") == 1);
 	assert(compiled.terms.size() == 5);
 	assert(compiled.dt == 0.01 && compiled.steps == 5);
+	auto unsupported_flow = configuration;
+	unsupported_flow.boundaries[0].conditions.push_back(
+		{"pressure", iga::FieldBoundaryKind::Flux, {0.0}, 0.0, 0.0, "", 1.0});
+	bool flow_boundary_rejected = false;
+	try {
+		iga::ResolveFlowBoundaries(unsupported_flow,
+			iga::FirstNavierStokesSystem(unsupported_flow), {0, 1},
+			{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
+	} catch (const std::runtime_error&) {
+		flow_boundary_rejected = true;
+	}
+	assert(flow_boundary_rejected);
 
 	bool rejected = false;
 	try {

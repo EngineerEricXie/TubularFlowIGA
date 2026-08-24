@@ -38,10 +38,10 @@ Every mesh label is assigned a user-selected name and a list of field-specific
 conditions. Supported schema values are `dirichlet`, `no_flux`, `flux`, `robin`,
 and `advective_outflow`. The current volume assembler executes scalar Dirichlet
 conditions and treats `no_flux` and `advective_outflow` as natural conditions.
-The schema validates `flux` and `robin`, but their surface-integral assembly is
-reserved for the next backend increment.
-A schema-valid `flux` or `robin` declaration must therefore not be interpreted
-as a currently executed numerical boundary term.
+The schema validates `flux` and `robin`, but the CPU/CUDA boundary resolvers
+reject them because surface-integral assembly is not implemented. They are
+reserved for the next backend increment and are never silently treated as
+executed numerical boundary terms.
 A velocity Dirichlet condition may provide a three-component `value`, or set
 `"profile": "initial_velocityfield.txt"` plus a numeric `scale`. The latter
 preserves the case-generated vessel inlet profile, as in the HexSim workflow.
