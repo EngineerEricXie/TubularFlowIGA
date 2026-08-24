@@ -481,10 +481,10 @@ __global__ void ApplyBlockInverseKernel(int nodes, const double* inverse,
 }
 
 __global__ void ApplyTransportBoundaryKernel(DevicePatternView pattern,
-	const int* labels, double* left, double* previous)
+	const int* constrained, double* left, double* previous)
 {
 	const int node = blockIdx.x*blockDim.x+threadIdx.x;
-	if (node >= pattern.nodes || labels[node] != 1) return;
+	if (node >= pattern.nodes || !constrained[node]) return;
 	for (int block = pattern.row_offsets[node]; block < pattern.row_offsets[node+1]; ++block)
 		for (int i = 0; i < 4; ++i) {
 			left[static_cast<std::size_t>(block)*4+i] = 0.0;
@@ -495,25 +495,23 @@ __global__ void ApplyTransportBoundaryKernel(DevicePatternView pattern,
 	diagonal[3] = 1.0;
 }
 
-__global__ void SetTransportBoundaryVectorKernel(int nodes, const int* labels,
-	double n0, double nplus, double* vector)
+__global__ void SetTransportBoundaryVectorKernel(int nodes, const int* constrained,
+	const double* n0, const double* nplus, double* vector)
 {
 	const int node = blockIdx.x*blockDim.x+threadIdx.x;
-	if (node < nodes && labels[node] == 1) {
-		vector[node*2] = n0;
-		vector[node*2+1] = nplus;
+	if (node < nodes && constrained[node]) {
+		vector[node*2] = n0[node];
+		vector[node*2+1] = nplus[node];
 	}
 }
 
 __global__ void ApplyNavierStokesBoundaryKernel(DevicePatternView pattern,
-	const int* labels, double* jacobian)
+	const int* velocity_constrained, const int* pressure_constrained, double* jacobian)
 {
 	const int node = blockIdx.x*blockDim.x+threadIdx.x;
 	if (node >= pattern.nodes) return;
-	const int label = labels[node];
 	for (int field = 0; field < 4; ++field) {
-		const bool constrained = (field < 3 && (label == 0 || label == 1))
-			|| (field == 3 && label >= 2);
+		const bool constrained = field < 3 ? velocity_constrained[node] : pressure_constrained[node];
 		if (!constrained) continue;
 		for (int block = pattern.row_offsets[node]; block < pattern.row_offsets[node+1]; ++block)
 			for (int column_field = 0; column_field < 4; ++column_field)
@@ -522,18 +520,16 @@ __global__ void ApplyNavierStokesBoundaryKernel(DevicePatternView pattern,
 	}
 }
 
-__global__ void SetNavierStokesBoundaryRhsKernel(int nodes, const int* labels,
-	const double* boundary_velocity, double inlet_scale, const double* state, double* rhs)
+__global__ void SetNavierStokesBoundaryRhsKernel(int nodes,
+	const int* velocity_constrained, const int* pressure_constrained,
+	const double* velocity, const double* pressure, const double* state, double* rhs)
 {
 	const int node = blockIdx.x*blockDim.x+threadIdx.x;
 	if (node >= nodes) return;
-	const int label = labels[node];
 	for (int field = 0; field < 4; ++field) {
-		const bool constrained = (field < 3 && (label == 0 || label == 1))
-			|| (field == 3 && label >= 2);
+		const bool constrained = field < 3 ? velocity_constrained[node] : pressure_constrained[node];
 		if (!constrained) continue;
-		const double target = label == 1 && field < 3
-			? inlet_scale*boundary_velocity[node*3+field] : 0.0;
+		const double target = field < 3 ? velocity[node*3+field] : pressure[node];
 		rhs[node*4+field] = target-state[node*4+field];
 	}
 }

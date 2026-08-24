@@ -1,8 +1,10 @@
 #include "BlockCsr.hpp"
 #include "CaseInput.hpp"
+#include "GenericCaseInput.hpp"
 #include "CudaRuntime.hpp"
 #include "DeviceMesh.hpp"
 #include "Gmres.hpp"
+#include "GenericTransportKernels.cuh"
 #include "IgaCudaKernels.cuh"
 #include "IgaDatabase.hpp"
 
@@ -175,6 +177,13 @@ DeviceBuffer<int> CopyLabels(const std::vector<int>& labels)
 	return result;
 }
 
+DeviceBuffer<double> CopyScalars(const std::vector<double>& values)
+{
+	DeviceBuffer<double> result(values.size());
+	result.CopyFromHost(values.data(), values.size());
+	return result;
+}
+
 void RequireGeometry(const GeometryData& geometry)
 {
 	if (geometry.bad_samples())
@@ -282,6 +291,8 @@ int MeshCheck(const std::string& database_path)
 	return geometry.bad_samples() ? 1 : 0;
 }
 
+#include "ConfiguredTransportHost.inc"
+
 int Transport(int argc, char** argv)
 {
 	if (argc < 4)
@@ -294,6 +305,10 @@ int Transport(int argc, char** argv)
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
 	const fs::path velocity_path = argc >= 7 ? fs::path(argv[6]) : case_dir/"initial_velocityfield.txt";
 	const auto velocity_host = iga::ReadVelocity(velocity_path.string(), database.header().nodes);
+	const auto case_configuration = iga::ReadCaseConfiguration((case_dir/"case_config.json").string());
+	const auto boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, velocity_host, parameters);
+	std::cout << "boundary_config=" << (case_configuration.present ? "case_config.json" : "legacy-defaults")
+		<< " transport_nodes=" << boundaries.transport_nodes << '\n';
 
 	FlatMesh host(database);
 	BlockPattern pattern_host(host);
@@ -305,7 +320,9 @@ int Transport(int argc, char** argv)
 	GeometryData geometry(mesh, reference, false);
 	RequireGeometry(geometry);
 	ElementTiles tiles(host);
-	auto labels_device = CopyLabels(labels);
+	auto boundary_mask = CopyLabels(boundaries.transport_constrained);
+	auto boundary_n0 = CopyScalars(boundaries.n0);
+	auto boundary_nplus = CopyScalars(boundaries.nplus);
 	auto velocity = Flatten(velocity_host);
 	constexpr int linear_restart = 50;
 	const std::size_t matrix_bytes = static_cast<std::size_t>(pattern.view().blocks)*4*sizeof(double);
@@ -322,11 +339,11 @@ int Transport(int argc, char** argv)
 	CheckKernel("AssembleTransportKernel");
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	ApplyTransportBoundaryKernel<<<node_blocks,256>>>(
-		pattern.view(), labels_device.data(), left.values(), previous.values());
+		pattern.view(), boundary_mask.data(), left.values(), previous.values());
 	CheckKernel("ApplyTransportBoundaryKernel");
 	SetTransportBoundaryVectorKernel<<<node_blocks,256>>>(
-		static_cast<int>(host.nodes), labels_device.data(), parameters.n0_bc,
-		parameters.nplus_bc, current.data());
+		static_cast<int>(host.nodes), boundary_mask.data(), boundary_n0.data(),
+		boundary_nplus.data(), current.data());
 	CheckKernel("SetTransportBoundaryVectorKernel current");
 	Check(cudaDeviceSynchronize(), "transport assembly synchronize");
 	const auto assembly_end = Clock::now();
@@ -341,8 +358,8 @@ int Transport(int argc, char** argv)
 			pattern.view(), previous.values(), current.data(), rhs.data());
 		CheckKernel("transport previous MatMult");
 		SetTransportBoundaryVectorKernel<<<node_blocks,256>>>(
-			static_cast<int>(host.nodes), labels_device.data(), parameters.n0_bc,
-			parameters.nplus_bc, rhs.data());
+			static_cast<int>(host.nodes), boundary_mask.data(), boundary_n0.data(),
+			boundary_nplus.data(), rhs.data());
 		CheckKernel("SetTransportBoundaryVectorKernel rhs");
 		if (step == 0) next.Clear();
 		else Check(cudaMemcpy(next.data(), current.data(), current.bytes(), cudaMemcpyDeviceToDevice),
@@ -389,10 +406,25 @@ int NavierStokes(int argc, char** argv)
 	iga::Database database(argv[2]);
 	const fs::path case_dir(argv[3]);
 	const int maximum_newton = argc >= 5 ? std::stoi(argv[4]) : 8;
-	const auto parameters = iga::ReadTransportParameters((case_dir/"simulation_parameter.txt").string());
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
-	const auto boundary_velocity_host = iga::ReadVelocity(
-		(case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
+	const auto boundary_velocity_host = iga::ReadVelocity((case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
+	iga::ResolvedBoundaryConditions boundaries;
+	double viscosity = 0.1;
+	std::string boundary_config;
+	if (fs::exists(case_dir/"simulation_config.json")) {
+		const auto configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
+		const auto& flow = iga::FirstNavierStokesSystem(configuration);
+		viscosity = flow.viscosity;
+		boundaries = iga::ResolveFlowBoundaries(configuration, flow, labels, boundary_velocity_host);
+		boundary_config = "simulation_config.json";
+	} else {
+		const auto parameters = iga::ReadTransportParameters((case_dir/"simulation_parameter.txt").string());
+		const auto case_configuration = iga::ReadCaseConfiguration((case_dir/"case_config.json").string());
+		boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, boundary_velocity_host, parameters);
+		boundary_config = case_configuration.present ? "case_config.json" : "legacy-defaults";
+	}
+	std::cout << "boundary_config=" << boundary_config << " viscosity=" << viscosity
+		<< " velocity_nodes=" << boundaries.velocity_nodes << " pressure_nodes=" << boundaries.pressure_nodes << '\n';
 
 	FlatMesh host(database);
 	BlockPattern pattern_host(host);
@@ -404,8 +436,10 @@ int NavierStokes(int argc, char** argv)
 	GeometryData geometry(mesh, reference, true);
 	RequireGeometry(geometry);
 	ElementTiles tiles(host);
-	auto labels_device = CopyLabels(labels);
-	auto boundary_velocity = Flatten(boundary_velocity_host);
+	auto velocity_mask = CopyLabels(boundaries.velocity_constrained);
+	auto pressure_mask = CopyLabels(boundaries.pressure_constrained);
+	auto boundary_velocity = Flatten(boundaries.velocity);
+	auto boundary_pressure = CopyScalars(boundaries.pressure);
 	constexpr int linear_restart = 200;
 	const std::size_t matrix_bytes = static_cast<std::size_t>(pattern.view().blocks)*16*sizeof(double);
 	const std::size_t vector_bytes = static_cast<std::size_t>(host.nodes)*4*sizeof(double);
@@ -427,14 +461,14 @@ int NavierStokes(int argc, char** argv)
 		rhs.Clear();
 		AssembleNavierStokesKernel<<<tiles.view().count,kPairTile>>>(
 			mesh.view(), reference.view(), geometry.view(), tiles.view(), pattern.view(),
-			state.data(), 0.1, jacobian.values(), rhs.data());
+			state.data(), viscosity, jacobian.values(), rhs.data());
 		CheckKernel("AssembleNavierStokesKernel");
 		ApplyNavierStokesBoundaryKernel<<<node_blocks,256>>>(
-			pattern.view(), labels_device.data(), jacobian.values());
+			pattern.view(), velocity_mask.data(), pressure_mask.data(), jacobian.values());
 		CheckKernel("ApplyNavierStokesBoundaryKernel");
 		SetNavierStokesBoundaryRhsKernel<<<node_blocks,256>>>(
-			static_cast<int>(host.nodes), labels_device.data(), boundary_velocity.data(),
-			parameters.vplus, state.data(), rhs.data());
+			static_cast<int>(host.nodes), velocity_mask.data(), pressure_mask.data(),
+			boundary_velocity.data(), boundary_pressure.data(), state.data(), rhs.data());
 		CheckKernel("SetNavierStokesBoundaryRhsKernel");
 		Check(cudaDeviceSynchronize(), "Navier-Stokes assembly synchronize");
 		const auto assembly_end = Clock::now();
@@ -510,7 +544,7 @@ int main(int argc, char** argv)
 {
 	try {
 		if (argc < 2)
-			throw std::runtime_error("usage: iga_cuda device-info|mesh-check|transport|navier-stokes ...");
+			throw std::runtime_error("usage: iga_cuda device-info|mesh-check|solve|transport|navier-stokes ...");
 		const std::string command(argv[1]);
 		if (command == "device-info") {
 			iga::cuda::PrintDevice();
@@ -522,6 +556,7 @@ int main(int argc, char** argv)
 			return iga::cuda::MeshCheck(argv[2]);
 		}
 		if (command == "transport") return iga::cuda::Transport(argc, argv);
+		if (command == "solve") return iga::cuda::SolveConfigured(argc, argv);
 		if (command == "navier-stokes") return iga::cuda::NavierStokes(argc, argv);
 		throw std::runtime_error("unknown command: "+command);
 	} catch (const std::exception& error) {
