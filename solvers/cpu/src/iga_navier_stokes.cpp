@@ -3,6 +3,7 @@
 #include "IgaDatabase.hpp"
 #include "NavierStokesElement.hpp"
 #include "OwnedRowAssembler.hpp"
+#include "TemporalFunction.hpp"
 
 #include <petscksp.h>
 
@@ -20,7 +21,7 @@ namespace fs = std::filesystem;
 
 int main(int argc, char** argv)
 {
-	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA stabilized steady Navier-Stokes solver\n");
+	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA stabilized steady/transient Navier-Stokes solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;
@@ -32,13 +33,24 @@ int main(int argc, char** argv)
 		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
 		const auto boundary_velocity = iga::ReadVelocity((case_dir / "initial_velocityfield.txt").string(), database.header().nodes);
 		iga::ResolvedBoundaryConditions boundaries;
-		double viscosity = 0.1;
+		iga::SimulationConfiguration simulation_configuration;
+		iga::NavierStokesParameters flow_parameters{1.0, 0.1, 0.0};
+		bool configured = false;
+		bool transient = false;
 		std::string boundary_config;
 		if (fs::exists(case_dir / "simulation_config.json")) {
-			const auto configuration = iga::ReadSimulationConfiguration((case_dir / "simulation_config.json").string());
-			const auto& flow = iga::FirstNavierStokesSystem(configuration);
-			viscosity = flow.viscosity;
-			boundaries = iga::ResolveFlowBoundaries(configuration, flow, labels, boundary_velocity);
+			simulation_configuration = iga::ReadSimulationConfiguration(
+				(case_dir / "simulation_config.json").string());
+			const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
+			configured = true;
+			transient = flow.time_integration == "backward_euler";
+			flow_parameters = {flow.density, flow.viscosity,
+				transient ? simulation_configuration.time.dt : 0.0};
+			const auto initial_configuration = transient
+				? iga::MaterializeBoundaryWaveforms(simulation_configuration, case_dir.string(), 0.0)
+				: simulation_configuration;
+			boundaries = iga::ResolveFlowBoundaries(initial_configuration,
+				iga::FirstNavierStokesSystem(initial_configuration), labels, boundary_velocity);
 			boundary_config = "simulation_config.json";
 		} else {
 			const auto parameters = iga::ReadTransportParameters((case_dir / "simulation_parameter.txt").string());
@@ -46,13 +58,21 @@ int main(int argc, char** argv)
 			boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, boundary_velocity, parameters);
 			boundary_config = case_configuration.present ? "case_config.json" : "legacy-defaults";
 		}
-		if (rank == 0) std::cout << "boundary_config=" << boundary_config << " viscosity=" << viscosity
-			<< " velocity_nodes=" << boundaries.velocity_nodes << " pressure_nodes=" << boundaries.pressure_nodes << '\n';
+		const auto physical_steps = transient ? simulation_configuration.time.steps : 1;
+		if (rank == 0) std::cout << "boundary_config=" << boundary_config
+			<< " viscosity=" << flow_parameters.dynamic_viscosity
+			<< " density=" << flow_parameters.density
+			<< " time_integration=" << (transient ? "backward_euler" : "steady")
+			<< " dt=" << flow_parameters.dt << " steps=" << physical_steps
+			<< " velocity_nodes=" << boundaries.velocity_nodes
+			<< " pressure_nodes=" << boundaries.pressure_nodes << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 4);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
 		Mat jacobian = assembler.CreateMatrix(true);
-		Vec state = assembler.CreateVector(), update = assembler.CreateVector(), rhs = assembler.CreateVector();
+		Vec state = assembler.CreateVector(), previous = assembler.CreateVector();
+		Vec update = assembler.CreateVector(), rhs = assembler.CreateVector();
 		VecSet(state, 0.0);
+		VecSet(previous, 0.0);
 		VecSet(update, 0.0);
 		VecSet(rhs, 0.0);
 
@@ -71,6 +91,8 @@ int main(int argc, char** argv)
 		ISCreateGeneral(PETSC_COMM_WORLD, static_cast<PetscInt>(ghost_rows.size()), ghost_rows.data(), PETSC_COPY_VALUES, &source_rows);
 		Vec ghost_state = nullptr;
 		VecCreateSeq(PETSC_COMM_SELF, static_cast<PetscInt>(ghost_rows.size()), &ghost_state);
+		Vec ghost_previous = nullptr;
+		VecDuplicate(ghost_state, &ghost_previous);
 		IS destination_rows = nullptr;
 		ISCreateStride(PETSC_COMM_SELF, static_cast<PetscInt>(ghost_rows.size()), 0, 1, &destination_rows);
 		VecScatter scatter = nullptr;
@@ -83,6 +105,22 @@ int main(int argc, char** argv)
 				for (int field = 0; field < 3; ++field) boundary_rows.push_back(static_cast<PetscInt>(4*node+field));
 			if (boundaries.pressure_constrained[index]) boundary_rows.push_back(static_cast<PetscInt>(4*node+3));
 		}
+		if (transient) {
+			std::vector<PetscScalar> initial_values;
+			initial_values.reserve(boundary_rows.size());
+			for (auto row : boundary_rows) {
+				const auto node = static_cast<std::uint64_t>(row/4);
+				const auto field = row%4;
+				const auto index = static_cast<std::size_t>(node);
+				initial_values.push_back(field < 3
+					? boundaries.velocity[index][static_cast<std::size_t>(field)]
+					: boundaries.pressure[index]);
+			}
+			VecSetValues(state, static_cast<PetscInt>(boundary_rows.size()),
+				boundary_rows.data(), initial_values.data(), INSERT_VALUES);
+			iga::OwnedRowAssembler::Assemble(state);
+		}
+		VecCopy(state, previous);
 
 		KSP solver = nullptr;
 		KSPCreate(PETSC_COMM_WORLD, &solver);
@@ -94,27 +132,49 @@ int main(int argc, char** argv)
 		KSPSetFromOptions(solver);
 
 		PetscInt total_linear_iterations = 0;
-		PetscReal initial_residual = -1.0;
-		bool converged = false;
 		const auto start = std::chrono::steady_clock::now();
-		for (int nonlinear = 0; nonlinear < max_newton; ++nonlinear) {
+		for (int step = 0; step < physical_steps; ++step) {
+			if (step > 0) VecCopy(state, previous);
+			const auto physical_time = transient ? (step+1)*flow_parameters.dt : 0.0;
+			if (configured && transient) {
+				const auto materialized = iga::MaterializeBoundaryWaveforms(
+					simulation_configuration, case_dir.string(), physical_time);
+				boundaries = iga::ResolveFlowBoundaries(materialized,
+					iga::FirstNavierStokesSystem(materialized), labels, boundary_velocity);
+			}
+			PetscReal initial_residual = -1.0;
+			bool converged = false;
+			for (int nonlinear = 0; nonlinear < max_newton; ++nonlinear) {
 			const auto iteration_start = std::chrono::steady_clock::now();
 			MatZeroEntries(jacobian);
 			VecSet(rhs, 0.0);
 			VecScatterBegin(scatter, state, ghost_state, INSERT_VALUES, SCATTER_FORWARD);
 			VecScatterEnd(scatter, state, ghost_state, INSERT_VALUES, SCATTER_FORWARD);
+			if (transient) {
+				VecScatterBegin(scatter, previous, ghost_previous, INSERT_VALUES, SCATTER_FORWARD);
+				VecScatterEnd(scatter, previous, ghost_previous, INSERT_VALUES, SCATTER_FORWARD);
+			}
 			const PetscScalar* ghost_values = nullptr;
 			VecGetArrayRead(ghost_state, &ghost_values);
+			const PetscScalar* previous_values = nullptr;
+			if (transient) VecGetArrayRead(ghost_previous, &previous_values);
 			for (const auto& element : assembler.elements()) {
 				std::vector<std::array<double,4>> nodal(element.connectivity.size());
+				std::vector<std::array<double,4>> previous_nodal;
+				if (transient) previous_nodal.resize(element.connectivity.size());
 				for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
 					const auto position = ghost_position.at(element.connectivity[a]);
-					for (int field = 0; field < 4; ++field) nodal[a][field] = PetscRealPart(ghost_values[4*position+field]);
+					for (int field = 0; field < 4; ++field) {
+						nodal[a][field] = PetscRealPart(ghost_values[4*position+field]);
+						if (transient) previous_nodal[a][field] = PetscRealPart(previous_values[4*position+field]);
+					}
 				}
-				auto local = iga::BuildNavierStokesElement(element, nodal, viscosity);
+				auto local = iga::BuildNavierStokesElement(
+					element, nodal, previous_nodal, flow_parameters);
 				assembler.AddElementMatrix(jacobian, element, local.jacobian);
 				assembler.AddElementVector(rhs, element, local.negative_residual);
 			}
+			if (transient) VecRestoreArrayRead(ghost_previous, &previous_values);
 			VecRestoreArrayRead(ghost_state, &ghost_values);
 			iga::OwnedRowAssembler::Assemble(jacobian);
 			iga::OwnedRowAssembler::Assemble(rhs);
@@ -142,7 +202,8 @@ int main(int argc, char** argv)
 			if (initial_residual < 0.0) initial_residual = residual_norm;
 			const auto nonlinear_tolerance = std::max<PetscReal>(1e-10, 1e-5*initial_residual);
 			if (residual_norm <= nonlinear_tolerance) {
-				if (rank == 0) std::cout << "converged newton=" << nonlinear << " residual_l2=" << residual_norm
+				if (rank == 0) std::cout << "step=" << step+1 << " time=" << physical_time
+					<< " converged newton=" << nonlinear << " residual_l2=" << residual_norm
 					<< " tolerance=" << nonlinear_tolerance << " assembly_s="
 					<< std::chrono::duration<double>(std::chrono::steady_clock::now()-iteration_start).count() << '\n';
 				converged = true;
@@ -162,13 +223,16 @@ int main(int argc, char** argv)
 			PetscReal update_norm = 0.0;
 			VecNorm(update, NORM_2, &update_norm);
 			VecAXPY(state, 1.0, update);
-			if (rank == 0) std::cout << "newton=" << nonlinear << " residual_l2=" << residual_norm << " update_l2=" << update_norm
+			if (rank == 0) std::cout << "step=" << step+1 << " time=" << physical_time
+				<< " newton=" << nonlinear << " residual_l2=" << residual_norm << " update_l2=" << update_norm
 				<< " linear_iterations=" << iterations << " linear_residual=" << linear_residual
 				<< " assembly_s=" << std::chrono::duration<double>(linear_start-iteration_start).count()
 				<< " linear_s=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_start).count() << '\n';
 			if (update_norm < 1e-10) { converged = true; break; }
+			}
+			if (!converged) throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
+				+ std::to_string(step+1));
 		}
-		if (!converged) throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON without convergence");
 		const auto end = std::chrono::steady_clock::now();
 		PetscReal state_norm = 0.0;
 		VecNorm(state, NORM_2, &state_norm);
@@ -212,8 +276,9 @@ int main(int argc, char** argv)
 			}
 			VecScatterDestroy(&root_scatter); VecDestroy(&root);
 		}
-		KSPDestroy(&solver); VecScatterDestroy(&scatter); ISDestroy(&destination_rows); VecDestroy(&ghost_state); ISDestroy(&source_rows);
-		VecDestroy(&rhs); VecDestroy(&update); VecDestroy(&state); MatDestroy(&jacobian);
+		KSPDestroy(&solver); VecScatterDestroy(&scatter); ISDestroy(&destination_rows);
+		VecDestroy(&ghost_previous); VecDestroy(&ghost_state); ISDestroy(&source_rows);
+		VecDestroy(&rhs); VecDestroy(&update); VecDestroy(&previous); VecDestroy(&state); MatDestroy(&jacobian);
 	} catch (const std::exception& e) {
 		std::cerr << "rank " << rank << ": " << e.what() << '\n'; status = 1;
 	}

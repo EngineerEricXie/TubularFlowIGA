@@ -29,12 +29,14 @@ optional `time_integration` is either `steady` (the default) or
 `backward_euler`. Backward Euler uses the top-level positive `time.dt` and
 `time.steps` values.
 
-The CPU finite-element kernel assembles the physical inertial term
+The CPU finite-element kernel and solver assemble the physical inertial term
 `density * (du/dt + u dot grad(u))`, the Cauchy viscous term using dynamic
 viscosity, and pressure. Its stabilization includes the backward-Euler temporal
-scale. The CPU solver driver still executes only the steady mode while physical
-time-loop and previous-state plumbing are completed. Velocity profiles are
-spatial data multiplied by a constant `scale`.
+scale. The CPU solver stores the previous converged state, advances
+`time.steps` physical steps, resets nonlinear convergence checks per step, and
+evaluates velocity or pressure waveforms at the new-step time. Velocity profiles
+are spatial data multiplied by a `scale` and, when configured, the temporal
+waveform value.
 
 Schema version 2 optionally accepts named `temporal_functions` of kind
 `constant`, `sinusoid`, `periodic_table`, or `fourier`. Each declares
@@ -45,9 +47,10 @@ one-based harmonic order. A Dirichlet condition may name one with `waveform`.
 Parsing and dependency-free evaluation are implemented, including negative-time
 and period wrapping. CPU and CUDA configured transport materialize Dirichlet values at
 each physical step; a constant waveform reproduces constant-boundary results.
-Navier–Stokes still rejects waveform execution in the solver driver until its
-physical time loop is complete, so pulsatile flow remains unavailable. See the
-[development roadmap](ROADMAP.md).
+CPU backward-Euler Navier–Stokes executes waveform-backed velocity and pressure
+Dirichlet conditions. Steady flow still rejects them because a time-varying
+boundary has no meaning without physical time integration. CUDA transient flow,
+restart, and time-indexed output remain on the [development roadmap](ROADMAP.md).
 
 ## Boundary conditions
 
@@ -81,7 +84,9 @@ output contains `node_id` followed by fields in configured order; a neighboring
 `.fields` file records their names.
 
 `iga_navier_stokes DATABASE CASE_DIR` reads the `navier_stokes` system and its
-velocity/pressure boundary values from the same file. For transition only, it
+velocity/pressure boundary values from the same file. `steady` performs one
+nonlinear solve; `backward_euler` performs `time.steps` solves with step size
+`time.dt` and writes the final state to the optional output path. For transition only, it
 still accepts cases containing `simulation_parameter.txt` plus
 `case_config.json`; that input is converted to the shared representation rather
 than selecting a legacy numerical model.

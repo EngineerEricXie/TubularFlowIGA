@@ -14,8 +14,8 @@ application-specific field names in numerical kernels.
 | Configured cardiovascular flow | Working on CPU and CUDA | Stabilized, rigid-wall, steady Navier–Stokes |
 | Shared `simulation_config.json` | Working | Transport and flow still use separate CLI entry points |
 | Spatial inlet velocity profile | Working | `initial_velocityfield.txt` times a constant scale |
-| Pulsatile inlet waveform | Working for CPU and CUDA configured transport | Cardiovascular flow remains steady |
-| Transient Navier–Stokes | CPU element assembly in progress | Backward-Euler mass/stabilization terms are tested; solver time loop remains |
+| Pulsatile inlet waveform | Working for transport and CPU flow | CUDA cardiovascular flow remains steady |
+| Transient Navier–Stokes | Working CPU backward-Euler baseline | Restart, time-indexed output, validation suite, and CUDA remain |
 | Flux and Robin surface terms | Working on CPU and CUDA | V100 parity relative L2 `6.03e-8` |
 | Physiological outlet models | Not implemented | No resistance or Windkessel model |
 | Compliant wall / FSI | Not implemented | Current geometry is rigid |
@@ -67,9 +67,9 @@ branch. Candidate waveform sources are:
 The dependency-free schema, strict periodic CSV reader, and evaluators for all
 four sources are complete. CPU and CUDA configured transport materialize
 waveform-backed Dirichlet data at every step; their constant-factor regression
-has relative L2 `3.52e-8`.
-Steady Navier–Stokes intentionally rejects waveform references until transient
-CPU and CUDA time stepping is implemented.
+has relative L2 `3.52e-8`. CPU backward-Euler Navier–Stokes now materializes
+velocity and pressure Dirichlet waveforms at each new-step time. Steady flow
+continues to reject waveform references, and CUDA transient integration remains.
 
 A velocity inlet combines a spatial profile and temporal amplitude:
 
@@ -87,17 +87,28 @@ tabulated/Fourier waveforms pass value, periodicity, and restart-time tests.
 ## Milestone 3: transient cardiovascular flow
 
 1. Add density and a velocity time-derivative term to the Navier–Stokes weak
-   form; begin with backward Euler and preserve a path to BDF2. **CPU element
-   assembly and analytic mass-term regression complete; driver integration and
-   CUDA remain.**
+   form; begin with backward Euler and preserve a path to BDF2. **CPU complete,
+   including analytic mass-term and exact steady-compatibility regressions;
+   CUDA remains.**
 2. Add previous-state storage, physical-time stepping, nonlinear checks per
-   step, restart/checkpoint metadata, and time-indexed output.
-3. Re-evaluate stabilization parameters to include the temporal scale.
-4. Apply temporal inlet and pressure values at each physical time step.
+   step, restart/checkpoint metadata, and time-indexed output. **CPU previous
+   state, time loop, and per-step nonlinear checks complete; restart/checkpoint
+   and time-indexed output remain.**
+3. Re-evaluate stabilization parameters to include the temporal scale. **CPU
+   backward-Euler scale complete; validation and CUDA remain.**
+4. Apply temporal inlet and pressure values at each physical time step. **CPU
+   complete; CUDA remains.**
 5. Implement CPU first, then CUDA after the CPU formulation is stable.
 
 Validation includes the constant/steady limit, temporal refinement, mass
 balance, and a straight-tube pulsatile benchmark such as Womersley flow.
+
+CPU compute-node smoke on 2026-08-24 used the public two-rank packed case with
+`dt=0.1`, two steps, and a sinusoidal inlet (`mean=1`, `amplitude=0.2`,
+`period=0.4`). Step 1 converged at residual L2 `8.99738e-6` and step 2 at
+`8.1871e-6`; the final velocity and pressure L2 norms were `33.9468` and
+`354.393`. This exercises previous-state transfer and per-step waveform
+materialization but is not a temporal-refinement or Womersley validation.
 
 Exit gate: CPU and CUDA complete multiple cardiac cycles with bounded mass
 imbalance, repeatable cycle-to-cycle behavior, and documented relative L2
