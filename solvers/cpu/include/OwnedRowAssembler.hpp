@@ -162,7 +162,7 @@ private:
 
 	static void PetscCallThrow(PetscErrorCode code, const char* operation)
 	{
-		if (code != PETSC_SUCCESS) throw std::runtime_error(std::string(operation) + " failed with PETSc error " + std::to_string(code));
+		if (code != 0) throw std::runtime_error(std::string(operation) + " failed with PETSc error " + std::to_string(code));
 	}
 
 	Database& database_;

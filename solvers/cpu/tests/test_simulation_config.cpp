@@ -1,6 +1,7 @@
 #include "SimulationConfig.hpp"
 #include "GenericCaseInput.hpp"
 #include "TemporalFunction.hpp"
+#include "VelocitySeries.hpp"
 
 #include <array>
 #include <cassert>
@@ -30,6 +31,11 @@ int main()
 			{"name": "harmonics", "kind": "fourier", "units": "1",
 			 "mean": 1.0, "period": 2.0, "cosine": [2.0], "sine": [3.0]}
 		],
+		"velocity_sources": [
+			{"name": "flow_snapshots", "kind": "snapshot_series",
+			 "manifest": "velocity_series.csv", "interpolation": "linear",
+			 "out_of_range": "hold"}
+		],
 		"equation_systems": [
 			{"name": "flow", "kind": "navier_stokes", "unknowns": ["velocity", "pressure"],
 			 "viscosity": 0.0035, "density": 1060.0, "time_integration": "backward_euler"},
@@ -50,7 +56,9 @@ int main()
 				{"field": "drug", "type": "robin", "coefficient": 0.5, "exterior_value": 0.1}
 			]},
 			{"label": 1, "name": "inlet", "conditions": [
-				{"field": "oxygen", "type": "dirichlet", "value": 1.0}
+				{"field": "oxygen", "type": "dirichlet", "value": 1.0},
+				{"field": "pressure", "type": "pressure_traction", "value": 4.0,
+				 "waveform": "fixed"}
 			]}
 		]
 	})json";
@@ -61,6 +69,8 @@ int main()
 	assert(configuration.equation_systems[0].time_integration == "backward_euler");
 	assert(configuration.boundaries[0].name == "vessel_wall");
 	assert(configuration.temporal_functions.size() == 4);
+	assert(configuration.velocity_sources.size() == 1);
+	assert(configuration.velocity_sources[0].name == "flow_snapshots");
 	const auto& fixed = iga::FindTemporalFunction(configuration, "fixed");
 	const auto& pulse = iga::FindTemporalFunction(configuration, "pulse");
 	const auto& measured = iga::FindTemporalFunction(configuration, "measured");
@@ -82,12 +92,29 @@ int main()
 	assert(std::abs(materialized.boundaries[0].conditions[0].value[0]-0.75) < 1e-14);
 	assert(std::abs(materialized.boundaries[0].conditions[0].value[1]-1.5) < 1e-14);
 	assert(std::abs(materialized.boundaries[0].conditions[0].value[2]-2.25) < 1e-14);
+	assert(materialized.boundaries[1].conditions[1].kind
+		== iga::FieldBoundaryKind::PressureTraction);
+	assert(materialized.boundaries[1].conditions[1].waveform.empty());
+	assert(std::abs(materialized.boundaries[1].conditions[1].value[0]-3.0) < 1e-14);
+	const auto materialized_flow_boundaries = iga::ResolveFlowBoundaries(materialized,
+		iga::FirstNavierStokesSystem(materialized), {0, 1},
+		{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
+	assert(materialized_flow_boundaries.velocity_nodes == 1);
+	assert(materialized_flow_boundaries.pressure_nodes == 0);
 	const auto compiled = iga::CompileLinearSystem(configuration, "species");
 	assert(compiled.fields.size() == 2);
 	assert(compiled.field_index.at("oxygen") == 0);
 	assert(compiled.field_index.at("drug") == 1);
 	assert(compiled.terms.size() == 5);
 	assert(compiled.dt == 0.01 && compiled.steps == 5);
+	assert(compiled.velocity_source == "prescribed");
+	const auto velocity_samples = iga::ParseVelocityManifest(
+		"time,file\n0,velocity-0.txt\n0.25,velocity-1.txt\n1,velocity-2.txt\n");
+	const auto velocity_weights = iga::ResolveVelocityInterpolation(velocity_samples, 0.5, "error");
+	assert(velocity_weights.lower == 1 && velocity_weights.upper == 2);
+	assert(std::abs(velocity_weights.upper_weight-1.0/3.0) < 1e-14);
+	const auto held_velocity = iga::ResolveVelocityInterpolation(velocity_samples, 2.0, "hold");
+	assert(held_velocity.lower == 2 && held_velocity.upper == 2);
 	auto waveform_scalar = configuration;
 	waveform_scalar.boundaries[1].conditions[0].waveform = "fixed";
 	bool waveform_rejected = false;
@@ -144,6 +171,13 @@ int main()
 	rejected = false;
 	try {
 		iga::ParseTemporalCsv("0,1\n0.5,2\n0.4,3\n", 1.0);
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+	rejected = false;
+	try {
+		iga::ParseVelocityManifest("0,a.txt\n0,b.txt\n");
 	} catch (const std::runtime_error&) {
 		rejected = true;
 	}

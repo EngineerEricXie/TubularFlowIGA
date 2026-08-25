@@ -1,3 +1,4 @@
+#include "BoundaryFlow.hpp"
 #include "NavierStokesElement.hpp"
 
 #include <algorithm>
@@ -77,5 +78,8 @@ int main()
 		assert(std::abs(negative_residual_sum-expected_residual) < 2e-11);
 		assert(std::abs(mass_block_sum-density/dt) < 2e-11);
 	}
+	for (auto& node : state) node = {2.0, 0.0, 0.0, 0.0};
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, 2, state)-2.0) < 2e-13);
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, 4, state)+2.0) < 2e-13);
 	std::cout << "Navier-Stokes steady compatibility and backward-Euler mass tests passed\n";
 }

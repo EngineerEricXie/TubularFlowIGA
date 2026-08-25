@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J iga-cuda-cpu-ref
-#SBATCH -A mch260002p
+# Supply the allocation at submission: sbatch -A YOUR_PSC_PROJECT this-file.sbatch
 #SBATCH -p RM-shared
 #SBATCH -t 00:10:00
 #SBATCH -N 1

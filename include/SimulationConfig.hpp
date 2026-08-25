@@ -17,7 +17,10 @@ namespace iga {
 enum class FieldKind { Scalar, Vector3, Pressure };
 enum class EquationKind { LinearTransport, NavierStokes };
 enum class TermKind { TimeDerivative, Diffusion, Advection, LinearCoupling, VolumeSource };
-enum class FieldBoundaryKind { Dirichlet, NoFlux, Flux, Robin, AdvectiveOutflow };
+enum class FieldBoundaryKind {
+	Dirichlet, NoFlux, Flux, Robin, AdvectiveOutflow, PressureTraction,
+	Resistance, WindkesselRC, WindkesselRCR
+};
 enum class TemporalFunctionKind { Constant, Sinusoid, PeriodicTable, Fourier };
 
 struct FieldDefinition {
@@ -60,6 +63,12 @@ struct FieldBoundaryCondition {
 	std::string profile;
 	double scale = 1.0;
 	std::string waveform;
+	double resistance = 0.0;
+	double proximal_resistance = 0.0;
+	double distal_resistance = 0.0;
+	double capacitance = 0.0;
+	double reference_pressure = 0.0;
+	double initial_pressure = 0.0;
 };
 
 struct TemporalFunctionDefinition {
@@ -75,6 +84,14 @@ struct TemporalFunctionDefinition {
 	std::string interpolation;
 	std::vector<double> cosine;
 	std::vector<double> sine;
+};
+
+struct VelocitySourceDefinition {
+	std::string name;
+	std::string kind;
+	std::string manifest;
+	std::string interpolation;
+	std::string out_of_range = "error";
 };
 
 struct NamedBoundaryDefinition {
@@ -94,6 +111,7 @@ struct SimulationConfiguration {
 	std::vector<EquationSystemDefinition> equation_systems;
 	std::vector<NamedBoundaryDefinition> boundaries;
 	std::vector<TemporalFunctionDefinition> temporal_functions;
+	std::vector<VelocitySourceDefinition> velocity_sources;
 	TimeDefinition time;
 };
 
@@ -111,6 +129,7 @@ struct CompiledLinearSystem {
 	std::map<std::string, std::size_t> field_index;
 	std::vector<CompiledTerm> terms;
 	std::vector<StabilizationDefinition> stabilization;
+	std::string velocity_source = "prescribed";
 	double dt = 0.0;
 	int steps = 0;
 };
@@ -167,6 +186,10 @@ inline FieldBoundaryKind ParseFieldBoundaryKind(const std::string& value)
 	if (value == "flux") return FieldBoundaryKind::Flux;
 	if (value == "robin") return FieldBoundaryKind::Robin;
 	if (value == "advective_outflow") return FieldBoundaryKind::AdvectiveOutflow;
+	if (value == "pressure_traction") return FieldBoundaryKind::PressureTraction;
+	if (value == "resistance") return FieldBoundaryKind::Resistance;
+	if (value == "windkessel_rc") return FieldBoundaryKind::WindkesselRC;
+	if (value == "windkessel_rcr") return FieldBoundaryKind::WindkesselRCR;
 	throw std::runtime_error("simulation_config.json: unsupported boundary condition '" + value + "'");
 }
 
@@ -197,7 +220,7 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
 	RequireKnownKeys(root, {"schema_version", "fields", "equation_systems", "boundaries",
-		"time", "temporal_functions"}, "root");
+		"time", "temporal_functions", "velocity_sources"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	if (configuration.schema_version != 2)
@@ -277,6 +300,35 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		}
 	}
 
+	std::set<std::string> velocity_source_names;
+	if (const auto* sources = Find(root, "velocity_sources")) {
+		const auto& array = RequireArray(*sources, "velocity_sources");
+		for (std::size_t i = 0; i < array.size(); ++i) {
+			const auto context = "velocity_sources[" + std::to_string(i) + "]";
+			const auto& object = RequireObject(array[i], context);
+			RequireKnownKeys(object, {"name", "kind", "manifest", "interpolation",
+				"out_of_range"}, context);
+			VelocitySourceDefinition source;
+			source.name = RequireString(Required(object, "name", context), context + ".name");
+			source.kind = RequireString(Required(object, "kind", context), context + ".kind");
+			source.manifest = RequireString(Required(object, "manifest", context), context + ".manifest");
+			source.interpolation = RequireString(
+				Required(object, "interpolation", context), context + ".interpolation");
+			if (const auto* range = Find(object, "out_of_range"))
+				source.out_of_range = RequireString(*range, context + ".out_of_range");
+			if (source.name.empty() || source.name == "prescribed"
+				|| !velocity_source_names.insert(source.name).second)
+				throw std::runtime_error("simulation_config.json: velocity source names must be non-empty, unique, and not 'prescribed'");
+			if (source.kind != "snapshot_series" || source.manifest.empty()
+				|| source.interpolation != "linear"
+				|| (source.out_of_range != "error" && source.out_of_range != "hold"))
+				throw std::runtime_error("simulation_config.json: snapshot velocity source requires manifest, linear interpolation, and error or hold out_of_range");
+			if (std::filesystem::path(source.manifest).is_absolute())
+				throw std::runtime_error("simulation_config.json: velocity source manifest must be relative to the case directory");
+			configuration.velocity_sources.push_back(std::move(source));
+		}
+	}
+
 	const auto& systems = RequireArray(Required(root, "equation_systems", "root"), "equation_systems");
 	std::set<std::string> system_names;
 	for (std::size_t i = 0; i < systems.size(); ++i) {
@@ -330,6 +382,9 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 					throw std::runtime_error("simulation_config.json: term equation and trial must be unknowns of their system");
 				if (term.kind == TermKind::Advection && term.velocity.empty())
 					throw std::runtime_error("simulation_config.json: advection requires a velocity source");
+				if (term.kind == TermKind::Advection && term.velocity != "prescribed"
+					&& !velocity_source_names.count(term.velocity))
+					throw std::runtime_error("simulation_config.json: advection references an unknown velocity source");
 				system.terms.push_back(std::move(term));
 			}
 		}
@@ -347,6 +402,9 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 				definition.velocity = RequireString(Required(item, "velocity", item_context), item_context + ".velocity");
 				if (!local_fields.count(definition.equation) || definition.method != "supg")
 					throw std::runtime_error("simulation_config.json: stabilization requires a system equation and supported method 'supg'");
+				if (definition.velocity != "prescribed"
+					&& !velocity_source_names.count(definition.velocity))
+					throw std::runtime_error("simulation_config.json: stabilization references an unknown velocity source");
 				system.stabilization.push_back(std::move(definition));
 			}
 		}
@@ -370,7 +428,9 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			const auto condition_context = context + ".conditions[" + std::to_string(j) + "]";
 			const auto& condition_object = RequireObject(conditions[j], condition_context);
 			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient",
-				"exterior_value", "profile", "scale", "waveform"}, condition_context);
+				"exterior_value", "profile", "scale", "waveform", "resistance",
+				"proximal_resistance", "distal_resistance", "capacitance",
+				"reference_pressure", "initial_pressure"}, condition_context);
 			FieldBoundaryCondition condition;
 			condition.field = RequireString(Required(condition_object, "field", condition_context), condition_context + ".field");
 			condition.kind = ParseFieldBoundaryKind(RequireString(Required(condition_object, "type", condition_context), condition_context + ".type"));
@@ -383,18 +443,44 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			if (const auto* scale = Find(condition_object, "scale")) condition.scale = RequireNumber(*scale, condition_context + ".scale");
 			if (const auto* waveform = Find(condition_object, "waveform"))
 				condition.waveform = RequireString(*waveform, condition_context + ".waveform");
+			if (const auto* resistance = Find(condition_object, "resistance"))
+				condition.resistance = RequireNumber(*resistance, condition_context + ".resistance");
+			if (const auto* proximal = Find(condition_object, "proximal_resistance"))
+				condition.proximal_resistance = RequireNumber(*proximal, condition_context + ".proximal_resistance");
+			if (const auto* distal = Find(condition_object, "distal_resistance"))
+				condition.distal_resistance = RequireNumber(*distal, condition_context + ".distal_resistance");
+			if (const auto* capacitance = Find(condition_object, "capacitance"))
+				condition.capacitance = RequireNumber(*capacitance, condition_context + ".capacitance");
+			if (const auto* reference = Find(condition_object, "reference_pressure"))
+				condition.reference_pressure = RequireNumber(*reference, condition_context + ".reference_pressure");
+			if (const auto* initial_pressure = Find(condition_object, "initial_pressure"))
+				condition.initial_pressure = RequireNumber(*initial_pressure, condition_context + ".initial_pressure");
 			if (condition.kind == FieldBoundaryKind::Dirichlet && condition.value.empty() && condition.profile.empty())
 				throw std::runtime_error("simulation_config.json: dirichlet requires value or profile");
 			if (!condition.value.empty() && !condition.profile.empty())
 				throw std::runtime_error("simulation_config.json: boundary condition cannot set both value and profile");
 			if (condition.kind == FieldBoundaryKind::Flux && condition.value.size() != 1)
 				throw std::runtime_error("simulation_config.json: flux requires one value");
+			if (condition.kind == FieldBoundaryKind::PressureTraction
+				&& condition.value.size() != 1)
+				throw std::runtime_error(
+					"simulation_config.json: pressure_traction requires one value");
 			if (condition.kind == FieldBoundaryKind::Robin && condition.coefficient == 0.0)
 				throw std::runtime_error("simulation_config.json: robin requires nonzero coefficient");
+			if (condition.kind == FieldBoundaryKind::Resistance && !(condition.resistance > 0.0))
+				throw std::runtime_error("simulation_config.json: resistance outlet requires positive resistance");
+			if (condition.kind == FieldBoundaryKind::WindkesselRC
+				&& (!(condition.resistance > 0.0) || !(condition.capacitance > 0.0)))
+				throw std::runtime_error("simulation_config.json: windkessel_rc requires positive resistance and capacitance");
+			if (condition.kind == FieldBoundaryKind::WindkesselRCR
+				&& (condition.proximal_resistance < 0.0 || !(condition.distal_resistance > 0.0)
+					|| !(condition.capacitance > 0.0)))
+				throw std::runtime_error("simulation_config.json: windkessel_rcr requires nonnegative proximal resistance and positive distal resistance and capacitance");
 			if (!condition.waveform.empty()
-				&& (condition.kind != FieldBoundaryKind::Dirichlet
+				&& ((condition.kind != FieldBoundaryKind::Dirichlet
+						&& condition.kind != FieldBoundaryKind::PressureTraction)
 					|| !temporal_names.count(condition.waveform)))
-				throw std::runtime_error("simulation_config.json: waveform must name a temporal function on a Dirichlet condition");
+				throw std::runtime_error("simulation_config.json: waveform must name a temporal function on a Dirichlet or pressure_traction condition");
 			boundary.conditions.push_back(std::move(condition));
 		}
 		configuration.boundaries.push_back(std::move(boundary));
@@ -427,6 +513,14 @@ inline CompiledLinearSystem CompileLinearSystem(const SimulationConfiguration& c
 	result.dt = configuration.time.dt;
 	result.steps = configuration.time.steps;
 	result.stabilization = source->stabilization;
+	std::set<std::string> velocity_sources;
+	for (const auto& term : source->terms)
+		if (term.kind == TermKind::Advection) velocity_sources.insert(term.velocity);
+	for (const auto& definition : source->stabilization)
+		velocity_sources.insert(definition.velocity);
+	if (velocity_sources.size() > 1)
+		throw std::runtime_error("linear_transport currently supports one velocity source per equation system");
+	if (!velocity_sources.empty()) result.velocity_source = *velocity_sources.begin();
 	for (std::size_t i = 0; i < result.fields.size(); ++i) result.field_index.emplace(result.fields[i], i);
 	for (const auto& term : source->terms) {
 		result.terms.push_back({term.kind, result.field_index.at(term.equation),

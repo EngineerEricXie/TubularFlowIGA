@@ -108,7 +108,7 @@ Verify the preprocessing environment:
 make mesh mesh-test
 make spline EIGEN_DIR="${EIGEN_DIR:-/usr/include/eigen3}"
 make cpu cpu-test
-./scripts/prepare_smoke.sh
+./scripts/prepare_example.sh vascular_flow/straight_tube
 ```
 
 `make cpu` in the last block builds only the PETSc-free packer, inspector, and
@@ -181,6 +181,18 @@ sudo apt install cuda-toolkit
 sudo dnf install cuda-toolkit
 ```
 
+Without root access, install the toolkit (not a driver) in a Conda environment:
+
+```bash
+conda create -n tubularflow-cuda -c nvidia cuda-toolkit=12.6
+conda run -n tubularflow-cuda nvcc --version
+conda run -n tubularflow-cuda make cuda CUDA_ARCHS=89
+```
+
+This is also appropriate for WSL when `nvidia-smi` already works but `nvcc`
+does not: the Windows NVIDIA driver is exposed to WSL, while `nvcc` is supplied
+by a separate Linux toolkit. Do not install a second NVIDIA driver inside WSL.
+
 Driver setup is system-specific and separate from this repository. Follow the
 [official NVIDIA CUDA Linux installation guide](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/)
 rather than mixing runfile and package-manager installations.
@@ -209,7 +221,7 @@ GPU, benchmark, or parallel job sets. Do not request a nested allocation.
 ### Base environment
 
 ```bash
-export PROJECT_ACCOUNT=mch260002p
+export PROJECT_ACCOUNT=YOUR_PSC_PROJECT
 export PROJECT_ROOT=/ocean/projects/${PROJECT_ACCOUNT}/${USER}
 
 module load anaconda3
@@ -268,17 +280,17 @@ export PETSC_DIR="$PROJECT_ROOT/software/petsc"
 export PETSC_ARCH=arch-linux-c-opt
 export RANKS=2
 
-./scripts/prepare_smoke.sh "$PROJECT_ROOT/cases/tubular-smoke"
+./scripts/prepare_example.sh vascular_flow/straight_tube "$PROJECT_ROOT/cases/tubular-straight"
 mpiexec -np "$RANKS" ./solvers/cpu/iga_mesh_check \
-  "$PROJECT_ROOT/cases/tubular-smoke/smoke-$RANKS.ntiga"
-mpiexec -np "$RANKS" ./solvers/cpu/iga_solve \
-  "$PROJECT_ROOT/cases/tubular-smoke/smoke-$RANKS.ntiga" \
-  "$PROJECT_ROOT/cases/tubular-smoke" tracer_transport \
-  "$PROJECT_ROOT/cases/tubular-smoke/tracer.txt"
+  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-$RANKS.ntiga"
+mpiexec -np "$RANKS" ./solvers/cpu/iga_navier_stokes \
+  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-$RANKS.ntiga" \
+  "$PROJECT_ROOT/cases/tubular-straight" \
+  --output "$PROJECT_ROOT/cases/tubular-straight/velocity.txt"
 ```
 
-`prepare_smoke.sh` requires an empty target directory. Choose another path or
-remove/archive an earlier generated smoke directory before rerunning it.
+`prepare_example.sh` requires an empty target directory. Choose another path or
+archive an earlier generated case directory before rerunning it.
 
 ### GPU build and smoke test
 
@@ -303,7 +315,7 @@ module load cuda/12.4.0
 cd "$PROJECT_ROOT/TubularFlowIGA"
 ./solvers/cuda/iga_cuda device-info
 ./solvers/cuda/iga_cuda mesh-check \
-  "$PROJECT_ROOT/cases/tubular-smoke/smoke-2.ntiga"
+  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-2.ntiga"
 ```
 
 The CUDA reader ignores CPU ownership records, so a database packed for two CPU
@@ -319,7 +331,7 @@ After installation, the expected checks are:
 ```bash
 make mesh-test
 make cpu-test
-./scripts/prepare_smoke.sh
+./scripts/prepare_example.sh vascular_flow/straight_tube
 
 # With MPI/PETSc configured:
 ./scripts/check_dependencies.sh cpu
@@ -329,7 +341,9 @@ make cpu-test
 ```
 
 Successful dependency checks confirm that tools and headers are visible. The
-public smoke case additionally confirms mesh generation, spline extraction,
-METIS partitioning, database packing, and boundary-condition resolution.
+public straight-vessel example additionally confirms mesh generation, spline
+extraction, METIS partitioning, database packing, and boundary-condition
+resolution.
 See the [Bridges-2 guide](BRIDGES2.md) for allocation-aware validation and the
-[development roadmap](ROADMAP.md) for larger numerical gates.
+[CPU](../solvers/cpu/VALIDATION.md) and
+[CUDA](../solvers/cuda/VALIDATION.md) reports for larger numerical gates.

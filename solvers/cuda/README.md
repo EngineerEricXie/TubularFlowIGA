@@ -18,7 +18,7 @@ One executable exposes five modes:
 | --- | --- |
 | `iga_cuda device-info` | Report the selected CUDA device and compiled capabilities |
 | `iga_cuda mesh-check DATABASE.ntiga` | Validate all 4x4x4 element quadrature Jacobians |
-| `iga_cuda navier-stokes ...` | Run the stabilized four-field steady solve |
+| `iga_cuda navier-stokes ...` | Run stabilized steady or backward-Euler four-field flow |
 | `iga_cuda transport ...` | Run the transient two-field transport solve |
 | `iga_cuda solve ...` | Run configured 1–8-field transport through the generic operator graph |
 
@@ -143,6 +143,19 @@ make cuda CUDA_ARCHS="70 80 89 90"
 Set `CUDA_ARCHS` to the compute capabilities needed at the deployment site.
 Run `device-info` and all solver modes only on a CUDA-capable host.
 
+On WSL systems where `nvidia-smi` works but `nvcc` is absent, the Windows
+driver is already exposed to WSL but a Linux CUDA toolkit is still required.
+One non-root installation used for the SM 89 validation is:
+
+~~~bash
+conda create -n tubularflow-cuda -c nvidia cuda-toolkit=12.6
+conda run -n tubularflow-cuda make cuda CUDA_ARCHS=89
+~~~
+
+Run the executable from the activated environment, or expose its `bin` and
+`targets/x86_64-linux/lib` directories through `PATH` and `LD_LIBRARY_PATH`.
+Do not install a second Linux NVIDIA driver inside WSL.
+
 ## Run
 
 ~~~bash
@@ -152,14 +165,27 @@ export DATABASE=/path/to/work/case.ntiga
 
 "$IGA_CUDA_ROOT/iga_cuda" mesh-check "$DATABASE"
 "$IGA_CUDA_ROOT/iga_cuda" navier-stokes \
-  "$DATABASE" "$CASE_DIR" 8 velocity.txt
+  "$DATABASE" "$CASE_DIR" --max-newton 12 --output velocity.txt
 "$IGA_CUDA_ROOT/iga_cuda" solve \
-  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
+  "$DATABASE" "$CASE_DIR" --system neuron_transport --output neuron.txt
 ~~~
+
+Use the Navier--Stokes command with a prepared `vascular_flow/*` case and the
+transport command with a prepared `neuron_transport/*` case. See the
+[examples catalog](../../examples/README.md) for the source inputs and
+preparation command. Each public configuration intentionally contains only its
+matching application system.
 
 Configured CPU and CUDA transport lower the same weak-form terms and write a
 neighboring `.fields` file recording output names. Navier-Stokes reads viscosity
-and named velocity/pressure boundaries from the same `simulation_config.json`.
+and named velocity/pressure boundaries from the same `simulation_config.json`;
+open pressure boundaries use the natural traction `-p n`.
+Configured CUDA transport also contains the named snapshot-series interpolation
+and per-step reassembly path, raw-state checkpoint/restart, and time-indexed
+output. Straight-tube and 14,565-node branching parity/restart gates pass.
+Both transient solvers accept `--stop-after-step N`, which writes an intentional
+mid-run checkpoint while retaining the full configured horizon for restart
+validation.
 The fixed `transport` command remains only for old input compatibility. See the
 [configurable PDE guide](../../docs/PDE_CONFIGURATION.md).
 
@@ -168,6 +194,7 @@ The scripts in `slurm/` reproduce the published Bridges-2 measurements and
 require an external `IGA_CASE_ROOT`. See the
 [Bridges-2 guide](../../docs/BRIDGES2.md) for module, allocation, interactive,
 and `sbatch` commands.
+`slurm/validate_transient_v100.sbatch` is the focused transient/restart gate.
 
 ## Reproducibility notes
 
@@ -183,12 +210,18 @@ and `sbatch` commands.
 
 - Execution is single process and single GPU; multi-GPU domain decomposition is
   not implemented.
-- Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
-  configured `time` currently applies only to transport.
+- Navier-Stokes includes backward-Euler previous-state storage, temporal
+  stabilization, physical-time stepping, per-step boundary waveforms, and
+  checkpoint/restart. The multi-cycle Womersley gate passes on SM 89.
 - Configured scalar flux/Robin surface assembly matches the CPU weak form and
   requires version 4 `.ntiga` face labels.
 - Configured transport supports per-step temporal Dirichlet waveforms.
-- Pulsatile Navier-Stokes inflow, physiological outlet models, and compliant
+- Configured transport raw-state checkpoint/restart validates ordered fields,
+  system, velocity source, step, time, and `dt`; GPU restart validation passes.
+- CUDA raw-state checkpoint/restart, time-indexed flow output, and R/RC/RCR
+  outlet coupling pass GPU runtime validation. Outlet flow and natural pressure
+  traction use the same host-side surface quadrature as CPU, and outlet values
+  retain all continuity rows. Checkpoint metadata also matches CPU. Compliant
   walls are not implemented.
 - Block-Jacobi is weaker than CPU PETSc local ILU for the large transport case,
   limiting solve speedup even though assembly is much faster.

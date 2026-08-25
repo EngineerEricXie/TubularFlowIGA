@@ -1,4 +1,5 @@
 #include "BlockCsr.hpp"
+#include "BoundaryFlow.hpp"
 #include "CaseInput.hpp"
 #include "GenericCaseInput.hpp"
 #include "CudaRuntime.hpp"
@@ -7,7 +8,15 @@
 #include "GenericTransportKernels.cuh"
 #include "IgaCudaKernels.cuh"
 #include "IgaDatabase.hpp"
+#include "FlowCheckpoint.hpp"
+#include "OutletModel.hpp"
+#include "OutletCheckpoint.hpp"
+#include "OutletFlow.hpp"
+#include "PressureTraction.hpp"
+#include "PressureTractionFlow.hpp"
 #include "TemporalFunction.hpp"
+#include "TransportCheckpoint.hpp"
+#include "VelocitySeries.hpp"
 
 #include <cuda_runtime.h>
 
@@ -20,9 +29,11 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -320,6 +331,112 @@ void WriteNavierStokes(const fs::path& path, const std::vector<double>& values)
 	}
 }
 
+struct CudaFlowOptions {
+	fs::path database;
+	fs::path case_dir;
+	int maximum_newton = 12;
+	fs::path output;
+	fs::path checkpoint;
+	fs::path restart;
+	int output_every = 0;
+	int checkpoint_every = 0;
+	int stop_after_step = 0;
+};
+
+int ParsePositiveInteger(const std::string& text, const std::string& option)
+{
+	std::size_t used = 0;
+	int value = 0;
+	try {
+		value = std::stoi(text, &used);
+	} catch (const std::exception&) {
+		throw std::runtime_error(option+" requires a positive integer");
+	}
+	if (used != text.size() || value <= 0)
+		throw std::runtime_error(option+" requires a positive integer");
+	return value;
+}
+
+CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
+{
+	if (argc < 4) throw std::runtime_error(
+		"usage: iga_cuda navier-stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
+		"[--max-newton N] [--output PATH] [--output-every N] "
+		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
+		"[--stop-after-step N]");
+	CudaFlowOptions options;
+	options.database = argv[2];
+	options.case_dir = argv[3];
+	int positional = 0;
+	for (int i = 4; i < argc; ++i) {
+		const std::string argument(argv[i]);
+		if (argument.rfind("--", 0) != 0) {
+			if (positional == 0)
+				options.maximum_newton = ParsePositiveInteger(argument, "MAX_NEWTON");
+			else if (positional == 1) options.output = argument;
+			else throw std::runtime_error("too many positional arguments");
+			++positional;
+			continue;
+		}
+		if (i+1 >= argc) throw std::runtime_error(argument+" requires a value");
+		const std::string value(argv[++i]);
+		if (argument == "--max-newton")
+			options.maximum_newton = ParsePositiveInteger(value, argument);
+		else if (argument == "--output") options.output = value;
+		else if (argument == "--output-every")
+			options.output_every = ParsePositiveInteger(value, argument);
+		else if (argument == "--checkpoint") options.checkpoint = value;
+		else if (argument == "--checkpoint-every")
+			options.checkpoint_every = ParsePositiveInteger(value, argument);
+		else if (argument == "--restart") options.restart = value;
+		else if (argument == "--stop-after-step")
+			options.stop_after_step = ParsePositiveInteger(value, argument);
+		else throw std::runtime_error("unknown option: "+argument);
+	}
+	if (options.output_every > 0 && options.output.empty())
+		throw std::runtime_error("--output-every requires --output or legacy OUTPUT");
+	if (options.checkpoint_every > 0 && options.checkpoint.empty())
+		throw std::runtime_error("--checkpoint-every requires --checkpoint");
+	return options;
+}
+
+std::vector<double> ReadCudaFlowCheckpoint(const fs::path& prefix,
+	const iga::FlowCheckpointMetadata& metadata)
+{
+	if (metadata.state_format != "raw_float64")
+		throw std::runtime_error("CUDA flow restart requires raw_float64 checkpoint state");
+	fs::path path(metadata.state_file);
+	if (path.is_relative()) path = iga::FlowCheckpointMetadataPath(prefix).parent_path()/path;
+	std::ifstream input(path, std::ios::binary);
+	if (!input) throw std::runtime_error("cannot open CUDA flow checkpoint state: "+path.string());
+	std::vector<double> values(static_cast<std::size_t>(metadata.nodes)*metadata.fields);
+	input.read(reinterpret_cast<char*>(values.data()),
+		static_cast<std::streamsize>(values.size()*sizeof(double)));
+	char extra = 0;
+	if (!input || input.read(&extra, 1))
+		throw std::runtime_error("CUDA flow checkpoint state is truncated or has trailing data");
+	return values;
+}
+
+void WriteCudaFlowCheckpoint(const fs::path& prefix,
+	iga::FlowCheckpointMetadata metadata, const DeviceBuffer<double>& state,
+	std::size_t values)
+{
+	std::vector<double> host(values);
+	state.CopyToHost(host.data(), host.size());
+	const auto state_path = iga::FlowCheckpointStatePath(prefix);
+	std::ofstream output(state_path, std::ios::binary);
+	if (!output) throw std::runtime_error("cannot create CUDA flow checkpoint state: "+state_path.string());
+	output.write(reinterpret_cast<const char*>(host.data()),
+		static_cast<std::streamsize>(host.size()*sizeof(double)));
+	if (!output) throw std::runtime_error("cannot write CUDA flow checkpoint state: "+state_path.string());
+	output.close();
+	if (!output) throw std::runtime_error("cannot close CUDA flow checkpoint state: "+state_path.string());
+	metadata.state_file = state_path.filename().string();
+	metadata.state_format = "raw_float64";
+	iga::WriteFlowCheckpointMetadata(prefix, metadata);
+}
+
 int MeshCheck(const std::string& database_path)
 {
 	iga::Database database(database_path);
@@ -444,22 +561,40 @@ int Transport(int argc, char** argv)
 
 int NavierStokes(int argc, char** argv)
 {
-	if (argc < 4)
-		throw std::runtime_error("usage: iga_cuda navier-stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT]");
+	const auto options = ParseCudaFlowOptions(argc, argv);
 	const auto total_start = Clock::now();
-	iga::Database database(argv[2]);
-	const fs::path case_dir(argv[3]);
-	const int maximum_newton = argc >= 5 ? std::stoi(argv[4]) : 8;
+	iga::Database database(options.database.string());
+	const auto& case_dir = options.case_dir;
+	const int maximum_newton = options.maximum_newton;
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
 	const auto boundary_velocity_host = iga::ReadVelocity((case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
 	iga::ResolvedBoundaryConditions boundaries;
-	double viscosity = 0.1;
+	iga::SimulationConfiguration simulation_configuration;
+	std::vector<iga::OutletModelState> outlet_models;
+	std::map<int, double> pressure_tractions;
+	double viscosity = 0.1, density = 1.0, dt = 0.0;
+	int physical_steps = 1;
+	bool configured = false, transient = false;
 	std::string boundary_config;
 	if (fs::exists(case_dir/"simulation_config.json")) {
-		const auto configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
-		const auto& flow = iga::FirstNavierStokesSystem(configuration);
+		simulation_configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
+		const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
+		configured = true;
+		transient = flow.time_integration == "backward_euler";
 		viscosity = flow.viscosity;
-		boundaries = iga::ResolveFlowBoundaries(configuration, flow, labels, boundary_velocity_host);
+		density = flow.density;
+		dt = transient ? simulation_configuration.time.dt : 0.0;
+		physical_steps = transient ? simulation_configuration.time.steps : 1;
+		outlet_models = iga::InitializeOutletModels(simulation_configuration, flow);
+		const auto waveform_configuration = transient
+			? iga::MaterializeBoundaryWaveforms(simulation_configuration, case_dir, 0.0)
+			: simulation_configuration;
+		const auto initial_configuration = iga::MaterializeOutletPressures(
+			waveform_configuration, outlet_models);
+		pressure_tractions = iga::ExtractPressureTractions(
+			initial_configuration, iga::FirstNavierStokesSystem(initial_configuration));
+		boundaries = iga::ResolveFlowBoundaries(initial_configuration,
+			iga::FirstNavierStokesSystem(initial_configuration), labels, boundary_velocity_host);
 		boundary_config = "simulation_config.json";
 	} else {
 		const auto parameters = iga::ReadTransportParameters((case_dir/"simulation_parameter.txt").string());
@@ -467,10 +602,47 @@ int NavierStokes(int argc, char** argv)
 		boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, boundary_velocity_host, parameters);
 		boundary_config = case_configuration.present ? "case_config.json" : "legacy-defaults";
 	}
+	if (!transient)
+		for (const auto& model : outlet_models)
+			if (model.kind != iga::FieldBoundaryKind::Resistance)
+				throw std::runtime_error("RC/RCR outlets require backward_euler flow");
+	if (options.stop_after_step > physical_steps)
+		throw std::runtime_error("--stop-after-step exceeds configured physical steps");
+	const auto run_end_step = options.stop_after_step > 0
+		? options.stop_after_step : physical_steps;
 	std::cout << "boundary_config=" << boundary_config << " viscosity=" << viscosity
+		<< " density=" << density
+		<< " time_integration=" << (transient ? "backward_euler" : "steady")
+		<< " dt=" << dt << " steps=" << physical_steps
+		<< " run_end_step=" << run_end_step
 		<< " velocity_nodes=" << boundaries.velocity_nodes << " pressure_nodes=" << boundaries.pressure_nodes << '\n';
+	if (!transient && (!options.restart.empty() || !options.checkpoint.empty()
+		|| options.output_every > 0 || options.checkpoint_every > 0))
+		throw std::runtime_error("restart, checkpoint, and time-indexed output require transient flow");
 
 	FlatMesh host(database);
+	const auto pressure_traction_elements = iga::LoadPressureTractionElements(
+		database, pressure_tractions);
+	std::vector<iga::Element> outlet_elements;
+	if (!outlet_models.empty()) {
+		std::unordered_map<int, std::size_t> face_counts;
+		for (const auto& model : outlet_models) face_counts.emplace(model.label, 0);
+		for (std::uint64_t index = 0; index < database.header().elements; ++index) {
+			auto element = database.Load(index);
+			bool retained = false;
+			for (const auto label : element.boundary_labels) {
+				const auto found = face_counts.find(label);
+				if (found == face_counts.end()) continue;
+				++found->second;
+				retained = true;
+			}
+			if (retained) outlet_elements.push_back(std::move(element));
+		}
+		for (const auto& count : face_counts)
+			if (count.second == 0)
+				throw std::runtime_error("outlet model label "+std::to_string(count.first)
+					+" has no boundary faces in the .ntiga database; repack with iga_pack");
+	}
 	BlockPattern pattern_host(host);
 	PrintMesh(host, &pattern_host);
 	const auto preprocess_end = Clock::now();
@@ -487,26 +659,91 @@ int NavierStokes(int argc, char** argv)
 	constexpr int linear_restart = 200;
 	const std::size_t matrix_bytes = static_cast<std::size_t>(pattern.view().blocks)*16*sizeof(double);
 	const std::size_t vector_bytes = static_cast<std::size_t>(host.nodes)*4*sizeof(double);
-	CheckAvailableMemory(matrix_bytes+(13+linear_restart)*vector_bytes);
+	CheckAvailableMemory(matrix_bytes+(15+linear_restart)*vector_bytes);
 	BlockMatrix<4> jacobian(pattern);
-	DeviceBuffer<double> state(host.nodes*4), update(host.nodes*4), rhs(host.nodes*4);
-	state.Clear(); update.Clear(); rhs.Clear();
+	DeviceBuffer<double> state(host.nodes*4), previous(host.nodes*4), update(host.nodes*4),
+		rhs(host.nodes*4), pressure_traction_rhs(host.nodes*4);
+	state.Clear(); previous.Clear(); update.Clear(); rhs.Clear(); pressure_traction_rhs.Clear();
+	int start_step = 0;
+	if (transient && !options.restart.empty()) {
+		const auto metadata = iga::ReadFlowCheckpointMetadata(options.restart);
+		iga::ValidateFlowCheckpoint(metadata, database.header().nodes, physical_steps,
+			dt, density, viscosity);
+		const auto restart_state = ReadCudaFlowCheckpoint(options.restart, metadata);
+		iga::RestoreOutletCheckpoint(metadata, outlet_models);
+		state.CopyFromHost(restart_state.data(), restart_state.size());
+		previous.CopyFromHost(restart_state.data(), restart_state.size());
+		start_step = metadata.completed_step;
+		std::cout << "restart=" << options.restart.string()
+			<< " completed_step=" << start_step
+			<< " physical_time=" << metadata.physical_time << '\n';
+	} else if (transient) {
+		std::vector<double> initial_state(host.nodes*4, 0.0);
+		for (std::size_t node = 0; node < host.nodes; ++node) {
+			if (boundaries.velocity_constrained[node])
+				for (int field = 0; field < 3; ++field)
+					initial_state[node*4+field] = boundaries.velocity[node][field];
+			if (boundaries.pressure_constrained[node])
+				initial_state[node*4+3] = boundaries.pressure[node];
+		}
+		state.CopyFromHost(initial_state.data(), initial_state.size());
+		previous.CopyFromHost(initial_state.data(), initial_state.size());
+	}
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	BlasHandle blas;
-	double initial_residual = -1.0;
 	long long total_iterations = 0;
-	bool converged = false;
 	double total_assembly = 0.0, total_linear = 0.0;
 	double peak_gpu_used = 0.0;
 	GmresWorkspace<4> linear_workspace(pattern.view().nodes, linear_restart);
-	for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
-		const auto assembly_start = Clock::now();
-		jacobian.Clear();
-		rhs.Clear();
-		AssembleNavierStokesKernel<<<tiles.view().count,kPairTile>>>(
+	for (int step = start_step; step < run_end_step; ++step) {
+		if (step > start_step)
+			Check(cudaMemcpy(previous.data(), state.data(), vector_bytes, cudaMemcpyDeviceToDevice),
+				"Navier-Stokes previous-state copy");
+		const double physical_time = transient ? (step+1)*dt : 0.0;
+		iga::SimulationConfiguration step_configuration;
+		if (configured)
+			step_configuration = transient
+				? iga::MaterializeBoundaryWaveforms(
+					simulation_configuration, case_dir, physical_time)
+				: simulation_configuration;
+		std::vector<double> previous_capacitor_pressure(outlet_models.size());
+		for (std::size_t i = 0; i < outlet_models.size(); ++i)
+			previous_capacitor_pressure[i] = outlet_models[i].capacitor_pressure;
+		bool outlet_converged = false;
+		const int maximum_outlet_iterations = outlet_models.empty() ? 1 : 12;
+		for (int coupling = 0; coupling < maximum_outlet_iterations; ++coupling) {
+			if (configured) {
+				const auto boundary_configuration = iga::MaterializeOutletPressures(
+					step_configuration, outlet_models);
+				pressure_tractions = iga::ExtractPressureTractions(
+					boundary_configuration,
+					iga::FirstNavierStokesSystem(boundary_configuration));
+				boundaries = iga::ResolveFlowBoundaries(boundary_configuration,
+					iga::FirstNavierStokesSystem(boundary_configuration), labels,
+					boundary_velocity_host);
+				boundary_velocity.CopyFromHost(
+					reinterpret_cast<const double*>(boundaries.velocity.data()), host.nodes*3);
+				boundary_pressure.CopyFromHost(boundaries.pressure.data(), host.nodes);
+			}
+			const auto pressure_traction_host = iga::IntegratePressureTractionForces(
+				pressure_tractions, pressure_traction_elements, host.nodes);
+			pressure_traction_rhs.CopyFromHost(
+				pressure_traction_host.data(), pressure_traction_host.size());
+			double initial_residual = -1.0;
+			bool converged = false;
+			for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
+			const auto assembly_start = Clock::now();
+			jacobian.Clear();
+			rhs.Clear();
+			AssembleNavierStokesKernel<<<tiles.view().count,kPairTile>>>(
 			mesh.view(), reference.view(), geometry.view(), tiles.view(), pattern.view(),
-			state.data(), viscosity, jacobian.values(), rhs.data());
-		CheckKernel("AssembleNavierStokesKernel");
+			state.data(), previous.data(), density, viscosity, dt,
+			jacobian.values(), rhs.data());
+			CheckKernel("AssembleNavierStokesKernel");
+			const double one = 1.0;
+			Check(cublasDaxpy(blas, static_cast<int>(host.nodes*4), &one,
+			pressure_traction_rhs.data(), 1, rhs.data(), 1),
+			"Navier-Stokes pressure traction rhs");
 		ApplyNavierStokesBoundaryKernel<<<node_blocks,256>>>(
 			pattern.view(), velocity_mask.data(), pressure_mask.data(), jacobian.values());
 		CheckKernel("ApplyNavierStokesBoundaryKernel");
@@ -523,7 +760,8 @@ int NavierStokes(int argc, char** argv)
 		if (initial_residual < 0.0) initial_residual = residual_norm;
 		const double nonlinear_tolerance = std::max(1e-10, 1e-5*initial_residual);
 		if (residual_norm <= nonlinear_tolerance) {
-			std::cout << "converged newton=" << nonlinear << " residual_l2=" << residual_norm
+			std::cout << "step=" << step+1 << " time=" << physical_time
+				<< " converged newton=" << nonlinear << " residual_l2=" << residual_norm
 				<< " tolerance=" << nonlinear_tolerance << '\n';
 			converged = true;
 			break;
@@ -542,10 +780,10 @@ int NavierStokes(int argc, char** argv)
 		double update_norm = 0.0;
 		Check(cublasDnrm2(blas, static_cast<int>(host.nodes*4), update.data(), 1, &update_norm),
 			"Navier-Stokes update norm");
-		const double one = 1.0;
 		Check(cublasDaxpy(blas, static_cast<int>(host.nodes*4), &one, update.data(), 1,
 			state.data(), 1), "Navier-Stokes state update");
-		std::cout << "newton=" << nonlinear << " residual_l2=" << residual_norm
+		std::cout << "step=" << step+1 << " time=" << physical_time
+			<< " newton=" << nonlinear << " residual_l2=" << residual_norm
 			<< " update_l2=" << update_norm << " linear_iterations=" << result.iterations
 			<< " linear_residual=" << result.residual
 			<< " singular_diagonal_blocks=" << result.singular_diagonal_blocks
@@ -555,9 +793,63 @@ int NavierStokes(int argc, char** argv)
 			converged = true;
 			break;
 		}
+		}
+			if (!converged)
+				throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
+					+std::to_string(step+1));
+			if (outlet_models.empty()) {
+				outlet_converged = true;
+				break;
+			}
+			std::vector<double> host_state(host.nodes*4);
+			state.CopyToHost(host_state.data(), host_state.size());
+			const auto flows = iga::IntegrateOutletModelFlows(
+				outlet_models, outlet_elements, host_state);
+			const auto evaluated = iga::EvaluateOutletCoupling(
+				outlet_models, previous_capacitor_pressure, flows, dt);
+			const auto outlet_tolerance = iga::OutletCouplingTolerance(evaluated);
+			std::cout << "step=" << step+1 << " time=" << physical_time
+				<< " outlet_iteration=" << coupling
+				<< " pressure_change=" << evaluated.maximum_pressure_change
+				<< " tolerance=" << outlet_tolerance << '\n';
+			if (evaluated.maximum_pressure_change <= outlet_tolerance) {
+				iga::CommitOutletCoupling(outlet_models, evaluated);
+				for (std::size_t i = 0; i < outlet_models.size(); ++i) {
+					std::cout << "outlet label=" << outlet_models[i].label
+						<< " flow=" << outlet_models[i].flow
+						<< " pressure=" << outlet_models[i].pressure
+						<< " capacitor_pressure=" << outlet_models[i].capacitor_pressure << '\n';
+				}
+				outlet_converged = true;
+				break;
+			}
+			iga::RelaxOutletCoupling(outlet_models, evaluated);
+		}
+		if (!outlet_converged)
+			throw std::runtime_error("outlet fixed-point iteration did not converge at physical step "
+				+std::to_string(step+1));
+		const auto completed_step = step+1;
+		if (options.output_every > 0 && completed_step%options.output_every == 0) {
+			std::vector<double> values(host.nodes*4);
+			state.CopyToHost(values.data(), values.size());
+			WriteNavierStokes(iga::TimeIndexedPath(options.output, completed_step), values);
+		}
+		if (!options.checkpoint.empty()
+			&& (completed_step == run_end_step
+				|| (options.checkpoint_every > 0 && completed_step%options.checkpoint_every == 0))) {
+			iga::FlowCheckpointMetadata metadata;
+			metadata.nodes = database.header().nodes;
+			metadata.completed_step = completed_step;
+			metadata.physical_time = completed_step*dt;
+			metadata.dt = dt;
+			metadata.density = density;
+			metadata.viscosity = viscosity;
+			iga::AppendOutletCheckpoint(outlet_models, metadata);
+			WriteCudaFlowCheckpoint(options.checkpoint, metadata, state, host.nodes*4);
+			std::cout << "checkpoint=" << options.checkpoint.string()
+				<< " completed_step=" << completed_step << '\n';
+		}
 	}
-	if (!converged)
-		throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON without convergence");
 	double state_norm = 0.0;
 	Check(cublasDnrm2(blas, static_cast<int>(host.nodes*4), state.data(), 1, &state_norm),
 		"Navier-Stokes final norm");
@@ -569,11 +861,12 @@ int NavierStokes(int argc, char** argv)
 			velocity_squared += output[node*4+field]*output[node*4+field];
 		pressure_squared += output[node*4+3]*output[node*4+3];
 	}
-	if (argc >= 6) {
-		WriteNavierStokes(argv[5], output);
-		WriteNavierStokesVtk(case_dir/"controlmesh.vtk", std::string(argv[5])+".vtk", output);
+	if (!options.output.empty()) {
+		WriteNavierStokes(options.output, output);
+		WriteNavierStokesVtk(case_dir/"controlmesh.vtk", options.output.string()+".vtk", output);
 	}
 	std::cout << "navier_stokes_cuda nodes=" << host.nodes << " elements=" << host.elements()
+		<< " steps=" << physical_steps << " run_end_step=" << run_end_step
 		<< " preprocess_s=" << std::chrono::duration<double>(preprocess_end-total_start).count()
 		<< " assembly_s=" << total_assembly << " linear_s=" << total_linear
 		<< " total_linear_iterations=" << total_iterations << " state_l2=" << state_norm

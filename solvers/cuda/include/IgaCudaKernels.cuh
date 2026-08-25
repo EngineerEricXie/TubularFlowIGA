@@ -249,7 +249,8 @@ __global__ void AssembleTransportKernel(DeviceMeshView mesh, ReferenceView refer
 }
 
 __device__ inline void StabilizationDevice(const double* inverse,
-	const double state[4], double viscosity, double& tau_m, double& tau_c)
+	const double state[4], double kinematic_viscosity, double dt,
+	double& tau_m, double& tau_c)
 {
 	double metric[9]{};
 	double direction[3]{};
@@ -267,13 +268,16 @@ __device__ inline void StabilizationDevice(const double* inverse,
 			velocity_metric += state[i]*metric[i*3+j]*state[j];
 		}
 	}
-	tau_m = 1.0/sqrt(velocity_metric+(1.0/12.0)*viscosity*viscosity*metric_norm);
+	const double temporal_scale = dt > 0.0 ? 4.0/(dt*dt) : 0.0;
+	tau_m = 1.0/sqrt(temporal_scale+velocity_metric
+		+(1.0/12.0)*kinematic_viscosity*kinematic_viscosity*metric_norm);
 	tau_c = 1.0/(tau_m*direction_norm);
 }
 
 __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 	ReferenceView reference, GeometryView geometry, ElementTilesView tiles,
-	DevicePatternView pattern, const double* nodal_state, double viscosity,
+	DevicePatternView pattern, const double* nodal_state, const double* previous_nodal_state,
+	double density, double viscosity, double dt,
 	double* jacobian, double* negative_residual)
 {
 	const int tile = blockIdx.x;
@@ -297,6 +301,8 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 	__shared__ double state[4];
 	__shared__ double state_gradient[12];
 	__shared__ double state_hessian[36];
+	__shared__ double previous_velocity[3];
+	__shared__ double time_derivative[3];
 	__shared__ double fine_velocity[3];
 	__shared__ double fine_pressure;
 	__shared__ double tau_m;
@@ -316,6 +322,7 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 		__syncthreads();
 		if (threadIdx.x == 0) {
 			for (int field = 0; field < 4; ++field) state[field] = 0.0;
+			for (int component = 0; component < 3; ++component) previous_velocity[component] = 0.0;
 			for (int i = 0; i < 12; ++i) state_gradient[i] = 0.0;
 			for (int i = 0; i < 36; ++i) state_hessian[i] = 0.0;
 			for (int local = 0; local < nen; ++local) {
@@ -330,10 +337,18 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 								*basis_hessian[local*9+i*3+j];
 					}
 				}
+				if (dt > 0.0)
+					for (int component = 0; component < 3; ++component)
+						previous_velocity[component] += previous_nodal_state[node*4+component]
+							*basis[local];
 			}
+			for (int component = 0; component < 3; ++component)
+				time_derivative[component] = dt > 0.0
+					? (state[component]-previous_velocity[component])/dt : 0.0;
 			const double* inverse = geometry.inverse
 				+ static_cast<std::size_t>(element*kQuadraturePoints+q)*9;
-			StabilizationDevice(inverse, state, viscosity, tau_m, tau_c);
+			const double kinematic_viscosity = viscosity/density;
+			StabilizationDevice(inverse, state, kinematic_viscosity, dt, tau_m, tau_c);
 			for (int component = 0; component < 3; ++component) {
 				const double convection = state[0]*state_gradient[component*3]
 					+ state[1]*state_gradient[component*3+1]
@@ -341,10 +356,11 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 				const double pressure_gradient = state_gradient[9+component];
 				const double laplacian = state_hessian[component*9]
 					+ state_hessian[component*9+4]+state_hessian[component*9+8];
-				fine_velocity[component] = -tau_m
-					*(convection+pressure_gradient-viscosity*laplacian);
+				fine_velocity[component] = -tau_m*(time_derivative[component]+convection
+					+pressure_gradient/density-kinematic_viscosity*laplacian);
 			}
-			fine_pressure = -tau_c*(state_gradient[0]+state_gradient[4]+state_gradient[8]);
+			fine_pressure = -density*tau_c
+				*(state_gradient[0]+state_gradient[4]+state_gradient[8]);
 		}
 		__syncthreads();
 		if (active) {
@@ -356,14 +372,15 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 			if (b == 0) {
 				double residual[4]{};
 				for (int component = 0; component < 3; ++component) {
-					residual[component] = -ga[component]*state[3]-ga[component]*fine_pressure;
+					residual[component] = density*na*time_derivative[component]
+						-ga[component]*state[3]-ga[component]*fine_pressure;
 					for (int direction = 0; direction < 3; ++direction) {
 						residual[component] += viscosity*ga[direction]
 							*(state_gradient[component*3+direction]
 								+state_gradient[direction*3+component]);
-						residual[component] += na*(state[direction]+fine_velocity[direction])
+						residual[component] += density*na*(state[direction]+fine_velocity[direction])
 							*state_gradient[component*3+direction];
-						residual[component] -= ga[direction]*fine_velocity[component]
+						residual[component] -= density*ga[direction]*fine_velocity[component]
 							*(state[direction]+fine_velocity[direction]);
 					}
 				}
@@ -376,17 +393,18 @@ __global__ void AssembleNavierStokesKernel(DeviceMeshView mesh,
 			const double streamline_a = state[0]*ga[0]+state[1]*ga[1]+state[2]*ga[2];
 			const double gradient_dot = ga[0]*gb[0]+ga[1]*gb[1]+ga[2]*gb[2];
 			double tangent[16]{};
-			const double diagonal = na*convection_b+viscosity*gradient_dot
-				+tau_m*streamline_a*convection_b;
+			const double mass_b = dt > 0.0 ? nb/dt : 0.0;
+			const double diagonal = density*na*(mass_b+convection_b)+viscosity*gradient_dot
+				+density*tau_m*streamline_a*(mass_b+convection_b);
 			for (int i = 0; i < 3; ++i)
 				for (int j = 0; j < 3; ++j)
-					tangent[i*4+j] = viscosity*ga[j]*gb[i]+tau_c*ga[i]*gb[j];
+					tangent[i*4+j] = viscosity*ga[j]*gb[i]+density*tau_c*ga[i]*gb[j];
 			for (int i = 0; i < 3; ++i) tangent[i*4+i] += diagonal;
 			for (int i = 0; i < 3; ++i) {
 				tangent[i*4+3] = -ga[i]*nb+tau_m*streamline_a*gb[i];
-				tangent[12+i] = na*gb[i]+tau_m*ga[i]*convection_b;
+				tangent[12+i] = na*gb[i]+tau_m*ga[i]*(mass_b+convection_b);
 			}
-			tangent[15] = tau_m*gradient_dot;
+			tangent[15] = (tau_m/density)*gradient_dot;
 			for (int i = 0; i < 16; ++i) tangent_sum[i] += tangent[i]*measure;
 		}
 		__syncthreads();

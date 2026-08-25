@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -A mch260002p
+# Supply the allocation at submission: sbatch -A YOUR_PSC_PROJECT this-file.sbatch
 #SBATCH -p RM-shared
 #SBATCH -N 1
 #SBATCH -n 1

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -J iga-cuda-build
-#SBATCH -A mch260002p
+# Supply the allocation at submission: sbatch -A YOUR_PSC_PROJECT this-file.sbatch
 #SBATCH -p GPU-shared
 #SBATCH --gres=gpu:v100-32:1
 #SBATCH -t 00:20:00

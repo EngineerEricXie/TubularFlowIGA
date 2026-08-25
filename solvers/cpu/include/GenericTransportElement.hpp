@@ -35,13 +35,13 @@ inline GenericTransportMatrices BuildGenericTransportElement(const Element& elem
 	for (const auto& definition : system.stabilization) {
 		const auto found = system.field_index.find(definition.equation);
 		if (found == system.field_index.end()) throw std::runtime_error("stabilization references an unknown equation");
-		if (definition.method != "supg" || definition.velocity != "prescribed")
-			throw std::runtime_error("CPU linear transport currently supports SUPG with velocity source 'prescribed'");
+		if (definition.method != "supg" || definition.velocity != system.velocity_source)
+			throw std::runtime_error("CPU linear transport requires SUPG and advection to use the same velocity source");
 		supg[found->second] = 1;
 	}
 	for (const auto& term : system.terms)
-		if ((term.kind == TermKind::Advection) && term.velocity != "prescribed")
-			throw std::runtime_error("CPU linear transport currently supports advection velocity source 'prescribed'");
+		if ((term.kind == TermKind::Advection) && term.velocity != system.velocity_source)
+			throw std::runtime_error("CPU linear transport received inconsistent velocity sources");
 
 	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
 	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461, 0.6521451548625461, 0.3478548451374539}};

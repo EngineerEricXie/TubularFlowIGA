@@ -1,7 +1,7 @@
 # TubularFlowIGA CPU Backend
 
-A project-owned C++17 isogeometric-analysis pipeline for stabilized steady
-Navier-Stokes flow and configurable transient multi-field transport. PETSc provides distributed
+A project-owned C++17 isogeometric-analysis pipeline for stabilized steady and
+backward-Euler Navier-Stokes flow plus configurable transient multi-field transport. PETSc provides distributed
 sparse matrices and Krylov solvers; Bezier extraction, basis derivatives,
 quadrature, VMS/SUPG weak forms, boundary conditions, nonlinear iteration, and
 time integration are implemented in this repository.
@@ -17,13 +17,17 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 | `iga_case_check` | Validate case inputs and resolved boundary roles without PETSc |
 | `iga_mesh_check` | Evaluate every element at 4x4x4 quadrature points and reject non-positive Jacobians |
 | `iga_config_check` | Strictly validate `simulation_config.json` without PETSc |
+| `iga_flow_validate` | Integrate boundary flow, check divergence-theorem closure, mass balance, and cycle repeatability |
+| `iga_womersley_reference` | Generate a time-aligned analytical straight-tube Womersley velocity series |
 | `iga_solve` | Solve configured one-to-many-field transport/operator systems |
 | `iga_assembly_smoke` | Exercise distributed owned-row sparse assembly |
-| `iga_navier_stokes` | Solve the four-field stabilized steady velocity-pressure system |
+| `iga_navier_stokes` | Solve the four-field stabilized steady or transient velocity-pressure system |
 | `iga_transport` | Transitional old-input CLI, lowered through the generic assembler |
 
 `iga_solve` writes fields in configured order plus a `.fields` name file.
 `iga_navier_stokes` reads flow physics and boundary values from that same config.
+`iga_solve` can also read a configured time-resolved velocity manifest and
+linearly interpolate flow snapshots onto the transport time grid.
 
 ## Why this version is faster and smaller
 
@@ -126,8 +130,10 @@ make cpu
 make cpu-petsc PETSC_DIR=/path/to/petsc PETSC_ARCH=your-petsc-arch
 ~~~
 
-The first command builds `iga_pack`, `iga_inspect`, and `iga_case_check` with a
-standard C++17 compiler. PETSc targets require an MPI-aware PETSc configuration.
+The first command builds `iga_pack`, `iga_inspect`, `iga_case_check`,
+`iga_config_check`, `iga_flow_validate`, and `iga_womersley_reference` with a
+standard C++17 compiler.
+PETSc targets require an MPI-aware PETSc configuration.
 `PETSC_ARCH` may be omitted for an installed PETSc layout.
 
 ## Prepare a case
@@ -158,10 +164,17 @@ Use an allocated compute resource on shared clusters:
 ~~~bash
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_mesh_check" "$DATABASE"
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
-  "$DATABASE" "$CASE_DIR" 8 velocity.txt
+  "$DATABASE" "$CASE_DIR" --max-newton 12 --output velocity.txt
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
-  "$DATABASE" "$CASE_DIR" tracer_transport tracer.txt velocity.txt
+  "$DATABASE" "$CASE_DIR" --system neuron_transport --output neuron.txt
 ~~~
+
+Use the Navier--Stokes command with a prepared `vascular_flow/*` case and the
+transport command with a prepared `neuron_transport/*` case. The
+application-specific source cases and preparation command are documented in
+the [examples catalog](../../examples/README.md). Do not run both commands
+against one public example: each configuration intentionally contains only its
+matching equation system.
 
 The canonical [`simulation_config.json`](../../docs/PDE_CONFIGURATION.md) names
 fields, systems, operators, viscosity, time integration, and per-field boundary
@@ -169,6 +182,78 @@ conditions. A velocity Dirichlet condition can use a three-component value or
 `initial_velocityfield.txt` profile plus scale. The old two-file input remains
 accepted only as a transition adapter. Navier-Stokes uses nonlinear relative
 tolerance `1e-5`; configured transport uses relative tolerance `1e-8`.
+
+Backward-Euler flow supports time-indexed text output and a PETSc checkpoint
+state with validated JSON metadata:
+
+~~~bash
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
+  "$DATABASE" "$CASE_DIR" --output velocity.txt --output-every 10 \
+  --checkpoint flow-checkpoint --checkpoint-every 10
+
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
+  "$DATABASE" "$CASE_DIR" --output resumed.txt \
+  --restart flow-checkpoint
+~~~
+
+The metadata validates node count, completed step, physical time, `dt`, density,
+and viscosity before restart. A final checkpoint is written even when the final
+step is not an interval boundary. Legacy positional `MAX_NEWTON` and `OUTPUT`
+remain accepted; the default maximum is 12 nonlinear iterations.
+For a reproducible interruption test, add `--stop-after-step N`; the checkpoint
+retains the original configured final step, so the same case can resume without
+editing its time configuration.
+
+Configured transport uses equivalent flags and validates ordered field names,
+system name, and velocity-source name in addition to time metadata. A
+snapshot-series restart therefore resumes interpolation at the completed
+physical time:
+
+~~~bash
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
+  "$DATABASE" "$CASE_DIR" --system neuron_transport \
+  --output neuron.txt --output-every 10 --stop-after-step 10 \
+  --checkpoint neuron-checkpoint --checkpoint-every 10
+
+mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
+  "$DATABASE" "$CASE_DIR" --system neuron_transport \
+  --output neuron-resumed.txt --restart neuron-checkpoint
+~~~
+
+Validate one velocity snapshot, or a complete manifest with an optional cardiac
+period for cycle-to-cycle comparison:
+
+~~~bash
+"$IGA_CPU_ROOT/iga_flow_validate" "$DATABASE" velocity.txt
+"$IGA_CPU_ROOT/iga_flow_validate" "$DATABASE" \
+  --compare velocity-reference.txt velocity-current.txt
+"$IGA_CPU_ROOT/iga_flow_validate" "$DATABASE" \
+  --manifest "$CASE_DIR" velocity_series.csv 0.8
+"$IGA_CPU_ROOT/iga_flow_validate" "$DATABASE" \
+  --compare-manifests cpu-output velocity_series.csv \
+  "$CASE_DIR" velocity_series.csv
+"$IGA_CPU_ROOT/iga_flow_validate" "$DATABASE" \
+  --womersley examples/validation/womersley/womersley_reference.json \
+  "$CASE_DIR" velocity_series.csv
+~~~
+
+The reported relative mass imbalance is
+`2*abs(sum(Q))/sum(abs(Q))`, using outward flow on every packed boundary label.
+The divergence-theorem error is also normalized by the larger of total
+absolute boundary flow and absolute volume divergence, making its gate portable
+across geometric and unit scales.
+Manifest mode also reports the maximum velocity relative L2 between snapshots
+separated by the supplied period. The utility accepts either CPU or CUDA
+three-column velocity output. `--compare-manifests` requires every reference
+time to appear in the numerical manifest (which may contain additional startup
+snapshots) and reports the per-snapshot and maximum velocity relative L2,
+suitable for CPU/CUDA coefficient parity or an independently projected
+coefficient reference. Raw analytical point samples are not IGA control
+coefficients. `--womersley` instead evaluates the numerical spline and the
+analytical field at volume quadrature points and integrates their physical
+relative L2 norm, which is the Womersley acceptance metric.
+The generator configuration and pressure-gradient convention are documented in
+[`examples/validation/womersley`](../../examples/validation/womersley/README.md).
 
 For PSC module, interactive-node, and Slurm examples, see the
 [Bridges-2 guide](../../docs/BRIDGES2.md).
@@ -190,11 +275,13 @@ For PSC module, interactive-node, and Slurm examples, see the
 - Scaling has been validated to 16 MPI ranks, not exhaustively across nodes.
 - The binary database currently stores partition-specific touching-element
   indices and should be repacked when the rank count changes.
-- Navier-Stokes is steady and uses fixed-in-time velocity/pressure boundaries;
-  configured `time` currently applies only to transport.
+- CPU Navier-Stokes supports steady and backward-Euler rigid-wall flow,
+  per-step velocity Dirichlet and pressure-traction waveforms,
+  checkpoint/restart, and time-indexed output.
 - Configured scalar flux/Robin surface assembly is available in `iga_solve`
   with a version 4 `.ntiga` database.
-- Pulsatile inflow, physiological outlet models, and compliant walls are not
-  implemented.
+- Natural pressure traction and R/RC/RCR outlets are available on CPU. The
+  outlet models apply `-p n` without replacing continuity rows; compliant walls
+  are not implemented.
 - The stabilized formulations follow the legacy model; this repository does not
   claim a new physical model or discretization order.

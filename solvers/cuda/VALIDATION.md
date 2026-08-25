@@ -1,5 +1,76 @@
 # CUDA Validation
 
+## Transient and coupled gates
+
+The backward-Euler flow, time-indexed output, raw checkpoint/restart,
+R/RC/RCR outlet coupling, and snapshot-series transport paths passed on
+2026-08-24. The WSL host used one NVIDIA GeForce RTX 4080 SUPER (SM 89,
+15.99 GiB) and CUDA Toolkit 12.6.3 installed in the `tubularflow-cuda` Conda
+environment. `nvcc` reported release 12.6, V12.6.85. The CUDA target built for
+SM 89 without warnings; `device-info` reported the expected `1/64` FP64 ratio.
+
+The 2,211-node, 1,800-element mesh check evaluated every volume quadrature
+sample with minimum `detJ=8.1088652284857333e-5` and zero invalid samples.
+The eight-step straight-tube case covered two periods (`dt=0.1`, period `0.4`):
+
+```text
+preprocess_s=0.20281
+assembly_s=55.4066
+linear_s=181.265
+total_linear_iterations=35990
+state_l2=277.886
+velocity_l2=1.53637
+pressure_l2=277.882
+gpu_used_gib=1.5083
+maximum_relative_mass_imbalance=4.6845861945309674e-07
+maximum_cycle_velocity_relative_l2=6.7578834255151922e-06
+maximum_womersley_volume_relative_l2=0.046486537001491426
+cpu_cuda_velocity_relative_l2=4.2926346639797907e-11
+cpu_cuda_pressure_relative_l2=2.3669895670887319e-11
+```
+
+Restarting the run from its step-4 raw checkpoint changed final velocity by
+`1.1524231282768408e-14` and pressure by `1.0965863268123281e-15` relative L2.
+The result is below the `1e-12` restart gate. This consumer GPU is correctness
+evidence, not a performance baseline for V100/H100-class FP64 hardware.
+
+The R outlet converged to `Q=3.70264e-3` and `p=3.70264e-6`; its relative mass
+imbalance was `4.88703e-7`. CPU/CUDA velocity and pressure differences were
+`3.11089e-14` and `7.82448e-15`. RC and RCR completed the same fixed-point path.
+The RCR checkpoint stored capacitor pressure `2.9386022758583951e-6` at step 1,
+restored it at `t=0.1`, and advanced step 2 to flow `3.71854e-3`, applied
+pressure `3.71825e-6`, and capacitor pressure `2.97454e-6`.
+
+A two-step 2,211-node snapshot-series transport run matched CPU to
+`8.170084106094566e-12` and matched the uninterrupted CUDA result after a
+step-1 restart to `8.6877684819497343e-20`. The full 14,565-node,
+12,780-element bifurcation then completed the same two-snapshot gate in 217
+Krylov iterations with final L2 `24.9893`. Assembly and solve took `1.87246`
+and `0.280954` seconds, peak device use was `1.64697 GiB`, CPU/CUDA relative L2
+was `3.7467328704604612e-12`, and restart relative L2 was
+`6.6421720189409289e-20`.
+
+The dependency-free components used by CUDA also have unit coverage for
+waveform/manifest parsing, checkpoint metadata, R/RC/RCR updates, boundary
+surface-flow quadrature, and natural pressure-traction quadrature under
+`make cpu-test`.
+
+`slurm/validate_transient_v100.sbatch` automates the same build, mesh, restart,
+mass, transport, optional CPU/CUDA field, multi-cycle, and Womersley checks for
+a scheduled cluster GPU.
+
+The script enforces default final-flow limits of `1e-2` relative mass
+imbalance and `1e-6` relative divergence-theorem error. With
+`IGA_CARDIAC_PERIOD`, `IGA_FLOW_DT`, and `IGA_FLOW_STEPS`, it also constructs a
+manifest for all generated snapshots and gates maximum cycle-to-cycle velocity
+relative L2 at `1e-3`. Each tolerance has a named environment override in the
+[Bridges-2 guide](../../docs/BRIDGES2.md).
+`IGA_WOMERSLEY_CONFIG` adds a physical-volume Womersley relative L2 gate
+(default `5e-2`) by evaluating the numerical spline and analytical solution at
+element quadrature points. The case-directory/manifest variables are retained
+only for an independently projected coefficient reference; raw analytical
+point samples must not be treated as IGA coefficients.
+
 ## Configured Surface-Term Parity
 
 Job `44364589` ran the public 4,221-node, 3,600-element smoke database on one
@@ -37,8 +108,9 @@ CUDA iterations: 109
 singular diagonal blocks: 0
 ```
 
-This validates configured transport boundary updates only. Navier-Stokes
-remains steady and rejects waveform-backed flow boundaries.
+This job validates configured transport boundary updates. The later SM 89
+acceptance above separately validates backward-Euler Navier-Stokes boundary
+updates, multi-cycle integration, and restart.
 
 ## Cylinder Baseline
 
@@ -92,6 +164,11 @@ cd "$IGA_CUDA_ROOT"
 sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_v100.sbatch
 sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/validate_cpu_transport.sbatch
 sbatch --export=ALL,IGA_CASE_ROOT="$IGA_CASE_ROOT" slurm/nmo_full_v100.sbatch
+
+export IGA_TRANSIENT_CASE_DIR=/path/to/transient-case
+export IGA_TRANSIENT_DATABASE=/path/to/transient-case/case-1.ntiga
+sbatch --export=ALL,IGA_TRANSIENT_CASE_DIR="$IGA_TRANSIENT_CASE_DIR",IGA_TRANSIENT_DATABASE="$IGA_TRANSIENT_DATABASE" \
+  slurm/validate_transient_v100.sbatch
 ```
 
 

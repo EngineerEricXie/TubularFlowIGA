@@ -124,6 +124,7 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 	std::set<int> mesh_labels;
 	for (int label : labels) if (label >= 0) mesh_labels.insert(label);
 	std::set<int> configured_labels;
+	bool has_pressure_traction = false;
 	for (const auto& boundary : configuration.boundaries) {
 		if (!mesh_labels.count(boundary.label))
 			throw std::runtime_error("simulation_config.json boundary label " + std::to_string(boundary.label)
@@ -133,6 +134,13 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 			if (condition.field != velocity_name && condition.field != pressure_name) continue;
 			if (!condition.waveform.empty())
 				throw std::runtime_error("time-dependent Navier-Stokes boundary execution is not implemented");
+			if (condition.kind == FieldBoundaryKind::PressureTraction) {
+				if (condition.field != pressure_name || condition.value.size() != 1)
+					throw std::runtime_error(
+						"pressure_traction requires the Navier-Stokes pressure field");
+				has_pressure_traction = true;
+				continue;
+			}
 			if (condition.kind != FieldBoundaryKind::Dirichlet)
 				throw std::runtime_error("navier_stokes boundary field '" + condition.field
 					+ "' currently supports only dirichlet conditions");
@@ -169,8 +177,10 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 		result.velocity_constrained.begin(), result.velocity_constrained.end(), 1));
 	result.pressure_nodes = static_cast<std::size_t>(std::count(
 		result.pressure_constrained.begin(), result.pressure_constrained.end(), 1));
-	if (result.velocity_nodes == 0 || result.pressure_nodes == 0)
-		throw std::runtime_error("navier_stokes requires velocity and pressure Dirichlet boundaries");
+	if (result.velocity_nodes == 0
+		|| (result.pressure_nodes == 0 && !has_pressure_traction))
+		throw std::runtime_error(
+			"navier_stokes requires velocity Dirichlet and pressure gauge/traction boundaries");
 	return result;
 }
 } // namespace iga

@@ -68,6 +68,17 @@ It reads `controlmesh.vtk` and writes:
 - `spline_cache.igacache`: versioned sparse coefficients and Bezier points;
 - `bzmesh.vtk`: visualization output.
 
+### Coordinate normalization
+
+Before extraction, the spline code subtracts the minimum coordinate on each
+axis and divides every coordinate by the smallest domain-axis extent. The
+Bezier mesh and packed `.ntiga` geometry therefore use translated, normalized
+coordinates rather than the original SWC coordinate units. Record the scale
+for every physical study and transform flow, time, material, pressure, and
+transport parameters consistently. The public examples use internally
+consistent numerical values and are not presented as patient-specific SI
+calibrations.
+
 Omit `--no-legacy-text` to additionally reproduce `cmat.txt` and `bzpt.txt`.
 The binary cache records a control-mesh content hash; `iga_pack` rejects stale,
 truncated, malformed, or version-incompatible caches.
