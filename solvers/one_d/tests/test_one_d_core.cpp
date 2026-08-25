@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -71,6 +72,18 @@ int main()
 	assert(configuration.schema_version == 3);
 	assert(configuration.flow_systems.size() == 1);
 	assert(configuration.transport_systems.size() == 1);
+	auto obj_configuration_text = Configuration();
+	const auto kind_position = obj_configuration_text.find("\"kind\": \"swc_network\"");
+	const auto file_position = obj_configuration_text.find("\"file\": \"tree.swc\"");
+	assert(kind_position != std::string::npos && file_position != std::string::npos);
+	obj_configuration_text.replace(kind_position, std::string("\"kind\": \"swc_network\"").size(),
+		"\"kind\": \"obj_network\"");
+	const auto shifted_file_position = obj_configuration_text.find("\"file\": \"tree.swc\"");
+	obj_configuration_text.replace(shifted_file_position, std::string("\"file\": \"tree.swc\"").size(),
+		"\"file\": \"tree.obj\", \"root_node_id\": 1");
+	const auto obj_configuration = iga::ParseOneDConfiguration(obj_configuration_text);
+	assert(obj_configuration.geometry.kind == "obj_network");
+	assert(obj_configuration.geometry.root_node_id == 1);
 
 	const auto temporary = fs::temp_directory_path()/"tubularflowiga-one-d-core-test.swc";
 	WriteTree(temporary);
@@ -81,6 +94,42 @@ int main()
 	assert(network.outlet_nodes.size() == 2);
 	assert(network.cells == 6);
 	iga::ValidateOneDTopologyReferences(configuration, network);
+
+	const auto temporary_obj = fs::temp_directory_path()/"tubularflowiga-one-d-core-test.obj";
+	{
+		std::ofstream output(temporary_obj);
+		output << "v 0 0 0 0.001 0 0\n"
+			<< "v 0.01 0 0 0.001 0 0\n"
+			<< "v 0.02 0.01 0 0.001 0 0\n"
+			<< "v 0.02 -0.01 0 0.001 0 0\n"
+			<< "l 1 2\n"
+			<< "l 2 3\n"
+			<< "l 2 4\n";
+	}
+	const auto obj_network = iga::ReadOneDNetwork(temporary_obj, 1.0, 2, 0.004, 1);
+	fs::remove(temporary_obj);
+	assert(obj_network.root == 0);
+	assert(obj_network.nodes.size() == 4);
+	assert(obj_network.segments.size() == 3);
+	assert(obj_network.outlet_nodes.size() == 2);
+	const auto skeleton_output = fs::temp_directory_path()/"tubularflowiga-one-d-skeleton-output";
+	fs::create_directories(skeleton_output);
+	iga::WriteOneDSkeletonFiles(skeleton_output, obj_network, 1.0);
+	assert(fs::is_regular_file(skeleton_output/"skeleton_normalized.swc"));
+	assert(fs::is_regular_file(skeleton_output/"skeleton.vtp"));
+	const auto normalized_network = iga::ReadOneDNetwork(
+		skeleton_output/"skeleton_normalized.swc", 1.0, 2, 0.004);
+	assert(normalized_network.nodes.size() == obj_network.nodes.size());
+	{
+		std::ifstream input(skeleton_output/"skeleton.vtp");
+		std::ostringstream contents;
+		contents << input.rdbuf();
+		assert(contents.str().find("Name=\"role\"") != std::string::npos);
+		assert(contents.str().find("Name=\"segment_id\"") != std::string::npos);
+	}
+	fs::remove(skeleton_output/"skeleton_normalized.swc");
+	fs::remove(skeleton_output/"skeleton.vtp");
+	fs::remove(skeleton_output);
 
 	const auto& segment = network.segments.front();
 	const double expected_resistance = 8.0*0.004*0.01/(iga::OneDPi*std::pow(0.001, 4.0));

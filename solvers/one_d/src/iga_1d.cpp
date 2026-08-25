@@ -164,7 +164,7 @@ int main(int argc, char** argv)
 		const auto& flow = SelectFlow(configuration, options.system);
 		auto network = iga::ReadOneDNetwork(options.case_directory/configuration.geometry.file,
 			configuration.geometry.length_scale_to_m, flow.discretization.cells_per_segment,
-			flow.dynamic_viscosity);
+			flow.dynamic_viscosity, configuration.geometry.root_node_id);
 		iga::ValidateOneDTopologyReferences(configuration, network);
 		const auto inlet = iga::ResolveOneDInlet(configuration);
 		auto flow_state = iga::OneDFlowState{};
@@ -174,6 +174,7 @@ int main(int argc, char** argv)
 		if (options.check) {
 			if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
 				<< " nodes=" << network.nodes.size() << " segments=" << network.segments.size()
+				<< " root_id=" << network.nodes[static_cast<std::size_t>(network.root)].id
 				<< " cells=" << network.cells << " outlets=" << network.outlet_nodes.size()
 				<< " transport_systems=" << transports.size() << '\n';
 			PetscFinalize();
@@ -196,10 +197,15 @@ int main(int argc, char** argv)
 		if (options.output_directory.empty())
 			options.output_directory = options.case_directory/"results"/"one_d"/flow.name;
 		std::unique_ptr<iga::OneDOutputWriter> writer;
-		if (rank == 0) writer = std::make_unique<iga::OneDOutputWriter>(
-			options.output_directory, network, flow);
+		if (rank == 0) {
+			iga::WriteOneDSkeletonFiles(options.output_directory, network,
+				configuration.geometry.length_scale_to_m);
+			writer = std::make_unique<iga::OneDOutputWriter>(
+				options.output_directory, network, flow);
+		}
 		auto derived = iga::ComputeOneDDerivedFields(configuration, transports);
 		double output_seconds = 0.0;
+		double solve_output_seconds = 0.0;
 		if (rank == 0) {
 			const auto before = std::chrono::steady_clock::now();
 			writer->Write(flow_state.completed_step, flow_state.physical_time,
@@ -231,7 +237,10 @@ int main(int argc, char** argv)
 				|| step == final_step)) {
 				const auto before = std::chrono::steady_clock::now();
 				writer->Write(step, time, flow_state, transports, derived);
-				output_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now()-before).count();
+				const double elapsed = std::chrono::duration<double>(
+					std::chrono::steady_clock::now()-before).count();
+				output_seconds += elapsed;
+				solve_output_seconds += elapsed;
 			}
 			if (!options.checkpoint.empty() && options.checkpoint_every > 0
 				&& (step%options.checkpoint_every == 0 || step == final_step)) {
@@ -248,7 +257,7 @@ int main(int argc, char** argv)
 				configuration, transports, derived);
 			writer->Finish(flow_state,
 				std::chrono::duration<double>(setup_end-setup_start).count(),
-				std::chrono::duration<double>(solve_end-solve_start).count()-output_seconds,
+				std::chrono::duration<double>(solve_end-solve_start).count()-solve_output_seconds,
 				output_seconds);
 			std::cout << "completed 1d system=" << flow.name << " steps="
 				<< flow_state.completed_step << " output=" << options.output_directory << '\n';

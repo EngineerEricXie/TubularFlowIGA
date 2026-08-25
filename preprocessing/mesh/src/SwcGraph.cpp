@@ -1,5 +1,7 @@
 #include "SwcGraph.hpp"
 #include "BSpline.hpp"
+#include "RadiusAnnotatedObj.hpp"
+#include "SkeletonOutput.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -38,20 +40,45 @@ MeshParameters MeshParameters::Read(const std::filesystem::path& path)
 
 SwcGraph SwcGraph::Read(const std::filesystem::path& path)
 {
+	if (iga::IsRadiusAnnotatedObjPath(path)) {
+		const auto input = iga::ReadRadiusAnnotatedObj(path);
+		SwcGraph graph;
+		graph.nodes.resize(input.nodes.size());
+		for (std::size_t i = 0; i < input.nodes.size(); ++i) {
+			const auto& source = input.nodes[i];
+			auto& target = graph.nodes[i];
+			target.id = source.id;
+			target.type = 2;
+			target.position = {source.position[0], source.position[1], source.position[2]};
+			target.diameter = 2.0*source.radius;
+			target.parent = source.parent;
+		}
+		graph.RebuildChildren();
+		graph.Validate();
+		return graph;
+	}
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open SWC file: "+path.string());
 	struct Raw { int id; int type; Vec3 p; double radius; int parent; };
 	std::vector<Raw> raw;
 	std::string line;
+	int line_number = 0;
 	while (std::getline(input, line)) {
+		++line_number;
 		const auto first = line.find_first_not_of(" \t\r");
 		if (first == std::string::npos || line[first] == '#') continue;
 		std::istringstream row(line);
 		Raw value;
 		if (!(row >> value.id >> value.type >> value.p.x >> value.p.y >> value.p.z >> value.radius >> value.parent))
-			throw std::runtime_error("invalid SWC row: "+line);
-		if (value.id <= 0 || !IsFinite(value.p) || !std::isfinite(value.radius) || value.radius <= 0.0)
-			throw std::runtime_error("invalid SWC node values at id "+std::to_string(value.id));
+			throw std::runtime_error(path.string()+":"+std::to_string(line_number)
+				+": expected seven SWC columns");
+		std::string extra;
+		if (row >> extra) throw std::runtime_error(path.string()+":"+std::to_string(line_number)
+			+": unexpected SWC column");
+		if (value.id <= 0 || (value.parent != -1 && value.parent <= 0)
+			|| !IsFinite(value.p) || !std::isfinite(value.radius) || value.radius <= 0.0)
+			throw std::runtime_error(path.string()+":"+std::to_string(line_number)
+				+": invalid SWC node values at id "+std::to_string(value.id));
 		raw.push_back(value);
 	}
 	if (raw.empty()) throw std::runtime_error("SWC file contains no nodes");
@@ -64,6 +91,7 @@ SwcGraph SwcGraph::Read(const std::filesystem::path& path)
 	graph.nodes.resize(raw.size());
 	for (std::size_t i=0; i<raw.size(); ++i) {
 		auto& node = graph.nodes[i];
+		node.id = raw[i].id;
 		node.type = raw[i].type;
 		node.position = raw[i].p;
 		node.diameter = 2.0*raw[i].radius;
@@ -92,6 +120,39 @@ void SwcGraph::Write(const std::filesystem::path& path) const
 			<< n.position.z << ' ' << n.diameter/2.0 << ' '
 			<< (n.parent < 0 ? -1 : n.parent+1) << '\n';
 	}
+}
+
+namespace {
+
+std::vector<iga::SkeletonOutputNode> SkeletonOutputNodes(const SwcGraph& graph)
+{
+	std::vector<iga::SkeletonOutputNode> result(graph.nodes.size());
+	for (std::size_t i = 0; i < graph.nodes.size(); ++i) {
+		const auto& source = graph.nodes[i];
+		auto& target = result[i];
+		target.id = source.id > 0 ? source.id : static_cast<int>(i)+1;
+		target.type = source.type;
+		target.position = {{source.position.x, source.position.y, source.position.z}};
+		target.radius = source.diameter/2.0;
+		target.parent_id = source.parent < 0 ? -1
+			: (graph.nodes[static_cast<std::size_t>(source.parent)].id > 0
+				? graph.nodes[static_cast<std::size_t>(source.parent)].id : source.parent+1);
+	}
+	return result;
+}
+
+}
+
+void SwcGraph::WriteNormalized(const std::filesystem::path& path) const
+{
+	Validate();
+	iga::WriteNormalizedSkeletonSwc(path, SkeletonOutputNodes(*this));
+}
+
+void SwcGraph::WriteVisualizationVtp(const std::filesystem::path& path) const
+{
+	Validate();
+	iga::WriteSkeletonVtp(path, SkeletonOutputNodes(*this));
 }
 
 void SwcGraph::RebuildChildren()
@@ -124,9 +185,16 @@ void SwcGraph::Validate() const
 		if (state[i] == 2) return;
 		state[i] = 1;
 		if (nodes[i].children.size() > 2)
-			throw std::runtime_error("only binary branching is supported; node "+std::to_string(i+1)+" has more than two children");
+			throw std::runtime_error("3d mesh generation supports at most two children; node "
+				+std::to_string(nodes[i].id > 0 ? nodes[i].id : static_cast<int>(i)+1)
+				+" has "+std::to_string(nodes[i].children.size()));
 		if (!IsFinite(nodes[i].position) || !std::isfinite(nodes[i].diameter) || nodes[i].diameter <= 0.0)
-			throw std::runtime_error("invalid geometry at SWC node "+std::to_string(i+1));
+			throw std::runtime_error("invalid geometry at SWC node "
+				+std::to_string(nodes[i].id > 0 ? nodes[i].id : static_cast<int>(i)+1));
+		if (nodes[i].parent >= 0
+			&& !(Norm(nodes[i].position-nodes[static_cast<std::size_t>(nodes[i].parent)].position) > 0.0))
+			throw std::runtime_error("zero-length segment at SWC node "
+				+std::to_string(nodes[i].id > 0 ? nodes[i].id : static_cast<int>(i)+1));
 		for (int child : nodes[i].children) visit(child);
 		state[i] = 2;
 	};

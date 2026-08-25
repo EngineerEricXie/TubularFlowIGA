@@ -68,6 +68,8 @@ controlmesh.vtk
 bzmesh.vtk
 bzmeshinfo.txt
 skeleton_smooth.swc
+skeleton_normalized.swc
+skeleton.vtp
 initial_velocityfield.txt
 cmat.txt
 bzpt.txt

@@ -30,13 +30,27 @@ if [[ ! -d $source_dir ]]; then
 	exit 2
 fi
 
-required=(skeleton_initial.swc mesh_parameter.txt simulation_config.json)
+required=(mesh_parameter.txt simulation_config.json)
 for file in "${required[@]}"; do
 	if [[ ! -f $source_dir/$file ]]; then
 		printf 'example is missing required input: %s/%s\n' "$source_dir" "$file" >&2
 		exit 2
 	fi
 done
+skeleton_source=
+for candidate in skeleton_initial.swc skeleton_initial.obj; do
+	if [[ -f $source_dir/$candidate ]]; then
+		if [[ -n $skeleton_source ]]; then
+			printf 'example must contain only one skeleton_initial.swc or skeleton_initial.obj: %s\n' "$source_dir" >&2
+			exit 2
+		fi
+		skeleton_source=$candidate
+	fi
+done
+if [[ -z $skeleton_source ]]; then
+	printf 'example is missing skeleton_initial.swc or skeleton_initial.obj: %s\n' "$source_dir" >&2
+	exit 2
+fi
 
 if [[ $# -eq 2 ]]; then
 	work_dir=$2
@@ -51,10 +65,17 @@ fi
 
 "$repo_dir/scripts/check_dependencies.sh" preprocessing
 for file in "${required[@]}"; do cp "$source_dir/$file" "$work_dir/$file"; done
+cp "$source_dir/$skeleton_source" "$work_dir/$skeleton_source"
 
 make -C "$repo_dir" mesh spline cpu
 "$repo_dir/preprocessing/mesh/tubular_mesh" pipeline \
 	"$work_dir" "$repo_dir/meshgeneration/template"
+for generated in skeleton_normalized.swc skeleton.vtp skeleton_smooth.swc controlmesh.vtk; do
+	if [[ ! -s $work_dir/$generated ]]; then
+		printf 'preprocessing did not create required output: %s/%s\n' "$work_dir" "$generated" >&2
+		exit 1
+	fi
+done
 OMP_NUM_THREADS=${OMP_NUM_THREADS:-2} \
 	"$repo_dir/preprocessing/spline/spline" "$work_dir/" --no-legacy-text
 mpmetis "$work_dir/bzmeshinfo.txt" "$ranks"

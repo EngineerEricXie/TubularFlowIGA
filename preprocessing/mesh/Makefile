@@ -1,5 +1,5 @@
 CXX ?= g++
-CPPFLAGS ?= -Iinclude
+CPPFLAGS ?= -Iinclude -I../../include
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 LDLIBS ?= -lstdc++fs
 
@@ -17,6 +17,8 @@ $(TARGET): $(OBJECTS) src/main.o
 
 $(TEST_TARGET): $(OBJECTS) tests/test_core.o
 	$(CXX) $^ -o $@ $(LDLIBS)
+
+src/SwcGraph.o: ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp
 
 test: $(TEST_TARGET)
 	./$(TEST_TARGET) ../../meshgeneration/template

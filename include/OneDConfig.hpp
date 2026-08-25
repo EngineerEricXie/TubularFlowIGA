@@ -2,6 +2,7 @@
 #define IGA_ONE_D_CONFIG_HPP
 
 #include "SimulationConfig.hpp"
+#include "RadiusAnnotatedObj.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +28,7 @@ struct OneDGeometryDefinition {
 	std::string kind = "swc_network";
 	std::string file;
 	double length_scale_to_m = 1.0;
+	int root_node_id = 0;
 };
 
 struct OneDTimeDefinition {
@@ -351,15 +353,23 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 		throw std::runtime_error("simulation_config.json: 1d configuration requires schema_version 3 and dimension '1d'");
 
 	const auto& geometry = RequireObject(Required(root, "geometry", "root"), "geometry");
-	RequireKnownKeys(geometry, {"kind", "file", "length_scale_to_m"}, "geometry");
+	RequireKnownKeys(geometry, {"kind", "file", "length_scale_to_m", "root_node_id"}, "geometry");
 	result.geometry.kind = RequireString(Required(geometry, "kind", "geometry"), "geometry.kind");
 	result.geometry.file = RequireString(Required(geometry, "file", "geometry"), "geometry.file");
 	result.geometry.length_scale_to_m = RequireNumber(
 		Required(geometry, "length_scale_to_m", "geometry"), "geometry.length_scale_to_m");
-	if (result.geometry.kind != "swc_network" || result.geometry.file.empty()
+	if (const auto* root_id = Find(geometry, "root_node_id"))
+		result.geometry.root_node_id = RequireInteger(*root_id, "geometry.root_node_id");
+	if ((result.geometry.kind != "swc_network" && result.geometry.kind != "obj_network")
+		|| result.geometry.file.empty()
 		|| std::filesystem::path(result.geometry.file).is_absolute()
-		|| !(result.geometry.length_scale_to_m > 0.0))
-		throw std::runtime_error("simulation_config.json: geometry requires relative SWC file and positive length_scale_to_m");
+		|| !(result.geometry.length_scale_to_m > 0.0)
+		|| result.geometry.root_node_id < 0)
+		throw std::runtime_error("simulation_config.json: geometry requires swc_network or obj_network, a relative file, and positive length_scale_to_m");
+	if (result.geometry.kind == "swc_network" && result.geometry.root_node_id != 0)
+		throw std::runtime_error("simulation_config.json: root_node_id applies only to obj_network");
+	if ((result.geometry.kind == "obj_network") != IsRadiusAnnotatedObjPath(result.geometry.file))
+		throw std::runtime_error("simulation_config.json: geometry kind and skeleton file extension do not match");
 
 	const auto& time = RequireObject(Required(root, "time", "root"), "time");
 	RequireKnownKeys(time, {"dt", "steps", "output_every"}, "time");
@@ -503,8 +513,8 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			std::set<int> unique_ids;
 			for (std::size_t j = 0; j < array.size(); ++j) {
 				const int id = RequireInteger(array[j], context + ".node_ids[" + std::to_string(j) + "]");
-				if (id < 0 || !unique_ids.insert(id).second)
-					throw std::runtime_error("simulation_config.json: boundary node_ids must be unique nonnegative SWC ids");
+				if (id < 1 || !unique_ids.insert(id).second)
+					throw std::runtime_error("simulation_config.json: boundary node_ids must be unique positive skeleton ids");
 				boundary.node_ids.push_back(id);
 			}
 		}

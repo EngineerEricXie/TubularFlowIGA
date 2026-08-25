@@ -20,6 +20,7 @@ struct MeshParameters
 
 struct SwcNode
 {
+	int id = -1;
 	int type = 2;
 	Vec3 position;
 	double diameter = 0.0;
@@ -32,6 +33,8 @@ class SwcGraph
 public:
 	static SwcGraph Read(const std::filesystem::path& path);
 	void Write(const std::filesystem::path& path) const;
+	void WriteNormalized(const std::filesystem::path& path) const;
+	void WriteVisualizationVtp(const std::filesystem::path& path) const;
 	void RebuildChildren();
 	void Validate() const;
 

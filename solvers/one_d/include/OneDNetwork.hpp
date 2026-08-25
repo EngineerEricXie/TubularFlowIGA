@@ -2,6 +2,8 @@
 #define IGA_ONE_D_NETWORK_HPP
 
 #include "OneDConfig.hpp"
+#include "RadiusAnnotatedObj.hpp"
+#include "SkeletonOutput.hpp"
 
 #include <algorithm>
 #include <array>
@@ -55,6 +57,36 @@ struct OneDNetwork {
 	int cells = 0;
 };
 
+inline std::vector<SkeletonOutputNode> OneDSkeletonOutputNodes(
+	const OneDNetwork& network, double coordinate_scale)
+{
+	if (!(coordinate_scale > 0.0))
+		throw std::runtime_error("skeleton output coordinate scale must be positive");
+	std::vector<SkeletonOutputNode> result(network.nodes.size());
+	for (std::size_t i = 0; i < network.nodes.size(); ++i) {
+		const auto& source = network.nodes[i];
+		auto& target = result[i];
+		target.id = source.id;
+		target.type = source.type;
+		for (int axis = 0; axis < 3; ++axis)
+			target.position[static_cast<std::size_t>(axis)] =
+				source.position[static_cast<std::size_t>(axis)]*coordinate_scale;
+		target.radius = source.radius*coordinate_scale;
+		target.parent_id = source.parent_id;
+	}
+	return result;
+}
+
+inline void WriteOneDSkeletonFiles(const std::filesystem::path& directory,
+	const OneDNetwork& network, double length_scale_to_m)
+{
+	std::filesystem::create_directories(directory);
+	WriteNormalizedSkeletonSwc(directory/"skeleton_normalized.swc",
+		OneDSkeletonOutputNodes(network, 1.0/length_scale_to_m));
+	WriteSkeletonVtp(directory/"skeleton.vtp",
+		OneDSkeletonOutputNodes(network, 1.0));
+}
+
 inline double OneDDistance(const std::array<double, 3>& first,
 	const std::array<double, 3>& second)
 {
@@ -65,62 +97,82 @@ inline double OneDDistance(const std::array<double, 3>& first,
 }
 
 inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
-	double length_scale_to_m, int cells_per_segment, double dynamic_viscosity)
+	double length_scale_to_m, int cells_per_segment, double dynamic_viscosity,
+	int obj_root_node_id = 0)
 {
 	if (!(length_scale_to_m > 0.0) || cells_per_segment < 1 || !(dynamic_viscosity > 0.0))
 		throw std::runtime_error("invalid 1d network construction parameters");
-	std::ifstream input(path);
-	if (!input) throw std::runtime_error("cannot open SWC network: " + path.string());
 	OneDNetwork network;
-	std::string line;
-	int line_number = 0;
-	while (std::getline(input, line)) {
-		++line_number;
-		const auto first = line.find_first_not_of(" \t\r");
-		if (first == std::string::npos || line[first] == '#') continue;
-		std::istringstream row(line);
-		OneDNode node;
-		if (!(row >> node.id >> node.type >> node.position[0] >> node.position[1]
-			>> node.position[2] >> node.radius >> node.parent_id))
-			throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
-				+ ": expected seven SWC columns");
-		std::string extra;
-		if (row >> extra) throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
-			+ ": unexpected SWC column");
-		if (node.id < 0 || !std::isfinite(node.radius) || !(node.radius > 0.0))
-			throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
-				+ ": node id and radius must be valid");
-		for (double& coordinate : node.position) {
-			if (!std::isfinite(coordinate)) throw std::runtime_error("SWC coordinates must be finite");
-			coordinate *= length_scale_to_m;
+	if (IsRadiusAnnotatedObjPath(path)) {
+		const auto tree = ReadRadiusAnnotatedObj(path, obj_root_node_id);
+		network.root = tree.root;
+		for (const auto& source : tree.nodes) {
+			OneDNode node;
+			node.id = source.id;
+			node.type = 2;
+			node.position = source.position;
+			for (double& coordinate : node.position) coordinate *= length_scale_to_m;
+			node.radius = source.radius*length_scale_to_m;
+			node.parent = source.parent;
+			node.parent_id = source.parent < 0 ? -1
+				: tree.nodes[static_cast<std::size_t>(source.parent)].id;
+			node.children = source.children;
+			network.node_index.emplace(node.id, static_cast<int>(network.nodes.size()));
+			network.nodes.push_back(std::move(node));
 		}
-		node.radius *= length_scale_to_m;
-		if (!network.node_index.emplace(node.id, static_cast<int>(network.nodes.size())).second)
-			throw std::runtime_error("duplicate SWC node id " + std::to_string(node.id));
-		network.nodes.push_back(std::move(node));
-	}
-	if (network.nodes.empty()) throw std::runtime_error("SWC network is empty");
-
-	int roots = 0;
-	for (std::size_t i = 0; i < network.nodes.size(); ++i) {
-		auto& node = network.nodes[i];
-		if (node.parent_id == -1) {
-			network.root = static_cast<int>(i);
-			++roots;
-			continue;
+	} else {
+		std::ifstream input(path);
+		if (!input) throw std::runtime_error("cannot open SWC network: " + path.string());
+		std::string line;
+		int line_number = 0;
+		while (std::getline(input, line)) {
+			++line_number;
+			const auto first = line.find_first_not_of(" \t\r");
+			if (first == std::string::npos || line[first] == '#') continue;
+			std::istringstream row(line);
+			OneDNode node;
+			if (!(row >> node.id >> node.type >> node.position[0] >> node.position[1]
+				>> node.position[2] >> node.radius >> node.parent_id))
+				throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
+					+ ": expected seven SWC columns");
+			std::string extra;
+			if (row >> extra) throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
+				+ ": unexpected SWC column");
+			if (node.id < 1 || (node.parent_id != -1 && node.parent_id < 1)
+				|| !std::isfinite(node.radius) || !(node.radius > 0.0))
+				throw std::runtime_error(path.string() + ":" + std::to_string(line_number)
+					+ ": node id and radius must be valid");
+			for (double& coordinate : node.position) {
+				if (!std::isfinite(coordinate)) throw std::runtime_error("SWC coordinates must be finite");
+				coordinate *= length_scale_to_m;
+			}
+			node.radius *= length_scale_to_m;
+			if (!network.node_index.emplace(node.id, static_cast<int>(network.nodes.size())).second)
+				throw std::runtime_error("duplicate SWC node id " + std::to_string(node.id));
+			network.nodes.push_back(std::move(node));
 		}
-		const auto found = network.node_index.find(node.parent_id);
-		if (found == network.node_index.end())
-			throw std::runtime_error("SWC node " + std::to_string(node.id)
-				+ " references missing parent " + std::to_string(node.parent_id));
-		node.parent = found->second;
-		network.nodes[static_cast<std::size_t>(node.parent)].children.push_back(static_cast<int>(i));
+		if (network.nodes.empty()) throw std::runtime_error("SWC network is empty");
+		int roots = 0;
+		for (std::size_t i = 0; i < network.nodes.size(); ++i) {
+			auto& node = network.nodes[i];
+			if (node.parent_id == -1) {
+				network.root = static_cast<int>(i);
+				++roots;
+				continue;
+			}
+			const auto found = network.node_index.find(node.parent_id);
+			if (found == network.node_index.end())
+				throw std::runtime_error("SWC node " + std::to_string(node.id)
+					+ " references missing parent " + std::to_string(node.parent_id));
+			node.parent = found->second;
+			network.nodes[static_cast<std::size_t>(node.parent)].children.push_back(static_cast<int>(i));
+		}
+		if (roots != 1) throw std::runtime_error("SWC network must contain exactly one root");
 	}
-	if (roots != 1) throw std::runtime_error("SWC network must contain exactly one root");
 
 	std::vector<int> state(network.nodes.size(), 0);
 	std::function<void(int)> visit = [&](int index) {
-		if (state[static_cast<std::size_t>(index)] == 1) throw std::runtime_error("SWC network contains a cycle");
+		if (state[static_cast<std::size_t>(index)] == 1) throw std::runtime_error("skeleton network contains a cycle");
 		if (state[static_cast<std::size_t>(index)] == 2) return;
 		state[static_cast<std::size_t>(index)] = 1;
 		network.topological_nodes.push_back(index);
@@ -129,7 +181,7 @@ inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 	};
 	visit(network.root);
 	if (network.topological_nodes.size() != network.nodes.size())
-		throw std::runtime_error("SWC network contains nodes disconnected from the root");
+		throw std::runtime_error("skeleton network contains nodes disconnected from the root");
 
 	for (const int parent : network.topological_nodes) {
 		const auto& parent_node = network.nodes[static_cast<std::size_t>(parent)];
@@ -142,7 +194,7 @@ inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 			segment.child = child;
 			segment.length = OneDDistance(parent_node.position, child_node.position);
 			if (!(segment.length > 0.0))
-				throw std::runtime_error("SWC segment " + std::to_string(parent_node.id)
+				throw std::runtime_error("skeleton segment " + std::to_string(parent_node.id)
 					+ "->" + std::to_string(child_node.id) + " has zero length");
 			segment.radius0 = 0.5*(parent_node.radius+child_node.radius);
 			segment.baseline_radius0 = segment.radius0;
@@ -197,9 +249,9 @@ inline void ValidateOneDTopologyReferences(const OneDConfiguration& configuratio
 		for (const int id : boundary.node_ids) {
 			const auto found = network.node_index.find(id);
 			if (found == network.node_index.end())
-				throw std::runtime_error("1d boundary references unknown SWC node " + std::to_string(id));
+				throw std::runtime_error("1d boundary references unknown skeleton node " + std::to_string(id));
 			if (boundary.role == "inlet" && found->second != network.root)
-				throw std::runtime_error("1d inlet node must be the SWC root");
+				throw std::runtime_error("1d inlet node must be the skeleton root");
 			if (boundary.role == "outlet"
 				&& !network.nodes[static_cast<std::size_t>(found->second)].children.empty())
 				throw std::runtime_error("1d outlet node must be a leaf");
@@ -219,7 +271,7 @@ inline void ValidateOneDTopologyReferences(const OneDConfiguration& configuratio
 			const auto found = network.node_index.find(coefficient.first);
 			if (found == network.node_index.end()
 				|| network.nodes[static_cast<std::size_t>(found->second)].children.size() < 2)
-				throw std::runtime_error("junction coefficient must reference a branching SWC node");
+				throw std::runtime_error("junction coefficient must reference a branching skeleton node");
 		}
 	(void)configured_outlets;
 }
