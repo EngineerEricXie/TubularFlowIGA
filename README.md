@@ -28,23 +28,16 @@ database. CUDA configured transport supports one through eight scalar fields.
 
 ## Example results
 
-The hero image above is an actual two-rank CPU/PETSc solution on the connected
-`vascular_flow/iga_wordmark` pipe: 24,924 nodes, 22,140 IGA elements, and
-relative mass imbalance `9.79e-8`. The two connector arcs briefly pass behind
-the lettering in the z direction so that the `I`, `G`, and `A` strokes remain
-legible while forming one continuous three-dimensional pipe.
+The image above shows velocity magnitude from the connected
+`vascular_flow/iga_wordmark` example.
 
 | 3D vascular flow | Neuron transport |
 |---|---|
 | ![ParaView center slice of velocity magnitude in the Y-bifurcation vascular example](docs/images/vascular-y-bifurcation-velocity.png) | ![ParaView center slice of Nplus in the branched-neurite transport example](docs/images/neuron-branched-nplus.png) |
-| Y-bifurcation steady flow: 7,329 nodes, 6,300 elements, relative mass imbalance `8.36e-8`. | Branched neurite after two transport steps: 7,329 nodes, 88 Krylov iterations, coefficient L2 `29.6961`. |
+| Steady flow through a Y-bifurcation. | Two-field transport through a branched neurite. |
 
-Both images were rendered headlessly with ParaView 5.13.1 from public CPU
-examples run on two MPI ranks with PETSc 3.15.5. They show a center-plane,
-piecewise-linear visualization of solution coefficients on `controlmesh.vtk`;
-quantitative flow validation is evaluated from the packed IGA representation,
-not inferred from image pixels. Reproduction commands are in the
-[examples catalog](examples/README.md), and the exact run metrics are in the
+Reproduction commands are in the [examples catalog](examples/README.md), and
+numerical checks are recorded in the
 [public-example validation report](examples/VALIDATION.md).
 
 ## Pipeline
@@ -79,6 +72,35 @@ directory.
 
 See the [examples catalog](examples/README.md) for the input contract and case
 descriptions.
+
+## Install dependencies
+
+On Ubuntu or WSL Ubuntu, install the preprocessing and CPU build prerequisites
+with:
+
+```bash
+sudo apt update
+sudo apt install \
+  build-essential git \
+  libeigen3-dev metis \
+  openmpi-bin libopenmpi-dev \
+  libblas-dev liblapack-dev
+```
+
+After cloning the repository and entering its directory, check the selected
+backend:
+
+```bash
+./scripts/check_dependencies.sh preprocessing
+./scripts/check_dependencies.sh cpu       # requires PETSC_DIR
+./scripts/check_dependencies.sh cuda      # requires the CUDA Toolkit and nvcc
+```
+
+The CPU simulation executables additionally require PETSc built with the same
+MPI implementation used at runtime. CUDA compilation requires the CUDA Toolkit,
+while an NVIDIA GPU and compatible driver are needed only at runtime. See the
+[dependency and installation guide](docs/DEPENDENCIES.md) for PETSc setup,
+CUDA/Conda on WSL, RHEL-family systems, and Bridges-2.
 
 ## Five-minute preprocessing check
 
