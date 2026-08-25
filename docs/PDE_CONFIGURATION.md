@@ -5,6 +5,11 @@ describes fields, equation systems, time integration, and named boundary
 conditions in one file. Field names such as `tracer`, `oxygen`, or `Nplus` have
 no built-in numerical meaning.
 
+Schema version 3 adds required `dimension: "1d"|"3d"`. A v3/3d document uses
+the same systems as v2; v2 remains supported unchanged. A v3/1d document uses
+the native SWC-network flow, transport, physiology, and topological-boundary
+contract documented in the [native 1D guide](ONE_D.md).
+
 ## Fields and equation systems
 
 Each field has a unique `name` and a `kind`: `scalar`, `vector3`, or `pressure`.

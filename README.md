@@ -6,11 +6,11 @@
 
 # TubularFlowIGA
 
-TubularFlowIGA is a C++ isogeometric-analysis (IGA) pipeline for three-dimensional
-flow and transport in tubular and branching geometries. Starting from an SWC
-centerline, it generates a hexahedral control mesh, constructs the spline and
-Bezier representation, packs a partition-aware database, and solves on either
-MPI/PETSc CPUs or one CUDA GPU.
+TubularFlowIGA is a native C++ simulation toolkit for tubular and branching
+networks. It provides a direct SWC-to-1D vascular flow/transport path and a
+three-dimensional isogeometric-analysis (IGA) pipeline that generates a
+hexahedral control mesh, constructs the spline and Bezier representation,
+packs a partition-aware database, and solves on MPI/PETSc CPUs or one CUDA GPU.
 
 This is research software specialized for tube-like networks. It is not a
 general-purpose CFD package.
@@ -19,9 +19,9 @@ general-purpose CFD package.
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Rigid-wall steady and backward-Euler transient 3D incompressible Navier--Stokes; pulsatile inlet functions; pressure, R, RC, and RCR outlets | No compliant wall, FSI, or 1D vascular-network solver |
+| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; explicit Rusanov and PETSc implicit formulations; pressure, R, and RCR outlets; rigid-wall steady and transient 3D Navier--Stokes | 1D–3D coupling and FSI are not included; 3D walls remain rigid |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
-| Generic biological transport | One to many scalar advection--diffusion systems with linear coupling, volume sources, flux, Robin, and no-flux boundaries | Field names have no built-in physiology; VCA metabolism, blood-gas chemistry, and tissue models are not yet implemented |
+| Generic biological transport | 1D conservative multi-species transport with reaction, source, wall exchange, metabolism, blood-gas derived fields, and vasodilation; configurable 3D scalar transport | The physiology layer is a configurable reduced model, not patient calibration or tissue-resolved VCA |
 
 CPU and CUDA use the same `simulation_config.json` schema and packed `.ntiga`
 database. CUDA configured transport supports one through eight scalar fields.
@@ -56,10 +56,10 @@ SWC centerline
 
 ## Choose a first example
 
-Every runnable example contains exactly three committed inputs:
-`skeleton_initial.swc`, `mesh_parameter.txt`, and `simulation_config.json`.
-Generated meshes, databases, and results are written to a separate work
-directory.
+Every 3D runnable example contains `skeleton_initial.swc`,
+`mesh_parameter.txt`, and `simulation_config.json`. A native 1D example needs
+only the SWC and schema-v3 configuration. Generated meshes, databases, and
+results are written to a separate work directory.
 
 | Goal | Recommended case | Command |
 |---|---|---|
@@ -69,6 +69,9 @@ directory.
 | README showcase | Connected IGA wordmark | `./scripts/prepare_example.sh vascular_flow/iga_wordmark` |
 | First neuron run | Straight neurite | `./scripts/prepare_example.sh neuron_transport/straight_neurite` |
 | Branching neuron transport | Branched neurite | `./scripts/prepare_example.sh neuron_transport/branched_neurite` |
+| First native 1D run | Straight Poiseuille vessel | `./solvers/one_d/iga_1d examples/one_d/rigid_straight --check` |
+| Compliant 1D flow | Pulsatile Y-bifurcation | `./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation` |
+| 1D VCA-style transport | Six-species branching network | `./solvers/one_d/iga_1d examples/one_d/vca_transport` |
 
 See the [examples catalog](examples/README.md) for the input contract and case
 descriptions.
@@ -93,6 +96,7 @@ backend:
 ```bash
 ./scripts/check_dependencies.sh preprocessing
 ./scripts/check_dependencies.sh cpu       # requires PETSC_DIR
+./scripts/check_dependencies.sh one-d    # accepts PETSc pkg-config or PETSC_DIR
 ./scripts/check_dependencies.sh cuda      # requires the CUDA Toolkit and nvcc
 ```
 
@@ -101,6 +105,26 @@ MPI implementation used at runtime. CUDA compilation requires the CUDA Toolkit,
 while an NVIDIA GPU and compatible driver are needed only at runtime. See the
 [dependency and installation guide](docs/DEPENDENCIES.md) for PETSc setup,
 CUDA/Conda on WSL, RHEL-family systems, and Bridges-2.
+
+## Native 1D quick start
+
+The 1D path consumes only a rooted SWC centerline and schema-v3
+`simulation_config.json`; it does not run mesh generation, Python, FEniCS, or
+HexSim. Coordinates and radii are converted to SI using
+`geometry.length_scale_to_m`.
+
+```bash
+./scripts/check_dependencies.sh one-d
+make one-d-petsc
+
+./solvers/one_d/iga_1d examples/one_d/rigid_straight --check
+./solvers/one_d/iga_1d examples/one_d/rigid_straight \
+  --output-dir /tmp/tubularflowiga-1d-rigid
+```
+
+Open `/tmp/tubularflowiga-1d-rigid/profile_1d.pvd` in ParaView. For MPI and
+PETSc options, compliant formulations, transport, checkpoint/restart, SI units,
+and the Hex-to-schema-v3 field map, see the [native 1D guide](docs/ONE_D.md).
 
 ## Five-minute preprocessing check
 
@@ -215,6 +239,8 @@ make mesh-test
 make spline EIGEN_DIR=/path/to/eigen3
 make cpu
 make cpu-test
+make one-d-petsc
+make one-d-test
 
 make cpu-petsc \
   PETSC_DIR=/path/to/petsc \
@@ -230,14 +256,19 @@ legacy reference workflow.
 
 ## Create or modify a case
 
-1. Copy one complete directory from `examples/neuron_transport/` or
-   `examples/vascular_flow/` to a work or case directory outside the repository.
-2. Edit `skeleton_initial.swc` for the rooted centerline and radii.
-3. Edit `mesh_parameter.txt` for smoothing, segment length, and refinement.
-4. Edit `simulation_config.json` for fields, equations, time integration, and
+For 3D, copy one complete directory from `examples/neuron_transport/` or
+`examples/vascular_flow/` to a work directory, then:
+
+1. Edit `skeleton_initial.swc` for the rooted centerline and radii.
+2. Edit `mesh_parameter.txt` for smoothing, segment length, and refinement.
+3. Edit `simulation_config.json` for fields, equations, time integration, and
    named boundary conditions.
-5. Run the preparation pipeline, inspect positive Jacobians and boundary labels,
+4. Run the preparation pipeline, inspect positive Jacobians and boundary labels,
    then execute the matching solver.
+
+For 1D, copy a directory from `examples/one_d/`, edit its SWC and schema-v3
+configuration, then run `iga_1d CASE_DIR --check` before simulation. There is no
+`mesh_parameter.txt`, control-mesh generation, or `.ntiga` packing step.
 
 The mesh generator assigns wall label 0, inlet label 1, and terminal outlet
 labels starting at 2. Do not assume a branch label without checking
@@ -258,6 +289,7 @@ physically.
 - `meshgeneration/`: legacy MATLAB reference and template assets.
 - `preprocessing/spline/`: C++11 spline construction and Bezier extraction.
 - `solvers/cpu/`: C++17 packer, checks, MPI/PETSc flow, and transport.
+- `solvers/one_d/`: native C++17 SWC-network flow, transport, physiology, and PETSc solvers.
 - `solvers/cuda/`: FP64 single-GPU backend using the CPU database format.
 - `docs/`: installation, pipeline, configuration, and validation.
 
@@ -271,6 +303,7 @@ Large cases and generated results are intentionally not versioned.
 | Linux, WSL, PETSc, MPI, CUDA, and Bridges-2 setup | [Dependencies](docs/DEPENDENCIES.md) |
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
+| Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |
 | CUDA solver details | [CUDA solver README](solvers/cuda/README.md) |
@@ -288,14 +321,17 @@ are recorded in the [vascular example validation](examples/vascular_flow/VALIDAT
 
 Current scope limits are important when interpreting results:
 
-- vessel and neurite walls are geometrically rigid;
-- pulsatile rigid-wall flow is supported, but compliant-wall pulse-wave
-  propagation and FSI are not;
-- R, RC, and RCR outlets are zero-dimensional circuits, not a 1D flow solver;
-- generic scalar transport is not automatically a validated physiology model;
+- 3D vessel and neurite walls are geometrically rigid; 1D compliant wall laws
+  do not constitute 3D FSI;
+- 1D and 3D are independent paths with no real-time coupling;
+- 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
+  models, not tissue-resolved circulation;
+- the 1D physiology layer is configurable and reduced, not automatically a
+  patient-validated model;
 - the packed IGA geometry is normalized, so physical interpretation requires a
   documented dimensional scaling;
-- HexSim-style VCA RBC/PFC chemistry and metabolism are not implemented;
+- VCA-style metabolism and blood-gas derived fields are available in 1D, but
+  full RBC/PFC chemistry, tissue calibration, and parameter fitting are not;
 - neuron transport is not neuron electrophysiology.
 
 For shared clusters, run simulations on allocated compute resources rather

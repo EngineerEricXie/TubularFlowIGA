@@ -14,13 +14,16 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/bent_tube` | Curved rigid vessel | `blood_flow` |
 | Vascular flow | `vascular_flow/y_bifurcation` | One inlet and two independent outlets | `blood_flow` |
 | Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
+| Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
+| Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
+| Native 1D | `one_d/vca_transport` | Six-species transport, physiology, and vasodilation | `blood_flow_1d` + `vca_transport_1d` |
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
 inputs and is not a standalone geometry case.
 
 ## Common input contract
 
-Every runnable case directory contains exactly:
+Every 3D runnable case directory contains exactly:
 
 - `skeleton_initial.swc`: rooted centerline coordinates, radius, and parent;
 - `mesh_parameter.txt`: five control-mesh generation parameters;
@@ -30,6 +33,11 @@ The preparation pipeline generates all downstream files, including
 `controlmesh.vtk`, `initial_velocityfield.txt`, `bzmeshinfo.txt`, the spline
 cache, METIS partitions, and the `.ntiga` database. Do not commit these
 generated artifacts.
+
+Native 1D directories instead contain only `skeleton_initial.swc` and a
+schema-v3 `simulation_config.json`. Run them directly with `iga_1d`; they do not
+use `mesh_parameter.txt`, the preparation pipeline, or a packed database. See
+the [1D example guide](one_d/README.md).
 
 ## Prepare a case
 
@@ -126,5 +134,6 @@ Application-specific instructions:
 
 - [Neuron transport](neuron_transport/README.md)
 - [Vascular flow](vascular_flow/README.md)
+- [Native 1D flow and transport](one_d/README.md)
 - [Womersley validation](validation/womersley/README.md)
 - [Latest public-example validation](VALIDATION.md)

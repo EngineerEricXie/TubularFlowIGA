@@ -14,6 +14,7 @@ required only by the MPI CPU solvers. CUDA does not use PETSc.
 |---|---|---:|---:|
 | Preprocessing-only | GNU Make, C++ compiler, Eigen 3, OpenMP, METIS/`mpmetis` | No | No |
 | CPU-only solver | Preprocessing requirements, MPI, optimized PETSc with C++ | Yes | No |
+| Native 1D solver | C++17, OpenMP, MPI, PETSc; MUMPS recommended for multi-rank nonlinear solves | Yes | No |
 | CUDA-only solver | Preprocessing requirements, CUDA Toolkit and cuBLAS | No | Yes at runtime |
 
 The CPU and CUDA solvers consume the same packed `.ntiga` database. Preparing
@@ -26,6 +27,7 @@ Run the checker from the repository root:
 ```bash
 ./scripts/check_dependencies.sh preprocessing
 ./scripts/check_dependencies.sh cpu
+./scripts/check_dependencies.sh one-d
 ./scripts/check_dependencies.sh cuda
 ./scripts/check_dependencies.sh all
 ```
@@ -158,6 +160,21 @@ export PETSC_ARCH=arch-linux-c-opt
 make cpu-petsc PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH"
 ```
 
+`make cpu-petsc` also builds the native `solvers/one_d/iga_1d` executable. To
+build or test only the 1D subsystem, use:
+
+```bash
+./scripts/check_dependencies.sh one-d
+make one-d-petsc
+make one-d-test
+```
+
+The 1D Makefile first uses `pkg-config PETSc`, as supplied by many system PETSc
+packages. When pkg-config is unavailable, provide compatible `PETSC_CFLAGS` and
+`PETSC_LIBS`, or use the PETSc compiler/link flags from the selected
+installation. Multi-rank nonlinear tests use distributed MUMPS LU by default;
+include MUMPS in the PETSc build or provide alternate PETSc KSP/PC options.
+
 For an installed PETSc prefix whose configuration is directly under
 `$PETSC_DIR/lib/petsc/conf`, leave `PETSC_ARCH` unset:
 
@@ -188,6 +205,17 @@ conda create -n tubularflow-cuda -c nvidia cuda-toolkit=12.6
 conda run -n tubularflow-cuda nvcc --version
 conda run -n tubularflow-cuda make cuda CUDA_ARCHS=89
 ```
+
+For runtime, activate the environment and expose its CUDA shared libraries:
+
+```bash
+conda activate tubularflow-cuda
+export LD_LIBRARY_PATH="$CONDA_PREFIX/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
+./solvers/cuda/iga_cuda device-info
+```
+
+Without this library path, a successfully compiled Conda CUDA executable may
+still fail at startup with `libcublas.so.12: cannot open shared object file`.
 
 This is also appropriate for WSL when `nvidia-smi` already works but `nvcc`
 does not: the Windows NVIDIA driver is exposed to WSL, while `nvcc` is supplied
