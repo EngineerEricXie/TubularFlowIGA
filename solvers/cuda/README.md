@@ -156,6 +156,12 @@ Run the executable from the activated environment, or expose its `bin` and
 `targets/x86_64-linux/lib` directories through `PATH` and `LD_LIBRARY_PATH`.
 Do not install a second Linux NVIDIA driver inside WSL.
 
+~~~bash
+conda activate tubularflow-cuda
+export LD_LIBRARY_PATH="$CONDA_PREFIX/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
+./solvers/cuda/iga_cuda device-info
+~~~
+
 ## Run
 
 ~~~bash

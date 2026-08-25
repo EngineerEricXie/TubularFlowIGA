@@ -1,5 +1,34 @@
 # CUDA Validation
 
+## Schema-v3 integration regression
+
+After adding the native 1D subsystem and the schema-v3 dimension dispatcher,
+the unchanged 3D CUDA backend was rebuilt and rerun on 2026-08-25. The WSL host
+used an RTX 4080 SUPER (SM 89, 15.99 GiB), the `tubularflow-cuda` Conda
+environment, and `nvcc` 12.6.85. A clean SM 89 build completed without
+warnings. `device-info` and CUDA runtime execution required the environment's
+`targets/x86_64-linux/lib` directory in `LD_LIBRARY_PATH`.
+
+The source-only public straight-vessel and straight-neurite examples were
+freshly meshed and packed into separate 1,005-node, 720-element databases. Both
+device `mesh-check` runs reported `min(detJ)=9.0098909917245762e-5` and zero bad
+samples. The steady Navier--Stokes solve converged at Newton check 6 with no
+singular diagonal blocks. Relative to the two-rank PETSc result:
+
+```text
+velocity_relative_l2=1.9942021597698123e-10
+pressure_relative_l2=1.7826968415764227e-10
+relative_mass_imbalance=2.830318713527568e-7
+relative_divergence_theorem_error=1.4538127906482656e-7
+```
+
+The two-step configured `N0`/`Nplus` transport solve completed in 318 CUDA
+Krylov iterations with no singular diagonal blocks. Its combined CPU/CUDA
+relative L2 difference was `3.9995721083720065e-6`, below the `1e-5` gate, and
+node and field ordering matched. Restarting from the step-1 CUDA checkpoint
+changed the final field by `3.2091905463522199e-13` relative L2, below the
+`1e-12` restart gate.
+
 ## Transient and coupled gates
 
 The backward-Euler flow, time-indexed output, raw checkpoint/restart,
