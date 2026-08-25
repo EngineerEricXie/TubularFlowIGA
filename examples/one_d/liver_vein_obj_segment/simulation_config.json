@@ -1,0 +1,49 @@
+{
+  "schema_version": 3,
+  "dimension": "1d",
+  "geometry": {
+    "kind": "obj_network",
+    "file": "skeleton_initial.obj",
+    "length_scale_to_m": 0.001,
+    "root_node_id": 1
+  },
+  "fields": [
+    {"name": "area", "kind": "scalar"},
+    {"name": "flow_rate", "kind": "scalar"},
+    {"name": "pressure", "kind": "pressure"}
+  ],
+  "time": {"dt": 0.01, "steps": 3, "output_every": 1},
+  "temporal_functions": [
+    {"name": "inlet_flow", "kind": "constant", "units": "m3/s", "value": 1.0e-9}
+  ],
+  "equation_systems": [
+    {
+      "name": "blood_flow_1d",
+      "kind": "network_flow_1d",
+      "unknowns": ["area", "flow_rate", "pressure"],
+      "model": "rigid",
+      "scheme": "steady_poiseuille",
+      "dynamic_viscosity": 0.004,
+      "density": 1060.0,
+      "discretization": {"cells_per_segment": 2}
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "inlet",
+      "role": "inlet",
+      "node_ids": [1],
+      "conditions": [
+        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_flow"}
+      ]
+    },
+    {
+      "name": "outlet",
+      "role": "outlet",
+      "node_ids": [12],
+      "conditions": [
+        {"field": "pressure", "type": "pressure", "value": 0.0}
+      ]
+    }
+  ]
+}

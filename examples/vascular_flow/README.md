@@ -13,6 +13,7 @@ calibration.
 | `bent_tube` | Planar quarter bend | wall 0, inlet 1, outlet 2 |
 | `y_bifurcation` | One inlet splitting into two arms | wall 0, inlet 1, outlets 2 and 3 |
 | `iga_wordmark` | Connected IGA-letter showcase pipe | wall 0, inlet 1, outlet 2 |
+| `liver_vein_obj_segment` | Vertices 1–12 from the radius-annotated liver OBJ | wall 0, inlet 1, outlet 2 |
 
 Every configuration contains only the `blood_flow` system with velocity and
 pressure fields. Walls are no-slip, the generated inlet profile is multiplied
@@ -99,7 +100,8 @@ Build with `make cuda CUDA_ARCHS=YOUR_GPU_ARCH` and verify
 
 ## Customize
 
-- Change centerline coordinates and radii in `skeleton_initial.swc`.
+- Change centerline coordinates and radii in `skeleton_initial.swc` or the
+  radius-annotated `skeleton_initial.obj` used by `liver_vein_obj_segment`.
 - Change segment length, smoothing, or bifurcation refinement in
   `mesh_parameter.txt`.
 - Change viscosity, density, time integration, inlet profile scale, temporal

@@ -28,8 +28,10 @@ Open `profile_1d.pvd` in ParaView for the time series.
 | `rigid_straight` | rigid `steady_poiseuille` | Poiseuille pressure drop and equal inlet/outlet flow |
 | `compliant_bifurcation` | compliant `explicit_rusanov` | pulsatile A/Q update, junction loss, and two RCR states |
 | `vca_transport` | PETSc `pressure_network` | six conservative species, Robin oxygen exchange, metabolism, blood-gas arrays, and vasodilation |
+| `liver_vein_obj_segment` | rigid `steady_poiseuille` | radius-annotated line OBJ parsing on vertices 1–12 of the liver input |
 
-Generated CSV, VTP/PVD, summary, and checkpoint files belong in a separate
-output directory and are ignored by Git. The full schema, SI units, PETSc/MPI
-usage, restart contract, and manual Hex concept map are in
+Generated normalized SWC, skeleton VTP, simulation CSV, VTP/PVD, summary, and
+checkpoint files belong in a separate output directory and are ignored by
+Git. The full schema, SI units, PETSc/MPI usage, restart contract, and manual
+Hex concept map are in
 [`docs/ONE_D.md`](../../docs/ONE_D.md).

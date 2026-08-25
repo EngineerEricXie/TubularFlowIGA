@@ -17,6 +17,8 @@ work directory so that `examples/` stays small and reproducible.
 | Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
 | Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
 | Native 1D | `one_d/vca_transport` | Six-species transport, physiology, and vasodilation | `blood_flow_1d` + `vca_transport_1d` |
+| Native 1D | `one_d/liver_vein_obj_segment` | Radius-annotated OBJ skeleton input | `blood_flow_1d` |
+| Vascular flow | `vascular_flow/liver_vein_obj_segment` | 3D mesh and flow from the same OBJ excerpt | `blood_flow` |
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
 inputs and is not a standalone geometry case.
@@ -25,19 +27,19 @@ inputs and is not a standalone geometry case.
 
 Every 3D runnable case directory contains exactly:
 
-- `skeleton_initial.swc`: rooted centerline coordinates, radius, and parent;
+- `skeleton_initial.swc` or `skeleton_initial.obj`: centerline coordinates and radius;
 - `mesh_parameter.txt`: five control-mesh generation parameters;
 - `simulation_config.json`: schema-v2 fields, equations, time, and boundaries.
 
 The preparation pipeline generates all downstream files, including
-`controlmesh.vtk`, `initial_velocityfield.txt`, `bzmeshinfo.txt`, the spline
-cache, METIS partitions, and the `.ntiga` database. Do not commit these
-generated artifacts.
+`skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, `controlmesh.vtk`,
+`initial_velocityfield.txt`, `bzmeshinfo.txt`, the spline cache, METIS
+partitions, and the `.ntiga` database. Do not commit these generated artifacts.
 
-Native 1D directories instead contain only `skeleton_initial.swc` and a
-schema-v3 `simulation_config.json`. Run them directly with `iga_1d`; they do not
-use `mesh_parameter.txt`, the preparation pipeline, or a packed database. See
-the [1D example guide](one_d/README.md).
+Native 1D directories instead contain only `skeleton_initial.swc` or
+`skeleton_initial.obj` and a schema-v3 `simulation_config.json`. Run them
+directly with `iga_1d`; they do not use `mesh_parameter.txt`, the preparation
+pipeline, or a packed database. See the [1D example guide](one_d/README.md).
 
 ## Prepare a case
 
