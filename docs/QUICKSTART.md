@@ -126,6 +126,8 @@ Its flow solver writes a VTK file next to the requested text output.
 
 | File | Meaning |
 |---|---|
+| `skeleton_normalized.swc` | Validated, explicitly rooted skeleton |
+| `skeleton.vtp` | ParaView centerline with radius and topology arrays |
 | `controlmesh.vtk` | Labeled hexahedral control mesh |
 | `bzmesh.vtk` | Bezier visualization mesh |
 | `*.ntiga` | Packed binary database consumed by CPU and CUDA |

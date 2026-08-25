@@ -41,9 +41,9 @@ working site-specific `-ksp_*`/`-pc_*` configuration. Explicit flow and
 multi-species updates use OpenMP where the problem size benefits; one MPI rank
 is normally sufficient for the small explicit examples.
 
-## SWC and SI contract
+## Skeleton and SI contract
 
-The geometry block is:
+An SWC geometry block is:
 
 ```json
 "geometry": {
@@ -60,6 +60,12 @@ contiguous. Coordinates, segment lengths, and radii must be finite and
 positive after multiplication by `length_scale_to_m`. Zero-length segments,
 cycles, duplicate IDs, missing parents, and invalid configured boundary IDs are
 rejected before simulation.
+
+Radius-annotated line OBJ is selected with `kind: "obj_network"`. Its `v`
+records carry `x y z radius auxiliary auxiliary`, while `l` records define the
+undirected tree. `root_node_id` optionally selects a 1-based OBJ vertex;
+otherwise the largest-radius terminal is the root. See the strict
+[skeleton-format contract](SKELETON_FORMATS.md).
 
 The 1D schema uses SI for flow:
 
@@ -188,6 +194,10 @@ strict size checks.
 All generated files go to `--output-dir` (default:
 `CASE_DIR/results/one_d/SYSTEM`) and should not be committed:
 
+- `skeleton_normalized.swc`: validated, explicitly rooted skeleton in the
+  source coordinate unit;
+- `skeleton.vtp`: static skeleton in solver SI coordinates, including radius,
+  topology, role, segment, and branch arrays;
 - `flow_timeseries.csv`: inlet/outlet flow, sampled storage/continuity
   diagnostic, pressure drop, and area bounds;
 - `branch_timeseries.csv`: segment flow, endpoint pressure, and resistance;
@@ -198,8 +208,9 @@ All generated files go to `--output-dir` (default:
   RSS;
 - `physiology_fields.json` with solved/derived/skipped status.
 
-Open `profile_1d.pvd` in ParaView, choose a point-data array, and use **Tube**
-if a finite-width centerline rendering is desired.
+Open `skeleton.vtp` for the static network or `profile_1d.pvd` for simulated
+fields. Choose a point-data array and use **Tube** with `radius` as an absolute
+scalar when a finite-width skeleton rendering is desired.
 
 ## Hex/FEniCS concept map
 

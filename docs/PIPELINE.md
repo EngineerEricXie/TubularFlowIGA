@@ -2,8 +2,9 @@
 
 ## 1. Generate the control mesh
 
-A case directory starts with `skeleton_initial.swc` and
-`mesh_parameter.txt`. The parameter file contains, in order:
+A case directory starts with exactly one `skeleton_initial.swc` or
+radius-annotated `skeleton_initial.obj`, plus `mesh_parameter.txt`. The
+parameter file contains, in order:
 
 1. noise-smoothing iterations;
 2. bifurcation-node smoothing ratio;
@@ -20,11 +21,17 @@ make mesh-test
   "$CASE_DIR" meshgeneration/template
 ```
 
-It writes `skeleton_smooth.swc`, `controlmesh.vtk`, and
-`initial_velocityfield.txt`. The implementation parses SWC directly, evaluates
-its own cubic B-splines, constructs tube and bifurcation hexahedra, and has no
-MATLAB, TREES, Eigen, or VTK-library dependency. It currently requires a tree
-whose nonterminal nodes have exactly two children.
+After strict parsing and topology validation, it writes
+`skeleton_normalized.swc` and `skeleton.vtp`. OBJ is thereby converted to an
+explicitly rooted SWC before smoothing continues. Valid SWC follows the same
+normalization path. The original input is never overwritten.
+
+The pipeline then writes `skeleton_smooth.swc`, `controlmesh.vtk`, and
+`initial_velocityfield.txt`. The implementation evaluates its own cubic
+B-splines, constructs tube and bifurcation hexahedra, and has no MATLAB, TREES,
+Eigen, or VTK-library dependency. A 3D run requires a tree whose nodes have at
+most two children after root orientation. It stops before producing a mesh and
+reports the offending node ID and child count if this constraint is violated.
 
 The smoothed SWC is intentionally written to eight decimal places and read
 back before meshing. This preserves the legacy file-interface behavior at

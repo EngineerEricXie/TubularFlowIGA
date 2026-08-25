@@ -1,11 +1,13 @@
 # C++ Control-Mesh Generator
 
 This directory replaces the MATLAB/TREES preprocessing stage with a standalone
-C++17 program. It reads an SWC centerline, smooths and resamples each branch,
-and writes the hexahedral control mesh consumed by the existing spline stage.
-All spline evaluation, frame transport, bifurcation assembly, element-quality
-checks, and VTK output are implemented here without a high-level geometry
-library.
+C++17 program. It reads an SWC or radius-annotated line-OBJ centerline, smooths
+and resamples each branch, and writes the hexahedral control mesh consumed by
+the existing spline stage. All spline evaluation, frame transport, bifurcation
+assembly, element-quality checks, and VTK output are implemented here without a
+high-level geometry library. See the repository
+[skeleton-format contract](../../docs/SKELETON_FORMATS.md) for the exact input
+records and validation rules.
 
 ## Build and Test
 
@@ -22,8 +24,9 @@ filesystem library is built in.
 
 ## Run a Case
 
-Create a case directory containing `skeleton_initial.swc` and
-`mesh_parameter.txt`, then run from the repository root:
+Create a case directory containing exactly one `skeleton_initial.swc` or
+`skeleton_initial.obj`, plus `mesh_parameter.txt`, then run from the repository
+root:
 
 ```bash
 ./preprocessing/mesh/tubular_mesh pipeline \
@@ -33,14 +36,21 @@ Create a case directory containing `skeleton_initial.swc` and
 The final argument is the minimum accepted scaled Jacobian and is optional.
 The command writes:
 
+- `skeleton_normalized.swc`: strictly validated, explicitly rooted skeleton;
+- `skeleton.vtp`: ParaView line data with radius and topology arrays;
 - `skeleton_smooth.swc`: smoothed and resampled centerline;
 - `controlmesh.vtk`: labeled eight-node control elements;
 - `initial_velocityfield.txt`: branch-aligned initial velocities.
 
+OBJ input is accepted only when it follows the documented radius-annotated
+line convention. Surface faces and other OBJ records are rejected. During 3D
+preparation, a node with three or more oriented children is rejected before
+mesh generation, with its node ID and child count in the error.
+
 Individual stages are also available:
 
 ```bash
-tubular_mesh smooth INPUT.swc mesh_parameter.txt OUTPUT.swc
+tubular_mesh smooth INPUT.swc|INPUT.obj mesh_parameter.txt OUTPUT.swc
 tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR \
   controlmesh.vtk initial_velocityfield.txt MIN_SCALED_J
 ```

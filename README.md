@@ -43,7 +43,7 @@ numerical checks are recorded in the
 ## Pipeline
 
 ```text
-SWC centerline
+SWC or radius-annotated line-OBJ centerline
   -> C++ smoothing and hexahedral control mesh
   -> controlmesh.vtk
   -> C++ spline and Bezier extraction
@@ -56,10 +56,11 @@ SWC centerline
 
 ## Choose a first example
 
-Every 3D runnable example contains `skeleton_initial.swc`,
-`mesh_parameter.txt`, and `simulation_config.json`. A native 1D example needs
-only the SWC and schema-v3 configuration. Generated meshes, databases, and
-results are written to a separate work directory.
+Every 3D runnable example contains `skeleton_initial.swc` or
+`skeleton_initial.obj`, plus `mesh_parameter.txt` and
+`simulation_config.json`. A native 1D example needs only the skeleton and
+schema-v3 configuration. Generated meshes, databases, and results are written
+to a separate work directory.
 
 | Goal | Recommended case | Command |
 |---|---|---|
@@ -108,9 +109,9 @@ CUDA/Conda on WSL, RHEL-family systems, and Bridges-2.
 
 ## Native 1D quick start
 
-The 1D path consumes only a rooted SWC centerline and schema-v3
-`simulation_config.json`; it does not run mesh generation, Python, FEniCS, or
-HexSim. Coordinates and radii are converted to SI using
+The 1D path consumes only a rooted SWC or radius-annotated line-OBJ centerline
+and schema-v3 `simulation_config.json`; it does not run mesh generation,
+Python, FEniCS, or HexSim. Coordinates and radii are converted to SI using
 `geometry.length_scale_to_m`.
 
 ```bash
@@ -151,6 +152,8 @@ solver commands.
 
 The prepared directory contains, among other generated files:
 
+- `skeleton_normalized.swc`: validated, rooted canonical skeleton;
+- `skeleton.vtp`: centerline, radius, topology, and branch data for ParaView;
 - `controlmesh.vtk`: labeled hexahedral control mesh;
 - `bzmesh.vtk` and `bzmeshinfo.txt`: Bezier visualization and extraction data;
 - `initial_velocityfield.txt`: generated spatial velocity profile;
@@ -259,7 +262,7 @@ legacy reference workflow.
 For 3D, copy one complete directory from `examples/neuron_transport/` or
 `examples/vascular_flow/` to a work directory, then:
 
-1. Edit `skeleton_initial.swc` for the rooted centerline and radii.
+1. Edit `skeleton_initial.swc` or `skeleton_initial.obj` for the centerline and radii.
 2. Edit `mesh_parameter.txt` for smoothing, segment length, and refinement.
 3. Edit `simulation_config.json` for fields, equations, time integration, and
    named boundary conditions.
@@ -304,6 +307,7 @@ Large cases and generated results are intentionally not versioned.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
+| SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |
 | CUDA solver details | [CUDA solver README](solvers/cuda/README.md) |
