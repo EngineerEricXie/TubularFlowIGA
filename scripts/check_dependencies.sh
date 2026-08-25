@@ -53,6 +53,27 @@ check_cuda() {
 	have_command "${NVCC:-nvcc}"
 }
 
+check_one_d() {
+	have_command "${MPICXX:-mpicxx}"
+	if "${CXX:-g++}" -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null \
+		| grep -Eq '^#define __cplusplus 201703L$'; then
+		pass "C++17 compiler mode"
+	else
+		fail "C++17 compiler support"
+	fi
+	if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists PETSc; then
+		pass "PETSc pkg-config: $(pkg-config --modversion PETSc)"
+	else
+		check_cpu
+	fi
+	if "${CXX:-g++}" -fopenmp -dM -E -x c++ /dev/null 2>/dev/null \
+		| grep -q '^#define _OPENMP '; then
+		pass "OpenMP compiler flag: -fopenmp"
+	else
+		fail "OpenMP compiler support"
+	fi
+}
+
 case "$component" in
 	preprocessing)
 		check_base
@@ -68,6 +89,10 @@ case "$component" in
 		check_preprocessing
 		check_cuda
 		;;
+	one-d)
+		check_base
+		check_one_d
+		;;
 	all)
 		check_base
 		check_preprocessing
@@ -75,7 +100,7 @@ case "$component" in
 		check_cuda
 		;;
 	*)
-		printf 'usage: %s preprocessing|cpu|cuda|all\n' "$0" >&2
+		printf 'usage: %s preprocessing|cpu|one-d|cuda|all\n' "$0" >&2
 		exit 2
 		;;
 esac

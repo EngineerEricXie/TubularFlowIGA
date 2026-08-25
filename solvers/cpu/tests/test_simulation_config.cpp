@@ -63,6 +63,14 @@ int main()
 		]
 	})json";
 	const auto configuration = iga::ParseSimulationConfiguration(json);
+	auto v3_json = json;
+	const auto version_position = v3_json.find("\"schema_version\": 2,");
+	assert(version_position != std::string::npos);
+	v3_json.replace(version_position, std::string("\"schema_version\": 2,").size(),
+		"\"schema_version\": 3, \"dimension\": \"3d\",");
+	const auto v3_configuration = iga::ParseSimulationConfiguration(v3_json);
+	assert(v3_configuration.schema_version == 3);
+	assert(v3_configuration.dimension == "3d");
 	assert(configuration.fields.size() == 4);
 	assert(configuration.equation_systems.size() == 2);
 	assert(configuration.equation_systems[0].density == 1060.0);

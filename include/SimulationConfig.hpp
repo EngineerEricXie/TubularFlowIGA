@@ -107,6 +107,7 @@ struct TimeDefinition {
 
 struct SimulationConfiguration {
 	int schema_version = 2;
+	std::string dimension = "3d";
 	std::vector<FieldDefinition> fields;
 	std::vector<EquationSystemDefinition> equation_systems;
 	std::vector<NamedBoundaryDefinition> boundaries;
@@ -219,12 +220,18 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	using namespace simulation_detail;
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
-	RequireKnownKeys(root, {"schema_version", "fields", "equation_systems", "boundaries",
+	RequireKnownKeys(root, {"schema_version", "dimension", "fields", "equation_systems", "boundaries",
 		"time", "temporal_functions", "velocity_sources"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
-	if (configuration.schema_version != 2)
-		throw std::runtime_error("simulation_config.json: only schema_version 2 is supported");
+	const auto* dimension = Find(root, "dimension");
+	if (configuration.schema_version == 2) {
+		if (dimension)
+			throw std::runtime_error("simulation_config.json: schema_version 2 does not accept dimension");
+	} else if (configuration.schema_version == 3) {
+		if (!dimension || RequireString(*dimension, "dimension") != "3d")
+			throw std::runtime_error("simulation_config.json: schema_version 3 3d configuration requires dimension '3d'");
+	} else throw std::runtime_error("simulation_config.json: supported schema versions are 2 and 3");
 
 	const auto& fields = RequireArray(Required(root, "fields", "root"), "fields");
 	std::set<std::string> field_names;

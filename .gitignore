@@ -29,6 +29,9 @@
 /solvers/cpu/outlet_model_test
 /solvers/cpu/transport_checkpoint_test
 /solvers/cpu/womersley_reference_test
+/solvers/one_d/iga_1d
+/solvers/one_d/one_d_core_test
+/solvers/one_d/one_d_petsc_test
 /solvers/cuda/iga_cuda
 
 # Generated databases, results, and scheduler output
