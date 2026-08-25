@@ -39,6 +39,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--title", required=True)
     parser.add_argument("--subtitle", default="CPU / MPI / PETSc")
     parser.add_argument("--legend", default="")
+    parser.add_argument(
+        "--slice-z",
+        type=float,
+        help="z coordinate of the rendered slice (default: mesh-bounds center)",
+    )
     parser.add_argument("--width", type=int, default=1400)
     parser.add_argument("--height", type=int, default=800)
     return parser.parse_args()
@@ -177,7 +182,14 @@ def render(
 
     slice_filter = Slice(registrationName="Center plane", Input=producer)
     slice_filter.SliceType = "Plane"
-    slice_filter.SliceType.Origin = center
+    slice_origin = list(center)
+    if arguments.slice_z is not None:
+        if arguments.slice_z < bounds[4] or arguments.slice_z > bounds[5]:
+            raise RuntimeError(
+                f"slice z={arguments.slice_z} is outside mesh bounds [{bounds[4]}, {bounds[5]}]"
+            )
+        slice_origin[2] = arguments.slice_z
+    slice_filter.SliceType.Origin = slice_origin
     slice_filter.SliceType.Normal = [0.0, 0.0, 1.0]
     slice_display = Show(slice_filter, view)
     slice_display.Representation = "Surface"

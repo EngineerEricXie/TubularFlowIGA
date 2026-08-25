@@ -13,6 +13,7 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/straight_tube` | Smallest rigid 3D flow case | `blood_flow` |
 | Vascular flow | `vascular_flow/bent_tube` | Curved rigid vessel | `blood_flow` |
 | Vascular flow | `vascular_flow/y_bifurcation` | One inlet and two independent outlets | `blood_flow` |
+| Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
 inputs and is not a standalone geometry case.
@@ -99,6 +100,20 @@ pvbatch --force-offscreen-rendering scripts/render_example.py \
 The render is a piecewise-linear display of IGA coefficients on the control
 mesh. Use solver validation utilities and IGA quadrature for quantitative
 claims. The committed gallery images were produced with ParaView 5.13.1.
+
+The README hero uses a specified `z=0` slice because its connector arcs pass
+behind the visible lettering:
+
+```bash
+pvbatch --force-offscreen-rendering scripts/render_example.py \
+  --kind flow \
+  --mesh "$IGA_WORK/controlmesh.vtk" \
+  --result "$IGA_WORK/velocity-cpu.txt" \
+  --output "$IGA_WORK/iga-wordmark-flow.png" \
+  --slice-z 0 \
+  --title "TubularFlowIGA" \
+  --legend "Velocity magnitude"
+```
 
 ## Keep or remove generated data
 

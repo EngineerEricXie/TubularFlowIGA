@@ -12,12 +12,42 @@ calibration.
 | `straight_tube` | Short constant-radius vessel | wall 0, inlet 1, outlet 2 |
 | `bent_tube` | Planar quarter bend | wall 0, inlet 1, outlet 2 |
 | `y_bifurcation` | One inlet splitting into two arms | wall 0, inlet 1, outlets 2 and 3 |
+| `iga_wordmark` | Connected IGA-letter showcase pipe | wall 0, inlet 1, outlet 2 |
 
 Every configuration contains only the `blood_flow` system with velocity and
 pressure fields. Walls are no-slip, the generated inlet profile is multiplied
-by scale `0.01`, and outlets use zero natural pressure traction. The viscosity
-and density values are numerical example parameters, not patient-specific
-blood calibration.
+by scale `0.01` in the three simple geometries, and outlets use zero natural
+pressure traction. The wordmark instead uses scale `0.005` and density `1e-5`
+as a Stokes-limit visualization case. These values are numerical example
+parameters, not patient-specific blood calibration.
+
+## Run the README wordmark
+
+The wordmark is larger than the quick-start cases. Its two connector arcs move
+behind the lettering in the z direction, producing one continuous 3D pipe
+without planar self-intersections.
+
+```bash
+IGA_WORK="$(mktemp -d /tmp/tubularflowiga-iga-wordmark.XXXXXX)"
+RANKS=2 ./scripts/prepare_example.sh \
+  vascular_flow/iga_wordmark "$IGA_WORK"
+IGA_DB="$IGA_WORK/iga_wordmark-2.ntiga"
+
+PETSC_OPTIONS="-ksp_type fgmres -ksp_gmres_restart 200 \
+-pc_type asm -pc_asm_overlap 2 -sub_pc_type ilu \
+-sub_pc_factor_levels 1" \
+mpiexec -np 2 ./solvers/cpu/iga_navier_stokes \
+  "$IGA_DB" "$IGA_WORK" --max-newton 6 \
+  --output "$IGA_WORK/velocity-cpu.txt"
+
+./solvers/cpu/iga_flow_validate \
+  "$IGA_DB" "$IGA_WORK/velocity-cpu.txt"
+```
+
+The validated 2026-08-25 run used 24,924 nodes and 22,140 elements, converged
+in 1,304 total Krylov iterations, and reached relative mass imbalance
+`9.79398e-8`. See the [public validation report](../VALIDATION.md) for the
+remaining norms and timing.
 
 Spline extraction normalizes the domain coordinates before packing. Treat the
 committed values as a numerical smoke configuration; a physiological study

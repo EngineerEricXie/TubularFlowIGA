@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="docs/images/iga-wordmark-flow.png"
+       alt="ParaView rendering of velocity magnitude through a connected pipe spelling IGA"
+       width="100%">
+</p>
+
 # TubularFlowIGA
 
 TubularFlowIGA is a C++ isogeometric-analysis (IGA) pipeline for three-dimensional
@@ -21,6 +27,12 @@ CPU and CUDA use the same `simulation_config.json` schema and packed `.ntiga`
 database. CUDA configured transport supports one through eight scalar fields.
 
 ## Example results
+
+The hero image above is an actual two-rank CPU/PETSc solution on the connected
+`vascular_flow/iga_wordmark` pipe: 24,924 nodes, 22,140 IGA elements, and
+relative mass imbalance `9.79e-8`. The two connector arcs briefly pass behind
+the lettering in the z direction so that the `I`, `G`, and `A` strokes remain
+legible while forming one continuous three-dimensional pipe.
 
 | 3D vascular flow | Neuron transport |
 |---|---|
@@ -61,6 +73,7 @@ directory.
 | First vascular run | Straight rigid vessel | `./scripts/prepare_example.sh vascular_flow/straight_tube` |
 | Curved vascular geometry | Planar bend | `./scripts/prepare_example.sh vascular_flow/bent_tube` |
 | Branching vascular flow | Symmetric bifurcation | `./scripts/prepare_example.sh vascular_flow/y_bifurcation` |
+| README showcase | Connected IGA wordmark | `./scripts/prepare_example.sh vascular_flow/iga_wordmark` |
 | First neuron run | Straight neurite | `./scripts/prepare_example.sh neuron_transport/straight_neurite` |
 | Branching neuron transport | Branched neurite | `./scripts/prepare_example.sh neuron_transport/branched_neurite` |
 
