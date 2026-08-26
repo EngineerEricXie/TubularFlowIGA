@@ -79,6 +79,38 @@ natural boundary force `-p n`; unlike pressure Dirichlet, it retains all
 continuity rows. R/RC/RCR outlet models update this same traction through their
 3D/0D fixed-point coupling.
 
+### 3D VCA port contract
+
+Schema-v3 3D cases may declare the physical VCA ports explicitly. This avoids
+assuming that a particular mesh label is an inlet or that every other label is
+an outlet:
+
+```json
+"coupling": {
+  "three_d_ports": {"inlet_label": 1, "outlet_labels": [2, 3]}
+}
+```
+
+The inlet must have an `initial_velocityfield.txt` velocity Dirichlet profile;
+the bridge scales that profile to the signed SI pump flow. The listed outlets
+are the only faces eligible for conservative return aggregation.
+
+`iga_navier_stokes` supports this contract for CPU backward-Euler
+`vca_closed_loop`. It advances the pump-controlled flow step, then advances
+exactly one in-memory `linear_transport` system with the new flow velocity.
+All reservoir species must be transported fields and must have inlet Dirichlet
+conditions on the declared VCA inlet. Outlet flow, area-averaged pressure, and
+outward species fluxes are MPI-reduced before the external circuit advances.
+
+The runner writes `coupling_manifest.json` next to `--output`, or to
+`CASE_DIR/results/vca_flow/` without an output path. The initial implementation
+requires `velocity_source: "prescribed"` because it consumes the in-memory
+flow state rather than a velocity-file series. Checkpoint/restart remains
+rejected until flow, transport, outlet, and reservoir state share one
+checkpoint. CUDA and 3D VCA replay/open-loop modes remain unsupported.
+Native `iga_1d` remains the more complete VCA backend while those limitations
+are removed.
+
 ## Time-resolved velocity sources
 
 CPU configured transport can replace the built-in `prescribed` velocity with a

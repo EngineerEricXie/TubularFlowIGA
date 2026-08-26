@@ -31,7 +31,16 @@ int main()
 	assert(std::abs(interior_basis.physical_coordinate[2]-0.4) < 2e-13);
 	assert(std::abs(iga::IntegrateBoundaryFlow(element, 2, state)-2.0) < 2e-13);
 	assert(std::abs(iga::IntegrateBoundaryFlow(element, 4, state)+2.0) < 2e-13);
+	for (auto& node : state) node[3] = 5.0;
+	const auto pressure_area = iga::IntegrateBoundaryScalarAndArea(element, 2, state);
+	assert(std::abs(pressure_area[0]-5.0) < 2e-13);
+	assert(std::abs(pressure_area[1]-1.0) < 2e-13);
+	for (auto& node : state) node[3] = 0.0;
 	assert(std::abs(iga::IntegrateVolumeDivergence(element, state)) < 2e-13);
+	assert(std::abs(iga::IntegrateBoundarySpeciesFlux(element, 2, state,
+		std::vector<double>(64, 3.0))-6.0) < 2e-13);
+	assert(std::abs(iga::IntegrateBoundarySpeciesFlux(element, 4, state,
+		std::vector<double>(64, 3.0))+6.0) < 2e-13);
 	for (std::size_t node = 0; node < state.size(); ++node)
 		state[node] = {element.bezier_points[node][0], 0.0, 0.0, 0.0};
 	const auto linear_surface = iga::IntegrateBoundaryFlow(element, 2, state)

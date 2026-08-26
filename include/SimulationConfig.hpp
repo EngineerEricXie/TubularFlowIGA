@@ -2,6 +2,7 @@
 #define IGA_SIMULATION_CONFIG_HPP
 
 #include "CaseConfig.hpp"
+#include "CouplingConfig.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -115,6 +116,8 @@ struct PhysiologyDefinition {
 	double hemoglobin_g_dl = 15.0;
 	double p50_mmhg = 26.8;
 	double hill_exponent = 2.7;
+	double gas_molar_volume_ml_mmol = 22.4;
+	OxygenTransportState oxygen_state = OxygenTransportState::Dissolved;
 	bool vasodilation = false;
 	std::string vasodilator_field = "vasodilator";
 	double emax_radius_fraction = 0.0;
@@ -133,6 +136,7 @@ struct SimulationConfiguration {
 	std::vector<VelocitySourceDefinition> velocity_sources;
 	TimeDefinition time;
 	PhysiologyDefinition physiology;
+	CouplingDefinition coupling;
 };
 
 struct CompiledTerm {
@@ -240,7 +244,8 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
 	RequireKnownKeys(root, {"schema_version", "dimension", "fields", "equation_systems", "boundaries",
-		"time", "temporal_functions", "velocity_sources", "physiology"}, "root");
+		"time", "temporal_functions", "velocity_sources", "physiology",
+		"simulation_scope", "perfusate", "external_circuit", "coupling"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	const auto* dimension = Find(root, "dimension");
@@ -267,6 +272,25 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		configuration.fields.push_back(std::move(field));
 	}
 	if (configuration.fields.empty()) throw std::runtime_error("simulation_config.json: fields cannot be empty");
+	configuration.coupling = ParseCouplingDefinition(root);
+	if (Find(root, "perfusate")) {
+		configuration.physiology.enabled = true;
+		configuration.physiology.oxygen_capacity = true;
+		configuration.physiology.oxygen_state
+			= configuration.coupling.perfusate.oxygen_state;
+		configuration.physiology.hematocrit_percent
+			= configuration.coupling.perfusate.oxygen.hematocrit_percent;
+		configuration.physiology.oxygen_solubility
+			= configuration.coupling.perfusate.oxygen.oxygen_solubility_ml_dl_mmhg;
+		configuration.physiology.hemoglobin_g_dl
+			= configuration.coupling.perfusate.oxygen.hemoglobin_g_dl;
+		configuration.physiology.p50_mmhg
+			= configuration.coupling.perfusate.oxygen.p50_mmhg;
+		configuration.physiology.hill_exponent
+			= configuration.coupling.perfusate.oxygen.hill_exponent;
+		configuration.physiology.gas_molar_volume_ml_mmol
+			= configuration.coupling.perfusate.oxygen.gas_molar_volume_ml_mmol;
+	}
 
 	const auto& time = RequireObject(Required(root, "time", "root"), "time");
 	RequireKnownKeys(time, {"dt", "steps"}, "time");
@@ -531,25 +555,32 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		}
 		if (const auto* oxygen = Find(object, "oxygen_capacity")) {
 			const auto& item = RequireObject(*oxygen, "physiology.oxygen_capacity");
-			RequireKnownKeys(item, {"enabled", "hematocrit_percent", "oxygen_solubility",
-				"hemoglobin_g_dl", "p50_mmhg", "hill_exponent"}, "physiology.oxygen_capacity");
+			RequireKnownKeys(item, {"enabled", "oxygen_state", "hematocrit_percent", "oxygen_solubility",
+				"hemoglobin_g_dl", "p50_mmhg", "hill_exponent", "gas_molar_volume_ml_mmol"}, "physiology.oxygen_capacity");
 			auto number = [&](const char* name, double fallback) {
 				const auto* value = Find(item, name);
 				return value ? RequireNumber(*value, std::string("physiology.oxygen_capacity.")+name) : fallback;
 			};
 			configuration.physiology.oxygen_capacity = Find(item, "enabled")
 				? RequireBoolean(*Find(item, "enabled"), "physiology.oxygen_capacity.enabled") : true;
+			configuration.physiology.oxygen_state = ParseOxygenTransportState(
+				Find(item, "oxygen_state")
+					? RequireString(*Find(item, "oxygen_state"), "physiology.oxygen_capacity.oxygen_state")
+					: OxygenTransportStateName(configuration.physiology.oxygen_state));
 			configuration.physiology.hematocrit_percent = number("hematocrit_percent", 0.0);
 			configuration.physiology.oxygen_solubility = number("oxygen_solubility", 0.0031);
 			configuration.physiology.hemoglobin_g_dl = number("hemoglobin_g_dl", 15.0);
 			configuration.physiology.p50_mmhg = number("p50_mmhg", 26.8);
 			configuration.physiology.hill_exponent = number("hill_exponent", 2.7);
+			configuration.physiology.gas_molar_volume_ml_mmol
+				= number("gas_molar_volume_ml_mmol", 22.4);
 			if (configuration.physiology.hematocrit_percent < 0.0
 				|| configuration.physiology.hematocrit_percent > 100.0
 				|| !(configuration.physiology.oxygen_solubility > 0.0)
 				|| configuration.physiology.hemoglobin_g_dl < 0.0
 				|| !(configuration.physiology.p50_mmhg > 0.0)
-				|| !(configuration.physiology.hill_exponent > 0.0))
+				|| !(configuration.physiology.hill_exponent > 0.0)
+				|| !(configuration.physiology.gas_molar_volume_ml_mmol > 0.0))
 				throw std::runtime_error("simulation_config.json: oxygen-capacity parameters are invalid");
 		}
 		if (const auto* vasodilation = Find(object, "vasodilation")) {
@@ -583,11 +614,21 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		for (const auto& rate : configuration.physiology.metabolism_rates)
 			if (!transported.count(rate.first))
 				throw std::runtime_error("simulation_config.json: metabolism field '"+rate.first+"' is not a transported species");
+		const std::string oxygen_source = configuration.physiology.oxygen_state
+			== OxygenTransportState::Total ? "total_oxygen" : "oxygen";
+		if (configuration.physiology.oxygen_state == OxygenTransportState::Total
+			&& !configuration.physiology.oxygen_capacity)
+			throw std::runtime_error(
+				"simulation_config.json: total_oxygen transport requires oxygen_capacity");
+		if (transported.count("oxygen") && transported.count("total_oxygen"))
+			throw std::runtime_error(
+				"simulation_config.json: oxygen and total_oxygen cannot both be transported states");
 		for (const auto& name : configuration.physiology.derived_fields) {
 			if ((name == "pO2" || name == "SaO2" || name == "SvO2"
 				|| name == "dissolved_oxygen" || name == "bound_oxygen"
-				|| name == "total_oxygen") && !transported.count("oxygen"))
-				throw std::runtime_error("simulation_config.json: derived field '"+name+"' requires transported oxygen");
+				|| name == "total_oxygen") && !transported.count(oxygen_source))
+				throw std::runtime_error("simulation_config.json: derived field '"+name
+					+"' requires transported "+oxygen_source);
 			if (name == "pCO2" && !transported.count("carbon_dioxide"))
 				throw std::runtime_error("simulation_config.json: pCO2 requires transported carbon_dioxide");
 			if (name == "pH" && (!transported.count("carbon_dioxide")
@@ -597,6 +638,24 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 				&& !configuration.physiology.oxygen_capacity)
 				throw std::runtime_error("simulation_config.json: derived field '"+name+"' requires oxygen_capacity");
 		}
+	}
+	if (Find(root, "perfusate")) {
+		configuration.physiology.enabled = true;
+		configuration.physiology.oxygen_capacity = true;
+		configuration.physiology.oxygen_state
+			= configuration.coupling.perfusate.oxygen_state;
+		configuration.physiology.hematocrit_percent
+			= configuration.coupling.perfusate.oxygen.hematocrit_percent;
+		configuration.physiology.oxygen_solubility
+			= configuration.coupling.perfusate.oxygen.oxygen_solubility_ml_dl_mmhg;
+		configuration.physiology.hemoglobin_g_dl
+			= configuration.coupling.perfusate.oxygen.hemoglobin_g_dl;
+		configuration.physiology.p50_mmhg
+			= configuration.coupling.perfusate.oxygen.p50_mmhg;
+		configuration.physiology.hill_exponent
+			= configuration.coupling.perfusate.oxygen.hill_exponent;
+		configuration.physiology.gas_molar_volume_ml_mmol
+			= configuration.coupling.perfusate.oxygen.gas_molar_volume_ml_mmol;
 	}
 	return configuration;
 }

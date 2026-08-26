@@ -594,8 +594,10 @@ int NavierStokes(int argc, char** argv)
 	bool configured = false, transient = false;
 	std::string boundary_config;
 	if (fs::exists(case_dir/"simulation_config.json")) {
-		simulation_configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
-		const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
+			simulation_configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
+			iga::RequireFlowOnlyCoupling(simulation_configuration.coupling,
+				"CUDA Navier-Stokes");
+			const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
 		configured = true;
 		transient = flow.time_integration == "backward_euler";
 		viscosity = flow.viscosity;

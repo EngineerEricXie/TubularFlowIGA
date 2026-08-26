@@ -1,5 +1,6 @@
 #include "SimulationConfig.hpp"
 #include "GenericCaseInput.hpp"
+#include "ThreeDVcaCoupling.hpp"
 #include "TemporalFunction.hpp"
 #include "VelocitySeries.hpp"
 #include "PhysiologyOutput.hpp"
@@ -185,8 +186,73 @@ int main()
 		flow_boundary_rejected = true;
 	}
 	assert(flow_boundary_rejected);
-
 	bool rejected = false;
+
+	const auto vca_configuration = iga::ParseSimulationConfiguration(R"json({
+		"schema_version":3,"dimension":"3d",
+		"simulation_scope":{"mode":"vascular_open_loop"},
+		"coupling":{"three_d_ports":{"inlet_label":1,"outlet_labels":[2,3]}},
+		"fields":[{"name":"velocity","kind":"vector3"},{"name":"pressure","kind":"pressure"}],
+		"time":{"dt":0.1,"steps":2},
+		"equation_systems":[{"name":"flow","kind":"navier_stokes",
+			"unknowns":["velocity","pressure"],"viscosity":0.0035,"density":1060,
+			"time_integration":"backward_euler"}],
+		"boundaries":[
+			{"label":1,"name":"inlet","conditions":[{"field":"velocity","type":"dirichlet",
+				"profile":"initial_velocityfield.txt","scale":1.0}]},
+			{"label":2,"name":"outlet_a","conditions":[{"field":"pressure","type":"pressure_traction","value":0.0}]},
+			{"label":3,"name":"outlet_b","conditions":[{"field":"pressure","type":"pressure_traction","value":0.0}]}]
+	})json");
+	iga::RequireThreeDVascularPorts(vca_configuration.coupling, "test");
+	auto vca_step_configuration = vca_configuration;
+	iga::VascularInletState vca_inlet;
+	vca_inlet.time_s = 0.1;
+	vca_inlet.has_flow = true;
+	vca_inlet.flow_m3_s = 3.0;
+	iga::ApplyThreeDVascularInlet(vca_step_configuration,
+		iga::FirstNavierStokesSystem(vca_step_configuration), vca_inlet, -2.0);
+	assert(std::abs(vca_step_configuration.boundaries[0].conditions[0].scale-1.5) < 1e-14);
+	const auto vca_result = iga::BuildThreeDFlowPortResult(0.1, 0.1, vca_inlet,
+		vca_configuration.coupling.three_d_ports, {{2, 1.0}, {3, 2.0}},
+		{{2, 4.0}, {3, 5.0}});
+	assert(vca_result.outlets.size() == 2);
+	assert(vca_result.outlets[1].outlet_id == 3);
+	auto vca_species_configuration = vca_configuration;
+	vca_species_configuration.fields.push_back({"oxygen", iga::FieldKind::Scalar, 0.0});
+	iga::EquationSystemDefinition transport;
+	transport.name = "species";
+	transport.kind = iga::EquationKind::LinearTransport;
+	transport.unknowns = {"oxygen"};
+	transport.terms.push_back({iga::TermKind::TimeDerivative, "oxygen", "oxygen", 1.0, ""});
+	vca_species_configuration.equation_systems.push_back(transport);
+	vca_species_configuration.boundaries[0].conditions.push_back(
+		{"oxygen", iga::FieldBoundaryKind::Dirichlet, {0.0}, 0.0, 0.0,
+			"", 1.0, "", 0.0, 0.0, 0.0, 0.0, 0.0});
+	const auto vca_transport = iga::RequireThreeDVcaTransportSystem(
+		vca_species_configuration);
+	vca_inlet.species = {{"oxygen", 0.2}};
+	iga::ApplyThreeDVascularSpeciesInlet(vca_species_configuration,
+		vca_transport, vca_inlet);
+	assert(std::abs(vca_species_configuration.boundaries[0].conditions.back().value[0]-0.2) < 1e-14);
+	rejected = false;
+	try {
+		iga::RequireThreeDVascularPorts(iga::CouplingDefinition{}, "test");
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+	rejected = false;
+	try {
+		iga::CouplingDefinition species_circuit;
+		species_circuit.mode = iga::SimulationScopeMode::VcaClosedLoop;
+		species_circuit.external_circuit.reservoir.species = {{"oxygen", 1.0}};
+		iga::RequireThreeDFlowOnlyCircuit(species_circuit);
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+
+	rejected = false;
 	try {
 		iga::ParseSimulationConfiguration(R"json({"schema_version":2,"fields":[{"name":"c","kind":"scalar"}],"time":{"dt":1,"steps":1},"equation_systems":[{"name":"s","kind":"linear_transport","unknowns":["c"],"terms":[{"operator":"invented","equation":"c"}]}],"boundaries":[]})json");
 	} catch (const std::runtime_error&) {

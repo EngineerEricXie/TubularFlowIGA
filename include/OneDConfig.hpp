@@ -3,6 +3,7 @@
 
 #include "SimulationConfig.hpp"
 #include "RadiusAnnotatedObj.hpp"
+#include "CouplingConfig.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -122,6 +123,8 @@ struct OneDPhysiologyDefinition {
 	double hemoglobin_g_dl = 15.0;
 	double p50_mmhg = 26.8;
 	double hill_exponent = 2.7;
+	double gas_molar_volume_ml_mmol = 22.4;
+	OxygenTransportState oxygen_state = OxygenTransportState::Dissolved;
 	bool vasodilation = false;
 	std::string vasodilator_field = "vasodilator";
 	double emax_radius_fraction = 0.0;
@@ -141,6 +144,7 @@ struct OneDConfiguration {
 	std::vector<OneDTransportSystemDefinition> transport_systems;
 	std::vector<OneDBoundaryDefinition> boundaries;
 	OneDPhysiologyDefinition physiology;
+	CouplingDefinition coupling;
 };
 
 namespace one_d_config_detail {
@@ -345,7 +349,8 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
 	RequireKnownKeys(root, {"schema_version", "dimension", "geometry", "fields", "time",
-		"temporal_functions", "equation_systems", "boundaries", "physiology"}, "root");
+		"temporal_functions", "equation_systems", "boundaries", "physiology",
+		"simulation_scope", "perfusate", "external_circuit", "coupling"}, "root");
 	OneDConfiguration result;
 	result.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	result.dimension = RequireString(Required(root, "dimension", "root"), "dimension");
@@ -593,20 +598,25 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 		}
 		if (const auto* oxygen = Find(object, "oxygen_capacity")) {
 			const auto& item = RequireObject(*oxygen, "physiology.oxygen_capacity");
-			RequireKnownKeys(item, {"enabled", "hematocrit_percent", "oxygen_solubility",
-				"hemoglobin_g_dl", "p50_mmhg", "hill_exponent"}, "physiology.oxygen_capacity");
+			RequireKnownKeys(item, {"enabled", "oxygen_state", "hematocrit_percent", "oxygen_solubility",
+				"hemoglobin_g_dl", "p50_mmhg", "hill_exponent", "gas_molar_volume_ml_mmol"}, "physiology.oxygen_capacity");
 			result.physiology.oxygen_capacity = OptionalBoolean(item, "enabled", true, "physiology.oxygen_capacity");
+			result.physiology.oxygen_state = ParseOxygenTransportState(OptionalString(item,
+				"oxygen_state", "dissolved_oxygen", "physiology.oxygen_capacity"));
 			result.physiology.hematocrit_percent = OptionalNumber(item, "hematocrit_percent", 0.0, "physiology.oxygen_capacity");
 			result.physiology.oxygen_solubility = OptionalNumber(item, "oxygen_solubility", 0.0031, "physiology.oxygen_capacity");
 			result.physiology.hemoglobin_g_dl = OptionalNumber(item, "hemoglobin_g_dl", 15.0, "physiology.oxygen_capacity");
 			result.physiology.p50_mmhg = OptionalNumber(item, "p50_mmhg", 26.8, "physiology.oxygen_capacity");
 			result.physiology.hill_exponent = OptionalNumber(item, "hill_exponent", 2.7, "physiology.oxygen_capacity");
+			result.physiology.gas_molar_volume_ml_mmol = OptionalNumber(item,
+				"gas_molar_volume_ml_mmol", 22.4, "physiology.oxygen_capacity");
 			if (result.physiology.hematocrit_percent < 0.0
 				|| result.physiology.hematocrit_percent > 100.0
 				|| !(result.physiology.oxygen_solubility > 0.0)
 				|| !(result.physiology.hemoglobin_g_dl >= 0.0)
 				|| !(result.physiology.p50_mmhg > 0.0)
-				|| !(result.physiology.hill_exponent > 0.0))
+				|| !(result.physiology.hill_exponent > 0.0)
+				|| !(result.physiology.gas_molar_volume_ml_mmol > 0.0))
 				throw std::runtime_error("simulation_config.json: oxygen-capacity parameters are invalid");
 		}
 		if (const auto* vasodilation = Find(object, "vasodilation")) {
@@ -632,6 +642,23 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			}
 		}
 	}
+	result.coupling = ParseCouplingDefinition(root);
+	if (Find(root, "perfusate")) {
+		result.physiology.enabled = true;
+		result.physiology.oxygen_capacity = true;
+		result.physiology.oxygen_state = result.coupling.perfusate.oxygen_state;
+		result.physiology.hematocrit_percent
+			= result.coupling.perfusate.oxygen.hematocrit_percent;
+		result.physiology.oxygen_solubility
+			= result.coupling.perfusate.oxygen.oxygen_solubility_ml_dl_mmhg;
+		result.physiology.hemoglobin_g_dl
+			= result.coupling.perfusate.oxygen.hemoglobin_g_dl;
+		result.physiology.p50_mmhg = result.coupling.perfusate.oxygen.p50_mmhg;
+		result.physiology.hill_exponent
+			= result.coupling.perfusate.oxygen.hill_exponent;
+		result.physiology.gas_molar_volume_ml_mmol
+			= result.coupling.perfusate.oxygen.gas_molar_volume_ml_mmol;
+	}
 	if (result.physiology.enabled) {
 		std::set<std::string> transported;
 		for (const auto& transport : result.transport_systems)
@@ -644,6 +671,15 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			&& !transported.count(result.physiology.vasodilator_field))
 			throw std::runtime_error("simulation_config.json: vasodilation requires transported field '"
 				+ result.physiology.vasodilator_field + "'");
+		const std::string oxygen_source = result.physiology.oxygen_state
+			== OxygenTransportState::Total ? "total_oxygen" : "oxygen";
+		if (result.physiology.oxygen_state == OxygenTransportState::Total
+			&& !result.physiology.oxygen_capacity)
+			throw std::runtime_error(
+				"simulation_config.json: total_oxygen transport requires oxygen_capacity");
+		if (transported.count("oxygen") && transported.count("total_oxygen"))
+			throw std::runtime_error(
+				"simulation_config.json: oxygen and total_oxygen cannot both be transported states");
 		const std::set<std::string> oxygen_fields{"pO2", "SaO2", "SvO2",
 			"dissolved_oxygen", "bound_oxygen", "total_oxygen"};
 		const std::set<std::string> allowed{"pO2", "pCO2", "pH", "SaO2", "SvO2",
@@ -652,9 +688,9 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			if (!allowed.count(name))
 				throw std::runtime_error("simulation_config.json: unsupported physiology derived field '"
 					+ name + "'");
-			if (oxygen_fields.count(name) && !transported.count("oxygen"))
+			if (oxygen_fields.count(name) && !transported.count(oxygen_source))
 				throw std::runtime_error("simulation_config.json: derived field '" + name
-					+ "' requires transported oxygen");
+					+ "' requires transported " + oxygen_source);
 			if (name == "pCO2" && !transported.count("carbon_dioxide"))
 				throw std::runtime_error("simulation_config.json: pCO2 requires transported carbon_dioxide");
 			if (name == "pH" && (!transported.count("carbon_dioxide")
@@ -664,6 +700,15 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 				&& !result.physiology.oxygen_capacity)
 				throw std::runtime_error("simulation_config.json: derived field '" + name
 					+ "' requires enabled oxygen_capacity");
+		}
+		if (result.coupling.mode == SimulationScopeMode::VcaClosedLoop) {
+			for (const auto& item : result.coupling.external_circuit.reservoir.species)
+				if (!transported.count(item.first))
+					throw std::runtime_error("simulation_config.json: closed-loop reservoir species '"
+						+item.first+"' is not transported by the selected 1d case");
+			if (!transported.count(oxygen_source))
+				throw std::runtime_error("simulation_config.json: closed-loop perfusate requires transported "
+					+oxygen_source);
 		}
 	}
 	return result;

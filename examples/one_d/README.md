@@ -18,6 +18,16 @@ make one-d-petsc
   --output-dir /tmp/tubularflowiga-1d-multispecies
 ```
 
+Run the native VCA PFC closed-loop smoke case with:
+
+~~~bash
+./solvers/one_d/iga_1d examples/one_d/vca_pfc_closed_loop \
+  --output-dir /tmp/tubularflowiga-1d-vca
+~~~
+
+It records the arterial history, aggregated two-outlet venous return, and
+external-circuit balance in coupling_manifest.json.
+
 The compliant bifurcation uses the explicit A/Q solver and RCR terminal beds.
 The multispecies physiology case uses a pulsatile PETSc pressure network, six
 config-selected transported species, wall exchange, metabolism,

@@ -152,6 +152,81 @@ inline double IntegrateBoundaryFlow(const Element& element, std::size_t face,
 	return flow;
 }
 
+inline std::array<double, 2> IntegrateBoundaryScalarAndArea(
+	const Element& element, std::size_t face,
+	const std::vector<std::array<double, 4>>& nodal_state)
+{
+	if (face >= 6) throw std::runtime_error("boundary face index must be below six");
+	if (nodal_state.size() != element.connectivity.size())
+		throw std::runtime_error("boundary scalar state does not match element connectivity");
+	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
+		0.6699905217924281, 0.9305681557970262}};
+	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
+		0.6521451548625461, 0.3478548451374539}};
+	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+	constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+	constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+	std::array<double, 2> result{};
+	for (std::size_t qi = 0; qi < 4; ++qi)
+		for (std::size_t qj = 0; qj < 4; ++qj) {
+			std::array<double, 3> coordinate{};
+			coordinate[fixed_axis[face]] = fixed_value[face];
+			coordinate[varying_axes[face][0]] = points[qi];
+			coordinate[varying_axes[face][1]] = points[qj];
+			const auto basis = EvaluateBoundaryBasis(
+				element, coordinate[0], coordinate[1], coordinate[2]);
+			double scalar = 0.0;
+			for (std::size_t a = 0; a < nodal_state.size(); ++a)
+				scalar += basis.value[a]*nodal_state[a][3];
+			const double weight = weights[qi]*weights[qj]*2.0*basis.determinant;
+			result[0] += weight*scalar;
+			result[1] += weight;
+		}
+	return result;
+}
+
+inline double IntegrateBoundarySpeciesFlux(const Element& element, std::size_t face,
+	const std::vector<std::array<double, 4>>& nodal_flow,
+	const std::vector<double>& nodal_species)
+{
+	if (face >= 6) throw std::runtime_error("boundary face index must be below six");
+	if (nodal_flow.size() != element.connectivity.size()
+		|| nodal_species.size() != element.connectivity.size())
+		throw std::runtime_error("boundary species state does not match element connectivity");
+	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
+		0.6699905217924281, 0.9305681557970262}};
+	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
+		0.6521451548625461, 0.3478548451374539}};
+	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+	constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+	constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+	constexpr double outward_sign[6] = {-1.0, -1.0, 1.0, 1.0, -1.0, 1.0};
+	double flux = 0.0;
+	for (std::size_t qi = 0; qi < 4; ++qi)
+		for (std::size_t qj = 0; qj < 4; ++qj) {
+			std::array<double, 3> coordinate{};
+			coordinate[fixed_axis[face]] = fixed_value[face];
+			coordinate[varying_axes[face][0]] = points[qi];
+			coordinate[varying_axes[face][1]] = points[qj];
+			const auto basis = EvaluateBoundaryBasis(
+				element, coordinate[0], coordinate[1], coordinate[2]);
+			std::array<double, 3> velocity{};
+			double concentration = 0.0;
+			for (std::size_t a = 0; a < nodal_flow.size(); ++a) {
+				concentration += basis.value[a]*nodal_species[a];
+				for (int component = 0; component < 3; ++component)
+					velocity[component] += basis.value[a]*nodal_flow[a][component];
+			}
+			double normal_velocity = 0.0;
+			for (int component = 0; component < 3; ++component)
+				normal_velocity += velocity[component]
+					*basis.inverse_jacobian[fixed_axis[face]][component];
+			flux += outward_sign[face]*weights[qi]*weights[qj]*2.0
+				*basis.determinant*normal_velocity*concentration;
+		}
+	return flux;
+}
+
 inline std::vector<double> IntegrateBoundaryPressureTraction(
 	const Element& element, std::size_t face, double pressure)
 {

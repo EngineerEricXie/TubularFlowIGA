@@ -25,22 +25,27 @@ all: one_d_core_test
 
 petsc: iga_1d
 
-iga_1d: src/iga_1d.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
+iga_1d: src/iga_1d.cpp include/OneDCoupling.hpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/CouplingConfig.hpp ../../include/CouplingReplay.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
-one_d_core_test: tests/test_one_d_core.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
+one_d_core_test: tests/test_one_d_core.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp ../../include/CouplingConfig.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
+
+one_d_coupling_test: tests/test_one_d_coupling.cpp include/OneDCoupling.hpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp ../../include/CouplingConfig.hpp ../../include/CouplingReplay.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
 
 one_d_petsc_test: tests/test_one_d_petsc.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
-core-test: one_d_core_test
+core-test: one_d_core_test one_d_coupling_test
 	./one_d_core_test
+	./one_d_coupling_test
 
-test: one_d_core_test one_d_petsc_test
+test: one_d_core_test one_d_coupling_test one_d_petsc_test
 	./one_d_core_test
+	./one_d_coupling_test
 	./one_d_petsc_test
 	$(MPIEXEC) -np $(MPI_TEST_RANKS) ./one_d_petsc_test
 
 clean:
-	$(RM) one_d_core_test one_d_petsc_test iga_1d
+	$(RM) one_d_core_test one_d_coupling_test one_d_petsc_test iga_1d

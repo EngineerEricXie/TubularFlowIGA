@@ -1,0 +1,99 @@
+{
+  "schema_version": 3,
+  "dimension": "1d",
+  "simulation_scope": {"mode": "vca_closed_loop"},
+  "perfusate": {
+    "type": "pfc",
+    "oxygen_state": "total_oxygen",
+    "hematocrit_percent": 0.0,
+    "oxygen_solubility_ml_dl_mmhg": 0.034,
+    "hemoglobin_g_dl": 0.0,
+    "p50_mmhg": 26.8,
+    "hill_exponent": 2.7
+  },
+  "external_circuit": {
+    "reservoir": {
+      "volume_m3": 1.0e-6,
+      "temperature_c": 37.0,
+      "species": {"total_oxygen": 1.5, "glucose": 5.0}
+    },
+    "pump": {"mode": "flow_control", "flow_m3_s": 1.0e-9},
+    "oxygenator": {
+      "enabled": true,
+      "mode": "full_equilibration",
+      "po2_mmhg": 100.0
+    },
+    "dialyzer": {"enabled": false},
+    "infusion_rates": {"glucose": 0.0}
+  },
+  "coupling": {"scheme": "explicit_staggered", "flow_epsilon_m3_s": 1.0e-14},
+  "geometry": {
+    "kind": "swc_network",
+    "file": "skeleton_initial.swc",
+    "length_scale_to_m": 1.0
+  },
+  "fields": [
+    {"name": "area", "kind": "scalar"},
+    {"name": "flow_rate", "kind": "scalar"},
+    {"name": "pressure", "kind": "pressure"},
+    {"name": "total_oxygen", "kind": "scalar", "initial_value": 1.5},
+    {"name": "glucose", "kind": "scalar", "initial_value": 5.0}
+  ],
+  "time": {"dt": 0.001, "steps": 10, "output_every": 5},
+  "temporal_functions": [
+    {"name": "fallback_inlet_flow", "kind": "constant", "units": "m3/s", "value": 1.0e-9}
+  ],
+  "equation_systems": [
+    {
+      "name": "vascular_flow",
+      "kind": "network_flow_1d",
+      "unknowns": ["area", "flow_rate", "pressure"],
+      "model": "rigid",
+      "scheme": "steady_poiseuille",
+      "dynamic_viscosity": 0.004,
+      "density": 1060.0,
+      "discretization": {"cells_per_segment": 4, "cfl": 0.75, "min_area_fraction": 0.2}
+    },
+    {
+      "name": "vascular_transport",
+      "kind": "network_transport_1d",
+      "unknowns": ["total_oxygen", "glucose"],
+      "flow_system": "vascular_flow",
+      "species": [
+        {"field": "total_oxygen", "diffusivity": 1.0e-9, "reaction_rate": 0.0, "volume_source": 0.0},
+        {"field": "glucose", "diffusivity": 1.0e-9, "reaction_rate": 0.0, "volume_source": 0.0}
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "inlet",
+      "role": "inlet",
+      "node_ids": [1],
+      "conditions": [
+        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "fallback_inlet_flow"},
+        {"field": "total_oxygen", "type": "dirichlet", "value": 1.5},
+        {"field": "glucose", "type": "dirichlet", "value": 5.0}
+      ]
+    },
+    {
+      "name": "outlets",
+      "role": "outlet",
+      "node_ids": [3, 4],
+      "conditions": [{"field": "pressure", "type": "pressure", "value": 0.0}]
+    },
+    {
+      "name": "wall",
+      "role": "wall",
+      "conditions": [
+        {"field": "total_oxygen", "type": "no_flux"},
+        {"field": "glucose", "type": "no_flux"}
+      ]
+    }
+  ],
+  "physiology": {
+    "enabled": true,
+    "oxygen_capacity": {"enabled": true, "oxygen_state": "total_oxygen"},
+    "derived_fields": ["pO2", "SaO2", "bound_oxygen", "hematocrit"]
+  }
+}

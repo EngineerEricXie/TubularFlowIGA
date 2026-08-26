@@ -1,5 +1,6 @@
 #include "BoundaryFlow.hpp"
 #include "CaseInput.hpp"
+#include "CouplingHistory.hpp"
 #include "FlowCheckpoint.hpp"
 #include "GenericCaseInput.hpp"
 #include "IgaDatabase.hpp"
@@ -9,6 +10,8 @@
 #include "OutletCheckpoint.hpp"
 #include "PressureTraction.hpp"
 #include "TemporalFunction.hpp"
+#include "ThreeDVcaCoupling.hpp"
+#include "TransientTransportRuntime.hpp"
 #include "VelocitySeries.hpp"
 #include "VtkOutput.hpp"
 
@@ -20,8 +23,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -39,6 +44,12 @@ struct FlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+};
+
+struct VcaPortMeasurements {
+	std::map<int, double> flows;
+	std::map<int, double> pressures;
+	std::map<int, std::map<std::string, double>> species_fluxes;
 };
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
@@ -191,17 +202,43 @@ int main(int argc, char** argv)
 		iga::ResolvedBoundaryConditions boundaries;
 		iga::SimulationConfiguration simulation_configuration;
 		std::vector<iga::OutletModelState> outlet_models;
+		std::unique_ptr<iga::VcaExternalCircuit> vca_circuit;
+		std::unique_ptr<iga::TransientTransportRuntime> vca_transport;
+		iga::CompiledLinearSystem vca_transport_system;
+		bool vca_has_transport = false;
+		std::vector<double> vca_species_state;
+		std::map<std::string, double> vca_previous_mass;
+		std::vector<iga::VascularStepResult> vca_steps;
+		std::vector<iga::AggregatedVascularReturn> vca_returns;
+		std::vector<iga::CircuitAdvanceReport> vca_reports;
+		std::unique_ptr<iga::CouplingHistoryWriter> vca_history;
 		std::map<int, double> pressure_tractions;
 		iga::NavierStokesParameters flow_parameters{1.0, 0.1, 0.0};
 		bool configured = false;
 		bool transient = false;
 		std::string boundary_config;
 		if (fs::exists(case_dir / "simulation_config.json")) {
-			simulation_configuration = iga::ReadSimulationConfiguration(
-				(case_dir / "simulation_config.json").string());
-			const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
+				simulation_configuration = iga::ReadSimulationConfiguration(
+					(case_dir / "simulation_config.json").string());
+				const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
 			configured = true;
 			transient = flow.time_integration == "backward_euler";
+			if (simulation_configuration.coupling.mode
+				!= iga::SimulationScopeMode::FlowOnly) {
+				iga::RequireThreeDVascularPorts(simulation_configuration.coupling,
+					"CPU 3D VCA flow bridge");
+				if (simulation_configuration.coupling.external_circuit.reservoir.species.empty())
+					iga::RequireThreeDFlowOnlyCircuit(simulation_configuration.coupling);
+				else {
+					vca_transport_system = iga::RequireThreeDVcaTransportSystem(
+						simulation_configuration);
+					vca_has_transport = true;
+				}
+				if (!transient)
+					throw std::runtime_error("CPU 3D VCA flow bridge requires backward_euler Navier-Stokes");
+				vca_circuit = std::make_unique<iga::VcaExternalCircuit>(
+					simulation_configuration.coupling);
+			}
 			flow_parameters = {flow.density, flow.viscosity,
 				transient ? simulation_configuration.time.dt : 0.0};
 			const auto waveform_configuration = transient
@@ -226,6 +263,8 @@ int main(int argc, char** argv)
 			throw std::runtime_error("--stop-after-step exceeds configured physical steps");
 		const auto run_end_step = options.stop_after_step > 0
 			? options.stop_after_step : physical_steps;
+		if (vca_circuit && (!options.restart.empty() || !options.checkpoint.empty()))
+			throw std::runtime_error("CPU 3D VCA flow checkpoint/restart is unavailable until reservoir state is checkpointed");
 		if (!transient)
 			for (const auto& model : outlet_models)
 				if (model.kind != iga::FieldBoundaryKind::Resistance)
@@ -243,6 +282,57 @@ int main(int argc, char** argv)
 			<< " pressure_nodes=" << boundaries.pressure_nodes << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 4);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
+		double vca_reference_inlet_flow = 0.0;
+		if (vca_circuit) {
+			std::map<int, long long> port_faces;
+			port_faces.emplace(simulation_configuration.coupling.three_d_ports.inlet_label, 0);
+			for (const int label : simulation_configuration.coupling.three_d_ports.outlet_labels)
+				port_faces.emplace(label, 0);
+			for (const auto& element : assembler.elements()) {
+				if (element.owner != rank) continue;
+				for (const int label : element.boundary_labels) {
+					auto found = port_faces.find(label);
+					if (found != port_faces.end()) ++found->second;
+				}
+			}
+			for (auto& item : port_faces) {
+				long long global_faces = 0;
+				MPI_Allreduce(&item.second, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
+					PETSC_COMM_WORLD);
+				if (global_faces == 0)
+					throw std::runtime_error("VCA port label "+std::to_string(item.first)
+						+" has no boundary faces in the .ntiga database; repack with iga_pack");
+			}
+			double local_reference_flow = 0.0;
+			for (const auto& element : assembler.elements()) {
+				if (element.owner != rank) continue;
+				std::vector<std::array<double, 4>> nodal(element.connectivity.size());
+				for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+					const auto node = static_cast<std::size_t>(element.connectivity[a]);
+					for (int field = 0; field < 3; ++field)
+						nodal[a][field] = boundary_velocity[node][static_cast<std::size_t>(field)];
+				}
+				for (std::size_t face = 0; face < element.boundary_labels.size(); ++face)
+					if (element.boundary_labels[face]
+						== simulation_configuration.coupling.three_d_ports.inlet_label)
+						local_reference_flow += iga::IntegrateBoundaryFlow(element, face, nodal);
+			}
+			MPI_Allreduce(&local_reference_flow, &vca_reference_inlet_flow, 1,
+				MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
+			if (!(std::abs(vca_reference_inlet_flow)
+				> simulation_configuration.coupling.flow_epsilon_m3_s))
+				throw std::runtime_error("VCA inlet initial_velocityfield.txt profile has zero integrated flow");
+		}
+		if (vca_has_transport)
+			vca_transport = std::make_unique<iga::TransientTransportRuntime>(database,
+				PETSC_COMM_WORLD, simulation_configuration, vca_transport_system, labels);
+		if (vca_circuit) {
+			fs::path manifest_directory = options.output.empty()
+				? case_dir/"results"/"vca_flow" : options.output.parent_path();
+			if (manifest_directory.empty()) manifest_directory = ".";
+			vca_history = std::make_unique<iga::CouplingHistoryWriter>(manifest_directory,
+				simulation_configuration.coupling.mode);
+		}
 		for (const auto& model : outlet_models) {
 			long long local_faces = 0;
 			for (const auto& element : assembler.elements()) {
@@ -329,6 +419,90 @@ int main(int argc, char** argv)
 				MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
 			return global;
 		};
+		auto compute_vca_ports = [&]() {
+			std::map<int, std::size_t> index;
+			if (!vca_circuit) return VcaPortMeasurements{};
+			const auto& ports = simulation_configuration.coupling.three_d_ports;
+			const auto species_fields = vca_transport
+				? vca_transport->System().fields.size() : 0;
+			for (std::size_t i = 0; i < ports.outlet_labels.size(); ++i)
+				index.emplace(ports.outlet_labels[i], i);
+			std::vector<double> local_flow(index.size(), 0.0), global_flow(index.size(), 0.0);
+			std::vector<double> local_pressure(index.size(), 0.0), global_pressure(index.size(), 0.0);
+			std::vector<double> local_area(index.size(), 0.0), global_area(index.size(), 0.0);
+			std::vector<double> local_species(index.size()*species_fields, 0.0);
+			std::vector<double> global_species(index.size()*species_fields, 0.0);
+			VecScatterBegin(scatter, state, ghost_state, INSERT_VALUES, SCATTER_FORWARD);
+			VecScatterEnd(scatter, state, ghost_state, INSERT_VALUES, SCATTER_FORWARD);
+			const PetscScalar* values = nullptr;
+			VecGetArrayRead(ghost_state, &values);
+			for (const auto& element : assembler.elements()) {
+				if (element.owner != rank) continue;
+				std::vector<std::array<double, 4>> nodal(element.connectivity.size());
+				for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+					const auto position = ghost_position.at(element.connectivity[a]);
+					for (int field = 0; field < 4; ++field)
+						nodal[a][field] = PetscRealPart(values[4*position+field]);
+				}
+				for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
+					const auto found = index.find(element.boundary_labels[face]);
+					if (found == index.end()) continue;
+					local_flow[found->second] += iga::IntegrateBoundaryFlow(element, face, nodal);
+					const auto pressure = iga::IntegrateBoundaryScalarAndArea(element, face, nodal);
+					local_pressure[found->second] += pressure[0];
+					local_area[found->second] += pressure[1];
+					for (std::size_t field = 0; field < species_fields; ++field) {
+						std::vector<double> species(element.connectivity.size());
+						for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+							species[a] = vca_species_state[
+								static_cast<std::size_t>(element.connectivity[a])*species_fields+field];
+						local_species[found->second*species_fields+field]
+							+= iga::IntegrateBoundarySpeciesFlux(element, face, nodal, species);
+					}
+				}
+			}
+			VecRestoreArrayRead(ghost_state, &values);
+			MPI_Allreduce(local_flow.data(), global_flow.data(), static_cast<int>(global_flow.size()),
+				MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
+			MPI_Allreduce(local_pressure.data(), global_pressure.data(), static_cast<int>(global_pressure.size()),
+				MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
+			MPI_Allreduce(local_area.data(), global_area.data(), static_cast<int>(global_area.size()),
+				MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
+			if (species_fields > 0)
+				MPI_Allreduce(local_species.data(), global_species.data(),
+					static_cast<int>(global_species.size()), MPI_DOUBLE, MPI_SUM,
+					PETSC_COMM_WORLD);
+			VcaPortMeasurements result;
+			for (std::size_t i = 0; i < ports.outlet_labels.size(); ++i) {
+				result.flows.emplace(ports.outlet_labels[i], global_flow[i]);
+				if (!(global_area[i] > 0.0))
+					throw std::runtime_error("VCA outlet has zero boundary area");
+				result.pressures.emplace(ports.outlet_labels[i], global_pressure[i]/global_area[i]);
+				for (std::size_t field = 0; field < species_fields; ++field)
+					result.species_fluxes[ports.outlet_labels[i]].emplace(
+						vca_transport->System().fields[field],
+						global_species[i*species_fields+field]);
+			}
+			return result;
+		};
+		auto gather_flow_velocity = [&]() {
+			Vec all = nullptr;
+			VecScatter all_scatter = nullptr;
+			VecScatterCreateToAll(state, &all_scatter, &all);
+			VecScatterBegin(all_scatter, state, all, INSERT_VALUES, SCATTER_FORWARD);
+			VecScatterEnd(all_scatter, state, all, INSERT_VALUES, SCATTER_FORWARD);
+			const PetscScalar* values = nullptr;
+			VecGetArrayRead(all, &values);
+			std::vector<std::array<double, 3>> velocity(database.header().nodes);
+			for (std::uint64_t node = 0; node < database.header().nodes; ++node)
+				for (int component = 0; component < 3; ++component)
+					velocity[static_cast<std::size_t>(node)][static_cast<std::size_t>(component)]
+						= PetscRealPart(values[4*node+component]);
+			VecRestoreArrayRead(all, &values);
+			VecScatterDestroy(&all_scatter);
+			VecDestroy(&all);
+			return velocity;
+		};
 
 		std::vector<PetscInt> boundary_rows;
 		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node) {
@@ -391,11 +565,21 @@ int main(int argc, char** argv)
 			if (step > 0) VecCopy(state, previous);
 			const auto physical_time = transient ? (step+1)*flow_parameters.dt : 0.0;
 			iga::SimulationConfiguration step_configuration;
+			iga::VascularInletState vca_inlet;
 			if (configured)
 				step_configuration = transient
 					? iga::MaterializeBoundaryWaveforms(
 						simulation_configuration, case_dir.string(), physical_time)
 					: simulation_configuration;
+			if (vca_circuit) {
+				vca_inlet = vca_circuit->InletState(step*flow_parameters.dt);
+				iga::ApplyThreeDVascularInlet(step_configuration,
+					iga::FirstNavierStokesSystem(step_configuration), vca_inlet,
+					vca_reference_inlet_flow);
+				if (vca_transport)
+					iga::ApplyThreeDVascularSpeciesInlet(step_configuration,
+						vca_transport->System(), vca_inlet);
+			}
 			std::vector<double> previous_capacitor_pressure(outlet_models.size());
 			for (std::size_t i = 0; i < outlet_models.size(); ++i)
 				previous_capacitor_pressure[i] = outlet_models[i].capacitor_pressure;
@@ -538,6 +722,56 @@ int main(int argc, char** argv)
 			if (!outlet_converged)
 				throw std::runtime_error("outlet fixed-point iteration did not converge at physical step "
 					+ std::to_string(step+1));
+			if (vca_transport) {
+				vca_transport->Advance(step_configuration, gather_flow_velocity());
+				vca_species_state = vca_transport->GatherState();
+			}
+			if (vca_circuit) {
+				const auto ports = compute_vca_ports();
+				auto result = iga::BuildThreeDFlowPortResult(physical_time,
+					flow_parameters.dt, vca_inlet,
+					simulation_configuration.coupling.three_d_ports,
+					ports.flows, ports.pressures);
+				for (auto& outlet : result.outlets) {
+					const auto flux = ports.species_fluxes.find(outlet.outlet_id);
+					if (flux == ports.species_fluxes.end()) continue;
+					outlet.species_flux = flux->second;
+					outlet.average_valid = std::abs(outlet.flow_m3_s)
+						> simulation_configuration.coupling.flow_epsilon_m3_s;
+					if (outlet.average_valid)
+						for (const auto& species : outlet.species_flux)
+							outlet.flux_weighted_concentration[species.first]
+								= species.second/outlet.flow_m3_s;
+				}
+				if (vca_transport) {
+					result.total_mass = vca_transport->TotalMass(vca_species_state);
+					result.source_integrals = vca_transport->SourceIntegrals();
+					for (const auto& mass : result.total_mass) {
+						const auto old = vca_previous_mass.find(mass.first);
+						if (old == vca_previous_mass.end()) continue;
+						const double inlet_flux = vca_inlet.species.count(mass.first)
+							? vca_inlet.flow_m3_s*vca_inlet.species.at(mass.first) : 0.0;
+						double outlet_flux = 0.0;
+						for (const auto& outlet : result.outlets) {
+							const auto flux = outlet.species_flux.find(mass.first);
+							if (flux != outlet.species_flux.end()) outlet_flux += flux->second;
+						}
+						const auto source = result.source_integrals.find(mass.first);
+						result.balance_residuals[mass.first]
+							= (mass.second-old->second)/flow_parameters.dt-inlet_flux+outlet_flux
+								-(source == result.source_integrals.end() ? 0.0 : source->second);
+					}
+					vca_previous_mass = result.total_mass;
+				}
+				const auto venous = iga::AggregateVascularOutlets(result.outlets,
+					simulation_configuration.coupling.flow_epsilon_m3_s);
+				const auto report = vca_circuit->Advance(venous, flow_parameters.dt,
+					physical_time);
+				vca_steps.push_back(std::move(result));
+				vca_returns.push_back(venous);
+				vca_reports.push_back(report);
+				vca_history->Add(vca_steps.back(), venous, report);
+			}
 			const auto completed_step = step+1;
 			if (options.output_every > 0 && completed_step%options.output_every == 0)
 			{
@@ -565,6 +799,18 @@ int main(int argc, char** argv)
 				if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
 					<< " completed_step=" << completed_step << '\n';
 			}
+		}
+		if (vca_circuit) {
+			int write_failed = 0;
+			if (rank == 0) {
+				try {
+					vca_history->Write("cpu_3d_navier_stokes");
+				} catch (const std::exception&) {
+					write_failed = 1;
+				}
+			}
+			MPI_Bcast(&write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+			if (write_failed) throw std::runtime_error("cannot write VCA coupling manifest");
 		}
 		const auto end = std::chrono::steady_clock::now();
 		PetscReal state_norm = 0.0;

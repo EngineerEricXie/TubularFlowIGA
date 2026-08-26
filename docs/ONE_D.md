@@ -178,6 +178,35 @@ simulated. There is no hard-coded oxygen, glucose, or neuron species set. The
 smaller or different scalar set and enable physiology helpers only when their
 named dependencies are present.
 
+### VCA vascular coupling
+
+Native 1D can expose a stable SI port between the vascular network and an
+external VCA circuit. The top-level simulation_scope.mode selects flow_only,
+vascular_open_loop, vca_replay, or vca_closed_loop. Replay reads a relative
+JSON or CSV inlet history. Closed-loop runs advance a well-mixed reservoir from
+the conservative, signed aggregation of all outlet flows and species fluxes.
+The currently supported native boundary mode is a positive flow-controlled pump
+with explicit_staggered ordering.
+
+The perfusate block selects rbc or pfc and the transported oxygen state
+(dissolved_oxygen or total_oxygen). A PFC perfusate must use zero hematocrit
+and hemoglobin. Closed-loop runs require every reservoir species, including the
+selected oxygen state, to be a transported 1D field. The optional oxygenator,
+dialyzer, and infusion blocks operate outside the vascular mesh; their source
+terms and reservoir mass changes are included in coupling_manifest.json.
+
+Run the committed two-outlet PFC smoke case with:
+
+~~~bash
+./solvers/one_d/iga_1d examples/one_d/vca_pfc_closed_loop \
+  --output-dir /tmp/tubularflowiga-1d-vca
+~~~
+
+The manifest records the exact arterial history, aggregated venous return,
+reservoir/device balance, total vascular mass, source integrals, and residuals.
+Closed-loop checkpoint/restart is intentionally rejected until reservoir state
+is included in the checkpoint format.
+
 ## Checkpoint and restart
 
 ```bash

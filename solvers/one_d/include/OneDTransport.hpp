@@ -29,6 +29,35 @@ struct OneDTransportState {
 	std::vector<OneDSpeciesState> species;
 };
 
+inline double OneDSpeciesSourceIntegral(const OneDConfiguration& configuration,
+	const OneDNetwork& network, const OneDFlowState& flow,
+	const OneDSpeciesState& species)
+{
+	double result = 0.0;
+	const auto metabolism = configuration.physiology.metabolism_rates.find(
+		species.definition.field);
+	for (const auto& segment : network.segments) {
+		const double dx = segment.length/segment.cells;
+		for (int cell = 0; cell < segment.cells; ++cell) {
+			const auto index = static_cast<std::size_t>(segment.cell_offset+cell);
+			const double concentration = species.concentration[index];
+			double volume_source = species.definition.volume_source
+				-species.definition.reaction_rate*concentration;
+			if (configuration.physiology.enabled
+				&& metabolism != configuration.physiology.metabolism_rates.end())
+				volume_source += metabolism->second;
+			const double perimeter = 2.0*OneDPi*std::sqrt(flow.area[index]/OneDPi);
+			double wall_flux = 0.0;
+			if (species.wall_kind == OneDWallBoundaryKind::ConstantFlux)
+				wall_flux = species.wall_value;
+			else if (species.wall_kind == OneDWallBoundaryKind::Robin)
+				wall_flux = species.wall_coefficient*(concentration-species.exterior_value);
+			result += dx*(flow.area[index]*volume_source-perimeter*wall_flux);
+		}
+	}
+	return result;
+}
+
 inline OneDTransportState InitializeOneDTransport(const OneDConfiguration& configuration,
 	const OneDTransportSystemDefinition& transport, const OneDNetwork& network)
 {
@@ -187,11 +216,13 @@ inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportSt
 	return nullptr;
 }
 
-inline double OneDHillSaturation(double pressure_mmhg, double p50, double exponent)
+inline OneDSpeciesState* FindOneDSpecies(std::vector<OneDTransportState>& transports,
+	const std::string& name)
 {
-	const double pressure = std::max(pressure_mmhg, 0.0);
-	const double numerator = std::pow(pressure, exponent);
-	return numerator/(numerator+std::pow(p50, exponent));
+	for (auto& transport : transports)
+		for (auto& species : transport.species)
+			if (species.definition.field == name) return &species;
+	return nullptr;
 }
 
 inline std::map<std::string, std::vector<double>> ComputeOneDDerivedFields(
@@ -199,9 +230,20 @@ inline std::map<std::string, std::vector<double>> ComputeOneDDerivedFields(
 {
 	std::map<std::string, std::vector<double>> result;
 	if (!configuration.physiology.enabled) return result;
-	const auto* oxygen = FindOneDSpecies(transports, "oxygen");
+	const std::string oxygen_source = configuration.physiology.oxygen_state
+		== OxygenTransportState::Total ? "total_oxygen" : "oxygen";
+	const auto* oxygen = FindOneDSpecies(transports, oxygen_source);
 	const auto* carbon_dioxide = FindOneDSpecies(transports, "carbon_dioxide");
 	const auto* bicarbonate = FindOneDSpecies(transports, "bicarbonate");
+	OxygenCapacityParameters oxygen_parameters;
+	oxygen_parameters.hematocrit_percent = configuration.physiology.hematocrit_percent;
+	oxygen_parameters.oxygen_solubility_ml_dl_mmhg
+		= configuration.physiology.oxygen_solubility;
+	oxygen_parameters.hemoglobin_g_dl = configuration.physiology.hemoglobin_g_dl;
+	oxygen_parameters.p50_mmhg = configuration.physiology.p50_mmhg;
+	oxygen_parameters.hill_exponent = configuration.physiology.hill_exponent;
+	oxygen_parameters.gas_molar_volume_ml_mmol
+		= configuration.physiology.gas_molar_volume_ml_mmol;
 	std::size_t cells = 0;
 	for (const auto& transport : transports)
 		if (!transport.species.empty()) { cells = transport.species.front().concentration.size(); break; }
@@ -209,7 +251,8 @@ inline std::map<std::string, std::vector<double>> ComputeOneDDerivedFields(
 		std::vector<double> values(cells, 0.0);
 		if (name == "pO2" && oxygen) {
 			for (std::size_t i = 0; i < cells; ++i)
-				values[i] = oxygen->concentration[i]/std::max(configuration.physiology.oxygen_solubility, 1.0e-30);
+				values[i] = OxygenFromTransported(oxygen->concentration[i],
+					configuration.physiology.oxygen_state, oxygen_parameters).po2_mmhg;
 		} else if (name == "pCO2" && carbon_dioxide) {
 			for (std::size_t i = 0; i < cells; ++i)
 				values[i] = carbon_dioxide->concentration[i]/0.0301;
@@ -219,22 +262,21 @@ inline std::map<std::string, std::vector<double>> ComputeOneDDerivedFields(
 				values[i] = 6.1+std::log10(std::max(bicarbonate->concentration[i], 1.0e-30)/(0.0301*pco2));
 			}
 		} else if ((name == "SaO2" || name == "SvO2") && oxygen) {
-			for (std::size_t i = 0; i < cells; ++i) {
-				const double po2 = oxygen->concentration[i]/std::max(configuration.physiology.oxygen_solubility, 1.0e-30);
-				values[i] = OneDHillSaturation(po2, configuration.physiology.p50_mmhg,
-					configuration.physiology.hill_exponent);
-			}
+			for (std::size_t i = 0; i < cells; ++i)
+				values[i] = OxygenFromTransported(oxygen->concentration[i],
+					configuration.physiology.oxygen_state, oxygen_parameters).saturation;
 		} else if (name == "dissolved_oxygen" && oxygen) {
-			values = oxygen->concentration;
+			for (std::size_t i = 0; i < cells; ++i)
+				values[i] = OxygenFromTransported(oxygen->concentration[i],
+					configuration.physiology.oxygen_state,
+					oxygen_parameters).dissolved_oxygen_mol_m3;
 		} else if ((name == "bound_oxygen" || name == "total_oxygen") && oxygen) {
 			for (std::size_t i = 0; i < cells; ++i) {
-				const double po2 = oxygen->concentration[i]
-					/std::max(configuration.physiology.oxygen_solubility, 1.0e-30);
-				const double saturation = OneDHillSaturation(po2,
-					configuration.physiology.p50_mmhg, configuration.physiology.hill_exponent);
-				const double bound = 1.34*configuration.physiology.hemoglobin_g_dl*saturation;
-				values[i] = name == "bound_oxygen" ? bound
-					: oxygen->concentration[i]+bound;
+				const auto equilibrium = OxygenFromTransported(oxygen->concentration[i],
+					configuration.physiology.oxygen_state, oxygen_parameters);
+				values[i] = name == "bound_oxygen"
+					? equilibrium.bound_oxygen_mol_m3
+					: equilibrium.total_oxygen_mol_m3;
 			}
 		} else if (name == "hematocrit") {
 			std::fill(values.begin(), values.end(), configuration.physiology.hematocrit_percent);

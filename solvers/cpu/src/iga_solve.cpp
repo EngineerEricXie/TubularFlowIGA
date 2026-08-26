@@ -201,9 +201,10 @@ int main(int argc, char** argv)
 		const auto options = ParseOptions(argc, argv);
 		iga::Database database(options.database.string());
 		const auto& case_dir = options.case_dir;
-		const auto configuration = iga::ReadSimulationConfiguration(
-			(case_dir / "simulation_config.json").string());
-		const auto system_name = !options.system.empty() ? options.system
+			const auto configuration = iga::ReadSimulationConfiguration(
+				(case_dir / "simulation_config.json").string());
+			iga::RequireFlowOnlyCoupling(configuration.coupling, "CPU configured transport");
+			const auto system_name = !options.system.empty() ? options.system
 			: iga::FirstLinearTransportSystem(configuration);
 		const auto system = iga::CompileLinearSystem(configuration, system_name);
 		if (options.stop_after_step > system.steps)

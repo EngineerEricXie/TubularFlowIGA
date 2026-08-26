@@ -1,0 +1,209 @@
+#ifndef IGA_TRANSIENT_TRANSPORT_RUNTIME_HPP
+#define IGA_TRANSIENT_TRANSPORT_RUNTIME_HPP
+
+#include "GenericCaseInput.hpp"
+#include "GenericTransportElement.hpp"
+#include "OwnedRowAssembler.hpp"
+
+#include <petscksp.h>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace iga {
+
+class TransientTransportRuntime {
+public:
+	TransientTransportRuntime(Database& database, MPI_Comm communicator,
+		const SimulationConfiguration& configuration,
+		CompiledLinearSystem system, const std::vector<int>& labels)
+		: communicator_(communicator), configuration_(configuration),
+			system_(std::move(system)), assembler_(database, communicator, system_.fields.size()),
+			labels_(labels)
+	{
+		if (system_.velocity_source != "prescribed")
+			throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
+		if (labels_.size() != database.header().nodes)
+			throw std::runtime_error("transport boundary labels do not match database nodes");
+		const auto boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
+		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
+			for (std::size_t field = 0; field < system_.fields.size(); ++field)
+				if (boundaries.constrained[static_cast<std::size_t>(node)*system_.fields.size()+field])
+					boundary_rows_.push_back(static_cast<PetscInt>(node*system_.fields.size()+field));
+		left_ = assembler_.CreateMatrix();
+		previous_ = assembler_.CreateMatrix();
+		forcing_ = assembler_.CreateVector();
+		current_ = assembler_.CreateVector();
+		next_ = assembler_.CreateVector();
+		rhs_ = assembler_.CreateVector();
+		MatSetOption(left_, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
+		MatSetOption(previous_, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
+		MatSetOption(previous_, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
+		const auto initial = InitialScalarValues(configuration_, system_);
+		PetscScalar* values = nullptr;
+		VecGetArray(current_, &values);
+		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
+			for (std::size_t field = 0; field < system_.fields.size(); ++field) {
+				const auto local = static_cast<std::size_t>(node-assembler_.node_begin())
+					*system_.fields.size()+field;
+				const auto global = static_cast<std::size_t>(node)*system_.fields.size()+field;
+				values[local] = boundaries.constrained[global] ? boundaries.value[global] : initial[field];
+			}
+		VecRestoreArray(current_, &values);
+		KSPCreate(communicator_, &solver_);
+		KSPSetType(solver_, KSPGMRES);
+		KSPGMRESSetRestart(solver_, 50);
+		KSPSetTolerances(solver_, 1e-8, PETSC_DEFAULT, PETSC_DEFAULT, 10000);
+		PC preconditioner = nullptr;
+		KSPGetPC(solver_, &preconditioner);
+		PCSetType(preconditioner, PCBJACOBI);
+		KSPSetFromOptions(solver_);
+	}
+
+	~TransientTransportRuntime()
+	{
+		KSPDestroy(&solver_);
+		VecDestroy(&rhs_); VecDestroy(&next_); VecDestroy(&current_); VecDestroy(&forcing_);
+		MatDestroy(&previous_); MatDestroy(&left_);
+	}
+
+	void Advance(const SimulationConfiguration& step_configuration,
+		const std::vector<std::array<double, 3>>& velocity)
+	{
+		if (velocity.size() != labels_.size())
+			throw std::runtime_error("VCA transport velocity size does not match database nodes");
+		const auto boundaries = ResolveScalarBoundaries(step_configuration, system_, labels_);
+		MatZeroEntries(left_);
+		MatZeroEntries(previous_);
+		VecSet(forcing_, 0.0);
+		for (const auto& element : assembler_.elements()) {
+			const auto matrices = BuildGenericTransportElement(
+				element, velocity, system_, step_configuration);
+			assembler_.AddElementMatrix(left_, element, matrices.left);
+			assembler_.AddElementMatrix(previous_, element, matrices.previous);
+			assembler_.AddElementVector(forcing_, element, matrices.source);
+		}
+		OwnedRowAssembler::Assemble(left_);
+		OwnedRowAssembler::Assemble(previous_);
+		OwnedRowAssembler::Assemble(forcing_);
+		MatZeroRows(left_, static_cast<PetscInt>(boundary_rows_.size()),
+			boundary_rows_.data(), 1.0, nullptr, nullptr);
+		MatZeroRows(previous_, static_cast<PetscInt>(boundary_rows_.size()),
+			boundary_rows_.data(), 0.0, nullptr, nullptr);
+		MatMult(previous_, current_, rhs_);
+		VecAXPY(rhs_, 1.0, forcing_);
+		std::vector<PetscScalar> boundary_values;
+		boundary_values.reserve(boundary_rows_.size());
+		for (const auto row : boundary_rows_)
+			boundary_values.push_back(boundaries.value[static_cast<std::size_t>(row)]);
+		VecSetValues(rhs_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
+			boundary_values.data(), INSERT_VALUES);
+		OwnedRowAssembler::Assemble(rhs_);
+		if (steps_ > 0) VecCopy(current_, next_);
+		KSPSetOperators(solver_, left_, left_);
+		KSPSetInitialGuessNonzero(solver_, steps_ > 0 ? PETSC_TRUE : PETSC_FALSE);
+		KSPSetUp(solver_);
+		KSPSolve(solver_, rhs_, next_);
+		KSPConvergedReason reason;
+		KSPGetConvergedReason(solver_, &reason);
+		if (reason <= 0) throw std::runtime_error("VCA transport linear solve did not converge");
+		VecSwap(current_, next_);
+		++steps_;
+	}
+
+	std::vector<double> GatherState() const
+	{
+		Vec all = nullptr;
+		VecScatter scatter = nullptr;
+		VecScatterCreateToAll(current_, &scatter, &all);
+		VecScatterBegin(scatter, current_, all, INSERT_VALUES, SCATTER_FORWARD);
+		VecScatterEnd(scatter, current_, all, INSERT_VALUES, SCATTER_FORWARD);
+		const PetscScalar* values = nullptr;
+		VecGetArrayRead(all, &values);
+		std::vector<double> result(static_cast<std::size_t>(labels_.size())*system_.fields.size());
+		for (std::size_t i = 0; i < result.size(); ++i) result[i] = PetscRealPart(values[i]);
+		VecRestoreArrayRead(all, &values);
+		VecScatterDestroy(&scatter);
+		VecDestroy(&all);
+		return result;
+	}
+
+	const CompiledLinearSystem& System() const { return system_; }
+
+	std::map<std::string, double> TotalMass(const std::vector<double>& state) const
+	{
+		if (state.size() != labels_.size()*system_.fields.size())
+			throw std::runtime_error("VCA transport state size is invalid");
+		constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
+			0.6699905217924281, 0.9305681557970262}};
+		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
+			0.6521451548625461, 0.3478548451374539}};
+		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
+		for (const auto& element : assembler_.elements()) {
+			for (std::size_t qz = 0; qz < 4; ++qz)
+				for (std::size_t qy = 0; qy < 4; ++qy)
+					for (std::size_t qx = 0; qx < 4; ++qx) {
+						const auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
+						const double measure = weights[qx]*weights[qy]*weights[qz]*basis.determinant;
+						for (std::size_t field = 0; field < system_.fields.size(); ++field)
+							for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+								local[field] += measure*basis.value[a]*state[
+									static_cast<std::size_t>(element.connectivity[a])*system_.fields.size()+field];
+					}
+		}
+		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()), MPI_DOUBLE,
+			MPI_SUM, communicator_);
+		std::map<std::string, double> result;
+		for (std::size_t field = 0; field < system_.fields.size(); ++field)
+			result.emplace(system_.fields[field], global[field]);
+		return result;
+	}
+
+	std::map<std::string, double> SourceIntegrals() const
+	{
+		constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
+			0.6699905217924281, 0.9305681557970262}};
+		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
+			0.6521451548625461, 0.3478548451374539}};
+		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
+		for (const auto& term : system_.terms)
+			if (term.kind == TermKind::VolumeSource)
+				for (const auto& element : assembler_.elements()) {
+					for (std::size_t qz = 0; qz < 4; ++qz)
+						for (std::size_t qy = 0; qy < 4; ++qy)
+							for (std::size_t qx = 0; qx < 4; ++qx) {
+								const auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
+								local[term.equation] += term.coefficient*weights[qx]*weights[qy]
+									*weights[qz]*basis.determinant;
+							}
+				}
+		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()), MPI_DOUBLE,
+			MPI_SUM, communicator_);
+		std::map<std::string, double> result;
+		for (std::size_t field = 0; field < system_.fields.size(); ++field)
+			result.emplace(system_.fields[field], global[field]);
+		return result;
+	}
+
+private:
+	MPI_Comm communicator_;
+	SimulationConfiguration configuration_;
+	CompiledLinearSystem system_;
+	OwnedRowAssembler assembler_;
+	std::vector<int> labels_;
+	std::vector<PetscInt> boundary_rows_;
+	Mat left_ = nullptr, previous_ = nullptr;
+	Vec forcing_ = nullptr, current_ = nullptr, next_ = nullptr, rhs_ = nullptr;
+	KSP solver_ = nullptr;
+	int steps_ = 0;
+};
+
+} // namespace iga
+
+#endif

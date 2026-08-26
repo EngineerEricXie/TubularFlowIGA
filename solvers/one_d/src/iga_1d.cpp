@@ -1,6 +1,8 @@
 #include "OneDCheckpoint.hpp"
+#include "OneDCoupling.hpp"
 #include "OneDImplicit.hpp"
 #include "OneDOutput.hpp"
+#include "CouplingReplay.hpp"
 
 #include <petscsys.h>
 
@@ -160,7 +162,7 @@ int main(int argc, char** argv)
 		auto options = ParseOptions(argc, argv);
 		const auto config_path = options.case_directory/"simulation_config.json";
 		const auto config_text = ReadText(config_path);
-		const auto configuration = iga::ParseOneDConfiguration(config_text);
+		auto configuration = iga::ParseOneDConfiguration(config_text);
 		const auto& flow = SelectFlow(configuration, options.system);
 		auto network = iga::ReadOneDNetwork(options.case_directory/configuration.geometry.file,
 			configuration.geometry.length_scale_to_m, flow.discretization.cells_per_segment,
@@ -170,6 +172,17 @@ int main(int argc, char** argv)
 		auto flow_state = iga::OneDFlowState{};
 		flow_state.outlets = iga::ResolveOneDOutlets(configuration, network);
 		auto transports = InitializeTransports(configuration, flow, network);
+		std::unique_ptr<iga::ReplayInletProvider> replay;
+		std::unique_ptr<iga::VcaExternalCircuit> circuit;
+		if (configuration.coupling.mode == iga::SimulationScopeMode::VcaReplay)
+			replay = std::make_unique<iga::ReplayInletProvider>(
+				iga::ReplayInletProvider::Read(options.case_directory
+					/configuration.coupling.replay_file));
+		if (configuration.coupling.mode == iga::SimulationScopeMode::VcaClosedLoop)
+			circuit = std::make_unique<iga::VcaExternalCircuit>(configuration.coupling);
+		if (circuit && (!options.restart.empty() || !options.checkpoint.empty()))
+			throw std::runtime_error(
+				"closed-loop checkpoint/restart requires coupled reservoir state and is not yet enabled");
 		const auto config_fingerprint = iga::OneDFingerprint(config_text);
 		if (options.check) {
 			if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
@@ -181,8 +194,32 @@ int main(int argc, char** argv)
 			return 0;
 		}
 		const double inlet_area = network.segments.front().area0;
-		const double initial_inlet = iga::EvaluateOneDInlet(configuration, inlet,
+		auto open_loop_inlet = [&](double time, double flow_value) {
+			iga::VascularInletState state;
+			state.time_s = time;
+			state.has_flow = true;
+			state.flow_m3_s = flow_value;
+			for (const auto& transport : transports)
+				for (const auto& species : transport.species)
+					state.species[species.definition.field]
+						= iga::EvaluateOneDSpeciesInlet(configuration, species,
+							options.case_directory, time);
+			if (configuration.physiology.enabled) {
+				state.has_hematocrit = true;
+				state.hematocrit_percent = configuration.physiology.hematocrit_percent;
+			}
+			return state;
+		};
+		double initial_inlet = iga::EvaluateOneDInlet(configuration, inlet,
 			options.case_directory, 0.0, inlet_area);
+		iga::VascularInletState initial_port;
+		if (replay) {
+			initial_port = replay->StateAt(0.0);
+			initial_inlet = iga::ApplyOneDCoupledInlet(configuration, transports, initial_port);
+		} else if (circuit) {
+			initial_port = circuit->InletState(0.0);
+			initial_inlet = iga::ApplyOneDCoupledInlet(configuration, transports, initial_port);
+		} else initial_port = open_loop_inlet(0.0, initial_inlet);
 		if (flow.model == iga::OneDFlowModel::Rigid)
 			iga::SolveRigidOneD(network, flow, flow_state, initial_inlet, configuration.time.dt);
 		else iga::InitializeCompliantOneDFromRigid(network, flow, flow_state,
@@ -197,13 +234,23 @@ int main(int argc, char** argv)
 		if (options.output_directory.empty())
 			options.output_directory = options.case_directory/"results"/"one_d"/flow.name;
 		std::unique_ptr<iga::OneDOutputWriter> writer;
+		std::unique_ptr<iga::CouplingHistoryWriter> coupling_writer;
 		if (rank == 0) {
 			iga::WriteOneDSkeletonFiles(options.output_directory, network,
 				configuration.geometry.length_scale_to_m);
 			writer = std::make_unique<iga::OneDOutputWriter>(
 				options.output_directory, network, flow);
 		}
+		if (rank == 0 && configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly)
+			coupling_writer = std::make_unique<iga::CouplingHistoryWriter>(
+				options.output_directory, configuration.coupling.mode);
 		auto derived = iga::ComputeOneDDerivedFields(configuration, transports);
+		auto initial_result = iga::BuildOneDStepResult(configuration, network,
+			flow_state, transports, initial_port, 0.0);
+		auto previous_mass = initial_result.total_mass;
+		if (coupling_writer) coupling_writer->Add(initial_result,
+			iga::AggregateVascularOutlets(initial_result.outlets,
+				configuration.coupling.flow_epsilon_m3_s));
 		double output_seconds = 0.0;
 		double solve_output_seconds = 0.0;
 		if (rank == 0) {
@@ -218,8 +265,18 @@ int main(int argc, char** argv)
 			? options.stop_after_step : configuration.time.steps;
 		for (int step = flow_state.completed_step+1; step <= final_step; ++step) {
 			const double time = step*configuration.time.dt;
-			const double inlet_flow = iga::EvaluateOneDInlet(configuration, inlet,
+			double inlet_flow = iga::EvaluateOneDInlet(configuration, inlet,
 				options.case_directory, time, inlet_area);
+			iga::VascularInletState port_inlet;
+			if (replay) {
+				port_inlet = replay->StateAt(time);
+				inlet_flow = iga::ApplyOneDCoupledInlet(
+					configuration, transports, port_inlet);
+			} else if (circuit) {
+				port_inlet = circuit->InletState(time);
+				inlet_flow = iga::ApplyOneDCoupledInlet(
+					configuration, transports, port_inlet);
+			} else port_inlet = open_loop_inlet(time, inlet_flow);
 			if (flow.scheme == iga::OneDFlowScheme::SteadyPoiseuille)
 				iga::SolveRigidOneD(network, flow, flow_state, inlet_flow, configuration.time.dt);
 			else if (flow.scheme == iga::OneDFlowScheme::ExplicitRusanov)
@@ -233,6 +290,20 @@ int main(int argc, char** argv)
 			flow_state.completed_step = step;
 			flow_state.physical_time = time;
 			derived = iga::ComputeOneDDerivedFields(configuration, transports);
+			if (configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly) {
+				auto coupled_result = iga::BuildOneDStepResult(configuration, network,
+					flow_state, transports, port_inlet, configuration.time.dt,
+					previous_mass);
+				previous_mass = coupled_result.total_mass;
+				auto venous = iga::AggregateVascularOutlets(coupled_result.outlets,
+					configuration.coupling.flow_epsilon_m3_s);
+				iga::CircuitAdvanceReport circuit_report;
+				if (circuit) circuit_report = circuit->Advance(
+					venous, configuration.time.dt, time);
+				if (coupling_writer) coupling_writer->Add(
+					std::move(coupled_result), std::move(venous),
+					std::move(circuit_report));
+			}
 			if (rank == 0 && (step%configuration.time.output_every == 0
 				|| step == final_step)) {
 				const auto before = std::chrono::steady_clock::now();
@@ -253,6 +324,7 @@ int main(int argc, char** argv)
 		}
 		const auto solve_end = std::chrono::steady_clock::now();
 		if (rank == 0) {
+			if (coupling_writer) coupling_writer->Write();
 			iga::WriteOneDPhysiologyManifest(options.output_directory,
 				configuration, transports, derived);
 			writer->Finish(flow_state,
