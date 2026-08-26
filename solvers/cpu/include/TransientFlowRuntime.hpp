@@ -16,8 +16,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -46,6 +48,14 @@ struct FlowRuntimeSummary {
 	double pressure_l2 = 0.0;
 };
 
+struct FlowConvergenceMetrics {
+	double continuity_l2 = 0.0;
+	double continuity_sum = 0.0;
+	double net_boundary_flow = 0.0;
+	double absolute_boundary_flow = 0.0;
+	double relative_mass_imbalance = 0.0;
+};
+
 class TransientFlowRuntime {
 public:
 	TransientFlowRuntime(Database& database, MPI_Comm communicator, bool configured,
@@ -66,6 +76,7 @@ public:
 			throw std::runtime_error("flow boundary data do not match database nodes");
 		MPI_Comm_rank(communicator_, &rank_);
 		owned_elements_ = database_.LoadOwned(rank_);
+		BuildBoundaryLabelIndex();
 		jacobian_ = assembler_.CreateMatrix(true);
 		state_ = assembler_.CreateVector();
 		previous_ = assembler_.CreateVector();
@@ -90,7 +101,30 @@ public:
 		KSPSetTolerances(solver_, 1e-8, PETSC_DEFAULT, PETSC_DEFAULT, 5000);
 		PC preconditioner = nullptr;
 		KSPGetPC(solver_, &preconditioner);
-		PCSetType(preconditioner, PCBJACOBI);
+		const bool scalable_default = database_.header().nodes
+			>= kScalablePreconditionerNodeThreshold;
+		if (scalable_default) {
+			PCSetType(preconditioner, PCFIELDSPLIT);
+			PCFieldSplitSetBlockSize(preconditioner, 4);
+			const PetscInt velocity_fields[] = {0, 1, 2};
+			const PetscInt pressure_fields[] = {3};
+			PCFieldSplitSetFields(preconditioner, "0", 3, velocity_fields, velocity_fields);
+			PCFieldSplitSetFields(preconditioner, "1", 1, pressure_fields, pressure_fields);
+			PCFieldSplitSetType(preconditioner, PC_COMPOSITE_SCHUR);
+			PCFieldSplitSetSchurFactType(preconditioner, PC_FIELDSPLIT_SCHUR_FACT_FULL);
+			PCFieldSplitSetSchurPre(preconditioner, PC_FIELDSPLIT_SCHUR_PRE_A11, nullptr);
+			char requested_preconditioner[64]{};
+			PetscBool has_preconditioner_override = PETSC_FALSE;
+			PetscOptionsGetString(nullptr, nullptr, "-pc_type", requested_preconditioner,
+				sizeof(requested_preconditioner), &has_preconditioner_override);
+			if (!has_preconditioner_override
+				|| std::string(requested_preconditioner) == PCFIELDSPLIT) {
+				SetDefaultPetscOption("-fieldsplit_0_ksp_type", "preonly");
+				SetDefaultPetscOption("-fieldsplit_0_pc_type", "gamg");
+				SetDefaultPetscOption("-fieldsplit_1_ksp_type", "preonly");
+				SetDefaultPetscOption("-fieldsplit_1_pc_type", "gamg");
+			}
+		} else PCSetType(preconditioner, PCBJACOBI);
 		KSPSetFromOptions(solver_);
 	}
 
@@ -133,11 +167,16 @@ public:
 	}
 
 	IGA_FLOW_NOINLINE void Advance(const SimulationConfiguration& step_configuration, int step,
-		double physical_time, int maximum_newton, double nonlinear_relative_tolerance)
+		double physical_time, int maximum_newton, double nonlinear_relative_tolerance,
+		double nonlinear_absolute_tolerance, double mass_relative_tolerance)
 	{
 		if (maximum_newton <= 0) throw std::invalid_argument("maximum Newton iterations must be positive");
 		if (!std::isfinite(nonlinear_relative_tolerance) || nonlinear_relative_tolerance <= 0.0)
 			throw std::invalid_argument("nonlinear relative tolerance must be finite and positive");
+		if (!std::isfinite(nonlinear_absolute_tolerance) || nonlinear_absolute_tolerance <= 0.0)
+			throw std::invalid_argument("nonlinear absolute tolerance must be finite and positive");
+		if (!std::isfinite(mass_relative_tolerance) || mass_relative_tolerance <= 0.0)
+			throw std::invalid_argument("mass relative tolerance must be finite and positive");
 		if (step > 0) VecCopy(state_, previous_);
 		std::vector<double> previous_capacitor_pressure(outlet_models_.size());
 		for (std::size_t i = 0; i < outlet_models_.size(); ++i)
@@ -147,7 +186,8 @@ public:
 		for (int coupling = 0; coupling < maximum_outlet_iterations; ++coupling) {
 			if (configured_) UpdateConfiguredBoundaries(step_configuration);
 			const auto converged = SolveNonlinearStep(step, physical_time, maximum_newton,
-				nonlinear_relative_tolerance);
+				nonlinear_relative_tolerance, nonlinear_absolute_tolerance,
+				mass_relative_tolerance);
 			if (!converged)
 				throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
 					+std::to_string(step+1));
@@ -307,11 +347,104 @@ public:
 	Vec State() const { return state_; }
 	const OwnedRowAssembler& Assembler() const { return assembler_; }
 	const std::vector<Element>& Elements() const { return assembler_.elements(); }
+	const std::vector<Element>& OwnedElements() const { return owned_elements_; }
 	const std::vector<std::int32_t>& RequiredNodes() const { return ghost_nodes_; }
 	std::vector<OutletModelState>& OutletModels() { return outlet_models_; }
 	const std::vector<OutletModelState>& OutletModels() const { return outlet_models_; }
 
 private:
+	static constexpr std::uint64_t kScalablePreconditionerNodeThreshold = 1000;
+
+	static void SetDefaultPetscOption(const char* name, const char* value)
+	{
+		PetscBool present = PETSC_FALSE;
+		PetscOptionsHasName(nullptr, nullptr, name, &present);
+		if (!present) PetscOptionsSetValue(nullptr, name, value);
+	}
+
+	void BuildBoundaryLabelIndex()
+	{
+		std::set<int> local;
+		for (const auto& element : owned_elements_)
+			for (const auto label : element.boundary_labels)
+				if (label >= 0) local.insert(label);
+		const int local_count = static_cast<int>(local.size());
+		int size = 0;
+		MPI_Comm_size(communicator_, &size);
+		std::vector<int> counts(static_cast<std::size_t>(size));
+		MPI_Allgather(&local_count, 1, MPI_INT, counts.data(), 1, MPI_INT, communicator_);
+		std::vector<int> offsets(static_cast<std::size_t>(size), 0);
+		for (int i = 1; i < size; ++i)
+			offsets[static_cast<std::size_t>(i)] = offsets[static_cast<std::size_t>(i-1)]
+				+counts[static_cast<std::size_t>(i-1)];
+		const auto total = offsets.back()+counts.back();
+		std::vector<int> local_labels(local.begin(), local.end());
+		std::vector<int> gathered(static_cast<std::size_t>(total));
+		MPI_Allgatherv(local_labels.data(), local_count, MPI_INT, gathered.data(), counts.data(),
+			offsets.data(), MPI_INT, communicator_);
+		std::sort(gathered.begin(), gathered.end());
+		gathered.erase(std::unique(gathered.begin(), gathered.end()), gathered.end());
+		boundary_labels_ = std::move(gathered);
+		for (std::size_t i = 0; i < boundary_labels_.size(); ++i)
+			boundary_label_index_.emplace(boundary_labels_[i], i);
+	}
+
+	FlowConvergenceMetrics MeasureConvergence(const PetscScalar* ghost_values) const
+	{
+		FlowConvergenceMetrics result;
+		const PetscScalar* residual_values = nullptr;
+		VecGetArrayRead(rhs_, &residual_values);
+		double local_continuity_squared = 0.0;
+		double local_continuity_sum = 0.0;
+		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node) {
+			const auto local = static_cast<std::size_t>(node-assembler_.node_begin())*4+3;
+			const auto value = PetscRealPart(residual_values[local]);
+			local_continuity_squared += value*value;
+			local_continuity_sum += value;
+		}
+		VecRestoreArrayRead(rhs_, &residual_values);
+		double global_continuity_squared = 0.0;
+		MPI_Allreduce(&local_continuity_squared, &global_continuity_squared, 1,
+			MPI_DOUBLE, MPI_SUM, communicator_);
+		MPI_Allreduce(&local_continuity_sum, &result.continuity_sum, 1,
+			MPI_DOUBLE, MPI_SUM, communicator_);
+		result.continuity_l2 = std::sqrt(global_continuity_squared);
+
+		std::vector<double> local_flow(boundary_labels_.size(), 0.0);
+		std::vector<double> global_flow(boundary_labels_.size(), 0.0);
+		for (const auto& element : owned_elements_) {
+			std::vector<std::array<double, 4>> nodal(element.connectivity.size());
+			for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+				const auto position = ghost_position_.at(element.connectivity[a]);
+				for (int field = 0; field < 4; ++field)
+					nodal[a][field] = PetscRealPart(ghost_values[4*position+field]);
+			}
+			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
+				const auto found = boundary_label_index_.find(element.boundary_labels[face]);
+				if (found != boundary_label_index_.end())
+					local_flow[found->second] += IntegrateBoundaryFlow(element, face, nodal);
+			}
+		}
+		if (!local_flow.empty())
+			MPI_Allreduce(local_flow.data(), global_flow.data(), static_cast<int>(local_flow.size()),
+				MPI_DOUBLE, MPI_SUM, communicator_);
+		for (const auto flow : global_flow) {
+			result.net_boundary_flow += flow;
+			result.absolute_boundary_flow += std::abs(flow);
+		}
+		if (result.absolute_boundary_flow > 0.0)
+			result.relative_mass_imbalance = 2.0*std::abs(result.net_boundary_flow)
+				/result.absolute_boundary_flow;
+		return result;
+	}
+
+	static std::string PreciseNumber(double value)
+	{
+		std::ostringstream stream;
+		stream << std::scientific << std::setprecision(16) << value;
+		return stream.str();
+	}
+
 	void BuildGhostScatter()
 	{
 		std::vector<std::int32_t> nodes;
@@ -362,7 +495,8 @@ private:
 	}
 
 	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton,
-		double nonlinear_relative_tolerance)
+		double nonlinear_relative_tolerance, double nonlinear_absolute_tolerance,
+		double mass_relative_tolerance)
 	{
 		PetscReal initial_residual = -1.0;
 		for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
@@ -402,9 +536,10 @@ private:
 				assembler_.AddElementVector(rhs_, element, local.negative_residual);
 			}
 			if (transient_) VecRestoreArrayRead(ghost_previous_, &previous_values);
-			VecRestoreArrayRead(ghost_state_, &values);
 			OwnedRowAssembler::Assemble(jacobian_);
 			OwnedRowAssembler::Assemble(rhs_);
+			const auto convergence = MeasureConvergence(values);
+			VecRestoreArrayRead(ghost_state_, &values);
 			const PetscScalar* owned = nullptr;
 			VecGetArrayRead(state_, &owned);
 			std::vector<PetscScalar> boundary_update;
@@ -422,12 +557,23 @@ private:
 			PetscReal residual = 0.0;
 			VecNorm(rhs_, NORM_2, &residual);
 			if (initial_residual < 0.0) initial_residual = residual;
-			const auto tolerance = std::max<PetscReal>(1e-10,
+			const auto residual_scale = std::sqrt(
+				static_cast<PetscReal>(assembler_.global_rows()));
+			const auto residual_rms = residual/residual_scale;
+			const auto tolerance = std::max<PetscReal>(
+				nonlinear_absolute_tolerance*residual_scale,
 				nonlinear_relative_tolerance*initial_residual);
-			if (residual <= tolerance) {
+			if (residual <= tolerance
+				&& convergence.relative_mass_imbalance <= mass_relative_tolerance) {
 				if (rank_ == 0) std::cout << "step=" << step+1 << " time=" << physical_time
 					<< " converged newton=" << nonlinear << " residual_l2=" << residual
-					<< " tolerance=" << tolerance << " assembly_s="
+					<< " residual_rms=" << residual_rms << " tolerance=" << tolerance
+					<< " absolute_rms_tolerance=" << nonlinear_absolute_tolerance
+					<< " continuity_l2=" << convergence.continuity_l2
+					<< " continuity_sum=" << convergence.continuity_sum
+					<< " net_boundary_flow=" << convergence.net_boundary_flow
+					<< " relative_mass_imbalance=" << convergence.relative_mass_imbalance
+					<< " mass_tolerance=" << mass_relative_tolerance << " assembly_s="
 					<< std::chrono::duration<double>(std::chrono::steady_clock::now()-iteration_start).count() << '\n';
 				return true;
 			}
@@ -445,7 +591,11 @@ private:
 					+std::to_string(nonlinear) + " (KSP reason="
 					+std::to_string(static_cast<int>(reason)) + ", iterations="
 					+std::to_string(static_cast<long long>(failed_iterations)) + ", residual="
-					+std::to_string(static_cast<double>(failed_residual)) + ")");
+					+PreciseNumber(static_cast<double>(failed_residual)) + ", nonlinear_residual="
+					+PreciseNumber(static_cast<double>(residual)) + ", continuity_l2="
+					+PreciseNumber(convergence.continuity_l2) + ", net_boundary_flow="
+					+PreciseNumber(convergence.net_boundary_flow) + ", relative_mass_imbalance="
+					+PreciseNumber(convergence.relative_mass_imbalance) + ")");
 			}
 			PetscInt iterations = 0;
 			KSPGetIterationNumber(solver_, &iterations);
@@ -456,11 +606,15 @@ private:
 			VecAXPY(state_, 1.0, update_);
 			if (rank_ == 0) std::cout << "step=" << step+1 << " time=" << physical_time
 				<< " newton=" << nonlinear << " residual_l2=" << residual
+				<< " residual_rms=" << residual_rms
+				<< " continuity_l2=" << convergence.continuity_l2
+				<< " continuity_sum=" << convergence.continuity_sum
+				<< " net_boundary_flow=" << convergence.net_boundary_flow
+				<< " relative_mass_imbalance=" << convergence.relative_mass_imbalance
 				<< " update_l2=" << update_norm << " linear_iterations=" << iterations
 				<< " linear_residual=" << linear_residual << " assembly_s="
 				<< std::chrono::duration<double>(linear_start-iteration_start).count()
 				<< " linear_s=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_start).count() << '\n';
-			if (update_norm < 1e-10) return true;
 		}
 		return false;
 	}
@@ -504,6 +658,8 @@ private:
 	std::set<std::int32_t> wall_trace_basis_;
 	std::vector<OutletModelState> outlet_models_;
 	std::vector<Element> owned_elements_;
+	std::vector<int> boundary_labels_;
+	std::unordered_map<int, std::size_t> boundary_label_index_;
 	OwnedRowAssembler assembler_;
 	std::vector<PetscInt> boundary_rows_;
 	std::vector<std::int32_t> ghost_nodes_;

@@ -79,12 +79,12 @@ natural boundary force `-p n`; unlike pressure Dirichlet, it retains all
 continuity rows. R/RC/RCR outlet models update this same traction through their
 3D/0D fixed-point coupling.
 
-The CPU `iga_navier_stokes` solver can remove the otherwise constant pressure
-nullspace by adding `"pressure_gauge": true` to exactly one scalar
-`pressure_traction` condition. It constrains one deterministic coefficient on
-that label to the specified traction while retaining the natural traction rows
-on the outlet. This is a Navier–Stokes gauge, not a general pressure Dirichlet
-condition.
+Do not add `"pressure_gauge": true` to a `pressure_traction` condition.
+The natural traction already fixes the pressure reference. Pinning an
+additional pressure coefficient over-constrains this formulation and requires
+discarding a continuity equation, which can hide a global mass imbalance.
+The CPU solver rejects that combination with a diagnostic asking that the
+redundant gauge be removed.
 
 ### 3D VCA port contract
 
@@ -211,10 +211,16 @@ step `N` and writes its final checkpoint, which makes restart equivalence tests
 independent of configuration edits.
 
 Use `--nonlinear-rtol R` to set the positive finite relative nonlinear residual
-tolerance (default `1e-5`). PETSc linear-solver choices remain PETSc command
-line options, such as `-ksp_*` and `-pc_*`; on failure the solver reports the
-PETSc reason, iteration count, and final residual so a case-specific choice can
-be diagnosed.
+tolerance (default `1e-5`), `--nonlinear-atol A` to set the absolute residual
+RMS tolerance per equation (default `1e-10`), and `--mass-rtol R` to set the
+boundary-flow mass-imbalance tolerance (default `1e-3`). RMS normalization keeps
+the absolute criterion independent of mesh size. A Newton state is accepted
+only when the nonlinear and mass criteria both pass. Each iteration reports the
+L2 and RMS residuals, continuity residual, and boundary-flow imbalance. PETSc
+linear-solver choices remain PETSc command-line options, such as `-ksp_*` and
+`-pc_*`; on failure the solver reports the PETSc reason, iteration count, final
+linear and nonlinear residuals, continuity norm, and boundary-flow imbalance so
+a case-specific choice can be diagnosed.
 
 Configured transport accepts the same output/restart pattern:
 

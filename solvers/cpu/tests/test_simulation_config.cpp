@@ -113,11 +113,16 @@ int main()
 	assert(materialized_flow_boundaries.pressure_nodes == 0);
 	auto gauge_configuration = materialized;
 	gauge_configuration.boundaries[1].conditions[1].pressure_gauge = true;
-	const auto gauge_boundaries = iga::ResolveFlowBoundaries(gauge_configuration,
-		iga::FirstNavierStokesSystem(gauge_configuration), {0, 1},
-		{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
-	assert(gauge_boundaries.pressure_nodes == 1);
-	assert(std::abs(gauge_boundaries.pressure[1]-3.0) < 1e-14);
+	bool gauge_rejected = false;
+	try {
+		iga::ResolveFlowBoundaries(gauge_configuration,
+			iga::FirstNavierStokesSystem(gauge_configuration), {0, 1},
+			{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
+	} catch (const std::runtime_error& error) {
+		gauge_rejected = std::string(error.what()).find("preserve every continuity equation")
+			!= std::string::npos;
+	}
+	assert(gauge_rejected);
 	const auto compiled = iga::CompileLinearSystem(configuration, "species");
 	assert(compiled.fields.size() == 2);
 	assert(compiled.field_index.at("oxygen") == 0);

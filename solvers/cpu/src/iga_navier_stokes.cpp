@@ -40,6 +40,8 @@ struct FlowOptions {
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
 	double nonlinear_relative_tolerance = 1e-5;
+	double nonlinear_absolute_tolerance = 1e-10;
+	double mass_relative_tolerance = 1e-3;
 };
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
@@ -76,7 +78,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [--nonlinear-rtol R]");
+		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -101,7 +103,12 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--stop-after-step") options.stop_after_step = ParsePositiveInteger(value, argument);
 		else if (argument == "--nonlinear-rtol")
 			options.nonlinear_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--nonlinear-atol")
+			options.nonlinear_absolute_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--mass-rtol")
+			options.mass_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
+		PetscOptionsClearValue(nullptr, argument.c_str());
 	}
 	if (options.output_every > 0 && options.output.empty())
 		throw std::runtime_error("--output-every requires --output or legacy OUTPUT");
@@ -284,12 +291,11 @@ int main(int argc, char** argv)
 			port_faces.emplace(configuration.coupling.three_d_ports.inlet_label, 0);
 			for (const auto label : configuration.coupling.three_d_ports.outlet_labels)
 				port_faces.emplace(label, 0);
-			for (const auto& element : flow.Elements())
-				if (element.owner == rank)
-					for (const auto label : element.boundary_labels) {
-						auto found = port_faces.find(label);
-						if (found != port_faces.end()) ++found->second;
-					}
+			for (const auto& element : flow.OwnedElements())
+				for (const auto label : element.boundary_labels) {
+					auto found = port_faces.find(label);
+					if (found != port_faces.end()) ++found->second;
+				}
 			for (auto& item : port_faces) {
 				long long global_faces = 0;
 				MPI_Allreduce(&item.second, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
@@ -300,10 +306,9 @@ int main(int argc, char** argv)
 		}
 		for (const auto& model : flow.OutletModels()) {
 			long long local_faces = 0;
-			for (const auto& element : flow.Elements())
-				if (element.owner == rank)
-					for (const auto label : element.boundary_labels)
-						if (label == model.label) ++local_faces;
+			for (const auto& element : flow.OwnedElements())
+				for (const auto label : element.boundary_labels)
+					if (label == model.label) ++local_faces;
 			long long global_faces = 0;
 			MPI_Allreduce(&local_faces, &global_faces, 1, MPI_LONG_LONG, MPI_SUM, PETSC_COMM_WORLD);
 			if (global_faces == 0) throw std::runtime_error("outlet model label "
@@ -316,10 +321,9 @@ int main(int argc, char** argv)
 				iga::FirstNavierStokesSystem(traction_configuration));
 			for (const auto& traction : tractions) {
 				long long local_faces = 0;
-				for (const auto& element : flow.Elements())
-					if (element.owner == rank)
-						for (const auto label : element.boundary_labels)
-							if (label == traction.first) ++local_faces;
+				for (const auto& element : flow.OwnedElements())
+					for (const auto label : element.boundary_labels)
+						if (label == traction.first) ++local_faces;
 				long long global_faces = 0;
 				MPI_Allreduce(&local_faces, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
 					PETSC_COMM_WORLD);
@@ -426,7 +430,8 @@ int main(int argc, char** argv)
 						vca_transport->System(), inlet);
 			}
 			flow.Advance(step_configuration, step, physical_time, options.max_newton,
-				options.nonlinear_relative_tolerance);
+				options.nonlinear_relative_tolerance, options.nonlinear_absolute_tolerance,
+				options.mass_relative_tolerance);
 			if (vca_transport) {
 				vca_transport->Advance(step_configuration, flow.RequiredNodes(),
 					flow.GatherRequiredVelocity());

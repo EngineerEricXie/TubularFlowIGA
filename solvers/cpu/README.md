@@ -74,9 +74,11 @@ legacy single-update time while using about 4.45x less peak memory.
 
 Two cylinder transport steps reproduce the legacy fields to relative L2 errors
 of `4.18e-7` for `N0` and `3.13e-7` for `Nplus`. The converged default
-block-Jacobi/ILU Navier-Stokes run used 94 s and 1.51 GiB. A measured Schur
-field-split alternative used 180 s and 1.67 GiB, so block-Jacobi/ILU remains
-the default.
+block-Jacobi/ILU Navier-Stokes run at the time of this benchmark used 94 s and
+1.51 GiB. A different measured Schur field-split alternative used 180 s and
+1.67 GiB. These historical measurements do not characterize the current
+size-aware GAMG Schur default described below; rebenchmark it before making a
+new Bridges-2 performance claim.
 
 ### Larger validated CPU case
 
@@ -182,7 +184,19 @@ fields, systems, operators, viscosity, time integration, and per-field boundary
 conditions. A velocity Dirichlet condition can use a three-component value or
 `initial_velocityfield.txt` profile plus scale. The old two-file input remains
 accepted only as a transition adapter. Navier-Stokes uses nonlinear relative
-tolerance `1e-5`; configured transport uses relative tolerance `1e-8`.
+tolerance `1e-5`, absolute residual RMS tolerance `1e-10` per equation, and
+boundary mass-imbalance tolerance `1e-3`; configured transport uses relative
+tolerance `1e-8`. Override the flow criteria with `--nonlinear-rtol R`,
+`--nonlinear-atol A`, and `--mass-rtol R`. The solver accepts a Newton state
+only when the nonlinear and mass criteria both pass and prints L2/RMS,
+continuity, and boundary-flow diagnostics for every iteration.
+
+The default Navier--Stokes preconditioner is size-aware. Cases below 1,000
+control points retain block Jacobi, which is efficient and deterministic for
+small validation problems. Larger mixed velocity-pressure systems use a full
+Schur field split with the stabilized pressure block (`A11`) and PETSc GAMG for
+both subproblems. Standard PETSc options still take precedence; for example,
+`-pc_type bjacobi` explicitly selects the legacy preconditioner.
 
 Backward-Euler flow supports time-indexed text output and a PETSc checkpoint
 state with validated JSON metadata:
