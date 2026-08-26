@@ -359,7 +359,20 @@ int main(int argc, char** argv)
 			if (rank == 0) std::cout << "restart=" << options.restart.string()
 				<< " completed_step=" << start_step << " physical_time=" << metadata.physical_time << '\n';
 		} else {
-			flow.InitializeState();
+			if (vca_circuit) {
+				auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration,
+					options.case_dir.string(), 0.0);
+				const auto initial_inlet = vca_circuit->InletState(0.0);
+				iga::ApplyThreeDVascularInlet(initial_configuration,
+					iga::FirstNavierStokesSystem(initial_configuration), initial_inlet,
+					vca_reference_inlet_flow);
+				if (vca_transport)
+					iga::ApplyThreeDVascularSpeciesInlet(initial_configuration,
+						vca_transport->System(), initial_inlet);
+				flow.InitializeState(initial_configuration);
+			} else {
+				flow.InitializeState();
+			}
 		}
 		flow.CopyStateToPrevious();
 

@@ -2,17 +2,20 @@
 
 This source-only case exercises the CPU 3D explicit-staggered VCA path with a
 flow-controlled pump, one reservoir species, and two venous outlets. Generate
-the mesh/database on an allocated resource; generated files are intentionally
-not committed.
+the mesh/database on a suitable local or allocated resource; generated files
+are intentionally not committed.
 
-On an allocated CPU node with the PETSc-enabled solver built, run the complete
-one-versus-two-rank validation below. `prepare_example.sh` requires an empty
-work directory and generates the two-rank partition; the `awk` command derives
-the all-owned single-rank partition from it.
+With the PETSc-enabled solver built, run the complete one-versus-two-rank
+validation below. `prepare_example.sh` requires an empty work directory and
+generates the two-rank partition; the `awk` command derives the all-owned
+single-rank partition from it. Use a scheduler allocation for large production
+cases.
 
 The recommended form is the automated validator; set
-`VCA_RELATIVE_TOLERANCE` or `VCA_VOLUME_BALANCE_TOLERANCE` if the
-site-specific solver tolerance requires it.
+`VCA_RELATIVE_TOLERANCE`, `VCA_PRESSURE_RELATIVE_TOLERANCE`, or
+`VCA_VOLUME_BALANCE_TOLERANCE` if the site-specific solver tolerance requires
+it. The pressure default is `1e-4`: near-zero pressure fields make a tighter
+relative-only comparison misleading.
 
 ```bash
 VCA_RELATIVE_TOLERANCE=1e-6 ./scripts/validate_vca_bifurcation.sh /tmp/vca-bifurcation

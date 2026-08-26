@@ -34,6 +34,7 @@ public:
 			throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
 		if (labels_.size() != database.header().nodes)
 			throw std::runtime_error("transport boundary labels do not match database nodes");
+		owned_elements_ = database.LoadOwned(rank_);
 		const auto boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
 		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
 			for (std::size_t field = 0; field < system_.fields.size(); ++field)
@@ -184,8 +185,7 @@ public:
 		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
 			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
-		for (const auto& element : assembler_.elements()) {
-			if (element.owner != rank_) continue;
+		for (const auto& element : owned_elements_) {
 			for (std::size_t qz = 0; qz < 4; ++qz)
 				for (std::size_t qy = 0; qy < 4; ++qy)
 					for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -213,8 +213,7 @@ public:
 		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
 			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
-		for (const auto& element : assembler_.elements()) {
-			if (element.owner != rank_) continue;
+		for (const auto& element : owned_elements_) {
 			for (std::size_t qz = 0; qz < 4; ++qz)
 				for (std::size_t qy = 0; qy < 4; ++qy)
 					for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -243,8 +242,7 @@ public:
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& term : system_.terms)
 			if (term.kind == TermKind::VolumeSource)
-				for (const auto& element : assembler_.elements()) {
-					if (element.owner != rank_) continue;
+				for (const auto& element : owned_elements_) {
 					for (std::size_t qz = 0; qz < 4; ++qz)
 						for (std::size_t qy = 0; qy < 4; ++qy)
 							for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -265,6 +263,8 @@ private:
 	void BuildGhostScatter()
 	{
 		for (const auto& element : assembler_.elements())
+			ghost_nodes_.insert(ghost_nodes_.end(), element.connectivity.begin(), element.connectivity.end());
+		for (const auto& element : owned_elements_)
 			ghost_nodes_.insert(ghost_nodes_.end(), element.connectivity.begin(), element.connectivity.end());
 		std::sort(ghost_nodes_.begin(), ghost_nodes_.end());
 		ghost_nodes_.erase(std::unique(ghost_nodes_.begin(), ghost_nodes_.end()), ghost_nodes_.end());
@@ -294,6 +294,7 @@ private:
 	CompiledLinearSystem system_;
 	OwnedRowAssembler assembler_;
 	std::vector<int> labels_;
+	std::vector<Element> owned_elements_;
 	std::vector<PetscInt> boundary_rows_;
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;

@@ -58,13 +58,19 @@ Implemented in `feature/native-vca-vascular-integration`:
 - VCA checkpoint schema v2 includes a simulation-config fingerprint, transport
   system name, inlet/outlet port labels, and device-model identity. Restart
   rejects any mismatch, including all pre-v2 metadata.
+- The physical source bifurcation case completed on WSL in one and two MPI
+  ranks, including full, split, and resumed runs. Same-rank flow and transport
+  checkpoint states compare byte-for-byte. The one-versus-two-rank velocity
+  relative L2 is `2.26e-7`; pressure relative L2 is `7.71e-5` while its
+  absolute L2 is `2.66e-9 Pa`; all six manifests keep the largest reservoir
+  volume change below `4.93e-13 m^3`.
+- VCA reference inlet flow, port measurements, and transport mass/source
+  diagnostics integrate complete element-owner sets rather than the
+  row-required assembly sets. Their ghost exchanges include those owner-set
+  nodes, so a geometric element partition cannot silently omit port faces.
 
 Not yet demonstrated or intentionally unsupported:
 
-- A completed coupled flow-and-transport smoke run through the source
-  bifurcation case on two ranks. The locally prepared case is large enough
-  that it must be run on an allocated CPU resource, not a shared login node.
-- One-versus-two-rank agreement for the physical source case.
 - 3D VCA replay/open-loop modes, CUDA VCA, more than one transport system,
   and a transport source other than the current in-memory flow state.
 - Flow-only VCA checkpoint/restart. It remains rejected because there is no
@@ -223,22 +229,25 @@ explicitly because it cannot prove this identity.
    and two ranks. Run
    `make -C solvers/cpu test` and, with PETSc,
    `make -C solvers/cpu PETSC_DIR=... petsc-test`.
-2. **Next required run:** execute the source bifurcation case on one and two
-   allocated CPU ranks. Check port histories, field norms, and finite reservoir
-   and balance values. Do not commit generated case data.
+2. **Done locally:** execute the source bifurcation case on one and two MPI
+   ranks with the automated full, split, and restart validation. The one-/two-
+   rank velocity relative L2 is `2.26e-7`; pressure relative L2 is `7.71e-5`
+   (`2.66e-9 Pa` absolute); all manifest reservoir volume changes are below
+   `4.93e-13 m^3`. Do not commit generated case data.
 3. **Done locally:** the no-source, equal initial/inlet passive tracer fixture
    checks final vascular plus reservoir mass against its initial total with an
    absolute tolerance of `2e-8 mol`.
 4. **Done locally:** oxygenator source is reported separately and matches the
    vascular-plus-reservoir oxygen increase within `2e-8 mol`.
-5. MPI: repeat the physical smoke case on one and two ranks; compare port histories,
-   final reservoir state, and field norms.
+5. **Done locally:** compare physical one-/two-rank port histories, final
+   reservoir state, and field norms. The explicit `LoadOwned(rank)` port and
+   mass diagnostics prevent row-partition overlap from altering these values.
 6. **Done locally:** repeat the one-rank restart equivalence test on two ranks;
    both flow and transport PETSc state files compare byte-for-byte, and the
    reservoir state agrees.
 7. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
    `make -C solvers/one_d core-test`, and `git diff --check`.
 
-Do not claim full 3D VCA support until items 1--5 pass. Do not enable CUDA VCA
-until it has the same explicit port, species-flux, reservoir, and restart
-semantics.
+The local CPU 3D VCA acceptance items are complete. Run larger production
+validations through the scheduler; do not enable CUDA VCA until it has the
+same explicit port, species-flux, reservoir, and restart semantics.

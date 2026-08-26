@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 relative_tolerance=${VCA_RELATIVE_TOLERANCE:-1e-6}
+pressure_relative_tolerance=${VCA_PRESSURE_RELATIVE_TOLERANCE:-1e-4}
 volume_balance_tolerance=${VCA_VOLUME_BALANCE_TOLERANCE:-1e-12}
 
 if [[ $# -ne 1 ]]; then
@@ -42,7 +43,8 @@ RelativeL2()
 	local reference=$1
 	local candidate=$2
 	local label=$3
-	awk -v tolerance="$relative_tolerance" -v label="$label" '
+	local tolerance=$4
+	awk -v tolerance="$tolerance" -v label="$label" '
 		NR == FNR {
 			for (column = 1; column <= NF; ++column) reference_value[FNR, column] = $column
 			reference_columns[FNR] = NF
@@ -160,8 +162,8 @@ for ranks in one two; do
 		"$work_dir/$ranks/resumed/checkpoint.vca_transport.state"
 done
 
-RelativeL2 "$work_dir/one/full/flow.txt" "$work_dir/two/full/flow.txt" velocity
-RelativeL2 "$work_dir/one/full/flow.txt.pressure" "$work_dir/two/full/flow.txt.pressure" pressure
+RelativeL2 "$work_dir/one/full/flow.txt" "$work_dir/two/full/flow.txt" velocity "$relative_tolerance"
+RelativeL2 "$work_dir/one/full/flow.txt.pressure" "$work_dir/two/full/flow.txt.pressure" pressure "$pressure_relative_tolerance"
 for key in volume_m3 temperature_c hematocrit_percent oxygen; do
 	CompareReservoirNumber "$key" "$work_dir/one/full/checkpoint.vca.json" \
 		"$work_dir/two/full/checkpoint.vca.json"

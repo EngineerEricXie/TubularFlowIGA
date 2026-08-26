@@ -62,6 +62,7 @@ public:
 			|| boundary_velocity_.size() != database_.header().nodes)
 			throw std::runtime_error("flow boundary data do not match database nodes");
 		MPI_Comm_rank(communicator_, &rank_);
+		owned_elements_ = database_.LoadOwned(rank_);
 		jacobian_ = assembler_.CreateMatrix(true);
 		state_ = assembler_.CreateVector();
 		previous_ = assembler_.CreateVector();
@@ -116,6 +117,12 @@ public:
 		VecCopy(state_, previous_);
 	}
 
+	void InitializeState(const SimulationConfiguration& initial_configuration)
+	{
+		if (configured_) UpdateConfiguredBoundaries(initial_configuration);
+		InitializeState();
+	}
+
 	void CopyStateToPrevious()
 	{
 		VecCopy(state_, previous_);
@@ -168,8 +175,7 @@ public:
 	IGA_FLOW_NOINLINE double ReferenceBoundaryFlow(int label) const
 	{
 		double local = 0.0;
-		for (const auto& element : assembler_.elements()) {
-			if (element.owner != rank_) continue;
+		for (const auto& element : owned_elements_) {
 			std::vector<std::array<double, 4>> nodal(element.connectivity.size());
 			for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
 				const auto node = static_cast<std::size_t>(element.connectivity[a]);
@@ -203,8 +209,7 @@ public:
 		ScatterState();
 		const PetscScalar* values = nullptr;
 		VecGetArrayRead(ghost_state_, &values);
-		for (const auto& element : assembler_.elements()) {
-			if (element.owner != rank_) continue;
+		for (const auto& element : owned_elements_) {
 			std::vector<std::array<double, 4>> nodal(element.connectivity.size());
 			for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
 				const auto position = ghost_position_.at(element.connectivity[a]);
@@ -304,6 +309,8 @@ private:
 	{
 		std::vector<std::int32_t> nodes;
 		for (const auto& element : assembler_.elements())
+			nodes.insert(nodes.end(), element.connectivity.begin(), element.connectivity.end());
+		for (const auto& element : owned_elements_)
 			nodes.insert(nodes.end(), element.connectivity.begin(), element.connectivity.end());
 		std::sort(nodes.begin(), nodes.end());
 		nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
@@ -449,8 +456,7 @@ private:
 		ScatterState();
 		const PetscScalar* values = nullptr;
 		VecGetArrayRead(ghost_state_, &values);
-		for (const auto& element : assembler_.elements()) {
-			if (element.owner != rank_) continue;
+		for (const auto& element : owned_elements_) {
 			std::vector<std::array<double, 4>> nodal(element.connectivity.size());
 			for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
 				const auto position = ghost_position_.at(element.connectivity[a]);
@@ -478,6 +484,7 @@ private:
 	std::vector<int> labels_;
 	std::vector<std::array<double, 3>> boundary_velocity_;
 	std::vector<OutletModelState> outlet_models_;
+	std::vector<Element> owned_elements_;
 	OwnedRowAssembler assembler_;
 	std::vector<PetscInt> boundary_rows_;
 	std::vector<std::int32_t> ghost_nodes_;

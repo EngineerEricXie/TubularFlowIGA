@@ -145,7 +145,7 @@ void WriteCase(const fs::path& directory, double initial_oxygen = 0.2,
   "boundaries": [
     {"label": 1, "name": "arterial_inlet", "conditions": [
       {"field": "velocity", "type": "dirichlet",
-       "profile": "initial_velocityfield.txt", "scale": 0.001},
+       "profile": "initial_velocityfield.txt", "scale": 1.0},
       {"field": "oxygen", "type": "dirichlet", "value": INITIAL_OXYGEN}
     ]},
     {"label": 2, "name": "venous_outlet_a", "conditions": [
