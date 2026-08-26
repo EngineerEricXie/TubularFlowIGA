@@ -1,0 +1,128 @@
+{
+  "schema_version": 3,
+  "dimension": "3d",
+  "fields": [
+    {"name": "velocity", "kind": "vector3"},
+    {"name": "pressure", "kind": "pressure"},
+    {"name": "oxygen", "kind": "scalar", "initial_value": 0.10},
+    {"name": "glucose", "kind": "scalar", "initial_value": 4.5},
+    {"name": "lactate", "kind": "scalar", "initial_value": 1.0},
+    {"name": "carbon_dioxide", "kind": "scalar", "initial_value": 1.2},
+    {"name": "bicarbonate", "kind": "scalar", "initial_value": 24.0},
+    {"name": "vasodilator", "kind": "scalar", "initial_value": 0.0}
+  ],
+  "time": {"dt": 1.0, "steps": 8},
+  "temporal_functions": [
+    {
+      "name": "inlet_pulse",
+      "kind": "sinusoid",
+      "units": "dimensionless",
+      "mean": 1.0,
+      "amplitude": 0.35,
+      "period": 8.0,
+      "phase": 0.0
+    }
+  ],
+  "velocity_sources": [
+    {
+      "name": "flow_velocity_series",
+      "kind": "snapshot_series",
+      "manifest": "flow_velocity.series.csv",
+      "interpolation": "linear",
+      "out_of_range": "hold"
+    }
+  ],
+  "equation_systems": [
+    {
+      "name": "blood_flow",
+      "kind": "navier_stokes",
+      "unknowns": ["velocity", "pressure"],
+      "viscosity": 1.0,
+      "density": 1.0e-8,
+      "time_integration": "backward_euler"
+    },
+    {
+      "name": "multispecies_physiology_3d",
+      "kind": "linear_transport",
+      "unknowns": ["oxygen", "glucose", "lactate", "carbon_dioxide", "bicarbonate", "vasodilator"],
+      "terms": [
+        {"operator": "time_derivative", "equation": "oxygen"},
+        {"operator": "diffusion", "equation": "oxygen", "coefficient": 0.10},
+        {"operator": "advection", "equation": "oxygen", "velocity": "flow_velocity_series"},
+        {"operator": "time_derivative", "equation": "glucose"},
+        {"operator": "diffusion", "equation": "glucose", "coefficient": 0.067},
+        {"operator": "advection", "equation": "glucose", "velocity": "flow_velocity_series"},
+        {"operator": "time_derivative", "equation": "lactate"},
+        {"operator": "diffusion", "equation": "lactate", "coefficient": 0.08},
+        {"operator": "advection", "equation": "lactate", "velocity": "flow_velocity_series"},
+        {"operator": "time_derivative", "equation": "carbon_dioxide"},
+        {"operator": "diffusion", "equation": "carbon_dioxide", "coefficient": 0.12},
+        {"operator": "advection", "equation": "carbon_dioxide", "velocity": "flow_velocity_series"},
+        {"operator": "time_derivative", "equation": "bicarbonate"},
+        {"operator": "diffusion", "equation": "bicarbonate", "coefficient": 0.08},
+        {"operator": "advection", "equation": "bicarbonate", "velocity": "flow_velocity_series"},
+        {"operator": "time_derivative", "equation": "vasodilator"},
+        {"operator": "diffusion", "equation": "vasodilator", "coefficient": 0.08},
+        {"operator": "linear_coupling", "equation": "vasodilator", "coefficient": 0.02},
+        {"operator": "advection", "equation": "vasodilator", "velocity": "flow_velocity_series"}
+      ],
+      "stabilization": [
+        {"equation": "oxygen", "method": "supg", "velocity": "flow_velocity_series"},
+        {"equation": "glucose", "method": "supg", "velocity": "flow_velocity_series"},
+        {"equation": "lactate", "method": "supg", "velocity": "flow_velocity_series"},
+        {"equation": "carbon_dioxide", "method": "supg", "velocity": "flow_velocity_series"},
+        {"equation": "bicarbonate", "method": "supg", "velocity": "flow_velocity_series"},
+        {"equation": "vasodilator", "method": "supg", "velocity": "flow_velocity_series"}
+      ]
+    }
+  ],
+  "boundaries": [
+    {"label": 0, "name": "wall", "conditions": [
+      {"field": "velocity", "type": "dirichlet", "value": [0.0, 0.0, 0.0]},
+      {"field": "oxygen", "type": "robin", "coefficient": 0.02, "exterior_value": 0.05},
+      {"field": "glucose", "type": "no_flux"},
+      {"field": "lactate", "type": "no_flux"},
+      {"field": "carbon_dioxide", "type": "no_flux"},
+      {"field": "bicarbonate", "type": "no_flux"},
+      {"field": "vasodilator", "type": "no_flux"}
+    ]},
+    {"label": 1, "name": "inlet", "conditions": [
+      {"field": "velocity", "type": "dirichlet", "profile": "initial_velocityfield.txt", "scale": 2.0, "waveform": "inlet_pulse"},
+      {"field": "oxygen", "type": "dirichlet", "value": 0.14},
+      {"field": "glucose", "type": "dirichlet", "value": 6.0},
+      {"field": "lactate", "type": "dirichlet", "value": 0.5},
+      {"field": "carbon_dioxide", "type": "dirichlet", "value": 1.1},
+      {"field": "bicarbonate", "type": "dirichlet", "value": 24.0},
+      {"field": "vasodilator", "type": "dirichlet", "value": 0.0}
+    ]},
+    {"label": 2, "name": "outlet_a", "conditions": [
+      {"field": "pressure", "type": "pressure_traction", "value": 0.0},
+      {"field": "oxygen", "type": "advective_outflow"},
+      {"field": "glucose", "type": "advective_outflow"},
+      {"field": "lactate", "type": "advective_outflow"},
+      {"field": "carbon_dioxide", "type": "advective_outflow"},
+      {"field": "bicarbonate", "type": "advective_outflow"},
+      {"field": "vasodilator", "type": "advective_outflow"}
+    ]}
+  ],
+  "physiology": {
+    "enabled": true,
+    "metabolism": {
+      "oxygen": -0.002,
+      "glucose": -0.001,
+      "lactate": 0.001,
+      "carbon_dioxide": 0.001,
+      "vasodilator": 0.0005
+    },
+    "oxygen_capacity": {
+      "enabled": true,
+      "hematocrit_percent": 35.0,
+      "oxygen_solubility": 0.0031,
+      "hemoglobin_g_dl": 12.0,
+      "p50_mmhg": 26.8,
+      "hill_exponent": 2.7
+    },
+    "vasodilation": {"enabled": false},
+    "derived_fields": ["pO2", "pCO2", "pH", "SaO2", "total_oxygen", "hematocrit"]
+  }
+}

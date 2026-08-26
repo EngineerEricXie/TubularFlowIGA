@@ -17,9 +17,17 @@
     {"name": "bicarbonate", "kind": "scalar", "initial_value": 24.0},
     {"name": "vasodilator", "kind": "scalar", "initial_value": 0.0}
   ],
-  "time": {"dt": 0.001, "steps": 10, "output_every": 1},
+  "time": {"dt": 0.002, "steps": 120, "output_every": 1},
   "temporal_functions": [
-    {"name": "inlet_flow", "kind": "constant", "units": "m3/s", "value": 1.0e-8}
+    {
+      "name": "inlet_flow_pulse",
+      "kind": "sinusoid",
+      "units": "m3/s",
+      "mean": 4.0e-7,
+      "amplitude": 1.2e-7,
+      "period": 0.12,
+      "phase": 0.0
+    }
   ],
   "equation_systems": [
     {
@@ -40,7 +48,7 @@
       "discretization": {"cells_per_segment": 3, "cfl": 0.75}
     },
     {
-      "name": "vca_transport_1d",
+      "name": "multispecies_physiology_1d",
       "kind": "network_transport_1d",
       "unknowns": ["oxygen", "glucose", "lactate", "carbon_dioxide", "bicarbonate", "vasodilator"],
       "flow_system": "blood_flow_1d",
@@ -60,7 +68,7 @@
       "role": "inlet",
       "node_ids": [1],
       "conditions": [
-        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_flow"},
+        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_flow_pulse"},
         {"field": "oxygen", "type": "dirichlet", "value": 0.14},
         {"field": "glucose", "type": "dirichlet", "value": 6.0},
         {"field": "lactate", "type": "dirichlet", "value": 0.5},
