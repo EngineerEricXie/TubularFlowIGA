@@ -49,7 +49,7 @@ Implemented in `feature/native-vca-vascular-integration`:
   state restore.
 - A one-element/two-port end-to-end smoke test that runs flow, transport,
   external-circuit advance, manifest generation, checkpoint, and restart. Its
-  uninterrupted and resumed single-rank flow/transport PETSc state files
+  uninterrupted and resumed one- and two-rank flow/transport PETSc state files
   compare byte-for-byte; the one- and two-rank velocity/pressure fields and
   reservoir state agree to `1e-10` relative tolerance. Its oxygenator fixture
   starts the vascular field at the arterial equilibrium and verifies a positive
@@ -191,7 +191,7 @@ that step.
 | `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
 | `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** V2 metadata round-trip plus step and port-identity mismatch rejection. |
 | `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. |
-| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it checks passive-tracer and oxygenator mass balance, uninterrupted/restarted state, and one-/two-rank flow fields plus reservoir state. |
+| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it checks passive-tracer and oxygenator mass balance, one-/two-rank uninterrupted/restarted state, and one-/two-rank flow fields plus reservoir state. |
 | `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
@@ -231,7 +231,9 @@ explicitly because it cannot prove this identity.
    vascular-plus-reservoir oxygen increase within `2e-8 mol`.
 5. MPI: repeat the physical smoke case on one and two ranks; compare port histories,
    final reservoir state, and field norms.
-6. Restart: repeat the one-rank restart equivalence test on two ranks.
+6. **Done locally:** repeat the one-rank restart equivalence test on two ranks;
+   both flow and transport PETSc state files compare byte-for-byte, and the
+   reservoir state agrees.
 7. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
    `make -C solvers/one_d core-test`, and `git diff --check`.
 

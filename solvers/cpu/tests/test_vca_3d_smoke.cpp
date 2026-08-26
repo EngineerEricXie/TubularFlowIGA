@@ -313,6 +313,17 @@ int main()
 		RequireCloseFiles(root/"full/flow.txt.pressure", root/"two-rank/flow.txt.pressure",
 			1e-10, "pressure field");
 		RequireSameReservoir(root/"full/checkpoint", root/"two-rank/checkpoint");
+		Run(two_rank_database, root, root/"two-rank-split/checkpoint", " --stop-after-step 1",
+			"mpiexec -np 2 ");
+		Run(two_rank_database, root, root/"two-rank-resumed/checkpoint",
+			" --restart "+Quote(root/"two-rank-split/checkpoint"), "mpiexec -np 2 ");
+		if (!SameFile(root/"two-rank/checkpoint.state",
+			root/"two-rank-resumed/checkpoint.state"))
+			throw std::runtime_error("two-rank flow checkpoint/restart state differs from uninterrupted VCA run");
+		if (!SameFile(root/"two-rank/checkpoint.vca_transport.state",
+			root/"two-rank-resumed/checkpoint.vca_transport.state"))
+			throw std::runtime_error("two-rank transport checkpoint/restart state differs from uninterrupted VCA run");
+		RequireSameReservoir(root/"two-rank/checkpoint", root/"two-rank-resumed/checkpoint");
 		const auto oxygenator_directory = root/"oxygenator";
 		fs::create_directories(oxygenator_directory);
 		const auto oxygenator_database = oxygenator_directory/"fixture.ntiga";
