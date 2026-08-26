@@ -21,7 +21,7 @@ general-purpose CFD package.
 |---|---|---|
 | Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; explicit Rusanov and PETSc implicit formulations; pressure, R, and RCR outlets; rigid-wall steady and transient 3D Navier--Stokes | 1D–3D coupling and FSI are not included; 3D walls remain rigid |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
-| Generic biological transport | 1D conservative multi-species transport with reaction, source, wall exchange, metabolism, blood-gas derived fields, and vasodilation; configurable 3D scalar transport | The physiology layer is a configurable reduced model, not patient calibration or tissue-resolved VCA |
+| Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D vasodilation is disabled because rigid-wall flow has no FSI |
 
 CPU and CUDA use the same `simulation_config.json` schema and packed `.ntiga`
 database. CUDA configured transport supports one through eight scalar fields.
@@ -31,10 +31,15 @@ database. CUDA configured transport supports one through eight scalar fields.
 The image above shows velocity magnitude from the connected
 `vascular_flow/iga_wordmark` example.
 
-| 3D vascular flow | Neuron transport |
+| 3D pulse multispecies physiology | 1D pulse multispecies physiology |
 |---|---|
-| ![ParaView center slice of velocity magnitude in the Y-bifurcation vascular example](docs/images/vascular-y-bifurcation-velocity.png) | ![ParaView center slice of Nplus in the branched-neurite transport example](docs/images/neuron-branched-nplus.png) |
-| Steady flow through a Y-bifurcation. | Two-field transport through a branched neurite. |
+| ![3D pulse flow with oxygen, glucose, and lactate transport](docs/images/multispecies-3d-pulse.gif) | ![1D pulse flow with oxygen, glucose, and lactate transport](docs/images/multispecies-1d-pulse.gif) |
+| Transient Navier--Stokes velocity plus six transported species on a curved vessel. | Compliant pressure-network flow plus six conservative network species. |
+
+| Steady-state 3D vascular flow | Neuron material transport |
+|---|---|
+| ![ParaView center slice of velocity magnitude in the steady-state Y-bifurcation vascular example](docs/images/vascular-y-bifurcation-velocity.png) | ![Animated Nplus transport through the branched-neurite example](docs/images/neuron-branched-transport.gif) |
+| Steady-state rigid-wall flow through a Y-bifurcation. | Time-dependent two-field material transport through a branched neurite. |
 
 Reproduction commands are in the [examples catalog](examples/README.md), and
 numerical checks are recorded in the
@@ -72,7 +77,8 @@ to a separate work directory.
 | Branching neuron transport | Branched neurite | `./scripts/prepare_example.sh neuron_transport/branched_neurite` |
 | First native 1D run | Straight Poiseuille vessel | `./solvers/one_d/iga_1d examples/one_d/rigid_straight --check` |
 | Compliant 1D flow | Pulsatile Y-bifurcation | `./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation` |
-| 1D VCA-style transport | Six-species branching network | `./solvers/one_d/iga_1d examples/one_d/vca_transport` |
+| 1D multispecies physiology | Six-species pulse network | `./solvers/one_d/iga_1d examples/one_d/multispecies_physiology` |
+| 3D multispecies pulse | Navier--Stokes plus six species | `./scripts/prepare_example.sh vascular_flow/multispecies_pulse` |
 
 See the [examples catalog](examples/README.md) for the input contract and case
 descriptions.
@@ -106,6 +112,8 @@ MPI implementation used at runtime. CUDA compilation requires the CUDA Toolkit,
 while an NVIDIA GPU and compatible driver are needed only at runtime. See the
 [dependency and installation guide](docs/DEPENDENCIES.md) for PETSc setup,
 CUDA/Conda on WSL, RHEL-family systems, and Bridges-2.
+ParaView/`pvbatch` and Pillow (`python3-pil`) are optional and are needed only
+to inspect PVD/VTU results or regenerate the README animations.
 
 ## Native 1D quick start
 
@@ -205,7 +213,9 @@ mpiexec -np 2 ./solvers/cpu/iga_solve \
 The flow solver writes three velocity columns to the requested path and one
 pressure column to the neighboring `.pressure` file. Configured transport
 writes `node_id` followed by fields in configured order; the neighboring
-`.fields` file records `N0` and `Nplus`.
+`.fields` file records their names. Both solvers also write a ParaView-ready
+final `.vtu`; `--output-every N` additionally creates step-indexed `.vtu`
+snapshots and a `.pvd` time collection.
 
 ## Run on one CUDA GPU
 
@@ -334,8 +344,8 @@ Current scope limits are important when interpreting results:
   patient-validated model;
 - the packed IGA geometry is normalized, so physical interpretation requires a
   documented dimensional scaling;
-- VCA-style metabolism and blood-gas derived fields are available in 1D, but
-  full RBC/PFC chemistry, tissue calibration, and parameter fitting are not;
+- reduced metabolism and blood-gas derived fields are available in 1D and 3D,
+  but full RBC/PFC chemistry, tissue calibration, and parameter fitting are not;
 - neuron transport is not neuron electrophysiology.
 
 For shared clusters, run simulations on allocated compute resources rather

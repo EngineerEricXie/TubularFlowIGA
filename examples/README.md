@@ -14,9 +14,10 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/bent_tube` | Curved rigid vessel | `blood_flow` |
 | Vascular flow | `vascular_flow/y_bifurcation` | One inlet and two independent outlets | `blood_flow` |
 | Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
+| Vascular flow | `vascular_flow/multispecies_pulse` | Pulsatile 3D Navier--Stokes and six-species physiology | `blood_flow` + `multispecies_physiology_3d` |
 | Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
 | Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
-| Native 1D | `one_d/vca_transport` | Six-species transport, physiology, and vasodilation | `blood_flow_1d` + `vca_transport_1d` |
+| Native 1D | `one_d/multispecies_physiology` | Pulsatile six-species transport, physiology, and vasodilation | `blood_flow_1d` + `multispecies_physiology_1d` |
 | Native 1D | `one_d/liver_vein_obj_segment` | Radius-annotated OBJ skeleton input | `blood_flow_1d` |
 | Vascular flow | `vascular_flow/liver_vein_obj_segment` | 3D mesh and flow from the same OBJ excerpt | `blood_flow` |
 

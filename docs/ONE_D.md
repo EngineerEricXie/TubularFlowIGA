@@ -172,6 +172,12 @@ then affects the next flow step. Supported requested derived arrays are `pO2`,
 transport dependencies are configuration errors; the output manifest records
 all solved and derived fields.
 
+The `unknowns` and `species` arrays are the config controls for what is
+simulated. There is no hard-coded oxygen, glucose, or neuron species set. The
+`multispecies_physiology` example selects six fields; another case may select a
+smaller or different scalar set and enable physiology helpers only when their
+named dependencies are present.
+
 ## Checkpoint and restart
 
 ```bash

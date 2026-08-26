@@ -180,7 +180,8 @@ Use the Navier--Stokes command with a prepared `vascular_flow/*` case and the
 transport command with a prepared `neuron_transport/*` case. See the
 [examples catalog](../../examples/README.md) for the source inputs and
 preparation command. Each public configuration intentionally contains only its
-matching application system.
+matching application system except `vascular_flow/multispecies_pulse`, which
+runs flow followed by six-species transport.
 
 Configured CPU and CUDA transport lower the same weak-form terms and write a
 neighboring `.fields` file recording output names. Navier-Stokes reads viscosity
@@ -192,6 +193,10 @@ output. Straight-tube and 14,565-node branching parity/restart gates pass.
 Both transient solvers accept `--stop-after-step N`, which writes an intentional
 mid-run checkpoint while retaining the full configured horizon for restart
 validation.
+Both CUDA production paths also write a final ParaView `.vtu`; time-indexed
+output creates step `.vtu` files and a `.pvd` collection using the same point
+array names as CPU. The legacy flow `.vtk` companion remains for compatibility.
+Transient collections include the initialized `step000000` state.
 The fixed `transport` command remains only for old input compatibility. See the
 [configurable PDE guide](../../docs/PDE_CONFIGURATION.md).
 

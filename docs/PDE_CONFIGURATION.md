@@ -124,6 +124,15 @@ expresses the previous two-field neuron equations using the same generic
 operators. Application-specific examples deliberately do not mix unrelated
 flow and transport systems in one configuration.
 
+The `vascular_flow/multispecies_pulse` showcase intentionally combines them.
+Its `linear_transport.unknowns` array is the config selection of species to
+simulate; each selected field has matching weak-form terms and boundary
+conditions. The optional top-level `physiology` block adds signed metabolism
+rates to those species and requests output-time blood-gas arrays. Dependencies
+are validated before assembly. Three-dimensional vasodilation is rejected
+because the current rigid mesh has no FSI; radius feedback remains available
+in the 1D solver.
+
 ## CPU use
 
 After preparing the mesh database and loading the documented PETSc/MPI setup:
@@ -136,6 +145,13 @@ mpiexec -np 2 ./solvers/cpu/iga_solve \
 Omit the system name only when the case has one linear transport system. The
 output contains `node_id` followed by fields in configured order; a neighboring
 `.fields` file records their names.
+
+Every requested 3D result also has a ParaView XML companion. A final solve
+writes `NAME.vtu`; time-indexed output writes `NAME.stepNNNNNN.vtu` and a
+`NAME.pvd` collection. Flow point data contain `velocity` and `pressure`.
+Transport point data contain every configured unknown plus requested derived
+physiology arrays. Legacy text, `.pressure`, and `.fields` outputs remain for
+validation and CPU/CUDA comparison.
 
 `iga_navier_stokes DATABASE CASE_DIR` reads the `navier_stokes` system and its
 velocity/pressure boundary values from the same file. `steady` performs one

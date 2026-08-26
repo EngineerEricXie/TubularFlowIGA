@@ -172,9 +172,10 @@ mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
 Use the Navier--Stokes command with a prepared `vascular_flow/*` case and the
 transport command with a prepared `neuron_transport/*` case. The
 application-specific source cases and preparation command are documented in
-the [examples catalog](../../examples/README.md). Do not run both commands
-against one public example: each configuration intentionally contains only its
-matching equation system.
+the [examples catalog](../../examples/README.md). Most small configurations
+contain one matching equation system; `vascular_flow/multispecies_pulse`
+intentionally runs flow first and then six-species transport from its generated
+velocity snapshot manifest.
 
 The canonical [`simulation_config.json`](../../docs/PDE_CONFIGURATION.md) names
 fields, systems, operators, viscosity, time integration, and per-field boundary
@@ -195,6 +196,13 @@ mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
   "$DATABASE" "$CASE_DIR" --output resumed.txt \
   --restart flow-checkpoint
 ~~~
+
+Alongside text output, both production solvers write a final ParaView XML
+`.vtu`. With `--output-every N`, they also write step-indexed `.vtu` files and
+a `.pvd` time collection. Flow arrays are `velocity` and `pressure`; transport
+arrays include every configured species and requested derived physiology
+field. Transient collections begin with the initialized `step000000` state, so
+animations preserve the configured initial values before the first solve.
 
 The metadata validates node count, completed step, physical time, `dt`, density,
 and viscosity before restart. A final checkpoint is written even when the final

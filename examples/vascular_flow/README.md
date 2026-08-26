@@ -13,14 +13,61 @@ calibration.
 | `bent_tube` | Planar quarter bend | wall 0, inlet 1, outlet 2 |
 | `y_bifurcation` | One inlet splitting into two arms | wall 0, inlet 1, outlets 2 and 3 |
 | `iga_wordmark` | Connected IGA-letter showcase pipe | wall 0, inlet 1, outlet 2 |
+| `multispecies_pulse` | Curved pulse-driven multiphysics showcase | wall 0, inlet 1, outlet 2 |
 | `liver_vein_obj_segment` | Vertices 1–12 from the radius-annotated liver OBJ | wall 0, inlet 1, outlet 2 |
 
-Every configuration contains only the `blood_flow` system with velocity and
-pressure fields. Walls are no-slip, the generated inlet profile is multiplied
-by scale `0.01` in the three simple geometries, and outlets use zero natural
-pressure traction. The wordmark instead uses scale `0.005` and density `1e-5`
-as a Stokes-limit visualization case. These values are numerical example
-parameters, not patient-specific blood calibration.
+## Results
+
+| Steady-state Y-bifurcation | Transient multispecies pulse |
+|---|---|
+| ![Steady-state velocity magnitude through the 3D Y-bifurcation](../../docs/images/vascular-y-bifurcation-velocity.png) | ![Transient velocity, oxygen, glucose, and lactate through the curved vessel](../../docs/images/multispecies-3d-pulse.gif) |
+| The two outlets carry nearly equal outward flow in the symmetric rigid-wall geometry. | The fixed time-series color ranges show the pulse velocity and three concentration fronts over `t=0` through `t=8`. |
+
+`straight_tube`, `bent_tube`, `y_bifurcation`, `iga_wordmark`, and
+`liver_vein_obj_segment` are steady-state flow cases. They solve velocity and
+pressure without a physical-time loop. `multispecies_pulse` is deliberately
+different: it first solves transient flow, then transports six scalar species
+with those velocity snapshots.
+
+Except for `multispecies_pulse`, each configuration contains only the
+`blood_flow` system with velocity and pressure fields. Walls are no-slip, the
+generated inlet profile is multiplied by scale `0.01` in the three simple
+geometries, and outlets use zero natural pressure traction. The wordmark
+instead uses scale `0.005` and density `1e-5` as a Stokes-limit visualization
+case. These values are numerical example parameters, not patient-specific
+blood calibration.
+
+`multispecies_pulse` is the intentional exception. It combines transient
+Navier--Stokes with config-selected oxygen, glucose, lactate, carbon dioxide,
+bicarbonate, and vasodilator transport, metabolism, Robin oxygen exchange, and
+derived blood-gas arrays. Its eight-second pulse and inlet scale are selected
+so the animation covers roughly one advective transit through the example;
+they are numerical showcase units, not calibrated blood parameters. Run flow
+first so it writes
+`flow_velocity.series.csv`, then run the named transport system:
+
+```bash
+RANKS=8 ./scripts/prepare_example.sh \
+  vascular_flow/multispecies_pulse "$MULTISPECIES_WORK"
+DB="$MULTISPECIES_WORK/multispecies_pulse-8.ntiga"
+
+mpiexec -np 8 ./solvers/cpu/iga_navier_stokes "$DB" "$MULTISPECIES_WORK" \
+  --output "$MULTISPECIES_WORK/flow_velocity.txt" --output-every 1
+mpiexec -np 8 ./solvers/cpu/iga_solve "$DB" "$MULTISPECIES_WORK" \
+  --system multispecies_physiology_3d \
+  --output "$MULTISPECIES_WORK/multispecies.txt" --output-every 1
+```
+
+The resulting `.pvd` files open directly in ParaView. Reproduce the README GIF
+from the repository root with:
+
+```bash
+pvbatch scripts/render_multiphysics_gif.py --dimension 3d \
+  --flow "$MULTISPECIES_WORK/flow_velocity.pvd" \
+  --transport "$MULTISPECIES_WORK/multispecies.pvd" \
+  --output docs/images/multispecies-3d-pulse.gif \
+  --title "3D pulse multispecies physiology" --frames 9
+```
 
 ## Run the README wordmark
 
