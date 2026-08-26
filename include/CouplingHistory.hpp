@@ -9,9 +9,20 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace iga {
+
+inline std::string CouplingEscapeJson(const std::string& value)
+{
+	std::string result;
+	for (const char character : value) {
+		if (character == '\\' || character == '"') result.push_back('\\');
+		result.push_back(character);
+	}
+	return result;
+}
 
 inline void WriteCouplingMap(std::ostream& output,
 	const std::map<std::string, double>& values)
@@ -19,10 +30,20 @@ inline void WriteCouplingMap(std::ostream& output,
 	output << '{';
 	bool first = true;
 	for (const auto& value : values) {
-		output << (first ? "" : ", ") << '"' << value.first << "\": " << value.second;
+		output << (first ? "" : ", ") << '"' << CouplingEscapeJson(value.first)
+			<< "\": " << value.second;
 		first = false;
 	}
 	output << '}';
+}
+
+inline void WriteCouplingOutletIds(std::ostream& output,
+	const std::vector<int>& outlet_ids)
+{
+	output << '[';
+	for (std::size_t i = 0; i < outlet_ids.size(); ++i)
+		output << (i == 0 ? "" : ", ") << outlet_ids[i];
+	output << ']';
 }
 
 class CouplingHistoryWriter {
@@ -32,27 +53,43 @@ public:
 		: directory_(std::move(directory)), mode_(mode) {}
 
 	void Add(VascularStepResult step, AggregatedVascularReturn venous,
-		CircuitAdvanceReport report)
+		CircuitAdvanceReport report = {})
 	{
 		steps_.push_back(std::move(step));
 		venous_.push_back(std::move(venous));
 		reports_.push_back(std::move(report));
 	}
 
-	void Write(const std::string& backend) const
+	void Write(const std::string& backend = {}) const
 	{
 		std::filesystem::create_directories(directory_);
 		std::ofstream output(directory_/"coupling_manifest.json");
 		if (!output) throw std::runtime_error("cannot create coupling manifest");
 		output << std::setprecision(17)
 			<< "{\n  \"schema_version\": 1,\n  \"mode\": \""
-			<< SimulationScopeModeName(mode_) << "\",\n  \"backend\": \""
-			<< backend << "\",\n  \"arterial_inlet_history\": [";
+			<< SimulationScopeModeName(mode_) << '\"';
+		if (!backend.empty()) output << ",\n  \"backend\": \"" << CouplingEscapeJson(backend) << '\"';
+		output << ",\n  \"scheme\": \"explicit_staggered\",\n"
+			<< "  \"lag\": \"vascular step uses arterial state at t; closed-loop reservoir advances from that step's aggregated venous return\",\n"
+			<< "  \"units\": {\"time\": \"s\", \"flow\": \"m^3/s\", \"pressure\": \"Pa\", \"concentration\": \"mol/m^3\", \"species_flux\": \"mol/s\", \"species_mass\": \"mol\", \"source_rate\": \"mol/s\"},\n"
+			<< "  \"arterial_inlet_history\": [";
 		for (std::size_t i = 0; i < steps_.size(); ++i) {
-			const auto& inlet = steps_[i].inlet;
-			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": " << inlet.time_s
-				<< ", \"flow_m3_s\": " << inlet.flow_m3_s << ", \"species\": ";
-			WriteCouplingMap(output, inlet.species);
+			const auto& step = steps_[i];
+			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": "
+				<< step.inlet.time_s << ", \"flow_m3_s\": ";
+			if (step.inlet.has_flow) output << step.inlet.flow_m3_s;
+			else output << "null";
+			output << ", \"pressure_pa\": ";
+			if (step.inlet.has_pressure) output << step.inlet.pressure_pa;
+			else output << "null";
+			output << ", \"species\": ";
+			WriteCouplingMap(output, step.inlet.species);
+			output << ", \"temperature_c\": ";
+			if (step.inlet.has_temperature) output << step.inlet.temperature_c;
+			else output << "null";
+			output << ", \"hematocrit_percent\": ";
+			if (step.inlet.has_hematocrit) output << step.inlet.hematocrit_percent;
+			else output << "null";
 			output << '}';
 		}
 		if (!steps_.empty()) output << '\n';
@@ -61,13 +98,17 @@ public:
 			const auto& value = venous_[i];
 			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": "
 				<< steps_[i].time_s << ", \"flow_m3_s\": " << value.flow_m3_s
-				<< ", \"pressure_pa\": " << value.pressure_pa
-				<< ", \"species_flux_mol_s\": ";
+				<< ", \"pressure_pa\": ";
+			if (value.pressure_valid) output << value.pressure_pa;
+			else output << "null";
+			output << ", \"species_flux_mol_s\": ";
 			WriteCouplingMap(output, value.species_flux);
-			output << ", \"outlet_ids\": [";
-			for (std::size_t j = 0; j < value.outlet_ids.size(); ++j)
-				output << (j == 0 ? "" : ", ") << value.outlet_ids[j];
-			output << "]}";
+			output << ", \"flux_weighted_concentration\": ";
+			WriteCouplingMap(output, value.flux_weighted_concentration);
+			output << ", \"average_valid\": "
+				<< (value.average_valid ? "true" : "false") << ", \"outlet_ids\": ";
+			WriteCouplingOutletIds(output, value.outlet_ids);
+			output << '}';
 		}
 		if (!venous_.empty()) output << '\n';
 		output << "  ],\n  \"vca_balance_history\": [";

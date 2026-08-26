@@ -2,50 +2,14 @@
 #define IGA_ONE_D_COUPLING_HPP
 
 #include "OneDTransport.hpp"
-#include "VascularCoupling.hpp"
+#include "CouplingHistory.hpp"
 
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
 #include <map>
-#include <ostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace iga {
-
-inline std::string CouplingEscapeJson(const std::string& value)
-{
-	std::string result;
-	for (const char character : value) {
-		if (character == '\\' || character == '"') result.push_back('\\');
-		result.push_back(character);
-	}
-	return result;
-}
-
-inline void WriteCouplingNumberMap(std::ostream& output,
-	const std::map<std::string, double>& values)
-{
-	output << '{';
-	bool first = true;
-	for (const auto& item : values) {
-		output << (first ? "" : ", ") << '"' << CouplingEscapeJson(item.first)
-			<< "\": " << item.second;
-		first = false;
-	}
-	output << '}';
-}
-
-inline void WriteCouplingOutletIds(std::ostream& output,
-	const std::vector<int>& outlet_ids)
-{
-	output << '[';
-	for (std::size_t i = 0; i < outlet_ids.size(); ++i)
-		output << (i == 0 ? "" : ", ") << outlet_ids[i];
-	output << ']';
-}
 
 inline double ApplyOneDCoupledInlet(OneDConfiguration& configuration,
 	std::vector<OneDTransportState>& transports, const VascularInletState& inlet)
@@ -174,100 +138,6 @@ inline VascularStepResult BuildOneDStepResult(const OneDConfiguration& configura
 	}
 	return result;
 }
-
-class CouplingHistoryWriter {
-public:
-	explicit CouplingHistoryWriter(std::filesystem::path output_directory,
-		SimulationScopeMode mode)
-		: output_directory_(std::move(output_directory)), mode_(mode) {}
-
-	void Add(VascularStepResult step, AggregatedVascularReturn venous,
-		CircuitAdvanceReport circuit = {})
-	{
-		steps_.push_back(std::move(step));
-		venous_.push_back(std::move(venous));
-		circuit_.push_back(std::move(circuit));
-	}
-
-	void Write() const
-	{
-		std::filesystem::create_directories(output_directory_);
-		std::ofstream output(output_directory_/"coupling_manifest.json");
-		if (!output) throw std::runtime_error("cannot create coupling manifest");
-		output << std::setprecision(17)
-			<< "{\n  \"schema_version\": 1,\n  \"mode\": \""
-			<< SimulationScopeModeName(mode_)
-			<< "\",\n  \"scheme\": \"explicit_staggered\",\n"
-			<< "  \"lag\": \"vascular step uses arterial state at t; closed-loop reservoir advances from that step's aggregated venous return\",\n"
-			<< "  \"units\": {\"time\": \"s\", \"flow\": \"m^3/s\", \"pressure\": \"Pa\", \"concentration\": \"mol/m^3\", \"species_flux\": \"mol/s\", \"species_mass\": \"mol\", \"source_rate\": \"mol/s\"},\n"
-			<< "  \"arterial_inlet_history\": [";
-		for (std::size_t i = 0; i < steps_.size(); ++i) {
-			const auto& step = steps_[i];
-			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": "
-				<< step.inlet.time_s << ", \"flow_m3_s\": ";
-			if (step.inlet.has_flow) output << step.inlet.flow_m3_s;
-			else output << "null";
-			output << ", \"pressure_pa\": ";
-			if (step.inlet.has_pressure) output << step.inlet.pressure_pa;
-			else output << "null";
-			output << ", \"species\": ";
-			WriteCouplingNumberMap(output, step.inlet.species);
-			output << ", \"temperature_c\": ";
-			if (step.inlet.has_temperature) output << step.inlet.temperature_c;
-			else output << "null";
-			output << ", \"hematocrit_percent\": ";
-			if (step.inlet.has_hematocrit) output << step.inlet.hematocrit_percent;
-			else output << "null";
-			output << '}';
-		}
-		if (!steps_.empty()) output << '\n';
-		output << "  ],\n  \"aggregated_venous_return_history\": [";
-		for (std::size_t i = 0; i < venous_.size(); ++i) {
-			const auto& venous = venous_[i];
-			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": "
-				<< steps_[i].time_s << ", \"flow_m3_s\": " << venous.flow_m3_s
-				<< ", \"pressure_pa\": ";
-			if (venous.pressure_valid) output << venous.pressure_pa;
-			else output << "null";
-			output << ", \"species_flux_mol_s\": ";
-			WriteCouplingNumberMap(output, venous.species_flux);
-			output << ", \"flux_weighted_concentration\": ";
-			WriteCouplingNumberMap(output, venous.flux_weighted_concentration);
-			output << ", \"average_valid\": "
-				<< (venous.average_valid ? "true" : "false") << ", \"outlet_ids\": ";
-			WriteCouplingOutletIds(output, venous.outlet_ids);
-			output << '}';
-		}
-		if (!venous_.empty()) output << '\n';
-		output << "  ],\n  \"vca_balance_history\": [";
-		for (std::size_t i = 0; i < circuit_.size(); ++i) {
-			const auto& circuit = circuit_[i];
-			const auto& step = steps_[i];
-			output << (i == 0 ? "\n" : ",\n") << "    {\"time_s\": "
-				<< circuit.time_s << ", \"volume_change_m3\": "
-				<< circuit.volume_change_m3 << ", \"species_mass_change_mol\": ";
-			WriteCouplingNumberMap(output, circuit.species_mass_change);
-			output << ", \"device_source_mol_s\": ";
-			WriteCouplingNumberMap(output, circuit.device_source_rate);
-			output << ", \"vascular_total_mass_mol\": ";
-			WriteCouplingNumberMap(output, step.total_mass);
-			output << ", \"vascular_source_integrals_mol_s\": ";
-			WriteCouplingNumberMap(output, step.source_integrals);
-			output << ", \"vascular_balance_residuals_mol_s\": ";
-			WriteCouplingNumberMap(output, step.balance_residuals);
-			output << '}';
-		}
-		if (!circuit_.empty()) output << '\n';
-		output << "  ]\n}\n";
-	}
-
-private:
-	std::filesystem::path output_directory_;
-	SimulationScopeMode mode_;
-	std::vector<VascularStepResult> steps_;
-	std::vector<AggregatedVascularReturn> venous_;
-	std::vector<CircuitAdvanceReport> circuit_;
-};
 
 } // namespace iga
 

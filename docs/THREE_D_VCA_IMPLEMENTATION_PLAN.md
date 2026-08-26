@@ -172,7 +172,8 @@ that step.
 | `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
 | `solvers/cpu/include/BoundaryFlow.hpp` | **Changed.** Signed scalar flux and scalar/area integrals. |
 | `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
-| `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer. Next: remove the now-duplicated writer from `solvers/one_d/include/OneDCoupling.hpp` and have 1D include this header. |
+| `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer with the established explicit-staggered schema, units, port validity, and JSON escaping. |
+| `solvers/one_d/include/OneDCoupling.hpp` | **Changed.** Uses the generic history writer; 1D-specific inlet/mass/port calculations remain local. |
 | `include/VcaCheckpoint.hpp` | **Changed.** VCA metadata parser/validator. Next: add configuration/port fingerprint fields before treating restart as production-ready. |
 | `solvers/cpu/tests/test_boundary_flow.cpp` | **Changed.** Covers positive and negative signed species flux. |
 | `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
