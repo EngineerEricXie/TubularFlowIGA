@@ -315,6 +315,8 @@ int main(int argc, char** argv)
 		if (vca_has_transport)
 			vca_transport = std::make_unique<iga::TransientTransportRuntime>(database,
 				PETSC_COMM_WORLD, configuration, vca_transport_system, labels);
+		if (vca_transport && vca_transport->RequiredNodes() != flow.RequiredNodes())
+			throw std::runtime_error("VCA flow and transport required-node layouts differ");
 		if (vca_circuit) {
 			vca_checkpoint_identity.configuration_fingerprint = iga::VcaConfigurationFingerprint(
 				options.case_dir/"simulation_config.json");
@@ -351,8 +353,8 @@ int main(int argc, char** argv)
 					transport_path = iga::VcaCheckpointMetadataPath(options.restart).parent_path()/transport_path;
 				vca_transport->ReadState(transport_path);
 				vca_circuit->RestoreState(vca_metadata.reservoir);
-				vca_species_state = vca_transport->GatherState();
-				vca_previous_mass = vca_transport->TotalMass(vca_species_state);
+				vca_species_state = vca_transport->GatherRequiredState();
+				vca_previous_mass = vca_transport->TotalMass();
 			}
 			if (rank == 0) std::cout << "restart=" << options.restart.string()
 				<< " completed_step=" << start_step << " physical_time=" << metadata.physical_time << '\n';
@@ -390,8 +392,9 @@ int main(int argc, char** argv)
 			}
 			flow.Advance(step_configuration, step, physical_time, options.max_newton);
 			if (vca_transport) {
-				vca_transport->Advance(step_configuration, flow.GatherVelocity());
-				vca_species_state = vca_transport->GatherState();
+				vca_transport->Advance(step_configuration, flow.RequiredNodes(),
+					flow.GatherRequiredVelocity());
+				vca_species_state = vca_transport->GatherRequiredState();
 			}
 			if (vca_circuit) {
 				const auto ports = flow.MeasurePorts(configuration.coupling.three_d_ports,
@@ -411,7 +414,7 @@ int main(int argc, char** argv)
 								= species.second/outlet.flow_m3_s;
 				}
 				if (vca_transport) {
-					result.total_mass = vca_transport->TotalMass(vca_species_state);
+					result.total_mass = vca_transport->TotalMass();
 					result.source_integrals = vca_transport->SourceIntegrals();
 					for (const auto& mass : result.total_mass) {
 						const auto old = vca_previous_mass.find(mass.first);

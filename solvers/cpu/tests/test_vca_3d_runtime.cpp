@@ -117,12 +117,18 @@ int main(int argc, char** argv)
 		iga::TransientTransportRuntime runtime(database, PETSC_COMM_WORLD,
 			initial_configuration, system, std::vector<int>(64, 1));
 		auto step_configuration = MakeConfiguration(2.0);
-		runtime.Advance(step_configuration, std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}));
+		assert(runtime.RequiredNodes().size() == 64);
+		runtime.Advance(step_configuration, runtime.RequiredNodes(),
+			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}));
 		const auto state = runtime.GatherState();
+		const auto required_state = runtime.GatherRequiredState();
 		assert(state.size() == 64);
+		assert(required_state == state);
 		for (const auto value : state) RequireNear(2.0, value, 1e-11, "Dirichlet transport state");
 		const auto mass = runtime.TotalMass(state);
 		RequireNear(2.0, mass.at("oxygen"), 1e-10, "unit-cube oxygen mass");
+		RequireNear(2.0, runtime.TotalMass().at("oxygen"), 1e-10,
+			"required-node unit-cube oxygen mass");
 		RequireNear(0.0, runtime.SourceIntegrals().at("oxygen"), 1e-12, "oxygen source integral");
 		runtime.WriteState(state_path);
 		iga::TransientTransportRuntime restored(database, PETSC_COMM_WORLD,

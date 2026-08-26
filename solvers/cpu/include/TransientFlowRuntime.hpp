@@ -190,8 +190,8 @@ public:
 		const std::vector<double>& species_state) const
 	{
 		if (!species_fields.empty()
-			&& species_state.size() != database_.header().nodes*species_fields.size())
-			throw std::runtime_error("VCA species state size does not match flow database");
+			&& species_state.size() != ghost_nodes_.size()*species_fields.size())
+			throw std::runtime_error("VCA species state size does not match flow-required nodes");
 		std::map<int, std::size_t> index;
 		for (std::size_t i = 0; i < ports.outlet_labels.size(); ++i)
 			index.emplace(ports.outlet_labels[i], i);
@@ -222,7 +222,7 @@ public:
 				for (std::size_t field = 0; field < species_fields.size(); ++field) {
 					std::vector<double> species(element.connectivity.size());
 					for (std::size_t a = 0; a < element.connectivity.size(); ++a)
-						species[a] = species_state[static_cast<std::size_t>(element.connectivity[a])
+						species[a] = species_state[ghost_position_.at(element.connectivity[a])
 							*species_fields.size()+field];
 					local_species[port*species_fields.size()+field]
 						+= IntegrateBoundarySpeciesFlux(element, face, nodal, species);
@@ -251,23 +251,17 @@ public:
 		return result;
 	}
 
-	IGA_FLOW_NOINLINE std::vector<std::array<double, 3>> GatherVelocity() const
+	IGA_FLOW_NOINLINE std::vector<std::array<double, 3>> GatherRequiredVelocity() const
 	{
-		Vec all = nullptr;
-		VecScatter gather = nullptr;
-		VecScatterCreateToAll(state_, &gather, &all);
-		VecScatterBegin(gather, state_, all, INSERT_VALUES, SCATTER_FORWARD);
-		VecScatterEnd(gather, state_, all, INSERT_VALUES, SCATTER_FORWARD);
+		ScatterState();
 		const PetscScalar* values = nullptr;
-		VecGetArrayRead(all, &values);
-		std::vector<std::array<double, 3>> velocity(database_.header().nodes);
-		for (std::uint64_t node = 0; node < database_.header().nodes; ++node)
+		VecGetArrayRead(ghost_state_, &values);
+		std::vector<std::array<double, 3>> velocity(ghost_nodes_.size());
+		for (std::size_t node = 0; node < ghost_nodes_.size(); ++node)
 			for (int component = 0; component < 3; ++component)
 				velocity[static_cast<std::size_t>(node)][static_cast<std::size_t>(component)]
 					= PetscRealPart(values[4*node+component]);
-		VecRestoreArrayRead(all, &values);
-		VecScatterDestroy(&gather);
-		VecDestroy(&all);
+		VecRestoreArrayRead(ghost_state_, &values);
 		return velocity;
 	}
 
@@ -301,6 +295,7 @@ public:
 	Vec State() const { return state_; }
 	const OwnedRowAssembler& Assembler() const { return assembler_; }
 	const std::vector<Element>& Elements() const { return assembler_.elements(); }
+	const std::vector<std::int32_t>& RequiredNodes() const { return ghost_nodes_; }
 	std::vector<OutletModelState>& OutletModels() { return outlet_models_; }
 	const std::vector<OutletModelState>& OutletModels() const { return outlet_models_; }
 
@@ -312,11 +307,12 @@ private:
 			nodes.insert(nodes.end(), element.connectivity.begin(), element.connectivity.end());
 		std::sort(nodes.begin(), nodes.end());
 		nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+		ghost_nodes_ = std::move(nodes);
 		std::vector<PetscInt> rows;
-		rows.reserve(4*nodes.size());
-		for (std::size_t i = 0; i < nodes.size(); ++i) {
-			ghost_position_.emplace(nodes[i], i);
-			for (int field = 0; field < 4; ++field) rows.push_back(4*nodes[i]+field);
+		rows.reserve(4*ghost_nodes_.size());
+		for (std::size_t i = 0; i < ghost_nodes_.size(); ++i) {
+			ghost_position_.emplace(ghost_nodes_[i], i);
+			for (int field = 0; field < 4; ++field) rows.push_back(4*ghost_nodes_[i]+field);
 		}
 		ISCreateGeneral(communicator_, static_cast<PetscInt>(rows.size()), rows.data(),
 			PETSC_COPY_VALUES, &source_rows_);
@@ -484,6 +480,7 @@ private:
 	std::vector<OutletModelState> outlet_models_;
 	OwnedRowAssembler assembler_;
 	std::vector<PetscInt> boundary_rows_;
+	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;
 	std::map<int, double> pressure_tractions_;
 	Mat jacobian_ = nullptr;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
 
@@ -18,8 +19,9 @@ struct GenericTransportMatrices {
 	std::vector<PetscScalar> source;
 };
 
-inline GenericTransportMatrices BuildGenericTransportElement(const Element& element,
-	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+template <class VelocityAt>
+inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const Element& element,
+	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
 	const SimulationConfiguration& configuration)
 {
 	if (system.fields.empty()) throw std::runtime_error("linear transport system has no fields");
@@ -53,7 +55,7 @@ inline GenericTransportMatrices BuildGenericTransportElement(const Element& elem
 				std::array<double, 3> velocity{};
 				for (std::size_t a = 0; a < nen; ++a)
 					for (int d = 0; d < 3; ++d)
-						velocity[d] += basis.value[a] * nodal_velocity.at(static_cast<std::size_t>(element.connectivity[a]))[d];
+						velocity[d] += basis.value[a] * velocity_at(element.connectivity[a])[d];
 				double inverse_length = 0.0;
 				for (std::size_t a = 0; a < nen; ++a)
 					inverse_length += std::abs(velocity[0]*basis.gradient[a][0]
@@ -144,6 +146,16 @@ inline GenericTransportMatrices BuildGenericTransportElement(const Element& elem
 			}
 	}
 	return matrices;
+}
+
+inline GenericTransportMatrices BuildGenericTransportElement(const Element& element,
+	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration)
+{
+	return BuildGenericTransportElementWithVelocity(element,
+		[&nodal_velocity](std::int32_t node) -> const std::array<double, 3>& {
+			return nodal_velocity.at(static_cast<std::size_t>(node));
+		}, system, configuration);
 }
 
 } // namespace iga

@@ -32,8 +32,8 @@ Implemented in `feature/native-vca-vascular-integration`:
   inlet state, solves flow, solves one in-memory transport system using the
   current flow velocity, reduces outlet flow/pressure/species fluxes across
   MPI, advances the external circuit, and writes `coupling_manifest.json`.
-- `TransientTransportRuntime`, including gathered scalar state, total-mass and
-  volume-source diagnostics, and PETSc binary state import/export.
+- `TransientTransportRuntime`, including required-node scalar state, total-mass
+  and volume-source diagnostics, and PETSc binary state import/export.
 - Signed outward species-flux quadrature in `BoundaryFlow.hpp`, dynamic scalar
   inlet materialization, and port-result construction in
   `ThreeDVcaCoupling.hpp`.
@@ -125,9 +125,9 @@ Initial implementation constraints are acceptable and should be explicit:
   conditions at the declared VCA inlet.
 
 Avoid a per-step text/VTK velocity round-trip. It is non-conservative, slow,
-and breaks MPI ownership. A temporary all-rank PETSc gather is acceptable only
-as a clearly marked correctness-first implementation; replace it with a
-shared ghost-vector evaluation before performance validation.
+and breaks MPI ownership. The coupled path exchanges only the velocity and
+scalar values on its shared required-node layout; diagnostic full-state gather
+remains available for tests and output tooling only.
 
 ### 3. Add boundary species-flux integration — implemented
 
@@ -181,7 +181,7 @@ that step.
 | --- | --- |
 | `solvers/cpu/src/iga_navier_stokes.cpp` | **Changed.** Retains CLI, VCA circuit/transport ordering, output, and checkpoint metadata; flow step work delegates to `TransientFlowRuntime`. |
 | `solvers/cpu/include/TransientFlowRuntime.hpp` | **Changed.** Owns transient Navier--Stokes state, ghost scatter, Newton/KSP, outlet fixed-point coupling, port measurements, velocity gather, and summary norms. |
-| `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. MPI total-mass and source diagnostics integrate only element owners. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
+| `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. Its VCA path exchanges only shared required-node velocity/scalar values; MPI total-mass and source diagnostics integrate only element owners. |
 | `solvers/cpu/include/BoundaryFlow.hpp` | **Changed.** Signed scalar flux and scalar/area integrals. |
 | `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
 | `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer with the established explicit-staggered schema, units, port validity, and JSON escaping. |
