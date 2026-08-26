@@ -17,6 +17,8 @@
 #include "TemporalFunction.hpp"
 #include "TransportCheckpoint.hpp"
 #include "VelocitySeries.hpp"
+#include "PhysiologyOutput.hpp"
+#include "VtkOutput.hpp"
 
 #include <cuda_runtime.h>
 
@@ -29,6 +31,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -317,6 +320,20 @@ void WriteNavierStokesVtk(const fs::path& mesh_path, const fs::path& path, const
 		output << values[node*4] << ' ' << values[node*4+1] << ' ' << values[node*4+2] << '\n';
 	output << "SCALARS Pressure double 1\nLOOKUP_TABLE default\n";
 	for (std::size_t node = 0; node < values.size()/4; ++node) output << values[node*4+3] << '\n';
+}
+
+void WriteNavierStokesVtu(const fs::path& mesh_path, const fs::path& path,
+	const std::vector<double>& values, double physical_time)
+{
+	std::vector<double> velocity(3*values.size()/4), pressure(values.size()/4);
+	for (std::size_t node = 0; node < values.size()/4; ++node) {
+		for (int component = 0; component < 3; ++component)
+			velocity[3*node+component] = values[4*node+component];
+		pressure[node] = values[4*node+3];
+	}
+	iga::WriteVtu(mesh_path, path,
+		{{"velocity", 3, std::move(velocity)}, {"pressure", 1, std::move(pressure)}},
+		physical_time);
 }
 
 void WriteNavierStokes(const fs::path& path, const std::vector<double>& values)
@@ -695,6 +712,19 @@ int NavierStokes(int argc, char** argv)
 	double total_assembly = 0.0, total_linear = 0.0;
 	double peak_gpu_used = 0.0;
 	GmresWorkspace<4> linear_workspace(pattern.view().nodes, linear_restart);
+	std::vector<std::pair<double, fs::path>> vtk_snapshots;
+	std::vector<iga::VelocitySnapshot> velocity_snapshots_written;
+	if (transient && options.output_every > 0) {
+		std::vector<double> initial_output(host.nodes*4);
+		state.CopyToHost(initial_output.data(), initial_output.size());
+		const auto text_path = iga::TimeIndexedPath(options.output, start_step);
+		const auto vtk_path = iga::VtuStepPath(options.output, start_step);
+		WriteNavierStokes(text_path, initial_output);
+		WriteNavierStokesVtu(case_dir/"controlmesh.vtk", vtk_path,
+			initial_output, start_step*dt);
+		vtk_snapshots.push_back({start_step*dt, vtk_path});
+		velocity_snapshots_written.push_back({start_step*dt, text_path});
+	}
 	for (int step = start_step; step < run_end_step; ++step) {
 		if (step > start_step)
 			Check(cudaMemcpy(previous.data(), state.data(), vector_bytes, cudaMemcpyDeviceToDevice),
@@ -832,7 +862,13 @@ int NavierStokes(int argc, char** argv)
 		if (options.output_every > 0 && completed_step%options.output_every == 0) {
 			std::vector<double> values(host.nodes*4);
 			state.CopyToHost(values.data(), values.size());
-			WriteNavierStokes(iga::TimeIndexedPath(options.output, completed_step), values);
+			const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
+			const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
+			WriteNavierStokes(text_path, values);
+			WriteNavierStokesVtu(case_dir/"controlmesh.vtk", vtk_path, values,
+				completed_step*dt);
+			vtk_snapshots.push_back({completed_step*dt, vtk_path});
+			velocity_snapshots_written.push_back({completed_step*dt, text_path});
 		}
 		if (!options.checkpoint.empty()
 			&& (completed_step == run_end_step
@@ -864,6 +900,15 @@ int NavierStokes(int argc, char** argv)
 	if (!options.output.empty()) {
 		WriteNavierStokes(options.output, output);
 		WriteNavierStokesVtk(case_dir/"controlmesh.vtk", options.output.string()+".vtk", output);
+		const double final_time = transient ? run_end_step*dt : 0.0;
+		WriteNavierStokesVtu(case_dir/"controlmesh.vtk",
+			iga::VtuFinalPath(options.output), output, final_time);
+		if (vtk_snapshots.empty())
+			vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
+		iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+		if (!velocity_snapshots_written.empty())
+			iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output),
+				velocity_snapshots_written);
 	}
 	std::cout << "navier_stokes_cuda nodes=" << host.nodes << " elements=" << host.elements()
 		<< " steps=" << physical_steps << " run_end_step=" << run_end_step

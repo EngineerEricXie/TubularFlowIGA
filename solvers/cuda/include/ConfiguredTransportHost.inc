@@ -92,7 +92,9 @@ void WriteCudaTransportCheckpoint(const fs::path& prefix,
 template <int Fields>
 void WriteCudaConfiguredOutput(const fs::path& path,
 	const std::vector<std::string>& fields, std::size_t nodes,
-	const DeviceBuffer<double>& state)
+	const DeviceBuffer<double>& state, const fs::path& mesh_path,
+	const fs::path& vtk_path, double physical_time,
+	const iga::PhysiologyDefinition& physiology)
 {
 	std::vector<double> output(nodes*Fields);
 	state.CopyToHost(output.data(), output.size());
@@ -109,6 +111,18 @@ void WriteCudaConfiguredOutput(const fs::path& path,
 	}
 	if (!values || !metadata)
 		throw std::runtime_error("cannot write configured CUDA output");
+	std::vector<iga::VtkPointArray> arrays;
+	for (int field = 0; field < Fields; ++field) {
+		std::vector<double> field_values(nodes);
+		for (std::size_t node = 0; node < nodes; ++node)
+			field_values[node] = output[node*Fields+field];
+		arrays.push_back({fields[static_cast<std::size_t>(field)], 1,
+			std::move(field_values)});
+	}
+	auto derived = iga::ComputePhysiologyPointArrays(physiology, fields, output);
+	arrays.insert(arrays.end(), std::make_move_iterator(derived.begin()),
+		std::make_move_iterator(derived.end()));
+	iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
 }
 
 template <int Fields>
@@ -314,6 +328,16 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	unsigned int singular_blocks = 0;
 	const auto solve_start = Clock::now();
 	double linear_seconds = 0.0;
+	std::vector<std::pair<double, fs::path>> vtk_snapshots;
+	if (options.output_every > 0) {
+		const auto text_path = iga::TimeIndexedPath(options.output, start_step);
+		const auto vtk_path = iga::VtuStepPath(options.output, start_step);
+		WriteCudaConfiguredOutput<Fields>(
+			text_path, system.fields, host.nodes, current,
+			case_dir/"controlmesh.vtk", vtk_path,
+			start_step*system.dt, configuration.physiology);
+		vtk_snapshots.push_back({start_step*system.dt, vtk_path});
+	}
 	const int vector_size = static_cast<int>(host.nodes*Fields);
 	const int vector_blocks = (vector_size+255)/256;
 	for (int step = start_step; step < run_end_step; ++step) {
@@ -344,10 +368,15 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		std::swap(current, next);
 		const auto completed_step = step+1;
 		if (options.output_every > 0
-			&& completed_step%options.output_every == 0)
+			&& completed_step%options.output_every == 0) {
+			const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
+			const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
 			WriteCudaConfiguredOutput<Fields>(
-				iga::TimeIndexedPath(options.output, completed_step),
-				system.fields, host.nodes, current);
+				text_path, system.fields, host.nodes, current,
+				case_dir/"controlmesh.vtk", vtk_path,
+				completed_step*system.dt, configuration.physiology);
+			vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
+		}
 		if (!options.checkpoint.empty()
 			&& (completed_step == run_end_step
 				|| (options.checkpoint_every > 0
@@ -371,9 +400,18 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	BlasHandle blas;
 	double norm = 0.0;
 	Check(cublasDnrm2(blas, vector_size, current.data(), 1, &norm), "configured transport final norm");
-	if (!options.output.empty())
+	if (!options.output.empty()) {
 		WriteCudaConfiguredOutput<Fields>(
-			options.output, system.fields, host.nodes, current);
+			options.output, system.fields, host.nodes, current,
+			case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output),
+			run_end_step*system.dt, configuration.physiology);
+		if (vtk_snapshots.empty())
+			vtk_snapshots.push_back({run_end_step*system.dt,
+				iga::VtuFinalPath(options.output)});
+		iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+		iga::WritePhysiologyManifest(options.output.parent_path()/"physiology_fields.json",
+			configuration.physiology, system.fields);
+	}
 	std::cout << "iga_cuda_solve system=" << system.name << " fields=" << Fields
 		<< " steps=" << system.steps << " run_end_step=" << run_end_step
 		<< " preprocess_s=" << std::chrono::duration<double>(preprocess_end-total_start).count()

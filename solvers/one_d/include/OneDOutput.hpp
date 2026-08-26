@@ -86,6 +86,7 @@ inline void WriteOneDVtp(const std::filesystem::path& path,
 	const auto points = OneDCellCenters(network);
 	int lines = 0;
 	for (const auto& segment : network.segments) if (segment.cells > 1) ++lines;
+	for (const auto& segment : network.segments) if (segment.parent != network.root) ++lines;
 	output << "<?xml version=\"1.0\"?>\n"
 		<< "<VTKFile type=\"PolyData\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
 		<< "  <PolyData>\n"
@@ -116,11 +117,20 @@ inline void WriteOneDVtp(const std::filesystem::path& path,
 		<< "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n          ";
 	for (const auto& segment : network.segments) if (segment.cells > 1)
 		for (int cell = 0; cell < segment.cells; ++cell) output << segment.cell_offset+cell << ' ';
+	for (const auto& segment : network.segments) if (segment.parent != network.root) {
+		const int incoming = OneDSegmentIntoNode(network, segment.parent);
+		const auto& parent = network.segments[static_cast<std::size_t>(incoming)];
+		output << parent.cell_offset+parent.cells-1 << ' ' << segment.cell_offset << ' ';
+	}
 	output << "\n        </DataArray>\n"
 		<< "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n          ";
 	int offset = 0;
 	for (const auto& segment : network.segments) if (segment.cells > 1) {
 		offset += segment.cells;
+		output << offset << ' ';
+	}
+	for (const auto& segment : network.segments) if (segment.parent != network.root) {
+		offset += 2;
 		output << offset << ' ';
 	}
 	output << "\n        </DataArray>\n"

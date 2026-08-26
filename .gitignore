@@ -17,6 +17,7 @@
 /solvers/cpu/iga_config_check
 /solvers/cpu/iga_solve
 /solvers/cpu/simulation_config_test
+/solvers/cpu/vtk_output_test
 /solvers/cpu/generic_transport_test
 /solvers/cpu/navier_stokes_test
 /solvers/cpu/iga_assembly_smoke

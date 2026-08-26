@@ -8,6 +8,8 @@
 #include "FlowCheckpoint.hpp"
 #include "TransportCheckpoint.hpp"
 #include "VelocitySeries.hpp"
+#include "PhysiologyOutput.hpp"
+#include "VtkOutput.hpp"
 
 #include <petscksp.h>
 
@@ -15,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <vector>
 
@@ -93,7 +96,9 @@ TransportOptions ParseOptions(int argc, char** argv)
 }
 
 void WriteTransportOutput(Vec state, std::uint64_t nodes,
-	const std::vector<std::string>& fields, const fs::path& path, int rank)
+	const std::vector<std::string>& fields, const fs::path& path,
+	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time,
+	const iga::PhysiologyDefinition& physiology, int rank)
 {
 	Vec root = nullptr;
 	VecScatter scatter = nullptr;
@@ -105,6 +110,7 @@ void WriteTransportOutput(Vec state, std::uint64_t nodes,
 		try {
 			const PetscScalar* values = nullptr;
 			VecGetArrayRead(root, &values);
+			std::vector<double> interleaved(static_cast<std::size_t>(nodes)*fields.size());
 			std::ofstream output(path);
 			std::ofstream metadata(path.string()+".fields");
 			if (!output || !metadata)
@@ -113,13 +119,27 @@ void WriteTransportOutput(Vec state, std::uint64_t nodes,
 			for (const auto& name : fields) metadata << name << '\n';
 			for (std::uint64_t node = 0; node < nodes; ++node) {
 				output << node;
-				for (std::size_t field = 0; field < fields.size(); ++field)
-					output << ' ' << PetscRealPart(values[node*fields.size()+field]);
+				for (std::size_t field = 0; field < fields.size(); ++field) {
+					const auto value = PetscRealPart(values[node*fields.size()+field]);
+					interleaved[static_cast<std::size_t>(node)*fields.size()+field] = value;
+					output << ' ' << value;
+				}
 				output << '\n';
 			}
 			VecRestoreArrayRead(root, &values);
 			if (!output || !metadata)
 				throw std::runtime_error("cannot write configured PDE output");
+			std::vector<iga::VtkPointArray> arrays;
+			for (std::size_t field = 0; field < fields.size(); ++field) {
+				std::vector<double> field_values(static_cast<std::size_t>(nodes));
+				for (std::size_t node = 0; node < static_cast<std::size_t>(nodes); ++node)
+					field_values[node] = interleaved[node*fields.size()+field];
+				arrays.push_back({fields[field], 1, std::move(field_values)});
+			}
+			auto derived = iga::ComputePhysiologyPointArrays(physiology, fields, interleaved);
+			arrays.insert(arrays.end(), std::make_move_iterator(derived.begin()),
+				std::make_move_iterator(derived.end()));
+			iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
 		} catch (const std::exception&) {
 			write_failed = 1;
 		}
@@ -334,6 +354,15 @@ int main(int argc, char** argv)
 		PetscInt total_iterations = 0;
 		const auto solve_start = std::chrono::steady_clock::now();
 		double linear_seconds = 0.0;
+		std::vector<std::pair<double, fs::path>> vtk_snapshots;
+		if (options.output_every > 0) {
+			const auto text_path = iga::TimeIndexedPath(options.output, start_step);
+			const auto vtk_path = iga::VtuStepPath(options.output, start_step);
+			WriteTransportOutput(current, database.header().nodes, system.fields,
+				text_path, case_dir/"controlmesh.vtk", vtk_path,
+				start_step*system.dt, configuration.physiology, rank);
+			vtk_snapshots.push_back({start_step*system.dt, vtk_path});
+		}
 		for (int step = start_step; step < run_end_step; ++step) {
 			if (velocity_source) {
 				const auto velocity = velocity_at((step+1)*system.dt);
@@ -367,9 +396,14 @@ int main(int argc, char** argv)
 			VecSwap(current, next);
 			const auto completed_step = step+1;
 			if (options.output_every > 0
-				&& completed_step%options.output_every == 0)
+				&& completed_step%options.output_every == 0) {
+				const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
+				const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
 				WriteTransportOutput(current, database.header().nodes, system.fields,
-					iga::TimeIndexedPath(options.output, completed_step), rank);
+					text_path, case_dir/"controlmesh.vtk", vtk_path,
+					completed_step*system.dt, configuration.physiology, rank);
+				vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
+			}
 			if (!options.checkpoint.empty()
 				&& (completed_step == run_end_step
 					|| (options.checkpoint_every > 0
@@ -392,9 +426,21 @@ int main(int argc, char** argv)
 		}
 		const auto solve_end = std::chrono::steady_clock::now();
 
-		if (!options.output.empty())
+		if (!options.output.empty()) {
 			WriteTransportOutput(current, database.header().nodes,
-				system.fields, options.output, rank);
+				system.fields, options.output, case_dir/"controlmesh.vtk",
+				iga::VtuFinalPath(options.output), run_end_step*system.dt,
+				configuration.physiology, rank);
+			if (rank == 0) {
+				if (vtk_snapshots.empty())
+					vtk_snapshots.push_back({run_end_step*system.dt,
+						iga::VtuFinalPath(options.output)});
+				iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				iga::WritePhysiologyManifest(
+					options.output.parent_path()/"physiology_fields.json",
+					configuration.physiology, system.fields);
+			}
+		}
 		PetscReal norm = 0.0;
 		VecNorm(current, NORM_2, &norm);
 		if (rank == 0) std::cout << "iga_solve system=" << system.name

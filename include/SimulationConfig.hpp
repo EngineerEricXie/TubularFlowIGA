@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <cmath>
 #include <map>
 #include <set>
 #include <sstream>
@@ -105,6 +106,23 @@ struct TimeDefinition {
 	int steps = 0;
 };
 
+struct PhysiologyDefinition {
+	bool enabled = false;
+	std::map<std::string, double> metabolism_rates;
+	bool oxygen_capacity = false;
+	double hematocrit_percent = 0.0;
+	double oxygen_solubility = 0.0031;
+	double hemoglobin_g_dl = 15.0;
+	double p50_mmhg = 26.8;
+	double hill_exponent = 2.7;
+	bool vasodilation = false;
+	std::string vasodilator_field = "vasodilator";
+	double emax_radius_fraction = 0.0;
+	double ec50 = 1.0;
+	double relaxation_tau = 1.0;
+	std::vector<std::string> derived_fields;
+};
+
 struct SimulationConfiguration {
 	int schema_version = 2;
 	std::string dimension = "3d";
@@ -114,6 +132,7 @@ struct SimulationConfiguration {
 	std::vector<TemporalFunctionDefinition> temporal_functions;
 	std::vector<VelocitySourceDefinition> velocity_sources;
 	TimeDefinition time;
+	PhysiologyDefinition physiology;
 };
 
 struct CompiledTerm {
@@ -221,7 +240,7 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
 	RequireKnownKeys(root, {"schema_version", "dimension", "fields", "equation_systems", "boundaries",
-		"time", "temporal_functions", "velocity_sources"}, "root");
+		"time", "temporal_functions", "velocity_sources", "physiology"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	const auto* dimension = Find(root, "dimension");
@@ -492,6 +511,93 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		}
 		configuration.boundaries.push_back(std::move(boundary));
 	}
+	if (const auto* physiology = Find(root, "physiology")) {
+		const auto& object = RequireObject(*physiology, "physiology");
+		RequireKnownKeys(object, {"enabled", "metabolism", "oxygen_capacity",
+			"vasodilation", "derived_fields"}, "physiology");
+		configuration.physiology.enabled = Find(object, "enabled")
+			? RequireBoolean(*Find(object, "enabled"), "physiology.enabled") : true;
+		if (const auto* metabolism = Find(object, "metabolism")) {
+			const auto& rates = RequireObject(*metabolism, "physiology.metabolism");
+			for (const auto& rate : rates) {
+				if (!field_names.count(rate.first))
+					throw std::runtime_error("simulation_config.json: metabolism references missing field '"+rate.first+"'");
+				const double value = RequireNumber(rate.second,
+					"physiology.metabolism."+rate.first);
+				if (!std::isfinite(value))
+					throw std::runtime_error("simulation_config.json: metabolism rates must be finite");
+				configuration.physiology.metabolism_rates.emplace(rate.first, value);
+			}
+		}
+		if (const auto* oxygen = Find(object, "oxygen_capacity")) {
+			const auto& item = RequireObject(*oxygen, "physiology.oxygen_capacity");
+			RequireKnownKeys(item, {"enabled", "hematocrit_percent", "oxygen_solubility",
+				"hemoglobin_g_dl", "p50_mmhg", "hill_exponent"}, "physiology.oxygen_capacity");
+			auto number = [&](const char* name, double fallback) {
+				const auto* value = Find(item, name);
+				return value ? RequireNumber(*value, std::string("physiology.oxygen_capacity.")+name) : fallback;
+			};
+			configuration.physiology.oxygen_capacity = Find(item, "enabled")
+				? RequireBoolean(*Find(item, "enabled"), "physiology.oxygen_capacity.enabled") : true;
+			configuration.physiology.hematocrit_percent = number("hematocrit_percent", 0.0);
+			configuration.physiology.oxygen_solubility = number("oxygen_solubility", 0.0031);
+			configuration.physiology.hemoglobin_g_dl = number("hemoglobin_g_dl", 15.0);
+			configuration.physiology.p50_mmhg = number("p50_mmhg", 26.8);
+			configuration.physiology.hill_exponent = number("hill_exponent", 2.7);
+			if (configuration.physiology.hematocrit_percent < 0.0
+				|| configuration.physiology.hematocrit_percent > 100.0
+				|| !(configuration.physiology.oxygen_solubility > 0.0)
+				|| configuration.physiology.hemoglobin_g_dl < 0.0
+				|| !(configuration.physiology.p50_mmhg > 0.0)
+				|| !(configuration.physiology.hill_exponent > 0.0))
+				throw std::runtime_error("simulation_config.json: oxygen-capacity parameters are invalid");
+		}
+		if (const auto* vasodilation = Find(object, "vasodilation")) {
+			const auto& item = RequireObject(*vasodilation, "physiology.vasodilation");
+			RequireKnownKeys(item, {"enabled", "field", "emax_radius_fraction", "ec50",
+				"relaxation_tau"}, "physiology.vasodilation");
+			configuration.physiology.vasodilation = Find(item, "enabled")
+				? RequireBoolean(*Find(item, "enabled"), "physiology.vasodilation.enabled") : true;
+			if (const auto* field = Find(item, "field"))
+				configuration.physiology.vasodilator_field = RequireString(*field, "physiology.vasodilation.field");
+			if (configuration.physiology.vasodilation)
+				throw std::runtime_error("simulation_config.json: 3d vasodilation requires FSI and is not supported; disable it or use the 1d solver");
+		}
+		if (const auto* derived = Find(object, "derived_fields")) {
+			const auto& array = RequireArray(*derived, "physiology.derived_fields");
+			const std::set<std::string> allowed{"pO2", "pCO2", "pH", "SaO2", "SvO2",
+				"dissolved_oxygen", "bound_oxygen", "total_oxygen", "hematocrit"};
+			std::set<std::string> unique;
+			for (std::size_t i = 0; i < array.size(); ++i) {
+				const auto name = RequireString(array[i],
+					"physiology.derived_fields["+std::to_string(i)+"]");
+				if (!allowed.count(name) || !unique.insert(name).second)
+					throw std::runtime_error("simulation_config.json: unsupported or duplicate physiology derived field '"+name+"'");
+				configuration.physiology.derived_fields.push_back(name);
+			}
+		}
+		std::set<std::string> transported;
+		for (const auto& system : configuration.equation_systems)
+			if (system.kind == EquationKind::LinearTransport)
+				transported.insert(system.unknowns.begin(), system.unknowns.end());
+		for (const auto& rate : configuration.physiology.metabolism_rates)
+			if (!transported.count(rate.first))
+				throw std::runtime_error("simulation_config.json: metabolism field '"+rate.first+"' is not a transported species");
+		for (const auto& name : configuration.physiology.derived_fields) {
+			if ((name == "pO2" || name == "SaO2" || name == "SvO2"
+				|| name == "dissolved_oxygen" || name == "bound_oxygen"
+				|| name == "total_oxygen") && !transported.count("oxygen"))
+				throw std::runtime_error("simulation_config.json: derived field '"+name+"' requires transported oxygen");
+			if (name == "pCO2" && !transported.count("carbon_dioxide"))
+				throw std::runtime_error("simulation_config.json: pCO2 requires transported carbon_dioxide");
+			if (name == "pH" && (!transported.count("carbon_dioxide")
+				|| !transported.count("bicarbonate")))
+				throw std::runtime_error("simulation_config.json: pH requires transported carbon_dioxide and bicarbonate");
+			if ((name == "bound_oxygen" || name == "total_oxygen" || name == "hematocrit")
+				&& !configuration.physiology.oxygen_capacity)
+				throw std::runtime_error("simulation_config.json: derived field '"+name+"' requires oxygen_capacity");
+		}
+	}
 	return configuration;
 }
 
@@ -533,6 +639,13 @@ inline CompiledLinearSystem CompileLinearSystem(const SimulationConfiguration& c
 		result.terms.push_back({term.kind, result.field_index.at(term.equation),
 			result.field_index.at(term.trial), term.coefficient, term.velocity});
 	}
+	if (configuration.physiology.enabled)
+		for (const auto& rate : configuration.physiology.metabolism_rates) {
+			const auto field = result.field_index.find(rate.first);
+			if (field != result.field_index.end())
+				result.terms.push_back({TermKind::VolumeSource, field->second,
+					field->second, rate.second, {}});
+		}
 	return result;
 }
 

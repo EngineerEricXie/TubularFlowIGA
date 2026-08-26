@@ -9,6 +9,8 @@
 #include "OutletCheckpoint.hpp"
 #include "PressureTraction.hpp"
 #include "TemporalFunction.hpp"
+#include "VelocitySeries.hpp"
+#include "VtkOutput.hpp"
 
 #include <petscksp.h>
 
@@ -92,7 +94,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 	return options;
 }
 
-void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path, int rank)
+void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
+	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time, int rank)
 {
 	Vec root = nullptr;
 	VecScatter root_scatter = nullptr;
@@ -104,18 +107,28 @@ void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path, int r
 		try {
 			const PetscScalar* values = nullptr;
 			VecGetArrayRead(root, &values);
+			std::vector<double> velocity(3*static_cast<std::size_t>(nodes));
+			std::vector<double> pressure_values(static_cast<std::size_t>(nodes));
 			std::ofstream output(path);
 			std::ofstream pressure(path.string() + ".pressure");
 			if (!output || !pressure) throw std::runtime_error("cannot create Navier-Stokes output");
 			output.precision(17);
 			pressure.precision(17);
 			for (std::uint64_t node = 0; node < nodes; ++node) {
-				output << PetscRealPart(values[4*node]) << ' ' << PetscRealPart(values[4*node+1]) << ' '
-					<< PetscRealPart(values[4*node+2]) << '\n';
-				pressure << PetscRealPart(values[4*node+3]) << '\n';
+				for (int component = 0; component < 3; ++component)
+					velocity[3*static_cast<std::size_t>(node)+component]
+						= PetscRealPart(values[4*node+component]);
+				pressure_values[static_cast<std::size_t>(node)] = PetscRealPart(values[4*node+3]);
+				output << velocity[3*static_cast<std::size_t>(node)] << ' '
+					<< velocity[3*static_cast<std::size_t>(node)+1] << ' '
+					<< velocity[3*static_cast<std::size_t>(node)+2] << '\n';
+				pressure << pressure_values[static_cast<std::size_t>(node)] << '\n';
 			}
 			VecRestoreArrayRead(root, &values);
 			if (!output || !pressure) throw std::runtime_error("cannot write Navier-Stokes output");
+			iga::WriteVtu(mesh_path, vtk_path,
+				{{"velocity", 3, std::move(velocity)},
+				 {"pressure", 1, std::move(pressure_values)}}, physical_time);
 		} catch (const std::exception&) {
 			write_failed = 1;
 		}
@@ -363,6 +376,17 @@ int main(int argc, char** argv)
 
 		PetscInt total_linear_iterations = 0;
 		const auto start = std::chrono::steady_clock::now();
+		std::vector<std::pair<double, fs::path>> vtk_snapshots;
+		std::vector<iga::VelocitySnapshot> velocity_snapshots_written;
+		if (transient && options.output_every > 0) {
+			const auto text_path = iga::TimeIndexedPath(options.output, start_step);
+			const auto vtk_path = iga::VtuStepPath(options.output, start_step);
+			WriteFlowOutput(state, database.header().nodes, text_path,
+				case_dir/"controlmesh.vtk", vtk_path,
+				start_step*flow_parameters.dt, rank);
+			vtk_snapshots.push_back({start_step*flow_parameters.dt, vtk_path});
+			velocity_snapshots_written.push_back({start_step*flow_parameters.dt, text_path});
+		}
 		for (int step = start_step; step < run_end_step; ++step) {
 			if (step > 0) VecCopy(state, previous);
 			const auto physical_time = transient ? (step+1)*flow_parameters.dt : 0.0;
@@ -516,8 +540,14 @@ int main(int argc, char** argv)
 					+ std::to_string(step+1));
 			const auto completed_step = step+1;
 			if (options.output_every > 0 && completed_step%options.output_every == 0)
-				WriteFlowOutput(state, database.header().nodes,
-					iga::TimeIndexedPath(options.output, completed_step), rank);
+			{
+				const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
+				const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
+				WriteFlowOutput(state, database.header().nodes, text_path,
+					case_dir/"controlmesh.vtk", vtk_path, physical_time, rank);
+				vtk_snapshots.push_back({physical_time, vtk_path});
+				velocity_snapshots_written.push_back({physical_time, text_path});
+			}
 			if (!options.checkpoint.empty()
 				&& (completed_step == run_end_step
 					|| (options.checkpoint_every > 0 && completed_step%options.checkpoint_every == 0))) {
@@ -559,8 +589,19 @@ int main(int argc, char** argv)
 			<< " total_linear_iterations=" << total_linear_iterations << " state_l2=" << state_norm
 			<< " velocity_l2=" << std::sqrt(velocity_squared) << " pressure_l2=" << std::sqrt(pressure_squared) << '\n';
 
-		if (!options.output.empty())
-			WriteFlowOutput(state, database.header().nodes, options.output, rank);
+		if (!options.output.empty()) {
+			const double final_time = transient ? run_end_step*flow_parameters.dt : 0.0;
+			WriteFlowOutput(state, database.header().nodes, options.output,
+				case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output), final_time, rank);
+			if (rank == 0) {
+				if (vtk_snapshots.empty())
+					vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
+				iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				if (!velocity_snapshots_written.empty())
+					iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output),
+						velocity_snapshots_written);
+			}
+		}
 		KSPDestroy(&solver); VecScatterDestroy(&scatter); ISDestroy(&destination_rows);
 		VecDestroy(&ghost_previous); VecDestroy(&ghost_state); ISDestroy(&source_rows);
 		VecDestroy(&rhs); VecDestroy(&update); VecDestroy(&previous); VecDestroy(&state); MatDestroy(&jacobian);

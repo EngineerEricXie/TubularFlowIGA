@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -81,6 +82,23 @@ inline std::vector<VelocitySnapshot> ReadVelocityManifest(const std::filesystem:
 	if (!input.good() && !input.eof())
 		throw std::runtime_error("cannot read velocity manifest: " + path.string());
 	return ParseVelocityManifest(contents.str(), path.string());
+}
+
+inline std::filesystem::path VelocityManifestPath(const std::filesystem::path& base)
+{
+	return base.parent_path()/(base.stem().string()+".series.csv");
+}
+
+inline void WriteVelocityManifest(const std::filesystem::path& path,
+	const std::vector<VelocitySnapshot>& snapshots)
+{
+	std::ofstream output(path);
+	if (!output) throw std::runtime_error("cannot create velocity manifest: "+path.string());
+	output << "time,file\n";
+	for (const auto& snapshot : snapshots)
+		output << std::setprecision(17) << snapshot.time << ','
+			<< snapshot.file.filename().string() << '\n';
+	if (!output) throw std::runtime_error("cannot write velocity manifest: "+path.string());
 }
 
 inline VelocityInterpolation ResolveVelocityInterpolation(

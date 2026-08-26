@@ -2,6 +2,7 @@
 #include "GenericCaseInput.hpp"
 #include "TemporalFunction.hpp"
 #include "VelocitySeries.hpp"
+#include "PhysiologyOutput.hpp"
 
 #include <array>
 #include <cassert>
@@ -116,6 +117,36 @@ int main()
 	assert(compiled.terms.size() == 5);
 	assert(compiled.dt == 0.01 && compiled.steps == 5);
 	assert(compiled.velocity_source == "prescribed");
+	const auto physiology_configuration = iga::ParseSimulationConfiguration(R"json({
+		"schema_version":3,"dimension":"3d",
+		"fields":[
+			{"name":"oxygen","kind":"scalar","initial_value":0.12},
+			{"name":"carbon_dioxide","kind":"scalar","initial_value":1.2},
+			{"name":"bicarbonate","kind":"scalar","initial_value":24.0}],
+		"time":{"dt":0.1,"steps":2},
+		"equation_systems":[{"name":"multispecies","kind":"linear_transport",
+			"unknowns":["oxygen","carbon_dioxide","bicarbonate"],"terms":[
+			{"operator":"time_derivative","equation":"oxygen"},
+			{"operator":"time_derivative","equation":"carbon_dioxide"},
+			{"operator":"time_derivative","equation":"bicarbonate"}]}],
+		"boundaries":[],
+		"physiology":{"enabled":true,"metabolism":{"oxygen":-0.01},
+			"oxygen_capacity":{"enabled":true,"hematocrit_percent":35},
+			"derived_fields":["pO2","pCO2","pH","SaO2","total_oxygen","hematocrit"]}
+	})json");
+	const auto physiology_system = iga::CompileLinearSystem(
+		physiology_configuration, "multispecies");
+	assert(physiology_system.fields.size() == 3);
+	assert(physiology_system.terms.size() == 4);
+	assert(physiology_system.terms.back().kind == iga::TermKind::VolumeSource);
+	assert(std::abs(physiology_system.terms.back().coefficient+0.01) < 1e-14);
+	const auto physiology_arrays = iga::ComputePhysiologyPointArrays(
+		physiology_configuration.physiology, physiology_system.fields,
+		{0.12, 1.2, 24.0, 0.06, 0.6, 12.0});
+	assert(physiology_arrays.size() == 6);
+	assert(physiology_arrays.front().name == "pO2");
+	assert(physiology_arrays.front().values.size() == 2);
+	assert(std::isfinite(physiology_arrays[2].values[0]));
 	const auto velocity_samples = iga::ParseVelocityManifest(
 		"time,file\n0,velocity-0.txt\n0.25,velocity-1.txt\n1,velocity-2.txt\n");
 	const auto velocity_weights = iga::ResolveVelocityInterpolation(velocity_samples, 0.5, "error");

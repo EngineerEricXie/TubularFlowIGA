@@ -19,6 +19,7 @@ HEADERS += ../../include/OutletCheckpoint.hpp
 HEADERS += ../cpu/include/OutletFlow.hpp
 HEADERS += ../../include/PressureTraction.hpp ../cpu/include/PressureTractionFlow.hpp
 HEADERS += ../../include/TransportCheckpoint.hpp
+HEADERS += ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp
 
 .PHONY: all clean
 
