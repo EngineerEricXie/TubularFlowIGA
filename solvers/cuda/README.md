@@ -193,6 +193,13 @@ output. Straight-tube and 14,565-node branching parity/restart gates pass.
 Both transient solvers accept `--stop-after-step N`, which writes an intentional
 mid-run checkpoint while retaining the full configured horizon for restart
 validation.
+CUDA Navier--Stokes uses the same mesh-independent convergence controls as the
+CPU backend: `--nonlinear-rtol R` (default `1e-5`), `--nonlinear-atol A`
+(default residual RMS `1e-10` per equation), and `--mass-rtol R` (default
+relative boundary-flow imbalance `1e-3`). A Newton state is accepted only when
+both the nonlinear residual and mass-balance criteria pass. Iteration output
+includes residual RMS, the unmodified continuity residual, net boundary flow,
+and relative mass imbalance.
 Both CUDA production paths also write a final ParaView `.vtu`; time-indexed
 output creates step `.vtu` files and a `.pvd` collection using the same point
 array names as CPU. The legacy flow `.vtk` companion remains for compatibility.

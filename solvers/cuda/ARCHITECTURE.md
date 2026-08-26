@@ -14,7 +14,7 @@ Element-pair work is tiled in groups of 256. Each tile evaluates extracted basis
 
 ## Numerical Solvers
 
-Transport assembles both time-integration matrices once and keeps all state vectors on device. Navier–Stokes rebuilds the VMS Jacobian and residual at each Newton iteration. Strong boundary rows match CPU v2.
+Transport assembles both time-integration matrices once and keeps all state vectors on device. Navier–Stokes rebuilds the VMS Jacobian and residual at each Newton iteration. Strong boundary rows match CPU v2. Before those rows overwrite the assembled residual, the flow solver copies the current state and raw residual to host for continuity and boundary-flow diagnostics using the shared surface quadrature. Nonlinear acceptance requires both the relative/RMS residual criterion and the configured relative mass-imbalance criterion; a small Newton update alone is not accepted as convergence.
 
 The linear solver is restarted left-preconditioned GMRES. cuBLAS supplies only FP64 dot, norm, scale, copy, and AXPY operations. Sparse block matrix-vector products, block inverses, IGA weak forms, and assembly are project-owned CUDA kernels. Transport reuses one device GMRES workspace and its node-block Jacobi inverse across all time steps. Navier–Stokes reuses the workspace, rebuilds the inverse after each Jacobian assembly, and uses restart 200. A polynomial correction was tested and rejected for the saddle-point system.
 

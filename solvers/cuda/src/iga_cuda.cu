@@ -34,6 +34,7 @@
 #include <iterator>
 #include <map>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -352,6 +353,9 @@ struct CudaFlowOptions {
 	fs::path database;
 	fs::path case_dir;
 	int maximum_newton = 12;
+	double nonlinear_relative_tolerance = 1e-5;
+	double nonlinear_absolute_tolerance = 1e-10;
+	double mass_relative_tolerance = 1e-3;
 	fs::path output;
 	fs::path checkpoint;
 	fs::path restart;
@@ -374,13 +378,28 @@ int ParsePositiveInteger(const std::string& text, const std::string& option)
 	return value;
 }
 
+double ParsePositiveFiniteDouble(const std::string& text, const std::string& option)
+{
+	std::size_t used = 0;
+	double value = 0.0;
+	try {
+		value = std::stod(text, &used);
+	} catch (const std::exception&) {
+		throw std::runtime_error(option+" requires a finite positive value");
+	}
+	if (used != text.size() || !std::isfinite(value) || value <= 0.0)
+		throw std::runtime_error(option+" requires a finite positive value");
+	return value;
+}
+
 CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 {
 	if (argc < 4) throw std::runtime_error(
 		"usage: iga_cuda navier-stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N]");
+		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] "
+		"[--mass-rtol R]");
 	CudaFlowOptions options;
 	options.database = argv[2];
 	options.case_dir = argv[3];
@@ -408,6 +427,12 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
+		else if (argument == "--nonlinear-rtol")
+			options.nonlinear_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--nonlinear-atol")
+			options.nonlinear_absolute_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--mass-rtol")
+			options.mass_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
@@ -415,6 +440,72 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 	if (options.checkpoint_every > 0 && options.checkpoint.empty())
 		throw std::runtime_error("--checkpoint-every requires --checkpoint");
 	return options;
+}
+
+struct CudaFlowConvergenceMetrics {
+	double continuity_l2 = 0.0;
+	double continuity_sum = 0.0;
+	double net_boundary_flow = 0.0;
+	double absolute_boundary_flow = 0.0;
+	double relative_mass_imbalance = 0.0;
+};
+
+std::vector<iga::Element> LoadBoundaryElements(iga::Database& database)
+{
+	std::vector<iga::Element> result;
+	for (std::uint64_t index = 0; index < database.header().elements; ++index) {
+		auto element = database.Load(index);
+		if (std::any_of(element.boundary_labels.begin(), element.boundary_labels.end(),
+			[](std::int32_t label) { return label >= 0; }))
+			result.push_back(std::move(element));
+	}
+	return result;
+}
+
+CudaFlowConvergenceMetrics MeasureFlowConvergence(
+	const std::vector<iga::Element>& boundary_elements,
+	const std::vector<double>& state, const std::vector<double>& raw_rhs)
+{
+	if (state.size() != raw_rhs.size() || state.size()%4 != 0)
+		throw std::runtime_error("CUDA flow convergence vectors have inconsistent sizes");
+	CudaFlowConvergenceMetrics result;
+	for (std::size_t node = 0; node < raw_rhs.size()/4; ++node) {
+		const auto continuity = raw_rhs[4*node+3];
+		result.continuity_l2 += continuity*continuity;
+		result.continuity_sum += continuity;
+	}
+	result.continuity_l2 = std::sqrt(result.continuity_l2);
+	std::map<int, double> boundary_flow;
+	for (const auto& element : boundary_elements) {
+		std::vector<std::array<double, 4>> nodal(element.connectivity.size());
+		for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+			const auto node = element.connectivity[a];
+			if (node < 0 || static_cast<std::size_t>(node) >= state.size()/4)
+				throw std::runtime_error("boundary element references an invalid node");
+			for (int field = 0; field < 4; ++field)
+				nodal[a][field] = state[4*static_cast<std::size_t>(node)+field];
+		}
+		for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
+			const auto label = element.boundary_labels[face];
+			if (label >= 0)
+				boundary_flow[label] += iga::IntegrateBoundaryFlow(element, face, nodal);
+		}
+	}
+	for (const auto& entry : boundary_flow) {
+		result.net_boundary_flow += entry.second;
+		result.absolute_boundary_flow += std::abs(entry.second);
+	}
+	if (result.absolute_boundary_flow > 0.0)
+		result.relative_mass_imbalance = 2.0*std::abs(result.net_boundary_flow)
+			/result.absolute_boundary_flow;
+	return result;
+}
+
+std::string PreciseNumber(double value)
+{
+	std::ostringstream stream;
+	stream << std::scientific << std::setprecision(16) << value;
+	return stream.str();
 }
 
 std::vector<double> ReadCudaFlowCheckpoint(const fs::path& prefix,
@@ -640,6 +731,7 @@ int NavierStokes(int argc, char** argv)
 		throw std::runtime_error("restart, checkpoint, and time-indexed output require transient flow");
 
 	FlatMesh host(database);
+	const auto boundary_elements = LoadBoundaryElements(database);
 	const auto pressure_traction_elements = iga::LoadPressureTractionElements(
 		database, pressure_tractions);
 	std::vector<iga::Element> outlet_elements;
@@ -714,6 +806,8 @@ int NavierStokes(int argc, char** argv)
 	double total_assembly = 0.0, total_linear = 0.0;
 	double peak_gpu_used = 0.0;
 	GmresWorkspace<4> linear_workspace(pattern.view().nodes, linear_restart);
+	std::vector<double> convergence_state(host.nodes*4);
+	std::vector<double> raw_rhs(host.nodes*4);
 	std::vector<std::pair<double, fs::path>> vtk_snapshots;
 	std::vector<iga::VelocitySnapshot> velocity_snapshots_written;
 	if (transient && options.output_every > 0) {
@@ -762,6 +856,8 @@ int NavierStokes(int argc, char** argv)
 			pressure_traction_rhs.CopyFromHost(
 				pressure_traction_host.data(), pressure_traction_host.size());
 			double initial_residual = -1.0;
+			double last_residual = -1.0;
+			CudaFlowConvergenceMetrics last_convergence;
 			bool converged = false;
 			for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
 			const auto assembly_start = Clock::now();
@@ -776,6 +872,11 @@ int NavierStokes(int argc, char** argv)
 			Check(cublasDaxpy(blas, static_cast<int>(host.nodes*4), &one,
 			pressure_traction_rhs.data(), 1, rhs.data(), 1),
 			"Navier-Stokes pressure traction rhs");
+			rhs.CopyToHost(raw_rhs.data(), raw_rhs.size());
+			state.CopyToHost(convergence_state.data(), convergence_state.size());
+			const auto convergence = MeasureFlowConvergence(
+				boundary_elements, convergence_state, raw_rhs);
+			last_convergence = convergence;
 		ApplyNavierStokesBoundaryKernel<<<node_blocks,256>>>(
 			pattern.view(), velocity_mask.data(), pressure_mask.data(), jacobian.values());
 		CheckKernel("ApplyNavierStokesBoundaryKernel");
@@ -789,12 +890,25 @@ int NavierStokes(int argc, char** argv)
 		double residual_norm = 0.0;
 		Check(cublasDnrm2(blas, static_cast<int>(host.nodes*4), rhs.data(), 1, &residual_norm),
 			"Navier-Stokes residual norm");
+		last_residual = residual_norm;
 		if (initial_residual < 0.0) initial_residual = residual_norm;
-		const double nonlinear_tolerance = std::max(1e-10, 1e-5*initial_residual);
-		if (residual_norm <= nonlinear_tolerance) {
+		const auto residual_scale = std::sqrt(static_cast<double>(host.nodes*4));
+		const auto residual_rms = residual_norm/residual_scale;
+		const double nonlinear_tolerance = std::max(
+			options.nonlinear_absolute_tolerance*residual_scale,
+			options.nonlinear_relative_tolerance*initial_residual);
+		if (residual_norm <= nonlinear_tolerance
+			&& convergence.relative_mass_imbalance <= options.mass_relative_tolerance) {
 			std::cout << "step=" << step+1 << " time=" << physical_time
 				<< " converged newton=" << nonlinear << " residual_l2=" << residual_norm
-				<< " tolerance=" << nonlinear_tolerance << '\n';
+				<< " residual_rms=" << residual_rms
+				<< " tolerance=" << nonlinear_tolerance
+				<< " absolute_rms_tolerance=" << options.nonlinear_absolute_tolerance
+				<< " continuity_l2=" << convergence.continuity_l2
+				<< " continuity_sum=" << convergence.continuity_sum
+				<< " net_boundary_flow=" << convergence.net_boundary_flow
+				<< " relative_mass_imbalance=" << convergence.relative_mass_imbalance
+				<< " mass_tolerance=" << options.mass_relative_tolerance << '\n';
 			converged = true;
 			break;
 		}
@@ -806,7 +920,12 @@ int NavierStokes(int argc, char** argv)
 		total_linear += std::chrono::duration<double>(linear_end-linear_start).count();
 		if (!result.converged)
 			throw std::runtime_error("Navier-Stokes GMRES failed at nonlinear iteration "
-				+std::to_string(nonlinear)+"; residual "+std::to_string(result.residual));
+				+std::to_string(nonlinear)+" (residual="+PreciseNumber(result.residual)
+				+", nonlinear_residual="+PreciseNumber(residual_norm)
+				+", continuity_l2="+PreciseNumber(convergence.continuity_l2)
+				+", net_boundary_flow="+PreciseNumber(convergence.net_boundary_flow)
+				+", relative_mass_imbalance="
+				+PreciseNumber(convergence.relative_mass_imbalance)+")");
 		total_iterations += result.iterations;
 		peak_gpu_used = std::max(peak_gpu_used, result.device_used_gib);
 		double update_norm = 0.0;
@@ -816,19 +935,25 @@ int NavierStokes(int argc, char** argv)
 			state.data(), 1), "Navier-Stokes state update");
 		std::cout << "step=" << step+1 << " time=" << physical_time
 			<< " newton=" << nonlinear << " residual_l2=" << residual_norm
+			<< " residual_rms=" << residual_rms
+			<< " continuity_l2=" << convergence.continuity_l2
+			<< " continuity_sum=" << convergence.continuity_sum
+			<< " net_boundary_flow=" << convergence.net_boundary_flow
+			<< " relative_mass_imbalance=" << convergence.relative_mass_imbalance
 			<< " update_l2=" << update_norm << " linear_iterations=" << result.iterations
 			<< " linear_residual=" << result.residual
 			<< " singular_diagonal_blocks=" << result.singular_diagonal_blocks
 			<< " assembly_s=" << std::chrono::duration<double>(assembly_end-assembly_start).count()
 			<< " linear_s=" << std::chrono::duration<double>(linear_end-linear_start).count() << '\n';
-		if (update_norm < 1e-10) {
-			converged = true;
-			break;
-		}
 		}
 			if (!converged)
 				throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
-					+std::to_string(step+1));
+					+std::to_string(step+1)+" (nonlinear_residual="
+					+PreciseNumber(last_residual)+", continuity_l2="
+					+PreciseNumber(last_convergence.continuity_l2)+", net_boundary_flow="
+					+PreciseNumber(last_convergence.net_boundary_flow)
+					+", relative_mass_imbalance="
+					+PreciseNumber(last_convergence.relative_mass_imbalance)+")");
 			if (outlet_models.empty()) {
 				outlet_converged = true;
 				break;
