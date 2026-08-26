@@ -19,7 +19,7 @@ general-purpose CFD package.
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; explicit Rusanov and PETSc implicit formulations; pressure, R, and RCR outlets; rigid-wall steady and transient 3D Navier--Stokes | 1D–3D coupling and FSI are not included; 3D walls remain rigid |
+| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled runs support one in-memory transport system. CUDA VCA, 3D replay/open-loop, and 3D FSI are not included |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
 | Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D vasodilation is disabled because rigid-wall flow has no FSI |
 
@@ -79,6 +79,7 @@ to a separate work directory.
 | Compliant 1D flow | Pulsatile Y-bifurcation | `./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation` |
 | 1D multispecies physiology | Six-species pulse network | `./solvers/one_d/iga_1d examples/one_d/multispecies_physiology` |
 | 3D multispecies pulse | Navier--Stokes plus six species | `./scripts/prepare_example.sh vascular_flow/multispecies_pulse` |
+| 3D VCA closed loop | Two-outlet vascular coupling smoke case | `RANKS=2 ./scripts/prepare_example.sh vascular_flow/vca_bifurcation` |
 
 See the [examples catalog](examples/README.md) for the input contract and case
 descriptions.
@@ -317,6 +318,7 @@ Large cases and generated results are intentionally not versioned.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
+| Native 3D VCA contract, current support, and validation scope | [3D VCA guide](docs/THREE_D_VCA_IMPLEMENTATION_PLAN.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |
@@ -337,7 +339,8 @@ Current scope limits are important when interpreting results:
 
 - 3D vessel and neurite walls are geometrically rigid; 1D compliant wall laws
   do not constitute 3D FSI;
-- 1D and 3D are independent paths with no real-time coupling;
+- native 1D and CPU 3D `vca_closed_loop` coupling are available, but CUDA VCA,
+  3D replay/open-loop, arbitrary multi-system coupling, and 3D FSI are not;
 - 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
   models, not tissue-resolved circulation;
 - the 1D physiology layer is configurable and reduced, not automatically a

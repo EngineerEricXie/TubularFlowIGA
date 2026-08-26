@@ -15,6 +15,7 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/y_bifurcation` | One inlet and two independent outlets | `blood_flow` |
 | Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
 | Vascular flow | `vascular_flow/multispecies_pulse` | Pulsatile 3D Navier--Stokes and six-species physiology | `blood_flow` + `multispecies_physiology_3d` |
+| Vascular flow | `vascular_flow/vca_bifurcation` | CPU 3D VCA closed-loop bifurcation and restart smoke case | `blood_flow` + one VCA transport system |
 | Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
 | Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
 | Native 1D | `one_d/multispecies_physiology` | Pulsatile six-species transport, physiology, and vasodilation | `blood_flow_1d` + `multispecies_physiology_1d` |
@@ -30,7 +31,7 @@ Every 3D runnable case directory contains exactly:
 
 - `skeleton_initial.swc` or `skeleton_initial.obj`: centerline coordinates and radius;
 - `mesh_parameter.txt`: five control-mesh generation parameters;
-- `simulation_config.json`: schema-v2 fields, equations, time, and boundaries.
+- `simulation_config.json`: schema-v2 or schema-v3 fields, equations, time, and boundaries.
 
 The preparation pipeline generates all downstream files, including
 `skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, `controlmesh.vtk`,
@@ -137,6 +138,7 @@ Application-specific instructions:
 
 - [Neuron transport](neuron_transport/README.md)
 - [Vascular flow](vascular_flow/README.md)
+- [3D VCA bifurcation validation](vascular_flow/vca_bifurcation/README.md)
 - [Native 1D flow and transport](one_d/README.md)
 - [Womersley validation](validation/womersley/README.md)
 - [Latest public-example validation](VALIDATION.md)
