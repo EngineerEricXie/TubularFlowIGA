@@ -12,6 +12,7 @@
 #include "TemporalFunction.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientTransportRuntime.hpp"
+#include "VcaCheckpoint.hpp"
 #include "VelocitySeries.hpp"
 #include "VtkOutput.hpp"
 
@@ -263,8 +264,9 @@ int main(int argc, char** argv)
 			throw std::runtime_error("--stop-after-step exceeds configured physical steps");
 		const auto run_end_step = options.stop_after_step > 0
 			? options.stop_after_step : physical_steps;
-		if (vca_circuit && (!options.restart.empty() || !options.checkpoint.empty()))
-			throw std::runtime_error("CPU 3D VCA flow checkpoint/restart is unavailable until reservoir state is checkpointed");
+		if (vca_circuit && !vca_transport
+			&& (!options.restart.empty() || !options.checkpoint.empty()))
+			throw std::runtime_error("VCA flow-only checkpoint/restart requires a transport state and is unavailable");
 		if (!transient)
 			for (const auto& model : outlet_models)
 				if (model.kind != iga::FieldBoundaryKind::Resistance)
@@ -519,6 +521,21 @@ int main(int argc, char** argv)
 			ReadCheckpoint(state, options.restart, metadata);
 			iga::RestoreOutletCheckpoint(metadata, outlet_models);
 			start_step = metadata.completed_step;
+			if (vca_circuit) {
+				if (!vca_transport)
+					throw std::runtime_error("VCA checkpoint requires in-process transport state");
+				const auto vca_metadata = iga::ReadVcaCheckpointMetadata(options.restart);
+				iga::ValidateVcaCheckpoint(vca_metadata, start_step, flow_parameters.dt,
+					vca_transport->System().fields);
+				fs::path transport_path(vca_metadata.transport_state_file);
+				if (transport_path.is_relative())
+					transport_path = iga::VcaCheckpointMetadataPath(options.restart)
+						.parent_path()/transport_path;
+				vca_transport->ReadState(transport_path);
+				vca_circuit->RestoreState(vca_metadata.reservoir);
+				vca_species_state = vca_transport->GatherState();
+				vca_previous_mass = vca_transport->TotalMass(vca_species_state);
+			}
 			if (rank == 0) std::cout << "restart=" << options.restart.string()
 				<< " completed_step=" << start_step
 				<< " physical_time=" << metadata.physical_time << '\n';
@@ -796,6 +813,29 @@ int main(int argc, char** argv)
 				metadata.state_format = "petsc_binary";
 				iga::AppendOutletCheckpoint(outlet_models, metadata);
 				WriteCheckpoint(state, options.checkpoint, metadata, rank);
+				if (vca_circuit) {
+					if (!vca_transport)
+						throw std::runtime_error("VCA checkpoint requires in-process transport state");
+					vca_transport->WriteState(iga::VcaCheckpointTransportStatePath(options.checkpoint));
+					int vca_write_failed = 0;
+					if (rank == 0) {
+						try {
+							iga::VcaCheckpointMetadata vca_metadata;
+							vca_metadata.completed_step = completed_step;
+							vca_metadata.physical_time = completed_step*flow_parameters.dt;
+							vca_metadata.dt = flow_parameters.dt;
+							vca_metadata.fields = vca_transport->System().fields;
+							vca_metadata.transport_state_file
+								= iga::VcaCheckpointTransportStatePath(options.checkpoint).filename().string();
+							vca_metadata.reservoir = vca_circuit->State();
+							iga::WriteVcaCheckpointMetadata(options.checkpoint, vca_metadata);
+						} catch (const std::exception&) {
+							vca_write_failed = 1;
+						}
+					}
+					MPI_Bcast(&vca_write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+					if (vca_write_failed) throw std::runtime_error("cannot write VCA checkpoint metadata");
+				}
 				if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
 					<< " completed_step=" << completed_step << '\n';
 			}

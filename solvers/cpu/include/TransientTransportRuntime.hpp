@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -135,6 +136,22 @@ public:
 	}
 
 	const CompiledLinearSystem& System() const { return system_; }
+	void WriteState(const std::filesystem::path& path) const
+	{
+		PetscViewer viewer = nullptr;
+		PetscViewerBinaryOpen(communicator_, path.string().c_str(), FILE_MODE_WRITE, &viewer);
+		VecView(current_, viewer);
+		PetscViewerDestroy(&viewer);
+	}
+
+	void ReadState(const std::filesystem::path& path)
+	{
+		PetscViewer viewer = nullptr;
+		PetscViewerBinaryOpen(communicator_, path.string().c_str(), FILE_MODE_READ, &viewer);
+		VecLoad(current_, viewer);
+		PetscViewerDestroy(&viewer);
+		steps_ = 1;
+	}
 
 	std::map<std::string, double> TotalMass(const std::vector<double>& state) const
 	{

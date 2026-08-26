@@ -249,6 +249,12 @@ public:
 
 	const ReservoirState& State() const { return state_; }
 
+	void RestoreState(const ReservoirState& state)
+	{
+		state_ = state;
+		ValidateState();
+	}
+
 	VascularInletState InletState(double time_s)
 	{
 		VascularInletState result;
