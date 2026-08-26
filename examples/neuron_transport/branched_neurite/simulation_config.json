@@ -4,7 +4,7 @@
     {"name": "N0", "kind": "scalar", "initial_value": 0.0},
     {"name": "Nplus", "kind": "scalar", "initial_value": 0.0}
   ],
-  "time": {"dt": 0.1, "steps": 2},
+  "time": {"dt": 0.1, "steps": 40},
   "equation_systems": [
     {
       "name": "neuron_transport",
@@ -16,6 +16,7 @@
         {"operator": "linear_coupling", "equation": "N0", "trial": "N0", "coefficient": 1.0},
         {"operator": "linear_coupling", "equation": "N0", "trial": "Nplus", "coefficient": -0.1},
         {"operator": "time_derivative", "equation": "Nplus"},
+        {"operator": "diffusion", "equation": "Nplus", "coefficient": 5.0},
         {"operator": "advection", "equation": "Nplus", "velocity": "prescribed"},
         {"operator": "linear_coupling", "equation": "Nplus", "trial": "N0", "coefficient": -1.0},
         {"operator": "linear_coupling", "equation": "Nplus", "trial": "Nplus", "coefficient": 0.1}
