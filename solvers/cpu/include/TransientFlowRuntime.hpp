@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -52,10 +53,12 @@ public:
 		ResolvedBoundaryConditions initial_boundaries,
 		std::vector<int> labels,
 		std::vector<std::array<double, 3>> boundary_velocity,
+		std::set<std::int32_t> wall_trace_basis,
 		std::vector<OutletModelState> outlet_models)
 		: database_(database), communicator_(communicator), configured_(configured),
 			transient_(transient), parameters_(parameters), boundaries_(std::move(initial_boundaries)),
 			labels_(std::move(labels)), boundary_velocity_(std::move(boundary_velocity)),
+			wall_trace_basis_(std::move(wall_trace_basis)),
 			outlet_models_(std::move(outlet_models)), assembler_(database, communicator, 4)
 	{
 		if (labels_.size() != database_.header().nodes
@@ -74,7 +77,8 @@ public:
 		VecSet(rhs_, 0.0);
 		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node) {
 			const auto index = static_cast<std::size_t>(node);
-			if (boundaries_.velocity_constrained[index])
+			if (wall_trace_basis_.count(static_cast<std::int32_t>(node))
+				|| boundaries_.velocity_constrained[index])
 				for (int field = 0; field < 3; ++field)
 					boundary_rows_.push_back(static_cast<PetscInt>(4*node+field));
 			if (boundaries_.pressure_constrained[index])
@@ -129,9 +133,11 @@ public:
 	}
 
 	IGA_FLOW_NOINLINE void Advance(const SimulationConfiguration& step_configuration, int step,
-		double physical_time, int maximum_newton)
+		double physical_time, int maximum_newton, double nonlinear_relative_tolerance)
 	{
 		if (maximum_newton <= 0) throw std::invalid_argument("maximum Newton iterations must be positive");
+		if (!std::isfinite(nonlinear_relative_tolerance) || nonlinear_relative_tolerance <= 0.0)
+			throw std::invalid_argument("nonlinear relative tolerance must be finite and positive");
 		if (step > 0) VecCopy(state_, previous_);
 		std::vector<double> previous_capacitor_pressure(outlet_models_.size());
 		for (std::size_t i = 0; i < outlet_models_.size(); ++i)
@@ -140,7 +146,8 @@ public:
 		const int maximum_outlet_iterations = outlet_models_.empty() ? 1 : 12;
 		for (int coupling = 0; coupling < maximum_outlet_iterations; ++coupling) {
 			if (configured_) UpdateConfiguredBoundaries(step_configuration);
-			const auto converged = SolveNonlinearStep(step, physical_time, maximum_newton);
+			const auto converged = SolveNonlinearStep(step, physical_time, maximum_newton,
+				nonlinear_relative_tolerance);
 			if (!converged)
 				throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
 					+std::to_string(step+1));
@@ -341,7 +348,8 @@ private:
 		const auto node = static_cast<std::uint64_t>(row/4);
 		const auto field = row%4;
 		const auto index = static_cast<std::size_t>(node);
-		return field < 3 ? boundaries_.velocity[index][static_cast<std::size_t>(field)]
+		return field < 3 ? (wall_trace_basis_.count(static_cast<std::int32_t>(node)) ? 0.0
+			: boundaries_.velocity[index][static_cast<std::size_t>(field)])
 			: boundaries_.pressure[index];
 	}
 
@@ -353,7 +361,8 @@ private:
 			labels_, boundary_velocity_);
 	}
 
-	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton)
+	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton,
+		double nonlinear_relative_tolerance)
 	{
 		PetscReal initial_residual = -1.0;
 		for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
@@ -413,7 +422,8 @@ private:
 			PetscReal residual = 0.0;
 			VecNorm(rhs_, NORM_2, &residual);
 			if (initial_residual < 0.0) initial_residual = residual;
-			const auto tolerance = std::max<PetscReal>(1e-10, 1e-5*initial_residual);
+			const auto tolerance = std::max<PetscReal>(1e-10,
+				nonlinear_relative_tolerance*initial_residual);
 			if (residual <= tolerance) {
 				if (rank_ == 0) std::cout << "step=" << step+1 << " time=" << physical_time
 					<< " converged newton=" << nonlinear << " residual_l2=" << residual
@@ -426,9 +436,17 @@ private:
 			KSPSolve(solver_, rhs_, update_);
 			KSPConvergedReason reason;
 			KSPGetConvergedReason(solver_, &reason);
-			if (reason <= 0)
+			if (reason <= 0) {
+				PetscInt failed_iterations = 0;
+				PetscReal failed_residual = 0.0;
+				KSPGetIterationNumber(solver_, &failed_iterations);
+				KSPGetResidualNorm(solver_, &failed_residual);
 				throw std::runtime_error("Navier-Stokes linear solve failed at nonlinear iteration "
-					+std::to_string(nonlinear));
+					+std::to_string(nonlinear) + " (KSP reason="
+					+std::to_string(static_cast<int>(reason)) + ", iterations="
+					+std::to_string(static_cast<long long>(failed_iterations)) + ", residual="
+					+std::to_string(static_cast<double>(failed_residual)) + ")");
+			}
 			PetscInt iterations = 0;
 			KSPGetIterationNumber(solver_, &iterations);
 			total_linear_iterations_ += iterations;
@@ -483,6 +501,7 @@ private:
 	ResolvedBoundaryConditions boundaries_;
 	std::vector<int> labels_;
 	std::vector<std::array<double, 3>> boundary_velocity_;
+	std::set<std::int32_t> wall_trace_basis_;
 	std::vector<OutletModelState> outlet_models_;
 	std::vector<Element> owned_elements_;
 	OwnedRowAssembler assembler_;

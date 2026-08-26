@@ -71,6 +71,7 @@ struct FieldBoundaryCondition {
 	double capacitance = 0.0;
 	double reference_pressure = 0.0;
 	double initial_pressure = 0.0;
+	bool pressure_gauge = false;
 };
 
 struct TemporalFunctionDefinition {
@@ -480,7 +481,7 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient",
 				"exterior_value", "profile", "scale", "waveform", "resistance",
 				"proximal_resistance", "distal_resistance", "capacitance",
-				"reference_pressure", "initial_pressure"}, condition_context);
+				"reference_pressure", "initial_pressure", "pressure_gauge"}, condition_context);
 			FieldBoundaryCondition condition;
 			condition.field = RequireString(Required(condition_object, "field", condition_context), condition_context + ".field");
 			condition.kind = ParseFieldBoundaryKind(RequireString(Required(condition_object, "type", condition_context), condition_context + ".type"));
@@ -505,6 +506,9 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 				condition.reference_pressure = RequireNumber(*reference, condition_context + ".reference_pressure");
 			if (const auto* initial_pressure = Find(condition_object, "initial_pressure"))
 				condition.initial_pressure = RequireNumber(*initial_pressure, condition_context + ".initial_pressure");
+			if (const auto* pressure_gauge = Find(condition_object, "pressure_gauge"))
+				condition.pressure_gauge = RequireBoolean(*pressure_gauge,
+					condition_context + ".pressure_gauge");
 			if (condition.kind == FieldBoundaryKind::Dirichlet && condition.value.empty() && condition.profile.empty())
 				throw std::runtime_error("simulation_config.json: dirichlet requires value or profile");
 			if (!condition.value.empty() && !condition.profile.empty())
@@ -515,6 +519,11 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 				&& condition.value.size() != 1)
 				throw std::runtime_error(
 					"simulation_config.json: pressure_traction requires one value");
+			if (condition.pressure_gauge
+				&& (condition.kind != FieldBoundaryKind::PressureTraction
+					|| condition.value.size() != 1))
+				throw std::runtime_error(
+					"simulation_config.json: pressure_gauge requires pressure_traction with one value");
 			if (condition.kind == FieldBoundaryKind::Robin && condition.coefficient == 0.0)
 				throw std::runtime_error("simulation_config.json: robin requires nonzero coefficient");
 			if (condition.kind == FieldBoundaryKind::Resistance && !(condition.resistance > 0.0))

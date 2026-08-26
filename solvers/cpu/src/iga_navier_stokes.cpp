@@ -1,3 +1,4 @@
+#include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
 #include "CouplingHistory.hpp"
 #include "FlowCheckpoint.hpp"
@@ -38,6 +39,7 @@ struct FlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	double nonlinear_relative_tolerance = 1e-5;
 };
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
@@ -54,13 +56,27 @@ int ParsePositiveInteger(const std::string& text, const std::string& option)
 	return value;
 }
 
+double ParsePositiveFiniteDouble(const std::string& text, const std::string& option)
+{
+	std::size_t used = 0;
+	double value = 0.0;
+	try {
+		value = std::stod(text, &used);
+	} catch (const std::exception&) {
+		throw std::runtime_error(option+" requires a finite positive value");
+	}
+	if (used != text.size() || !std::isfinite(value) || value <= 0.0)
+		throw std::runtime_error(option+" requires a finite positive value");
+	return value;
+}
+
 FlowOptions ParseOptions(int argc, char** argv)
 {
 	if (argc < 3) throw std::runtime_error(
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N]");
+		"[--stop-after-step N] [--nonlinear-rtol R]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -83,6 +99,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--checkpoint-every") options.checkpoint_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step") options.stop_after_step = ParsePositiveInteger(value, argument);
+		else if (argument == "--nonlinear-rtol")
+			options.nonlinear_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
@@ -183,8 +201,10 @@ int main(int argc, char** argv)
 	try {
 		const auto options = ParseOptions(argc, argv);
 		iga::Database database(options.database.string());
-		const auto labels = iga::ReadPointLabels(
-			(options.case_dir/"controlmesh.vtk").string(), database.header().nodes);
+		const auto mesh = iga::ReadLabeledHexMesh((options.case_dir/"controlmesh.vtk").string(),
+			database.header().nodes, database.header().elements);
+		const auto& labels = mesh.labels;
+		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh);
 		const auto boundary_velocity = iga::ReadVelocity(
 			(options.case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
 		iga::SimulationConfiguration configuration;
@@ -252,10 +272,12 @@ int main(int argc, char** argv)
 			<< " time_integration=" << (transient ? "backward_euler" : "steady")
 			<< " dt=" << parameters.dt << " steps=" << physical_steps
 			<< " run_end_step=" << run_end_step << " velocity_nodes=" << boundaries.velocity_nodes
-			<< " pressure_nodes=" << boundaries.pressure_nodes << '\n';
+			<< " pressure_nodes=" << boundaries.pressure_nodes
+			<< " wall_trace_velocity_nodes=" << wall_trace_basis.size() << '\n';
 
 		iga::TransientFlowRuntime flow(database, PETSC_COMM_WORLD, configured, transient,
-			parameters, boundaries, labels, boundary_velocity, std::move(outlet_models));
+			parameters, boundaries, labels, boundary_velocity, wall_trace_basis,
+			std::move(outlet_models));
 		iga::RequireValidGeometry(flow.Elements(), rank, PETSC_COMM_WORLD);
 		if (vca_circuit) {
 			std::map<int, long long> port_faces;
@@ -403,7 +425,8 @@ int main(int argc, char** argv)
 					iga::ApplyThreeDVascularSpeciesInlet(step_configuration,
 						vca_transport->System(), inlet);
 			}
-			flow.Advance(step_configuration, step, physical_time, options.max_newton);
+			flow.Advance(step_configuration, step, physical_time, options.max_newton,
+				options.nonlinear_relative_tolerance);
 			if (vca_transport) {
 				vca_transport->Advance(step_configuration, flow.RequiredNodes(),
 					flow.GatherRequiredVelocity());

@@ -111,6 +111,13 @@ int main()
 		{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
 	assert(materialized_flow_boundaries.velocity_nodes == 1);
 	assert(materialized_flow_boundaries.pressure_nodes == 0);
+	auto gauge_configuration = materialized;
+	gauge_configuration.boundaries[1].conditions[1].pressure_gauge = true;
+	const auto gauge_boundaries = iga::ResolveFlowBoundaries(gauge_configuration,
+		iga::FirstNavierStokesSystem(gauge_configuration), {0, 1},
+		{{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}});
+	assert(gauge_boundaries.pressure_nodes == 1);
+	assert(std::abs(gauge_boundaries.pressure[1]-3.0) < 1e-14);
 	const auto compiled = iga::CompileLinearSystem(configuration, "species");
 	assert(compiled.fields.size() == 2);
 	assert(compiled.field_index.at("oxygen") == 0);
@@ -187,6 +194,14 @@ int main()
 	}
 	assert(flow_boundary_rejected);
 	bool rejected = false;
+	try {
+		iga::ParseSimulationConfiguration(R"json({"schema_version":2,"fields":[{"name":"velocity","kind":"vector3"},{"name":"pressure","kind":"pressure"}],"time":{"dt":1,"steps":1},"equation_systems":[{"name":"flow","kind":"navier_stokes","unknowns":["velocity","pressure"],"viscosity":1}],"boundaries":[{"label":1,"name":"outlet","conditions":[{"field":"pressure","type":"dirichlet","value":0,"pressure_gauge":true}]}]})json");
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+
+	rejected = false;
 
 	const auto vca_configuration = iga::ParseSimulationConfiguration(R"json({
 		"schema_version":3,"dimension":"3d",

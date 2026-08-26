@@ -97,9 +97,7 @@ void WriteCase(const fs::path& directory, double initial_oxygen = 0.2,
 	for (int k = 0; k < 4; ++k)
 		for (int j = 0; j < 4; ++j)
 			for (int i = 0; i < 4; ++i) mesh << i/3.0 << ' ' << j/3.0 << ' ' << k/3.0 << '\n';
-	mesh << "CELLS 1 65\n64";
-	for (int node = 0; node < 64; ++node) mesh << ' ' << node;
-	mesh << "\nCELL_TYPES 1\n72\n";
+	mesh << "CELLS 1 9\n8 0 3 15 12 48 51 63 60\nCELL_TYPES 1\n12\n";
 	mesh << "POINT_DATA 64\nSCALARS boundary_label int 1\nLOOKUP_TABLE default\n";
 	for (int k = 0; k < 4; ++k)
 		for (int j = 0; j < 4; ++j)
