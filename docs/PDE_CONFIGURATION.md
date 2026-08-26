@@ -103,13 +103,15 @@ conditions on the declared VCA inlet. Outlet flow, area-averaged pressure, and
 outward species fluxes are MPI-reduced before the external circuit advances.
 
 The runner writes `coupling_manifest.json` next to `--output`, or to
-`CASE_DIR/results/vca_flow/` without an output path. The initial implementation
-requires `velocity_source: "prescribed"` because it consumes the in-memory
-flow state rather than a velocity-file series. Checkpoint/restart remains
-rejected until flow, transport, outlet, and reservoir state share one
-checkpoint. CUDA and 3D VCA replay/open-loop modes remain unsupported.
-Native `iga_1d` remains the more complete VCA backend while those limitations
-are removed.
+`CASE_DIR/results/vca_flow/` without an output path. It requires
+`velocity_source: "prescribed"` because it consumes the in-memory flow state
+rather than a velocity-file series. Species-coupled runs support
+`--checkpoint`/`--restart`: the normal flow checkpoint stores flow/outlet
+state, while `<prefix>.vca.json` and `<prefix>.vca_transport.state` store
+reservoir metadata and the transport vector. Flow-only VCA checkpoints remain
+rejected. CUDA and 3D VCA replay/open-loop modes remain unsupported; see
+[`THREE_D_VCA_IMPLEMENTATION_PLAN.md`](THREE_D_VCA_IMPLEMENTATION_PLAN.md)
+for the validation still required before production use.
 
 ## Time-resolved velocity sources
 

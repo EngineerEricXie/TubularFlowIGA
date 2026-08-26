@@ -22,33 +22,52 @@ semantics. The local reference implementation is
 
 ## Current state
 
-Already implemented:
+Implemented in `feature/native-vca-vascular-integration`:
 
 - Shared SI VCA contracts, external-circuit model, replay reader, oxygen
   capacity conversion, and 1D closed loop.
 - Explicit 3D port declaration:
   `coupling.three_d_ports.inlet_label` and `outlet_labels`.
-- CPU transient Navier--Stokes flow-only VCA bridge. It scales the inlet
-  `initial_velocityfield.txt` profile, aggregates outlet flow and
-  area-averaged pressure across MPI ranks, advances a species-free reservoir,
-  and writes `coupling_manifest.json`.
-- 3D transport contract checks and dynamic VCA inlet-species materialization
-  in `include/ThreeDVcaCoupling.hpp`.
+- CPU backward-Euler VCA loop in `iga_navier_stokes`: it applies the arterial
+  inlet state, solves flow, solves one in-memory transport system using the
+  current flow velocity, reduces outlet flow/pressure/species fluxes across
+  MPI, advances the external circuit, and writes `coupling_manifest.json`.
+- `TransientTransportRuntime`, including gathered scalar state, total-mass and
+  volume-source diagnostics, and PETSc binary state import/export.
+- Signed outward species-flux quadrature in `BoundaryFlow.hpp`, dynamic scalar
+  inlet materialization, and port-result construction in
+  `ThreeDVcaCoupling.hpp`.
+- A coupled checkpoint envelope: the existing flow checkpoint retains flow and
+  outlet state; `<prefix>.vca.json` retains step/time/dt, transport field
+  order, and reservoir state; `<prefix>.vca_transport.state` retains the
+  transport PETSc vector.
+- Source-only bifurcation VCA case in `examples/vascular_flow/vca_bifurcation`.
+  Generated meshes, databases, partitions, results, and checkpoints are
+  intentionally not committed.
+- Unit coverage for signed fluxes, VCA configuration checks, checkpoint
+  metadata, and a one-element/single-rank PETSc transport runtime including
+  state restore.
 
-Not yet implemented:
+Not yet demonstrated or intentionally unsupported:
 
-- In-process 3D scalar transport step owned by the same VCA runner as flow.
-- Outlet species flux integration and reservoir species advance from 3D data.
-- VCA checkpoint/restart, replay/open-loop execution in 3D, CUDA support, and
-  a committed packed 3D VCA smoke case.
+- A completed coupled flow-and-transport smoke run through the source
+  bifurcation case. The locally prepared case is large enough that it must be
+  run on an allocated CPU resource, not a shared login node.
+- One-versus-two-rank agreement, passive-tracer conservation, oxygenator
+  source accounting, and uninterrupted-versus-restart equivalence for the
+  coupled 3D runner.
+- 3D VCA replay/open-loop modes, CUDA VCA, more than one transport system,
+  and a transport source other than the current in-memory flow state.
+- Flow-only VCA checkpoint/restart. It remains rejected because there is no
+  scalar state to make the checkpoint contract uniform.
 
-The current flow-only path deliberately rejects reservoir species, oxygenator,
-dialyzer, and infusion rates. Do not remove that protection until the species
-loop below is complete.
+The species-free flow bridge remains available, but reservoir species require
+the transport path above. Do not extend the accepted circuit/device models
+without adding the corresponding conservation test.
 
 ## Required refactor
 
-### 1. Extract a reusable transient flow runtime
+### 1. Extract a reusable transient flow runtime — pending refactor
 
 Move the step-owned portions of
 `solvers/cpu/src/iga_navier_stokes.cpp` into a new CPU header/source pair,
@@ -70,7 +89,7 @@ Keep CLI parsing, output scheduling, and final summaries in
 `iga_navier_stokes.cpp`. Existing non-VCA and R/RC/RCR behaviours must retain
 their current code path and numerical results.
 
-### 2. Extract a reusable transient transport runtime
+### 2. Extract a reusable transient transport runtime — implemented
 
 Move the core of `solvers/cpu/src/iga_solve.cpp` into a corresponding
 `TransientTransportRuntime`.
@@ -99,7 +118,7 @@ and breaks MPI ownership. A temporary all-rank PETSc gather is acceptable only
 as a clearly marked correctness-first implementation; replace it with a
 shared ghost-vector evaluation before performance validation.
 
-### 3. Add boundary species-flux integration
+### 3. Add boundary species-flux integration — implemented
 
 Extend `solvers/cpu/include/BoundaryFlow.hpp` with a quadrature helper for
 the outward-normal advective species flux:
@@ -122,7 +141,7 @@ Create `VascularOutletState` entries with:
 
 Use `AggregateVascularOutlets` without changing its signed conservation rules.
 
-### 4. Add the coupled runner
+### 4. Add the coupled runner — implemented in `iga_navier_stokes`
 
 Either add `iga_vca_3d` or make `iga_navier_stokes` dispatch to a dedicated
 `RunThreeDVcaClosedLoop(...)` function. A dedicated function is preferred so
@@ -145,57 +164,62 @@ Maintain the established explicit lag: the vascular step consumes arterial
 state at `t`, and the reservoir consumes the resulting venous return after
 that step.
 
-## Files expected to change
+## Files changed and remaining modifications
 
-| File | Change |
+| File | Status and follow-up |
 | --- | --- |
-| `solvers/cpu/src/iga_navier_stokes.cpp` | Retain CLI; dispatch VCA work to the coupled runner. |
-| `solvers/cpu/src/iga_solve.cpp` | Retain CLI; use extracted transport runtime. |
-| `solvers/cpu/include/TransientFlowRuntime.hpp` | New reusable one-step flow runtime. |
-| `solvers/cpu/include/TransientTransportRuntime.hpp` | New reusable one-step scalar runtime. |
-| `solvers/cpu/include/BoundaryFlow.hpp` | Add species-flux quadrature helper. |
-| `include/ThreeDVcaCoupling.hpp` | Keep port/config checks; add result construction and diagnostics helpers as needed. |
-| `include/CouplingHistory.hpp` | Extract the generic manifest writer from the 1D-only header before the 3D runner uses it. |
-| `solvers/one_d/include/OneDCoupling.hpp` | Include the generic history header after extraction; preserve 1D output format. |
-| `solvers/cpu/tests/test_boundary_flow.cpp` | Unit-test signed scalar boundary flux and flux-weighted concentration. |
-| `solvers/cpu/tests/test_simulation_config.cpp` | Test VCA transport-system and inlet-boundary validation. |
-| `solvers/cpu/tests/test_vca_3d_runtime.cpp` | New small runtime test using a packed one-element/two-outlet fixture. |
-| `solvers/cpu/Makefile` | Build new runtime test and any new executable/source. |
-| `docs/PDE_CONFIGURATION.md` | Replace the flow-only limitation with supported 3D species configuration and remaining limitations. |
-| `examples/vascular_flow/...` | Add a small two-outlet VCA case, source geometry, config, and run instructions; never commit generated `.ntiga` or result files. |
+| `solvers/cpu/src/iga_navier_stokes.cpp` | **Changed.** Contains the coupled step, port reductions, manifest records, and VCA checkpoint/restart. Extract the flow part only after regression equivalence is established. |
+| `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
+| `solvers/cpu/include/BoundaryFlow.hpp` | **Changed.** Signed scalar flux and scalar/area integrals. |
+| `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
+| `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer. Next: remove the now-duplicated writer from `solvers/one_d/include/OneDCoupling.hpp` and have 1D include this header. |
+| `include/VcaCheckpoint.hpp` | **Changed.** VCA metadata parser/validator. Next: add configuration/port fingerprint fields before treating restart as production-ready. |
+| `solvers/cpu/tests/test_boundary_flow.cpp` | **Changed.** Covers positive and negative signed species flux. |
+| `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
+| `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** Metadata round-trip and mismatch rejection. |
+| `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. Next: add a two-outlet coupled-flow fixture. |
+| `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
+| `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
+| `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
 
-## Checkpoint design (after the coupled runtime works)
+## Checkpoint design — initial implementation complete
 
-Extend the flow checkpoint metadata or introduce a VCA checkpoint envelope that
-contains:
+The current VCA checkpoint envelope contains:
 
-- flow PETSc state and prior flow state;
-- every transport PETSc state;
-- R/RC/RCR outlet state;
+- flow PETSc state and reconstructed prior flow state;
+- the one supported transport PETSc state;
+- R/RC/RCR outlet state in the flow checkpoint;
 - reservoir volume, species concentrations, temperature, hematocrit, and the
   latest arterial state needed by devices;
-- completed step, physical time, time step, schema/config fingerprint, port
-  labels, field order, and transport-system name.
+- completed step, physical time, time step, schema version, field order, and
+  transport-state filename.
 
-Reject a restart when any of these identities differ. Do not silently restart
-only flow while resetting reservoir or species state.
+The reader rejects mismatched step/time/dt/field order and never resets the
+reservoir or species state silently. Before production use, add a configuration
+fingerprint, port labels, transport-system name, and device-model identity to
+the metadata validation.
 
-## Validation order and acceptance criteria
+## Handoff checklist and validation order
 
-1. Unit tests: signed scalar flux, outlet aggregation, dynamic inlet species,
-   and failure cases for missing ports/fields/boundaries.
-2. One-element/two-outlet transient smoke case: outlet flows sum to the pump
+1. **Done locally:** unit tests for signed scalar flux, outlet aggregation,
+   dynamic inlet species, VCA checkpoint metadata, and a one-element transport
+   runtime. Run `make -C solvers/cpu test` and, with PETSc,
+   `make -C solvers/cpu PETSC_DIR=... petsc-test`.
+2. **Next required run:** execute the source bifurcation case on an allocated
+   resource with `--stop-after-step 1`. Check for a manifest and finite port,
+   reservoir, and balance values. Do not commit generated case data.
+3. **Then:** one-element/two-outlet transient coupled-flow fixture: outlet flows sum to the pump
    flow within the incompressibility tolerance; reservoir volume remains
    bounded.
-3. Passive tracer case: with no source and equal initial/inlet concentration,
+4. Passive tracer case: with no source and equal initial/inlet concentration,
    combined vascular plus reservoir tracer mass is constant to the selected
    tolerance.
-4. Oxygenator case: reservoir/device oxygen source is reported separately and
+5. Oxygenator case: reservoir/device oxygen source is reported separately and
    matches vascular-plus-reservoir mass change.
-5. MPI: repeat the smoke case on one and two ranks; compare port histories,
+6. MPI: repeat the smoke case on one and two ranks; compare port histories,
    final reservoir state, and field norms.
-6. Restart: compare uninterrupted and checkpoint/resumed coupled runs.
-7. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
+7. Restart: compare uninterrupted and checkpoint/resumed coupled runs.
+8. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
    `make -C solvers/one_d core-test`, and `git diff --check`.
 
 Do not claim full 3D VCA support until items 1--5 pass. Do not enable CUDA VCA
