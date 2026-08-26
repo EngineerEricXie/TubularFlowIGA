@@ -71,12 +71,14 @@ without adding the corresponding conservation test.
 
 ## Required refactor
 
-### 1. Extract a reusable transient flow runtime — pending refactor
+### 1. Extract a reusable transient flow runtime — implemented
 
-Move the step-owned portions of
-`solvers/cpu/src/iga_navier_stokes.cpp` into a new CPU header/source pair,
-for example `solvers/cpu/include/TransientFlowRuntime.hpp` and
-`solvers/cpu/src/TransientFlowRuntime.cpp`.
+The step-owned portions of `solvers/cpu/src/iga_navier_stokes.cpp` now live in
+the header-only `solvers/cpu/include/TransientFlowRuntime.hpp`, matching the
+existing transport runtime's deployment style. It owns PETSc state and ghost
+scatter, Newton/KSP work, R/RC/RCR fixed-point state, VCA port measurements,
+velocity gather, and final norms. The CLI retains option parsing, VCA circuit
+and transport ordering, output, and checkpoint metadata.
 
 The runtime should own:
 
@@ -172,7 +174,8 @@ that step.
 
 | File | Status and follow-up |
 | --- | --- |
-| `solvers/cpu/src/iga_navier_stokes.cpp` | **Changed.** Contains the coupled step, port reductions, manifest records, and VCA checkpoint/restart. Extract the flow part only after regression equivalence is established. |
+| `solvers/cpu/src/iga_navier_stokes.cpp` | **Changed.** Retains CLI, VCA circuit/transport ordering, output, and checkpoint metadata; flow step work delegates to `TransientFlowRuntime`. |
+| `solvers/cpu/include/TransientFlowRuntime.hpp` | **Changed.** Owns transient Navier--Stokes state, ghost scatter, Newton/KSP, outlet fixed-point coupling, port measurements, velocity gather, and summary norms. |
 | `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
 | `solvers/cpu/include/BoundaryFlow.hpp` | **Changed.** Signed scalar flux and scalar/area integrals. |
 | `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
