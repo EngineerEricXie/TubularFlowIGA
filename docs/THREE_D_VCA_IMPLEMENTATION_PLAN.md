@@ -196,6 +196,7 @@ that step.
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
 | `examples/vascular_flow/vca_bifurcation/README.md` | **Changed.** Provides the allocation-only one-/two-rank full, split/restart, field-L2, and manifest-validation procedure. |
+| `scripts/validate_vca_bifurcation.sh` | **Added.** Automates the allocation-only physical validation, including preparation, one-/two-rank runs, restart equality, field L2, reservoir, and manifest checks. |
 
 ## Checkpoint design — initial implementation complete
 

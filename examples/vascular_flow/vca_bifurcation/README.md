@@ -10,6 +10,16 @@ one-versus-two-rank validation below. `prepare_example.sh` requires an empty
 work directory and generates the two-rank partition; the `awk` command derives
 the all-owned single-rank partition from it.
 
+The recommended form is the automated validator; set
+`VCA_RELATIVE_TOLERANCE` or `VCA_VOLUME_BALANCE_TOLERANCE` if the
+site-specific solver tolerance requires it.
+
+```bash
+VCA_RELATIVE_TOLERANCE=1e-6 ./scripts/validate_vca_bifurcation.sh /tmp/vca-bifurcation
+```
+
+The commands below are the equivalent expanded procedure.
+
 ```bash
 WORK=/tmp/vca-bifurcation
 RANKS=2 ./scripts/prepare_example.sh vascular_flow/vca_bifurcation "$WORK"
