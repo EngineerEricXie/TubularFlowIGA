@@ -125,6 +125,7 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 	for (int label : labels) if (label >= 0) mesh_labels.insert(label);
 	std::set<int> configured_labels;
 	bool has_pressure_traction = false;
+	bool has_pressure_gauge = false;
 	for (const auto& boundary : configuration.boundaries) {
 		if (!mesh_labels.count(boundary.label))
 			throw std::runtime_error("simulation_config.json boundary label " + std::to_string(boundary.label)
@@ -139,6 +140,18 @@ inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 					throw std::runtime_error(
 						"pressure_traction requires the Navier-Stokes pressure field");
 				has_pressure_traction = true;
+				if (condition.pressure_gauge) {
+					if (has_pressure_gauge)
+						throw std::runtime_error(
+							"navier_stokes accepts at most one pressure_gauge");
+					for (std::size_t node = 0; node < nodes; ++node)
+						if (labels[node] == boundary.label) {
+							result.pressure_constrained[node] = 1;
+							result.pressure[node] = condition.value[0];
+							break;
+						}
+					has_pressure_gauge = true;
+				}
 				continue;
 			}
 			if (condition.kind != FieldBoundaryKind::Dirichlet)

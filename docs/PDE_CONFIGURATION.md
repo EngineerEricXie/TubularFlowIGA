@@ -79,6 +79,13 @@ natural boundary force `-p n`; unlike pressure Dirichlet, it retains all
 continuity rows. R/RC/RCR outlet models update this same traction through their
 3D/0D fixed-point coupling.
 
+The CPU `iga_navier_stokes` solver can remove the otherwise constant pressure
+nullspace by adding `"pressure_gauge": true` to exactly one scalar
+`pressure_traction` condition. It constrains one deterministic coefficient on
+that label to the specified traction while retaining the natural traction rows
+on the outlet. This is a Navier–Stokes gauge, not a general pressure Dirichlet
+condition.
+
 ## Time-resolved velocity sources
 
 CPU configured transport can replace the built-in `prescribed` velocity with a
@@ -168,6 +175,12 @@ state file stores the distributed four-field vector.
 `--stop-after-step N` intentionally ends an otherwise unchanged full run at
 step `N` and writes its final checkpoint, which makes restart equivalence tests
 independent of configuration edits.
+
+Use `--nonlinear-rtol R` to set the positive finite relative nonlinear residual
+tolerance (default `1e-5`). PETSc linear-solver choices remain PETSc command
+line options, such as `-ksp_*` and `-pc_*`; on failure the solver reports the
+PETSc reason, iteration count, and final residual so a case-specific choice can
+be diagnosed.
 
 Configured transport accepts the same output/restart pattern:
 

@@ -1,4 +1,5 @@
 #include "BoundaryFlow.hpp"
+#include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
 #include "FlowCheckpoint.hpp"
 #include "GenericCaseInput.hpp"
@@ -39,6 +40,7 @@ struct FlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	double nonlinear_relative_tolerance = 1e-5;
 };
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
@@ -55,13 +57,27 @@ int ParsePositiveInteger(const std::string& text, const std::string& option)
 	return value;
 }
 
+double ParsePositiveFiniteDouble(const std::string& text, const std::string& option)
+{
+	std::size_t used = 0;
+	double value = 0.0;
+	try {
+		value = std::stod(text, &used);
+	} catch (const std::exception&) {
+		throw std::runtime_error(option + " requires a finite positive value");
+	}
+	if (used != text.size() || !std::isfinite(value) || value <= 0.0)
+		throw std::runtime_error(option + " requires a finite positive value");
+	return value;
+}
+
 FlowOptions ParseOptions(int argc, char** argv)
 {
 	if (argc < 3) throw std::runtime_error(
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N]");
+		"[--stop-after-step N] [--nonlinear-rtol R]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -85,6 +101,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
+		else if (argument == "--nonlinear-rtol")
+			options.nonlinear_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else throw std::runtime_error("unknown option: " + argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
@@ -186,7 +204,10 @@ int main(int argc, char** argv)
 		iga::Database database(options.database.string());
 		const auto& case_dir = options.case_dir;
 		const int max_newton = options.max_newton;
-		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
+		const auto mesh = iga::ReadLabeledHexMesh((case_dir / "controlmesh.vtk").string(),
+			database.header().nodes, database.header().elements);
+		const auto& labels = mesh.labels;
+		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh);
 		const auto boundary_velocity = iga::ReadVelocity((case_dir / "initial_velocityfield.txt").string(), database.header().nodes);
 		iga::ResolvedBoundaryConditions boundaries;
 		iga::SimulationConfiguration simulation_configuration;
@@ -240,7 +261,8 @@ int main(int argc, char** argv)
 			<< " dt=" << flow_parameters.dt << " steps=" << physical_steps
 			<< " run_end_step=" << run_end_step
 			<< " velocity_nodes=" << boundaries.velocity_nodes
-			<< " pressure_nodes=" << boundaries.pressure_nodes << '\n';
+			<< " pressure_nodes=" << boundaries.pressure_nodes
+			<< " wall_trace_velocity_nodes=" << wall_trace_basis.size() << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 4);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
 		for (const auto& model : outlet_models) {
@@ -333,7 +355,8 @@ int main(int argc, char** argv)
 		std::vector<PetscInt> boundary_rows;
 		for (std::uint64_t node = assembler.node_begin(); node < assembler.node_end(); ++node) {
 			const auto index = static_cast<std::size_t>(node);
-			if (boundaries.velocity_constrained[index])
+			if (wall_trace_basis.count(static_cast<std::int32_t>(node))
+				|| boundaries.velocity_constrained[index])
 				for (int field = 0; field < 3; ++field) boundary_rows.push_back(static_cast<PetscInt>(4*node+field));
 			if (boundaries.pressure_constrained[index]) boundary_rows.push_back(static_cast<PetscInt>(4*node+3));
 		}
@@ -356,7 +379,8 @@ int main(int argc, char** argv)
 				const auto field = row%4;
 				const auto index = static_cast<std::size_t>(node);
 				initial_values.push_back(field < 3
-					? boundaries.velocity[index][static_cast<std::size_t>(field)]
+					? (wall_trace_basis.count(static_cast<std::int32_t>(node)) ? 0.0
+						: boundaries.velocity[index][static_cast<std::size_t>(field)])
 					: boundaries.pressure[index]);
 			}
 			VecSetValues(state, static_cast<PetscInt>(boundary_rows.size()),
@@ -466,7 +490,8 @@ int main(int argc, char** argv)
 				const auto field = row % 4;
 				const auto index = static_cast<std::size_t>(node);
 				const double target = field < 3
-					? boundaries.velocity[index][static_cast<std::size_t>(field)]
+					? (wall_trace_basis.count(static_cast<std::int32_t>(node)) ? 0.0
+						: boundaries.velocity[index][static_cast<std::size_t>(field)])
 					: boundaries.pressure[index];
 				const auto local_row = static_cast<std::size_t>(row - 4*assembler.node_begin());
 				boundary_update.push_back(target - PetscRealPart(owned_state[local_row]));
@@ -478,7 +503,8 @@ int main(int argc, char** argv)
 			PetscReal residual_norm = 0.0;
 			VecNorm(rhs, NORM_2, &residual_norm);
 			if (initial_residual < 0.0) initial_residual = residual_norm;
-			const auto nonlinear_tolerance = std::max<PetscReal>(1e-10, 1e-5*initial_residual);
+			const auto nonlinear_tolerance = std::max<PetscReal>(1e-10,
+				options.nonlinear_relative_tolerance*initial_residual);
 			if (residual_norm <= nonlinear_tolerance) {
 				if (rank == 0) std::cout << "step=" << step+1 << " time=" << physical_time
 					<< " converged newton=" << nonlinear << " residual_l2=" << residual_norm
@@ -492,7 +518,17 @@ int main(int argc, char** argv)
 			KSPSolve(solver, rhs, update);
 			KSPConvergedReason reason;
 			KSPGetConvergedReason(solver, &reason);
-			if (reason <= 0) throw std::runtime_error("Navier-Stokes linear solve failed at nonlinear iteration " + std::to_string(nonlinear));
+			if (reason <= 0) {
+				PetscInt failed_iterations = 0;
+				PetscReal failed_residual = 0.0;
+				KSPGetIterationNumber(solver, &failed_iterations);
+				KSPGetResidualNorm(solver, &failed_residual);
+				throw std::runtime_error("Navier-Stokes linear solve failed at nonlinear iteration "
+					+ std::to_string(nonlinear) + " (KSP reason="
+					+ std::to_string(static_cast<int>(reason)) + ", iterations="
+					+ std::to_string(static_cast<long long>(failed_iterations)) + ", residual="
+					+ std::to_string(static_cast<double>(failed_residual)) + ")");
+			}
 			PetscInt iterations = 0;
 			KSPGetIterationNumber(solver, &iterations);
 			total_linear_iterations += iterations;
