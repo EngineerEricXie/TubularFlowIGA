@@ -318,7 +318,7 @@ Large cases and generated results are intentionally not versioned.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
-| Native 3D VCA contract, current support, and validation scope | [3D VCA guide](docs/THREE_D_VCA_IMPLEMENTATION_PLAN.md) |
+| Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |

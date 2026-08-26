@@ -1,6 +1,6 @@
-# Native 3D VCA species-coupling implementation plan
+# Native 3D VCA development record
 
-## Objective
+## Original objective
 
 Complete native CPU 3D `vca_closed_loop` support for transient
 Navier--Stokes plus transported species. Each physical step must use one

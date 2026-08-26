@@ -9,7 +9,7 @@ vascular and neuron workflows. Then choose the document matching the task:
 | Follow a fresh-clone vascular and neuron walkthrough | [QUICKSTART.md](QUICKSTART.md) |
 | Understand generated files and stage interfaces | [PIPELINE.md](PIPELINE.md) |
 | Configure fields, operators, time stepping, checkpointing, and solver CLI | [PDE_CONFIGURATION.md](PDE_CONFIGURATION.md) |
-| Configure native CPU 3D VCA coupling and review its validation scope | [THREE_D_VCA_IMPLEMENTATION_PLAN.md](THREE_D_VCA_IMPLEMENTATION_PLAN.md) |
+| Run and validate native CPU 3D VCA coupling | [VCA bifurcation case](../examples/vascular_flow/vca_bifurcation/README.md) |
 | Configure wall, inlet, outlet, waveform, and Windkessel conditions | [BOUNDARY_CONDITIONS.md](BOUNDARY_CONDITIONS.md) |
 | Run on PSC Bridges-2 | [BRIDGES2.md](BRIDGES2.md) |
 | Review mesh correctness evidence | [MESH_CPP_VALIDATION.md](MESH_CPP_VALIDATION.md) |

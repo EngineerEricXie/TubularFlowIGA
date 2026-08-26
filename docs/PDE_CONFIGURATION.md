@@ -116,9 +116,9 @@ rather than a velocity-file series. Species-coupled runs support
 `--checkpoint`/`--restart`: the normal flow checkpoint stores flow/outlet
 state, while `<prefix>.vca.json` and `<prefix>.vca_transport.state` store
 reservoir metadata and the transport vector. Flow-only VCA checkpoints remain
-rejected. CUDA and 3D VCA replay/open-loop modes remain unsupported; see
-[`THREE_D_VCA_IMPLEMENTATION_PLAN.md`](THREE_D_VCA_IMPLEMENTATION_PLAN.md)
-for the validation still required before production use.
+rejected. CUDA and 3D VCA replay/open-loop modes remain unsupported. Use the
+[VCA bifurcation case](../examples/vascular_flow/vca_bifurcation/README.md)
+for the runnable one-/two-rank validation procedure.
 
 ## Time-resolved velocity sources
 
