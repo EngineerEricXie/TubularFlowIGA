@@ -195,6 +195,20 @@ void RequireContains(const fs::path& path, const std::string& expected)
 		throw std::runtime_error("VCA manifest is missing "+expected);
 }
 
+double LastVascularMass(const fs::path& manifest, const std::string& field)
+{
+	std::ifstream input(manifest);
+	const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	const std::string marker = "\"vascular_total_mass_mol\": {\""+field+"\": ";
+	const auto position = text.rfind(marker);
+	if (position == std::string::npos)
+		throw std::runtime_error("VCA manifest is missing vascular mass for "+field);
+	std::size_t used = 0;
+	const auto value = std::stod(text.substr(position+marker.size()), &used);
+	if (used == 0) throw std::runtime_error("VCA manifest vascular mass is invalid");
+	return value;
+}
+
 void RequireSameReservoir(const fs::path& first, const fs::path& second)
 {
 	const auto left = iga::ReadVcaCheckpointMetadata(first).reservoir;
@@ -236,6 +250,11 @@ int main()
 		RequireContains(manifest, "\"outlet_ids\": [2, 3]");
 		RequireContains(manifest, "\"oxygen\"");
 		RequireContains(manifest, "\"vca_balance_history\"");
+		const auto reservoir = iga::ReadVcaCheckpointMetadata(root/"full/checkpoint").reservoir;
+		const auto combined_mass = LastVascularMass(manifest, "oxygen")
+			+ reservoir.volume_m3*reservoir.species.at("oxygen");
+		if (std::abs(combined_mass-0.4) > 2e-8)
+			throw std::runtime_error("passive tracer mass is not conserved in the VCA smoke run");
 		Run(database, root, root/"split/checkpoint", " --stop-after-step 1");
 		Run(database, root, root/"resumed/checkpoint",
 			" --restart "+Quote(root/"split/checkpoint"));
