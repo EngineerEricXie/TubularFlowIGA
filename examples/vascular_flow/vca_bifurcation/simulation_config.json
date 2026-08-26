@@ -1,0 +1,51 @@
+{
+  "schema_version": 3,
+  "dimension": "3d",
+  "simulation_scope": {"mode": "vca_closed_loop"},
+  "coupling": {
+    "scheme": "explicit_staggered",
+    "flow_epsilon_m3_s": 1.0e-14,
+    "three_d_ports": {"inlet_label": 1, "outlet_labels": [2, 3]}
+  },
+  "external_circuit": {
+    "reservoir": {"volume_m3": 1.0e-6, "temperature_c": 37.0,
+      "species": {"oxygen": 0.2}},
+    "pump": {"mode": "flow_control", "flow_m3_s": 1.0e-9}
+  },
+  "fields": [
+    {"name": "velocity", "kind": "vector3"},
+    {"name": "pressure", "kind": "pressure"},
+    {"name": "oxygen", "kind": "scalar", "initial_value": 0.2}
+  ],
+  "time": {"dt": 0.01, "steps": 4},
+  "equation_systems": [
+    {"name": "blood_flow", "kind": "navier_stokes",
+      "unknowns": ["velocity", "pressure"], "viscosity": 0.0035,
+      "density": 1060.0, "time_integration": "backward_euler"},
+    {"name": "oxygen_transport", "kind": "linear_transport",
+      "unknowns": ["oxygen"],
+      "terms": [
+        {"operator": "time_derivative", "equation": "oxygen"},
+        {"operator": "advection", "equation": "oxygen", "velocity": "prescribed"},
+        {"operator": "diffusion", "equation": "oxygen", "coefficient": 1.0e-9}
+      ]}
+  ],
+  "boundaries": [
+    {"label": 0, "name": "wall", "conditions": [
+      {"field": "velocity", "type": "dirichlet", "value": [0.0, 0.0, 0.0]},
+      {"field": "oxygen", "type": "no_flux"}
+    ]},
+    {"label": 1, "name": "vca_arterial_inlet", "conditions": [
+      {"field": "velocity", "type": "dirichlet", "profile": "initial_velocityfield.txt", "scale": 1.0},
+      {"field": "oxygen", "type": "dirichlet", "value": 0.2}
+    ]},
+    {"label": 2, "name": "venous_outlet_a", "conditions": [
+      {"field": "pressure", "type": "pressure_traction", "value": 0.0},
+      {"field": "oxygen", "type": "advective_outflow"}
+    ]},
+    {"label": 3, "name": "venous_outlet_b", "conditions": [
+      {"field": "pressure", "type": "pressure_traction", "value": 0.0},
+      {"field": "oxygen", "type": "advective_outflow"}
+    ]}
+  ]
+}
