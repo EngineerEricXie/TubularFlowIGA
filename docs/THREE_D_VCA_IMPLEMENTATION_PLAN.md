@@ -47,13 +47,17 @@ Implemented in `feature/native-vca-vascular-integration`:
 - Unit coverage for signed fluxes, VCA configuration checks, checkpoint
   metadata, and a one-element/single-rank PETSc transport runtime including
   state restore.
+- A one-element/two-port single-rank end-to-end smoke test that runs flow,
+  transport, external-circuit advance, manifest generation, checkpoint, and
+  restart. The uninterrupted and resumed flow/transport PETSc state files
+  compare byte-for-byte.
 
 Not yet demonstrated or intentionally unsupported:
 
 - A completed coupled flow-and-transport smoke run through the source
-  bifurcation case. The locally prepared case is large enough that it must be
-  run on an allocated CPU resource, not a shared login node.
-- One-versus-two-rank agreement, passive-tracer conservation, oxygenator
+  bifurcation case on two ranks. The locally prepared case is large enough
+  that it must be run on an allocated CPU resource, not a shared login node.
+- One-versus-two-rank agreement for the physical source case, passive-tracer conservation, oxygenator
   source accounting, and uninterrupted-versus-restart equivalence for the
   coupled 3D runner.
 - 3D VCA replay/open-loop modes, CUDA VCA, more than one transport system,
@@ -178,7 +182,8 @@ that step.
 | `solvers/cpu/tests/test_boundary_flow.cpp` | **Changed.** Covers positive and negative signed species flux. |
 | `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
 | `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** Metadata round-trip and mismatch rejection. |
-| `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. Next: add a two-outlet coupled-flow fixture. |
+| `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. |
+| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it compares uninterrupted and checkpoint/resumed PETSc flow and transport states. |
 | `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
@@ -203,24 +208,22 @@ the metadata validation.
 ## Handoff checklist and validation order
 
 1. **Done locally:** unit tests for signed scalar flux, outlet aggregation,
-   dynamic inlet species, VCA checkpoint metadata, and a one-element transport
-   runtime. Run `make -C solvers/cpu test` and, with PETSc,
+   dynamic inlet species, VCA checkpoint metadata, one-element transport, and
+   a one-element/two-port flow+transport+checkpoint/restart smoke run. Run
+   `make -C solvers/cpu test` and, with PETSc,
    `make -C solvers/cpu PETSC_DIR=... petsc-test`.
-2. **Next required run:** execute the source bifurcation case on an allocated
-   resource with `--stop-after-step 1`. Check for a manifest and finite port,
-   reservoir, and balance values. Do not commit generated case data.
-3. **Then:** one-element/two-outlet transient coupled-flow fixture: outlet flows sum to the pump
-   flow within the incompressibility tolerance; reservoir volume remains
-   bounded.
-4. Passive tracer case: with no source and equal initial/inlet concentration,
+2. **Next required run:** execute the source bifurcation case on one and two
+   allocated CPU ranks. Check port histories, field norms, and finite reservoir
+   and balance values. Do not commit generated case data.
+3. Passive tracer case: with no source and equal initial/inlet concentration,
    combined vascular plus reservoir tracer mass is constant to the selected
    tolerance.
-5. Oxygenator case: reservoir/device oxygen source is reported separately and
+4. Oxygenator case: reservoir/device oxygen source is reported separately and
    matches vascular-plus-reservoir mass change.
-6. MPI: repeat the smoke case on one and two ranks; compare port histories,
+5. MPI: repeat the physical smoke case on one and two ranks; compare port histories,
    final reservoir state, and field norms.
-7. Restart: compare uninterrupted and checkpoint/resumed coupled runs.
-8. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
+6. Restart: repeat the one-rank restart equivalence test on two ranks.
+7. Regression: run `make -C solvers/cpu test`, PETSc flow/transport tests,
    `make -C solvers/one_d core-test`, and `git diff --check`.
 
 Do not claim full 3D VCA support until items 1--5 pass. Do not enable CUDA VCA

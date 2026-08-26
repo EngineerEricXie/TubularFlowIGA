@@ -264,7 +264,7 @@ int main(int argc, char** argv)
 			throw std::runtime_error("--stop-after-step exceeds configured physical steps");
 		const auto run_end_step = options.stop_after_step > 0
 			? options.stop_after_step : physical_steps;
-		if (vca_circuit && !vca_transport
+		if (vca_circuit && !vca_has_transport
 			&& (!options.restart.empty() || !options.checkpoint.empty()))
 			throw std::runtime_error("VCA flow-only checkpoint/restart requires a transport state and is unavailable");
 		if (!transient)
