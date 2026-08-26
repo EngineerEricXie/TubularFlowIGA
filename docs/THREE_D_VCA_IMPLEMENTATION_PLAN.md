@@ -195,6 +195,7 @@ that step.
 | `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
+| `examples/vascular_flow/vca_bifurcation/README.md` | **Changed.** Provides the allocation-only one-/two-rank full, split/restart, field-L2, and manifest-validation procedure. |
 
 ## Checkpoint design — initial implementation complete
 
