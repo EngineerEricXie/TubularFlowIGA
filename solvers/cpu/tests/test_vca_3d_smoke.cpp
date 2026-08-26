@@ -1,5 +1,6 @@
 #include "IgaDatabase.hpp"
 #include "SimulationConfig.hpp"
+#include "VcaCheckpoint.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,7 +18,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-void WriteUnitDatabase(const fs::path& path)
+void WriteUnitDatabase(const fs::path& path, std::uint32_t ranks = 1)
 {
 	std::ofstream output(path, std::ios::binary | std::ios::trunc);
 	if (!output) throw std::runtime_error("cannot create VCA smoke-test database");
@@ -26,7 +27,7 @@ void WriteUnitDatabase(const fs::path& path)
 		+ sizeof(std::int32_t);
 	output.write(iga::kMagic.data(), iga::kMagic.size());
 	iga::Write(output, iga::kVersion);
-	iga::Write(output, std::uint32_t{1});
+	iga::Write(output, ranks);
 	iga::Write(output, std::uint64_t{1});
 	iga::Write(output, std::uint64_t{64});
 	iga::Write(output, iga::kBezierPointCount);
@@ -57,9 +58,10 @@ void WriteUnitDatabase(const fs::path& path)
 					static_cast<std::streamsize>(sizeof(point)));
 			}
 	const auto rank_index_offset = static_cast<std::uint64_t>(output.tellp());
-	iga::Write(output, std::uint64_t{0});
-	iga::Write(output, std::uint64_t{1});
-	iga::Write(output, std::uint64_t{0});
+	for (std::uint32_t rank = 0; rank <= ranks; ++rank)
+		iga::Write(output, static_cast<std::uint64_t>(rank));
+	for (std::uint32_t rank = 0; rank < ranks; ++rank)
+		iga::Write(output, std::uint64_t{0});
 	output.seekp(header_size + sizeof(std::uint64_t));
 	iga::Write(output, rank_index_offset);
 	output.seekp(rank_index_position);
@@ -76,6 +78,9 @@ void WriteCase(const fs::path& directory)
 	for (int k = 0; k < 4; ++k)
 		for (int j = 0; j < 4; ++j)
 			for (int i = 0; i < 4; ++i) mesh << i/3.0 << ' ' << j/3.0 << ' ' << k/3.0 << '\n';
+	mesh << "CELLS 1 65\n64";
+	for (int node = 0; node < 64; ++node) mesh << ' ' << node;
+	mesh << "\nCELL_TYPES 1\n72\n";
 	mesh << "POINT_DATA 64\nSCALARS boundary_label int 1\nLOOKUP_TABLE default\n";
 	for (int k = 0; k < 4; ++k)
 		for (int j = 0; j < 4; ++j)
@@ -142,11 +147,12 @@ std::string Quote(const fs::path& path)
 }
 
 void Run(const fs::path& database, const fs::path& directory, const fs::path& checkpoint,
-	const std::string& extra)
+	const std::string& extra, const std::string& launcher = {})
 {
 	fs::create_directories(checkpoint.parent_path());
-	const std::string command = "./iga_navier_stokes "+Quote(database)+" "+Quote(directory)
-		+" --max-newton 12 --checkpoint "+Quote(checkpoint)+extra;
+	const std::string command = launcher+"./iga_navier_stokes "+Quote(database)+" "+Quote(directory)
+		+" --max-newton 12 --checkpoint "+Quote(checkpoint)
+		+" --output "+Quote(checkpoint.parent_path()/"flow.txt")+extra;
 	if (std::system(command.c_str()) != 0)
 		throw std::runtime_error("iga_navier_stokes VCA smoke run failed");
 }
@@ -165,12 +171,47 @@ bool SameFile(const fs::path& first, const fs::path& second)
 		std::istreambuf_iterator<char>(right));
 }
 
+void RequireCloseFiles(const fs::path& first, const fs::path& second,
+	double relative_tolerance, const char* description)
+{
+	std::ifstream left(first);
+	std::ifstream right(second);
+	double left_value = 0.0, right_value = 0.0;
+	while (left >> left_value) {
+		if (!(right >> right_value)
+			|| std::abs(left_value-right_value) > relative_tolerance
+				*std::max({1.0, std::abs(left_value), std::abs(right_value)}))
+			throw std::runtime_error(std::string("single-rank and two-rank ")+description+" differ");
+	}
+	if (right >> right_value)
+		throw std::runtime_error(std::string("single-rank and two-rank ")+description+" sizes differ");
+}
+
 void RequireContains(const fs::path& path, const std::string& expected)
 {
 	std::ifstream input(path);
 	std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
 	if (text.find(expected) == std::string::npos)
 		throw std::runtime_error("VCA manifest is missing "+expected);
+}
+
+void RequireSameReservoir(const fs::path& first, const fs::path& second)
+{
+	const auto left = iga::ReadVcaCheckpointMetadata(first).reservoir;
+	const auto right = iga::ReadVcaCheckpointMetadata(second).reservoir;
+	auto close = [](double first, double second) {
+		return std::abs(first-second) <= 1e-10*std::max({1.0, std::abs(first), std::abs(second)});
+	};
+	if (!close(left.volume_m3, right.volume_m3)
+		|| !close(left.temperature_c, right.temperature_c)
+		|| !close(left.hematocrit_percent, right.hematocrit_percent)
+		|| left.species.size() != right.species.size())
+		throw std::runtime_error("single-rank and two-rank reservoir states differ");
+	for (const auto& species : left.species) {
+		const auto found = right.species.find(species.first);
+		if (found == right.species.end() || !close(species.second, found->second))
+			throw std::runtime_error("single-rank and two-rank reservoir states differ");
+	}
 }
 
 } // namespace
@@ -190,7 +231,7 @@ int main()
 		if (configuration.coupling.external_circuit.reservoir.species.count("oxygen") != 1)
 			throw std::runtime_error("VCA smoke-test configuration lost reservoir oxygen");
 		Run(database, root, root/"full/checkpoint", "");
-		const auto manifest = root/"results/vca_flow/coupling_manifest.json";
+		const auto manifest = root/"full/coupling_manifest.json";
 		RequireContains(manifest, "\"backend\": \"cpu_3d_navier_stokes\"");
 		RequireContains(manifest, "\"outlet_ids\": [2, 3]");
 		RequireContains(manifest, "\"oxygen\"");
@@ -203,6 +244,14 @@ int main()
 		if (!SameFile(root/"full/checkpoint.vca_transport.state",
 			root/"resumed/checkpoint.vca_transport.state"))
 			throw std::runtime_error("transport checkpoint/restart state differs from uninterrupted VCA run");
+		const auto two_rank_database = root/"fixture-2.ntiga";
+		WriteUnitDatabase(two_rank_database, 2);
+		Run(two_rank_database, root, root/"two-rank/checkpoint", "", "mpiexec -np 2 ");
+		RequireCloseFiles(root/"full/flow.txt", root/"two-rank/flow.txt", 1e-10,
+			"velocity field");
+		RequireCloseFiles(root/"full/flow.txt.pressure", root/"two-rank/flow.txt.pressure",
+			1e-10, "pressure field");
+		RequireSameReservoir(root/"full/checkpoint", root/"two-rank/checkpoint");
 		fs::remove_all(root);
 		std::cout << "VCA 3D flow, transport, checkpoint, and restart smoke test passed\n";
 		return 0;

@@ -47,10 +47,11 @@ Implemented in `feature/native-vca-vascular-integration`:
 - Unit coverage for signed fluxes, VCA configuration checks, checkpoint
   metadata, and a one-element/single-rank PETSc transport runtime including
   state restore.
-- A one-element/two-port single-rank end-to-end smoke test that runs flow,
-  transport, external-circuit advance, manifest generation, checkpoint, and
-  restart. The uninterrupted and resumed flow/transport PETSc state files
-  compare byte-for-byte.
+- A one-element/two-port end-to-end smoke test that runs flow, transport,
+  external-circuit advance, manifest generation, checkpoint, and restart. Its
+  uninterrupted and resumed single-rank flow/transport PETSc state files
+  compare byte-for-byte; the one- and two-rank velocity/pressure fields and
+  reservoir state agree to `1e-10` relative tolerance.
 
 Not yet demonstrated or intentionally unsupported:
 
@@ -176,7 +177,7 @@ that step.
 | --- | --- |
 | `solvers/cpu/src/iga_navier_stokes.cpp` | **Changed.** Retains CLI, VCA circuit/transport ordering, output, and checkpoint metadata; flow step work delegates to `TransientFlowRuntime`. |
 | `solvers/cpu/include/TransientFlowRuntime.hpp` | **Changed.** Owns transient Navier--Stokes state, ghost scatter, Newton/KSP, outlet fixed-point coupling, port measurements, velocity gather, and summary norms. |
-| `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
+| `solvers/cpu/include/TransientTransportRuntime.hpp` | **Changed.** One-step in-memory scalar solver. MPI total-mass and source diagnostics integrate only element owners. Next: replace its correctness-first all-rank velocity/state gather with shared ghost evaluation. |
 | `solvers/cpu/include/BoundaryFlow.hpp` | **Changed.** Signed scalar flux and scalar/area integrals. |
 | `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
 | `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer with the established explicit-staggered schema, units, port validity, and JSON escaping. |
@@ -186,7 +187,7 @@ that step.
 | `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
 | `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** Metadata round-trip and mismatch rejection. |
 | `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. |
-| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it compares uninterrupted and checkpoint/resumed PETSc flow and transport states. |
+| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it compares uninterrupted/restarted state and one-/two-rank flow fields plus reservoir state. |
 | `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
@@ -212,7 +213,8 @@ the metadata validation.
 
 1. **Done locally:** unit tests for signed scalar flux, outlet aggregation,
    dynamic inlet species, VCA checkpoint metadata, one-element transport, and
-   a one-element/two-port flow+transport+checkpoint/restart smoke run. Run
+   a one-element/two-port flow+transport+checkpoint/restart smoke run on one
+   and two ranks. Run
    `make -C solvers/cpu test` and, with PETSc,
    `make -C solvers/cpu PETSC_DIR=... petsc-test`.
 2. **Next required run:** execute the source bifurcation case on one and two

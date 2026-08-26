@@ -28,6 +28,7 @@ public:
 			system_(std::move(system)), assembler_(database, communicator, system_.fields.size()),
 			labels_(labels)
 	{
+		MPI_Comm_rank(communicator_, &rank_);
 		if (system_.velocity_source != "prescribed")
 			throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
 		if (labels_.size() != database.header().nodes)
@@ -163,6 +164,7 @@ public:
 			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& element : assembler_.elements()) {
+			if (element.owner != rank_) continue;
 			for (std::size_t qz = 0; qz < 4; ++qz)
 				for (std::size_t qy = 0; qy < 4; ++qy)
 					for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -192,6 +194,7 @@ public:
 		for (const auto& term : system_.terms)
 			if (term.kind == TermKind::VolumeSource)
 				for (const auto& element : assembler_.elements()) {
+					if (element.owner != rank_) continue;
 					for (std::size_t qz = 0; qz < 4; ++qz)
 						for (std::size_t qy = 0; qy < 4; ++qy)
 							for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -219,6 +222,7 @@ private:
 	Vec forcing_ = nullptr, current_ = nullptr, next_ = nullptr, rhs_ = nullptr;
 	KSP solver_ = nullptr;
 	int steps_ = 0;
+	int rank_ = 0;
 };
 
 } // namespace iga
