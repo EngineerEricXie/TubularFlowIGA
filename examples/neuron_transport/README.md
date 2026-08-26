@@ -10,13 +10,25 @@ potentials, synapses, or network electrophysiology.
 |---|---|---|
 | `straight_neurite` | Short constant-radius neurite | wall 0, inlet 1, outlet 2 |
 | `branched_neurite` | One parent splitting into two arms | wall 0, inlet 1, outlets 2 and 3 |
+| `nmo_06840_bifurcation` | Large NeuroMorpho-derived bifurcation | wall 0, inlet 1, outlets 2 and 3 |
 
-Both configurations solve `N0` and `Nplus`. `N0` diffuses, `Nplus` uses the
+All three configurations solve `N0` and `Nplus`. `N0` diffuses, `Nplus` uses the
 generated `initial_velocityfield.txt` for advection, and linear coupling
-transfers mass between the fields. The longer `branched_neurite` showcase also
-configures `Nplus` diffusion to reduce pure-advection oscillation. Walls are
-no-flux, label 1 prescribes both inlet values, and terminal labels use
-advective outflow.
+transfers mass between the fields. The `branched_neurite` showcase and large
+NMO regression also configure `Nplus` diffusion to reduce pure-advection
+oscillation. Walls are no-flux, label 1 prescribes both inlet values, and
+terminal labels use advective outflow.
+
+## Large NMO transport regression
+
+The `nmo_06840_bifurcation` input produces 29,238 control points and 25,920
+elements. Its cache and database are each about 260 MiB, so preparation and
+the two-step transport solve can take many minutes on a slower workstation.
+It is not an installation smoke test.
+
+See the [case README](nmo_06840_bifurcation/README.md) for resource estimates,
+12-rank CPU and single-GPU commands, output details, validation evidence,
+NeuroMorpho.Org attribution, and scientific limitations.
 
 ## Branched transport result
 

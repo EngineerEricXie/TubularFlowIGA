@@ -10,6 +10,7 @@ work directory so that `examples/` stays small and reproducible.
 |---|---|---|---|
 | Neuron transport | `neuron_transport/straight_neurite` | Smallest two-field transport case | `neuron_transport` |
 | Neuron transport | `neuron_transport/branched_neurite` | Transport through a parent and two arms | `neuron_transport` |
+| Neuron transport | `neuron_transport/nmo_06840_bifurcation` | Large real-morphology transport regression | `neuron_transport` |
 | Vascular flow | `vascular_flow/straight_tube` | Smallest rigid 3D flow case | `blood_flow` |
 | Vascular flow | `vascular_flow/bent_tube` | Curved rigid vessel | `blood_flow` |
 | Vascular flow | `vascular_flow/y_bifurcation` | One inlet and two independent outlets | `blood_flow` |
@@ -27,11 +28,15 @@ inputs and is not a standalone geometry case.
 
 ## Common input contract
 
-Every 3D runnable case directory contains exactly:
+Every 3D runnable case directory requires:
 
 - `skeleton_initial.swc` or `skeleton_initial.obj`: centerline coordinates and radius;
 - `mesh_parameter.txt`: five control-mesh generation parameters;
 - `simulation_config.json`: schema-v2 or schema-v3 fields, equations, time, and boundaries.
+
+A case may also contain a `README.md` with provenance, resource requirements,
+case-specific commands, and validation evidence. It is documentation rather
+than a generated solver input.
 
 The preparation pipeline generates all downstream files, including
 `skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, `controlmesh.vtk`,
@@ -137,6 +142,7 @@ root or at a directory containing unrelated case data.
 Application-specific instructions:
 
 - [Neuron transport](neuron_transport/README.md)
+- [Large NMO_06840 neuron transport](neuron_transport/nmo_06840_bifurcation/README.md)
 - [Vascular flow](vascular_flow/README.md)
 - [3D VCA bifurcation validation](vascular_flow/vca_bifurcation/README.md)
 - [Native 1D flow and transport](one_d/README.md)

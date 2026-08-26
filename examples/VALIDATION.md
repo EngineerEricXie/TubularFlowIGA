@@ -9,7 +9,7 @@ ParaView 5.13.1 rendered the committed gallery images in offscreen batch mode.
 
 ## Preparation gates
 
-All five cases below completed mesh generation, Bezier extraction, METIS
+All five small showcase cases below completed mesh generation, Bezier extraction, METIS
 partitioning, `.ntiga` packing, schema validation, and packed boundary
 resolution. Every sampled control-mesh Jacobian was positive.
 
@@ -20,6 +20,13 @@ resolution. Every sampled control-mesh Jacobian was positive.
 | `vascular_flow/iga_wordmark` | 24,924 | 22,140 | `0.149585` | wall 0, inlet 1, outlet 2 |
 | `vascular_flow/multispecies_pulse` | 2,010 | 1,620 | `0.750036` | wall 0, inlet 1, outlet 2 |
 | `neuron_transport/branched_neurite` | 7,329 | 6,300 | `0.305198` | wall 0, inlet 1, outlets 2 and 3 |
+
+The large `neuron_transport/nmo_06840_bifurcation` regression was validated
+separately on 2026-08-26. It produces 29,238 nodes and 25,920 elements; its
+12-rank packed geometry check reported `minimum_detJ=4.5706e-11`, zero bad
+elements, zero bad quadrature samples, and wall/inlet/outlet labels 0/1/2/3.
+See its [case README](neuron_transport/nmo_06840_bifurcation/README.md) for the
+resource warning, exact commands, provenance, and transport evidence.
 
 ## Steady vascular flow
 
@@ -56,6 +63,17 @@ to `2.36306`. The worst early transient undershoots were `-1.87144e-2` for
 visualization case, not a positivity-preserving or biologically calibrated
 transport benchmark; the undershoots must not be interpreted as physical
 concentrations.
+
+## Large NMO neuron transport
+
+The two-step `neuron_transport/nmo_06840_bifurcation` acceptance run used 12
+OpenMPI ranks. Assembly took `26.6397 s`, the time-loop solve took `109.36 s`,
+and 10,520 Krylov iterations produced final coefficient L2 `330.035`. The
+output contained exactly 29,238 finite rows with field order `N0`, `Nplus`.
+Final ranges were `0.0403333` to `1.0001424` for `N0` and `1.7740167` to
+`2.0012732` for `Nplus`. This short two-step horizon validates execution and
+output, not biological steady state. CUDA runtime validation remains pending
+for this large public case.
 
 ## Pulse multispecies showcase
 

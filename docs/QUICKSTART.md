@@ -34,6 +34,11 @@ generates the control mesh, extracts the spline, creates a two-way METIS
 partition, packs the `.ntiga` database, and validates Jacobians, configuration,
 and boundary labels.
 
+Use this small straight tube for installation checks. The source-only
+[NMO_06840 neuron transport](../examples/neuron_transport/nmo_06840_bifurcation/README.md)
+is a separate 29,238-node regression whose preparation and solve can take many
+minutes and create more than 500 MiB of work files.
+
 Successful output includes `bad_elements=0` with a positive control-mesh
 `min_detJ`, a successfully validated packed element count, `schema_version=2`,
 and resolved wall/inlet/outlet conditions.

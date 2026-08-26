@@ -72,6 +72,7 @@ to a separate work directory.
 | First vascular run | Straight rigid vessel | `./scripts/prepare_example.sh vascular_flow/straight_tube` |
 | Curved vascular geometry | Planar bend | `./scripts/prepare_example.sh vascular_flow/bent_tube` |
 | Branching vascular flow | Symmetric bifurcation | `./scripts/prepare_example.sh vascular_flow/y_bifurcation` |
+| Large neuron regression | NMO_06840 transport; long-running | `RANKS=12 ./scripts/prepare_example.sh neuron_transport/nmo_06840_bifurcation` |
 | README showcase | Connected IGA wordmark | `./scripts/prepare_example.sh vascular_flow/iga_wordmark` |
 | First neuron run | Straight neurite | `./scripts/prepare_example.sh neuron_transport/straight_neurite` |
 | Branching neuron transport | Branched neurite | `./scripts/prepare_example.sh neuron_transport/branched_neurite` |
@@ -298,7 +299,7 @@ physically.
 
 ## Repository layout
 
-- `examples/`: small source-only neuron, vascular, and validation cases.
+- `examples/`: source-only neuron, vascular, and validation cases.
 - `preprocessing/mesh/`: dependency-free C++ SWC smoothing and control meshes.
 - `meshgeneration/`: legacy MATLAB reference and template assets.
 - `preprocessing/spline/`: C++11 spline construction and Bezier extraction.
@@ -307,7 +308,9 @@ physically.
 - `solvers/cuda/`: FP64 single-GPU backend using the CPU database format.
 - `docs/`: installation, pipeline, configuration, and validation.
 
-Large cases and generated results are intentionally not versioned.
+Large generated meshes, databases, caches, partitions, and results are
+intentionally not versioned. The source-only NMO_06840 regression is committed
+under `examples/`, but preparing it creates hundreds of MiB of work files.
 
 ## Documentation map
 
@@ -319,6 +322,7 @@ Large cases and generated results are intentionally not versioned.
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
 | Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
+| Run the large morphology-derived neuron regression | [NMO_06840 transport](examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |
@@ -328,7 +332,7 @@ Large cases and generated results are intentionally not versioned.
 
 ## Validation status and limitations
 
-The public straight, bent, and Y-shaped meshes have positive sampled
+The public straight, bent, Y-shaped, and NMO_06840 meshes have positive sampled
 Jacobians. Representative CPU/CUDA transport and steady-flow comparisons,
 mass-balance results, restart checks, and a rigid straight-tube Womersley gate
 are recorded in the [vascular example validation](examples/vascular_flow/VALIDATION.md),
