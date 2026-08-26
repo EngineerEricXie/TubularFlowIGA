@@ -197,6 +197,7 @@ int main(int argc, char** argv)
 		std::unique_ptr<iga::VcaExternalCircuit> vca_circuit;
 		std::unique_ptr<iga::TransientTransportRuntime> vca_transport;
 		iga::CompiledLinearSystem vca_transport_system;
+		iga::VcaCheckpointIdentity vca_checkpoint_identity;
 		bool vca_has_transport = false;
 		if (fs::exists(options.case_dir/"simulation_config.json")) {
 			configuration = iga::ReadSimulationConfiguration(
@@ -314,6 +315,14 @@ int main(int argc, char** argv)
 		if (vca_has_transport)
 			vca_transport = std::make_unique<iga::TransientTransportRuntime>(database,
 				PETSC_COMM_WORLD, configuration, vca_transport_system, labels);
+		if (vca_circuit) {
+			vca_checkpoint_identity.configuration_fingerprint = iga::VcaConfigurationFingerprint(
+				options.case_dir/"simulation_config.json");
+			vca_checkpoint_identity.transport_system = vca_transport_system.name;
+			vca_checkpoint_identity.inlet_label = configuration.coupling.three_d_ports.inlet_label;
+			vca_checkpoint_identity.outlet_labels = configuration.coupling.three_d_ports.outlet_labels;
+			vca_checkpoint_identity.device_model = iga::VcaDeviceModelIdentity(configuration.coupling);
+		}
 		std::unique_ptr<iga::CouplingHistoryWriter> vca_history;
 		if (vca_circuit) {
 			fs::path directory = options.output.empty() ? options.case_dir/"results"/"vca_flow"
@@ -336,7 +345,7 @@ int main(int argc, char** argv)
 				if (!vca_transport) throw std::runtime_error("VCA checkpoint requires in-process transport state");
 				const auto vca_metadata = iga::ReadVcaCheckpointMetadata(options.restart);
 				iga::ValidateVcaCheckpoint(vca_metadata, start_step, parameters.dt,
-					vca_transport->System().fields);
+					vca_transport->System().fields, vca_checkpoint_identity);
 				fs::path transport_path(vca_metadata.transport_state_file);
 				if (transport_path.is_relative())
 					transport_path = iga::VcaCheckpointMetadataPath(options.restart).parent_path()/transport_path;
@@ -460,6 +469,7 @@ int main(int argc, char** argv)
 							vca_metadata.physical_time = completed_step*parameters.dt;
 							vca_metadata.dt = parameters.dt;
 							vca_metadata.fields = vca_transport->System().fields;
+							vca_metadata.identity = vca_checkpoint_identity;
 							vca_metadata.transport_state_file
 								= iga::VcaCheckpointTransportStatePath(options.checkpoint).filename().string();
 							vca_metadata.reservoir = vca_circuit->State();

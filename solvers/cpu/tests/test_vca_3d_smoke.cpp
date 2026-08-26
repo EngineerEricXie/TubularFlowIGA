@@ -9,8 +9,10 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -69,7 +71,24 @@ void WriteUnitDatabase(const fs::path& path, std::uint32_t ranks = 1)
 	if (!output) throw std::runtime_error("failed to finalize VCA smoke-test database");
 }
 
-void WriteCase(const fs::path& directory)
+void ReplaceAll(std::string& text, const std::string& from, const std::string& to)
+{
+	std::size_t position = 0;
+	while ((position = text.find(from, position)) != std::string::npos) {
+		text.replace(position, from.size(), to);
+		position += to.size();
+	}
+}
+
+std::string JsonNumber(double value)
+{
+	std::ostringstream output;
+	output << std::setprecision(17) << value;
+	return output.str();
+}
+
+void WriteCase(const fs::path& directory, double initial_oxygen = 0.2,
+	bool oxygenator = false, double reservoir_oxygen = -1.0)
 {
 	std::ofstream mesh(directory/"controlmesh.vtk");
 	if (!mesh) throw std::runtime_error("cannot create VCA smoke-test mesh");
@@ -91,7 +110,7 @@ void WriteCase(const fs::path& directory)
 	for (int node = 0; node < 64; ++node) velocity << "1 0 0\n";
 	std::ofstream config(directory/"simulation_config.json");
 	if (!config) throw std::runtime_error("cannot create VCA smoke-test configuration");
-	config << R"json({
+	std::string text = R"json({
   "schema_version": 3,
   "dimension": "3d",
   "simulation_scope": {"mode": "vca_closed_loop"},
@@ -102,15 +121,15 @@ void WriteCase(const fs::path& directory)
   },
   "external_circuit": {
     "reservoir": {"volume_m3": 1.0, "temperature_c": 37.0,
-      "species": {"oxygen": 0.2}},
-    "pump": {"mode": "flow_control", "flow_m3_s": 0.001}
+      "species": {"oxygen": RESERVOIR_OXYGEN}},
+    "pump": {"mode": "flow_control", "flow_m3_s": 0.001}OXYGENATOR_CONFIG
   },
   "fields": [
     {"name": "velocity", "kind": "vector3"},
     {"name": "pressure", "kind": "pressure"},
-    {"name": "oxygen", "kind": "scalar", "initial_value": 0.2}
+    {"name": "oxygen", "kind": "scalar", "initial_value": INITIAL_OXYGEN}
   ],
-  "time": {"dt": 0.1, "steps": 2},
+  "time": {"dt": 0.01, "steps": 2},
   "equation_systems": [
     {"name": "flow", "kind": "navier_stokes",
       "unknowns": ["velocity", "pressure"], "viscosity": 1.0,
@@ -127,7 +146,7 @@ void WriteCase(const fs::path& directory)
     {"label": 1, "name": "arterial_inlet", "conditions": [
       {"field": "velocity", "type": "dirichlet",
        "profile": "initial_velocityfield.txt", "scale": 0.001},
-      {"field": "oxygen", "type": "dirichlet", "value": 0.2}
+      {"field": "oxygen", "type": "dirichlet", "value": INITIAL_OXYGEN}
     ]},
     {"label": 2, "name": "venous_outlet_a", "conditions": [
       {"field": "pressure", "type": "pressure_traction", "value": 0.0},
@@ -139,6 +158,13 @@ void WriteCase(const fs::path& directory)
     ]}
   ]
 })json";
+	ReplaceAll(text, "INITIAL_OXYGEN", JsonNumber(initial_oxygen));
+	ReplaceAll(text, "RESERVOIR_OXYGEN", JsonNumber(
+		reservoir_oxygen >= 0.0 ? reservoir_oxygen : initial_oxygen));
+	ReplaceAll(text, "OXYGENATOR_CONFIG", oxygenator
+		? ",\n    \"oxygenator\": {\"enabled\": true, \"po2_mmhg\": 100.0}"
+		: "");
+	config << text;
 }
 
 std::string Quote(const fs::path& path)
@@ -209,6 +235,22 @@ double LastVascularMass(const fs::path& manifest, const std::string& field)
 	return value;
 }
 
+double SumDeviceSource(const fs::path& manifest, const std::string& field)
+{
+	std::ifstream input(manifest);
+	const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	const std::string marker = "\"device_source_mol_s\": {\""+field+"\": ";
+	double result = 0.0;
+	std::size_t position = 0;
+	while ((position = text.find(marker, position)) != std::string::npos) {
+		std::size_t used = 0;
+		result += std::stod(text.substr(position+marker.size()), &used);
+		if (used == 0) throw std::runtime_error("VCA manifest device source is invalid");
+		position += marker.size()+used;
+	}
+	return result;
+}
+
 void RequireSameReservoir(const fs::path& first, const fs::path& second)
 {
 	const auto left = iga::ReadVcaCheckpointMetadata(first).reservoir;
@@ -271,6 +313,31 @@ int main()
 		RequireCloseFiles(root/"full/flow.txt.pressure", root/"two-rank/flow.txt.pressure",
 			1e-10, "pressure field");
 		RequireSameReservoir(root/"full/checkpoint", root/"two-rank/checkpoint");
+		const auto oxygenator_directory = root/"oxygenator";
+		fs::create_directories(oxygenator_directory);
+		const auto oxygenator_database = oxygenator_directory/"fixture.ntiga";
+		WriteUnitDatabase(oxygenator_database);
+		const double arterial_oxygen = iga::DissolvedOxygenMolM3(100.0,
+			iga::OxygenCapacityParameters{});
+		WriteCase(oxygenator_directory, arterial_oxygen, true, 0.1);
+		Run(oxygenator_database, oxygenator_directory, oxygenator_directory/"checkpoint", "");
+		const auto oxygenator_manifest = oxygenator_directory/"coupling_manifest.json";
+		const auto oxygenator_reservoir = iga::ReadVcaCheckpointMetadata(
+			oxygenator_directory/"checkpoint").reservoir;
+		const auto oxygenator_mass = LastVascularMass(oxygenator_manifest, "oxygen")
+			+oxygenator_reservoir.volume_m3*oxygenator_reservoir.species.at("oxygen");
+		const auto oxygenator_source = 0.01*SumDeviceSource(oxygenator_manifest, "oxygen");
+		const double initial_oxygenator_mass = arterial_oxygen+0.1;
+		if (!(oxygenator_source > 0.0)
+			|| std::abs((oxygenator_mass-initial_oxygenator_mass)-oxygenator_source) > 2e-8)
+		{
+			std::ostringstream message;
+			message << std::setprecision(17)
+				<< "oxygenator source does not match VCA mass increase: mass="
+				<< oxygenator_mass << ", initial=" << initial_oxygenator_mass
+				<< ", source=" << oxygenator_source;
+			throw std::runtime_error(message.str());
+		}
 		fs::remove_all(root);
 		std::cout << "VCA 3D flow, transport, checkpoint, and restart smoke test passed\n";
 		return 0;

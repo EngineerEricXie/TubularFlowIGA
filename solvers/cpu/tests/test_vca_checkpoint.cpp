@@ -12,6 +12,11 @@ int main()
 	metadata.physical_time = 0.3;
 	metadata.dt = 0.1;
 	metadata.fields = {"oxygen", "glucose"};
+	metadata.identity.configuration_fingerprint = "64b6d5d1d10a6217";
+	metadata.identity.transport_system = "oxygen_transport";
+	metadata.identity.inlet_label = 1;
+	metadata.identity.outlet_labels = {2, 3};
+	metadata.identity.device_model = "pump=flow_control;oxygenator=disabled;dialyzer=disabled;infusion=disabled";
 	metadata.transport_state_file = "checkpoint.vca_transport.state";
 	metadata.reservoir.volume_m3 = 1.0e-6;
 	metadata.reservoir.temperature_c = 37.0;
@@ -22,11 +27,21 @@ int main()
 	assert(parsed.completed_step == 3);
 	assert(std::abs(parsed.physical_time-0.3) < 1.0e-14);
 	assert(parsed.fields == metadata.fields);
+	assert(parsed.identity.outlet_labels == metadata.identity.outlet_labels);
 	assert(std::abs(parsed.reservoir.species.at("glucose")-5.0) < 1.0e-14);
-	iga::ValidateVcaCheckpoint(parsed, 3, 0.1, metadata.fields);
+	iga::ValidateVcaCheckpoint(parsed, 3, 0.1, metadata.fields, metadata.identity);
 	bool rejected = false;
 	try {
-		iga::ValidateVcaCheckpoint(parsed, 2, 0.1, metadata.fields);
+		iga::ValidateVcaCheckpoint(parsed, 2, 0.1, metadata.fields, metadata.identity);
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	assert(rejected);
+	rejected = false;
+	try {
+		auto incompatible = metadata.identity;
+		incompatible.outlet_labels = {2, 4};
+		iga::ValidateVcaCheckpoint(parsed, 3, 0.1, metadata.fields, incompatible);
 	} catch (const std::runtime_error&) {
 		rejected = true;
 	}

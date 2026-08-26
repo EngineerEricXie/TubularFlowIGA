@@ -51,16 +51,20 @@ Implemented in `feature/native-vca-vascular-integration`:
   external-circuit advance, manifest generation, checkpoint, and restart. Its
   uninterrupted and resumed single-rank flow/transport PETSc state files
   compare byte-for-byte; the one- and two-rank velocity/pressure fields and
-  reservoir state agree to `1e-10` relative tolerance.
+  reservoir state agree to `1e-10` relative tolerance. Its oxygenator fixture
+  starts the vascular field at the arterial equilibrium and verifies a positive
+  device source against the vascular-plus-reservoir oxygen increase within
+  `2e-8 mol`.
+- VCA checkpoint schema v2 includes a simulation-config fingerprint, transport
+  system name, inlet/outlet port labels, and device-model identity. Restart
+  rejects any mismatch, including all pre-v2 metadata.
 
 Not yet demonstrated or intentionally unsupported:
 
 - A completed coupled flow-and-transport smoke run through the source
   bifurcation case on two ranks. The locally prepared case is large enough
   that it must be run on an allocated CPU resource, not a shared login node.
-- One-versus-two-rank agreement for the physical source case and oxygenator
-  source accounting, and uninterrupted-versus-restart equivalence for the
-  coupled 3D runner.
+- One-versus-two-rank agreement for the physical source case.
 - 3D VCA replay/open-loop modes, CUDA VCA, more than one transport system,
   and a transport source other than the current in-memory flow state.
 - Flow-only VCA checkpoint/restart. It remains rejected because there is no
@@ -182,12 +186,12 @@ that step.
 | `include/ThreeDVcaCoupling.hpp` | **Changed.** Port and transport validation plus dynamic inlet/result helpers. |
 | `include/CouplingHistory.hpp` | **Changed.** Generic manifest writer with the established explicit-staggered schema, units, port validity, and JSON escaping. |
 | `solvers/one_d/include/OneDCoupling.hpp` | **Changed.** Uses the generic history writer; 1D-specific inlet/mass/port calculations remain local. |
-| `include/VcaCheckpoint.hpp` | **Changed.** VCA metadata parser/validator. Next: add configuration/port fingerprint fields before treating restart as production-ready. |
+| `include/VcaCheckpoint.hpp` | **Changed.** VCA v2 metadata parser/validator; persists and checks configuration fingerprint, transport system, port labels, and device-model identity. |
 | `solvers/cpu/tests/test_boundary_flow.cpp` | **Changed.** Covers positive and negative signed species flux. |
 | `solvers/cpu/tests/test_simulation_config.cpp` | **Changed.** Covers ports, transport-system validation, and inlet-species update. |
-| `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** Metadata round-trip and mismatch rejection. |
+| `solvers/cpu/tests/test_vca_checkpoint.cpp` | **Changed.** V2 metadata round-trip plus step and port-identity mismatch rejection. |
 | `solvers/cpu/tests/test_vca_3d_runtime.cpp` | **Changed.** One-element/single-rank PETSc transport, mass, and state restore. |
-| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it checks passive-tracer combined mass, uninterrupted/restarted state, and one-/two-rank flow fields plus reservoir state. |
+| `solvers/cpu/tests/test_vca_3d_smoke.cpp` | **Changed.** One-element/two-port flow+transport+reservoir smoke test; it checks passive-tracer and oxygenator mass balance, uninterrupted/restarted state, and one-/two-rank flow fields plus reservoir state. |
 | `solvers/cpu/Makefile` | **Changed.** Adds `vca_checkpoint_test` and PETSc `vca_3d_runtime_test`; tracks new VCA headers. |
 | `docs/PDE_CONFIGURATION.md` | **Changed.** Records supported CPU 3D VCA configuration and limitations. |
 | `examples/vascular_flow/vca_bifurcation/` | **Changed.** Source-only two-outlet case and run instructions; do not commit generated data. |
@@ -204,10 +208,10 @@ The current VCA checkpoint envelope contains:
 - completed step, physical time, time step, schema version, field order, and
   transport-state filename.
 
-The reader rejects mismatched step/time/dt/field order and never resets the
-reservoir or species state silently. Before production use, add a configuration
-fingerprint, port labels, transport-system name, and device-model identity to
-the metadata validation.
+The reader rejects mismatched step/time/dt/field order, configuration
+fingerprint, transport-system name, port labels, or device-model identity, and
+never resets the reservoir or species state silently. V1 metadata is rejected
+explicitly because it cannot prove this identity.
 
 ## Handoff checklist and validation order
 
@@ -223,8 +227,8 @@ the metadata validation.
 3. **Done locally:** the no-source, equal initial/inlet passive tracer fixture
    checks final vascular plus reservoir mass against its initial total with an
    absolute tolerance of `2e-8 mol`.
-4. Oxygenator case: reservoir/device oxygen source is reported separately and
-   matches vascular-plus-reservoir mass change.
+4. **Done locally:** oxygenator source is reported separately and matches the
+   vascular-plus-reservoir oxygen increase within `2e-8 mol`.
 5. MPI: repeat the physical smoke case on one and two ranks; compare port histories,
    final reservoir state, and field norms.
 6. Restart: repeat the one-rank restart equivalence test on two ranks.
