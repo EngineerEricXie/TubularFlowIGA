@@ -230,9 +230,16 @@ mpiexec -np 2 ./solvers/cpu/iga_solve DATABASE.ntiga CASE_DIR \
   --checkpoint tracer-checkpoint --checkpoint-every 10 --stop-after-step 10
 
 mpiexec -np 2 ./solvers/cpu/iga_solve DATABASE.ntiga CASE_DIR \
-  --system tracer_transport --output tracer-resumed.txt \
-  --restart tracer-checkpoint
+	--system tracer_transport --output tracer-resumed.txt \
+	--restart tracer-checkpoint
 ```
+
+For a per-rank and reduced memory trace, add
+`--memory-report transport-memory.jsonl`. Each JSONL record marks database,
+required-element, matrix, assembly, KSP-setup, or solve state and reports RSS
+and PETSc allocation current/peak values. The compiled field-pair graph is also
+used to avoid allocating absent cross-field blocks in both global and element
+matrices.
 
 Transport metadata validates node count, ordered field names, system name,
 velocity-source name, completed step, physical time, and `dt`. This ensures a

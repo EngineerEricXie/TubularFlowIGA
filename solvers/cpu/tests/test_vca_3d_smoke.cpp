@@ -71,6 +71,19 @@ void WriteUnitDatabase(const fs::path& path, std::uint32_t ranks = 1)
 	if (!output) throw std::runtime_error("failed to finalize VCA smoke-test database");
 }
 
+void RequireOwnedElementsAreRequired(const fs::path& path)
+{
+	iga::Database database(path.string());
+	for (std::uint32_t rank = 0; rank < database.header().ranks; ++rank) {
+		const auto required = database.RequiredElementIndices(static_cast<std::int32_t>(rank));
+		for (std::uint64_t element = 0; element < database.header().elements; ++element)
+			if (database.owners().at(static_cast<std::size_t>(element))
+				== static_cast<std::int32_t>(rank)
+				&& std::find(required.begin(), required.end(), element) == required.end())
+				throw std::runtime_error("owned VCA element is absent from required-element set");
+	}
+}
+
 void ReplaceAll(std::string& text, const std::string& from, const std::string& to)
 {
 	std::size_t position = 0;
@@ -279,6 +292,7 @@ int main()
 		fs::create_directories(root);
 		const auto database = root/"fixture.ntiga";
 		WriteUnitDatabase(database);
+		RequireOwnedElementsAreRequired(database);
 		WriteCase(root);
 		const auto configuration = iga::ReadSimulationConfiguration(
 			(root/"simulation_config.json").string());
@@ -305,6 +319,7 @@ int main()
 			throw std::runtime_error("transport checkpoint/restart state differs from uninterrupted VCA run");
 		const auto two_rank_database = root/"fixture-2.ntiga";
 		WriteUnitDatabase(two_rank_database, 2);
+		RequireOwnedElementsAreRequired(two_rank_database);
 		Run(two_rank_database, root, root/"two-rank/checkpoint", "", "mpiexec -np 2 ");
 		RequireCloseFiles(root/"full/flow.txt", root/"two-rank/flow.txt", 1e-10,
 			"velocity field");

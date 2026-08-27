@@ -26,7 +26,10 @@ public:
 		const SimulationConfiguration& configuration,
 		CompiledLinearSystem system, const std::vector<int>& labels)
 		: communicator_(communicator), configuration_(configuration),
-			system_(std::move(system)), assembler_(database, communicator, system_.fields.size()),
+			system_(std::move(system)),
+			coupling_patterns_(BuildTransportCouplingPatterns(system_, configuration_)),
+			assembler_(database, communicator, system_.fields.size()),
+			element_matrices_(coupling_patterns_),
 			labels_(labels)
 	{
 		MPI_Comm_rank(communicator_, &rank_);
@@ -34,14 +37,13 @@ public:
 			throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
 		if (labels_.size() != database.header().nodes)
 			throw std::runtime_error("transport boundary labels do not match database nodes");
-		owned_elements_ = database.LoadOwned(rank_);
 		const auto boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
 		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
 			for (std::size_t field = 0; field < system_.fields.size(); ++field)
 				if (boundaries.constrained[static_cast<std::size_t>(node)*system_.fields.size()+field])
 					boundary_rows_.push_back(static_cast<PetscInt>(node*system_.fields.size()+field));
-		left_ = assembler_.CreateMatrix();
-		previous_ = assembler_.CreateMatrix();
+		left_ = assembler_.CreateMatrix(coupling_patterns_.left);
+		previous_ = assembler_.CreateMatrix(coupling_patterns_.previous);
 		forcing_ = assembler_.CreateVector();
 		current_ = assembler_.CreateVector();
 		next_ = assembler_.CreateVector();
@@ -93,13 +95,13 @@ public:
 		MatZeroEntries(previous_);
 		VecSet(forcing_, 0.0);
 		for (const auto& element : assembler_.elements()) {
-			const auto matrices = BuildGenericTransportElementWithVelocity(element,
+			BuildGenericTransportElementWithVelocity(element,
 				[&velocity, this](std::int32_t node) -> const std::array<double, 3>& {
 					return velocity.at(ghost_position_.at(node));
-				}, system_, step_configuration);
-			assembler_.AddElementMatrix(left_, element, matrices.left);
-			assembler_.AddElementMatrix(previous_, element, matrices.previous);
-			assembler_.AddElementVector(forcing_, element, matrices.source);
+				}, system_, step_configuration, element_matrices_);
+			assembler_.AddElementMatrix(left_, element, element_matrices_.left);
+			assembler_.AddElementMatrix(previous_, element, element_matrices_.previous);
+			assembler_.AddElementVector(forcing_, element, element_matrices_.source);
 		}
 		OwnedRowAssembler::Assemble(left_);
 		OwnedRowAssembler::Assemble(previous_);
@@ -185,7 +187,8 @@ public:
 		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
 			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
-		for (const auto& element : owned_elements_) {
+		for (const auto& element : assembler_.elements()) {
+			if (element.owner != rank_) continue;
 			for (std::size_t qz = 0; qz < 4; ++qz)
 				for (std::size_t qy = 0; qy < 4; ++qy)
 					for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -213,7 +216,8 @@ public:
 		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
 			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
-		for (const auto& element : owned_elements_) {
+		for (const auto& element : assembler_.elements()) {
+			if (element.owner != rank_) continue;
 			for (std::size_t qz = 0; qz < 4; ++qz)
 				for (std::size_t qy = 0; qy < 4; ++qy)
 					for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -242,7 +246,8 @@ public:
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& term : system_.terms)
 			if (term.kind == TermKind::VolumeSource)
-				for (const auto& element : owned_elements_) {
+				for (const auto& element : assembler_.elements()) {
+					if (element.owner != rank_) continue;
 					for (std::size_t qz = 0; qz < 4; ++qz)
 						for (std::size_t qy = 0; qy < 4; ++qy)
 							for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -263,8 +268,6 @@ private:
 	void BuildGhostScatter()
 	{
 		for (const auto& element : assembler_.elements())
-			ghost_nodes_.insert(ghost_nodes_.end(), element.connectivity.begin(), element.connectivity.end());
-		for (const auto& element : owned_elements_)
 			ghost_nodes_.insert(ghost_nodes_.end(), element.connectivity.begin(), element.connectivity.end());
 		std::sort(ghost_nodes_.begin(), ghost_nodes_.end());
 		ghost_nodes_.erase(std::unique(ghost_nodes_.begin(), ghost_nodes_.end()), ghost_nodes_.end());
@@ -292,9 +295,10 @@ private:
 	MPI_Comm communicator_;
 	SimulationConfiguration configuration_;
 	CompiledLinearSystem system_;
+	TransportCouplingPatterns coupling_patterns_;
 	OwnedRowAssembler assembler_;
+	GenericTransportMatrices element_matrices_;
 	std::vector<int> labels_;
-	std::vector<Element> owned_elements_;
 	std::vector<PetscInt> boundary_rows_;
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;

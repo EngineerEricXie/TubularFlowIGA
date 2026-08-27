@@ -37,14 +37,16 @@ int main(int argc, char** argv)
 			<< " transport_nodes=" << boundaries.transport_nodes << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 2);
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
-		Mat left = assembler.CreateMatrix();
-		Mat previous = assembler.CreateMatrix();
+		const auto coupling_patterns = iga::BuildTransportCouplingPatterns(system, converted);
+		Mat left = assembler.CreateMatrix(coupling_patterns.left);
+		Mat previous = assembler.CreateMatrix(coupling_patterns.previous);
 		MatSetOption(previous, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
 		const auto assembly_start = std::chrono::steady_clock::now();
+		iga::GenericTransportMatrices element_matrices(coupling_patterns);
 		for (const auto& element : assembler.elements()) {
-			auto matrices = iga::BuildGenericTransportElement(element, velocity, system, converted);
-			assembler.AddElementMatrix(left, element, matrices.left);
-			assembler.AddElementMatrix(previous, element, matrices.previous);
+			iga::BuildGenericTransportElement(element, velocity, system, converted, element_matrices);
+			assembler.AddElementMatrix(left, element, element_matrices.left);
+			assembler.AddElementMatrix(previous, element, element_matrices.previous);
 		}
 		iga::OwnedRowAssembler::Assemble(left);
 		iga::OwnedRowAssembler::Assemble(previous);

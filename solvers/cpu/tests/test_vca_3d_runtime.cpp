@@ -111,6 +111,31 @@ int main(int argc, char** argv)
 			/ "tubularflowiga-vca-runtime-test.state";
 		WriteUnitDatabase(database_path);
 		iga::Database database(database_path.string());
+		const auto required_indices = database.RequiredElementIndices(0);
+		for (std::uint64_t element = 0; element < database.header().elements; ++element)
+			if (database.owners().at(static_cast<std::size_t>(element)) == 0)
+				assert(std::find(required_indices.begin(), required_indices.end(), element)
+					!= required_indices.end());
+		iga::OwnedRowAssembler sparse_assembler(database, PETSC_COMM_WORLD, 6);
+		iga::FieldCouplingPattern diagonal(6);
+		for (std::size_t field = 0; field < 6; ++field) diagonal.Add(field, field);
+		Mat sparse_matrix = sparse_assembler.CreateMatrix(diagonal);
+		iga::FieldBlockElementMatrix sparse_blocks(diagonal);
+		for (const auto& element : sparse_assembler.elements()) {
+			sparse_blocks.Reset(element.connectivity.size());
+			for (std::size_t field = 0; field < 6; ++field)
+				for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+					for (std::size_t b = 0; b < element.connectivity.size(); ++b)
+						sparse_blocks.At(field, field, a, b) = 1.0;
+			sparse_assembler.AddElementMatrix(sparse_matrix, element, sparse_blocks);
+		}
+		iga::OwnedRowAssembler::Assemble(sparse_matrix);
+		MatInfo sparse_info{};
+		MatGetInfo(sparse_matrix, MAT_GLOBAL_SUM, &sparse_info);
+		assert(sparse_info.mallocs == 0.0);
+		assert(sparse_info.nz_used == 6.0*64.0*64.0);
+		assert(sparse_info.nz_allocated == sparse_info.nz_used);
+		MatDestroy(&sparse_matrix);
 		auto initial_configuration = MakeConfiguration(0.0);
 		auto system = iga::CompileLinearSystem(initial_configuration, "oxygen_transport");
 		system.velocity_source = "prescribed";

@@ -2,6 +2,7 @@
 #include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
 #include "IgaDatabase.hpp"
+#include "MemoryReport.hpp"
 #include "OwnedRowAssembler.hpp"
 #include "SimulationConfig.hpp"
 #include "TemporalFunction.hpp"
@@ -14,6 +15,7 @@
 #include <petscksp.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -25,6 +27,22 @@ namespace fs = std::filesystem;
 
 namespace {
 
+void EnableMemoryTracking(int argc, char** argv)
+{
+	bool requested = false;
+	for (int i = 1; i < argc; ++i)
+		if (std::string(argv[i]) == "--memory-report") requested = true;
+	if (!requested) return;
+	std::string petsc_options = std::getenv("PETSC_OPTIONS")
+		? std::getenv("PETSC_OPTIONS") : "";
+	if (petsc_options.find("-malloc_debug") == std::string::npos) {
+		if (!petsc_options.empty()) petsc_options += ' ';
+		petsc_options += "-malloc_debug";
+		if (setenv("PETSC_OPTIONS", petsc_options.c_str(), 1) != 0)
+			throw std::runtime_error("cannot enable PETSc allocation tracking");
+	}
+}
+
 struct TransportOptions {
 	fs::path database;
 	fs::path case_dir;
@@ -33,6 +51,7 @@ struct TransportOptions {
 	fs::path velocity;
 	fs::path checkpoint;
 	fs::path restart;
+	fs::path memory_report;
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
@@ -58,7 +77,7 @@ TransportOptions ParseOptions(int argc, char** argv)
 		"usage: iga_solve DATABASE.ntiga CASE_DIR [SYSTEM] [OUTPUT] [VELOCITY] "
 		"[--system NAME] [--output PATH] [--velocity PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N]");
+		"[--stop-after-step N] [--memory-report PATH]");
 	TransportOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -84,6 +103,7 @@ TransportOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--checkpoint-every")
 			options.checkpoint_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
+		else if (argument == "--memory-report") options.memory_report = value;
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
@@ -193,13 +213,16 @@ void ReadTransportCheckpoint(Vec state, const fs::path& prefix,
 
 int main(int argc, char** argv)
 {
+	EnableMemoryTracking(argc, argv);
 	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA configured PDE solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;
 	try {
 		const auto options = ParseOptions(argc, argv);
+		iga::DistributedMemoryRecorder memory(PETSC_COMM_WORLD, options.memory_report);
 		iga::Database database(options.database.string());
+		memory.Record("database_open");
 		const auto& case_dir = options.case_dir;
 			const auto configuration = iga::ReadSimulationConfiguration(
 				(case_dir / "simulation_config.json").string());
@@ -229,6 +252,7 @@ int main(int argc, char** argv)
 		const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
 		const auto initial = iga::InitialScalarValues(configuration, system);
 		const auto fields = system.fields.size();
+		const auto coupling_patterns = iga::BuildTransportCouplingPatterns(system, configuration);
 		if (rank == 0) {
 			std::cout << "configuration=simulation_config.json system=" << system.name
 				<< " fields=" << fields << " velocity_source=" << system.velocity_source
@@ -238,6 +262,7 @@ int main(int argc, char** argv)
 		}
 
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, fields);
+		memory.Record("required_elements_loaded");
 		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
 		std::map<int, long long> surface_faces;
 		for (const auto& boundary : configuration.boundaries)
@@ -261,8 +286,9 @@ int main(int argc, char** argv)
 				throw std::runtime_error("configured scalar surface boundary label "
 					+ std::to_string(entry.first) + " has no boundary faces in the .ntiga database; repack with iga_pack");
 		}
-		Mat left = assembler.CreateMatrix();
-		Mat previous = assembler.CreateMatrix();
+		Mat left = assembler.CreateMatrix(coupling_patterns.left);
+		Mat previous = assembler.CreateMatrix(coupling_patterns.previous);
+		memory.Record("matrix_preallocation");
 		MatSetOption(left, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
 		MatSetOption(previous, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
 		MatSetOption(previous, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE);
@@ -275,17 +301,19 @@ int main(int argc, char** argv)
 				if (boundaries.constrained[static_cast<std::size_t>(node)*fields+field])
 					boundary_rows.push_back(static_cast<PetscInt>(node*fields+field));
 		double assembly_seconds = 0.0;
+		iga::GenericTransportMatrices element_matrices(coupling_patterns);
+		bool assembly_memory_recorded = false;
 		auto assemble_operators = [&](const std::vector<std::array<double, 3>>& velocity) {
 			const auto start = std::chrono::steady_clock::now();
 			MatZeroEntries(left);
 			MatZeroEntries(previous);
 			VecSet(forcing, 0.0);
 			for (const auto& element : assembler.elements()) {
-				const auto matrices = iga::BuildGenericTransportElement(
-					element, velocity, system, configuration);
-				assembler.AddElementMatrix(left, element, matrices.left);
-				assembler.AddElementMatrix(previous, element, matrices.previous);
-				assembler.AddElementVector(forcing, element, matrices.source);
+				iga::BuildGenericTransportElement(
+					element, velocity, system, configuration, element_matrices);
+				assembler.AddElementMatrix(left, element, element_matrices.left);
+				assembler.AddElementMatrix(previous, element, element_matrices.previous);
+				assembler.AddElementVector(forcing, element, element_matrices.source);
 			}
 			iga::OwnedRowAssembler::Assemble(left);
 			iga::OwnedRowAssembler::Assemble(previous);
@@ -294,6 +322,10 @@ int main(int argc, char** argv)
 				boundary_rows.data(), 1.0, nullptr, nullptr);
 			MatZeroRows(previous, static_cast<PetscInt>(boundary_rows.size()),
 				boundary_rows.data(), 0.0, nullptr, nullptr);
+			if (!assembly_memory_recorded) {
+				memory.Record("operator_assembly");
+				assembly_memory_recorded = true;
+			}
 			assembly_seconds += std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-start).count();
 		};
@@ -350,9 +382,13 @@ int main(int argc, char** argv)
 		KSPGetPC(solver, &preconditioner);
 		PCSetType(preconditioner, PCBJACOBI);
 		KSPSetFromOptions(solver);
-		if (!velocity_source) KSPSetUp(solver);
+		if (!velocity_source) {
+			KSPSetUp(solver);
+			memory.Record("ksp_setup");
+		}
 
 		PetscInt total_iterations = 0;
+		bool setup_memory_recorded = !velocity_source;
 		const auto solve_start = std::chrono::steady_clock::now();
 		double linear_seconds = 0.0;
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
@@ -370,6 +406,10 @@ int main(int argc, char** argv)
 				assemble_operators(velocity);
 				KSPSetOperators(solver, left, left);
 				KSPSetUp(solver);
+				if (!setup_memory_recorded) {
+					memory.Record("ksp_setup");
+					setup_memory_recorded = true;
+				}
 			}
 			const auto step_configuration = iga::MaterializeBoundaryWaveforms(
 				configuration, case_dir, (step+1)*system.dt);
@@ -425,6 +465,7 @@ int main(int argc, char** argv)
 					<< " completed_step=" << completed_step << '\n';
 			}
 		}
+		memory.Record("linear_solve");
 		const auto solve_end = std::chrono::steady_clock::now();
 
 		if (!options.output.empty()) {

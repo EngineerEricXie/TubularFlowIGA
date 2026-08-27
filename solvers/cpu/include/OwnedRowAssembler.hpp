@@ -1,6 +1,7 @@
 #ifndef OWNED_ROW_ASSEMBLER_HPP
 #define OWNED_ROW_ASSEMBLER_HPP
 
+#include "FieldCouplingPattern.hpp"
 #include "IgaDatabase.hpp"
 
 #include <petscmat.h>
@@ -39,6 +40,15 @@ public:
 
 	Mat CreateMatrix(bool keep_nonzero_pattern = false) const
 	{
+		return CreateMatrix(FieldCouplingPattern::Dense(static_cast<std::size_t>(fields_)),
+			keep_nonzero_pattern);
+	}
+
+	Mat CreateMatrix(const FieldCouplingPattern& pattern,
+		bool keep_nonzero_pattern = false) const
+	{
+		if (pattern.fields() != static_cast<std::size_t>(fields_))
+			throw std::invalid_argument("matrix field-coupling pattern has the wrong field count");
 		const auto local_nodes = static_cast<std::size_t>(node_end_ - node_begin_);
 		std::vector<std::vector<std::int32_t>> adjacency(local_nodes);
 		for (const auto& element : local_elements_) {
@@ -60,8 +70,9 @@ public:
 			const auto remote_count = static_cast<PetscInt>(neighbors.size()) - local_count;
 			for (PetscInt field = 0; field < fields_; ++field) {
 				const auto row = local_node * static_cast<std::size_t>(fields_) + static_cast<std::size_t>(field);
-				diagonal[row] = local_count * fields_;
-				off_diagonal[row] = remote_count * fields_;
+				const auto active_trials = CheckedPetsc(pattern.ActiveTrials(static_cast<std::size_t>(field)));
+				diagonal[row] = local_count * active_trials;
+				off_diagonal[row] = remote_count * active_trials;
 			}
 		}
 
@@ -109,6 +120,42 @@ public:
 		if (!rows.empty())
 			PetscCallThrow(MatSetValues(matrix, static_cast<PetscInt>(rows.size()), rows.data(),
 				static_cast<PetscInt>(columns.size()), columns.data(), owned_values.data(), ADD_VALUES), "MatSetValues");
+	}
+
+	void AddElementMatrix(Mat matrix, const Element& element,
+		const FieldBlockElementMatrix& blocks) const
+	{
+		const auto nodes = element.connectivity.size();
+		if (blocks.nodes() != nodes
+			|| blocks.pattern().fields() != static_cast<std::size_t>(fields_))
+			throw std::invalid_argument("element field blocks have the wrong size");
+		sparse_rows_.clear();
+		sparse_columns_.resize(nodes);
+		sparse_values_.clear();
+		sparse_rows_.reserve(nodes);
+		sparse_values_.reserve(nodes*nodes);
+		for (std::size_t pair = 0; pair < blocks.pattern().pairs(); ++pair) {
+			const auto coupling = blocks.pattern().active_pairs()[pair];
+			sparse_rows_.clear();
+			sparse_values_.clear();
+			for (std::size_t node = 0; node < nodes; ++node)
+				sparse_columns_[node] = GlobalRow(element.connectivity[node],
+					static_cast<PetscInt>(coupling.second));
+			const auto* values = blocks.Block(pair);
+			for (std::size_t node = 0; node < nodes; ++node) {
+				if (!Owns(element.connectivity[node])) continue;
+				sparse_rows_.push_back(GlobalRow(element.connectivity[node],
+					static_cast<PetscInt>(coupling.first)));
+				const auto begin = values+static_cast<std::ptrdiff_t>(node*nodes);
+				sparse_values_.insert(sparse_values_.end(), begin,
+					begin+static_cast<std::ptrdiff_t>(nodes));
+			}
+			if (!sparse_rows_.empty())
+				PetscCallThrow(MatSetValues(matrix, static_cast<PetscInt>(sparse_rows_.size()),
+					sparse_rows_.data(), static_cast<PetscInt>(sparse_columns_.size()),
+					sparse_columns_.data(), sparse_values_.data(), ADD_VALUES),
+					"MatSetValues");
+		}
 	}
 
 	void AddElementVector(Vec vector, const Element& element, const std::vector<PetscScalar>& values) const
@@ -173,6 +220,9 @@ private:
 	std::uint64_t node_begin_ = 0;
 	std::uint64_t node_end_ = 0;
 	std::vector<Element> local_elements_;
+	mutable std::vector<PetscInt> sparse_rows_;
+	mutable std::vector<PetscInt> sparse_columns_;
+	mutable std::vector<PetscScalar> sparse_values_;
 };
 
 } // namespace iga

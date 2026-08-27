@@ -1,6 +1,7 @@
 #ifndef GENERIC_TRANSPORT_ELEMENT_HPP
 #define GENERIC_TRANSPORT_ELEMENT_HPP
 
+#include "FieldCouplingPattern.hpp"
 #include "SimulationConfig.hpp"
 #include "TransportElement.hpp"
 
@@ -9,37 +10,79 @@
 #include <cmath>
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace iga {
 
+struct TransportCouplingPatterns {
+	FieldCouplingPattern left;
+	FieldCouplingPattern previous;
+};
+
+inline TransportCouplingPatterns BuildTransportCouplingPatterns(
+	const CompiledLinearSystem& system, const SimulationConfiguration& configuration)
+{
+	const auto fields = system.fields.size();
+	TransportCouplingPatterns result{FieldCouplingPattern(fields), FieldCouplingPattern(fields)};
+	for (const auto& term : system.terms) {
+		if (term.kind == TermKind::VolumeSource) continue;
+		result.left.Add(term.equation, term.trial);
+		if (term.kind == TermKind::TimeDerivative)
+			result.previous.Add(term.equation, term.trial);
+	}
+	for (const auto& boundary : configuration.boundaries)
+		for (const auto& condition : boundary.conditions) {
+			const auto field = system.field_index.find(condition.field);
+			if (field != system.field_index.end()
+				&& (condition.kind == FieldBoundaryKind::Robin
+					|| condition.kind == FieldBoundaryKind::Dirichlet))
+				result.left.Add(field->second, field->second);
+		}
+	return result;
+}
+
 struct GenericTransportMatrices {
-	std::vector<PetscScalar> left;
-	std::vector<PetscScalar> previous;
+	explicit GenericTransportMatrices(const TransportCouplingPatterns& patterns)
+		: left(patterns.left), previous(patterns.previous) {}
+
+	void Reset(std::size_t nodes, std::size_t fields)
+	{
+		left.Reset(nodes);
+		previous.Reset(nodes);
+		source.resize(nodes*fields);
+		std::fill(source.begin(), source.end(), PetscScalar{0.0});
+		supg.resize(fields);
+		std::fill(supg.begin(), supg.end(), 0);
+		streamline.resize(nodes);
+	}
+
+	FieldBlockElementMatrix left;
+	FieldBlockElementMatrix previous;
 	std::vector<PetscScalar> source;
+	std::vector<int> supg;
+	std::vector<double> streamline;
 };
 
 template <class VelocityAt>
-inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const Element& element,
+inline void BuildGenericTransportElementWithVelocity(const Element& element,
 	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
-	const SimulationConfiguration& configuration)
+	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices)
 {
 	if (system.fields.empty()) throw std::runtime_error("linear transport system has no fields");
 	if (!(system.dt > 0.0)) throw std::runtime_error("linear transport time step must be positive");
 	const auto fields = system.fields.size();
 	const auto nen = element.connectivity.size();
-	const auto ndof = fields * nen;
-	GenericTransportMatrices matrices{
-		std::vector<PetscScalar>(ndof * ndof, 0.0),
-		std::vector<PetscScalar>(ndof * ndof, 0.0),
-		std::vector<PetscScalar>(ndof, 0.0)};
-	std::vector<int> supg(fields, 0);
+	if (matrices.left.pattern().fields() != fields
+		|| matrices.previous.pattern().fields() != fields)
+		throw std::invalid_argument("transport scratch has the wrong field count");
+	matrices.Reset(nen, fields);
 	for (const auto& definition : system.stabilization) {
 		const auto found = system.field_index.find(definition.equation);
 		if (found == system.field_index.end()) throw std::runtime_error("stabilization references an unknown equation");
 		if (definition.method != "supg" || definition.velocity != system.velocity_source)
 			throw std::runtime_error("CPU linear transport requires SUPG and advection to use the same velocity source");
-		supg[found->second] = 1;
+		matrices.supg[found->second] = 1;
 	}
 	for (const auto& term : system.terms)
 		if ((term.kind == TermKind::Advection) && term.velocity != system.velocity_source)
@@ -64,37 +107,39 @@ inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const E
 				const auto tau_time = system.dt / 2.0;
 				const auto tau = tau_space > 0.0
 					? 1.0 / std::sqrt(1.0/(tau_space*tau_space) + 1.0/(tau_time*tau_time)) : 0.0;
-				std::vector<double> streamline(nen);
 				for (std::size_t a = 0; a < nen; ++a)
-					streamline[a] = velocity[0]*basis.gradient[a][0]
+					matrices.streamline[a] = velocity[0]*basis.gradient[a][0]
 						+ velocity[1]*basis.gradient[a][1] + velocity[2]*basis.gradient[a][2];
 
 				for (std::size_t a = 0; a < nen; ++a) {
 					for (const auto& term : system.terms) {
-						const double test = basis.value[a] + (supg[term.equation] ? tau*streamline[a] : 0.0);
+						const double test = basis.value[a]
+							+ (matrices.supg[term.equation] ? tau*matrices.streamline[a] : 0.0);
 						if (term.kind == TermKind::VolumeSource) {
 							matrices.source[(a*fields)+term.equation] += system.dt * term.coefficient * test * measure;
 							continue;
 						}
+						auto* left_block = matrices.left.Block(term.equation, term.trial);
+						auto* previous_block = term.kind == TermKind::TimeDerivative
+							? matrices.previous.Block(term.equation, term.trial) : nullptr;
 						for (std::size_t b = 0; b < nen; ++b) {
-							const auto row = a*fields + term.equation;
-							const auto column = b*fields + term.trial;
-							const auto index = row*ndof + column;
-							const auto gradient_dot = basis.gradient[a][0]*basis.gradient[b][0]
+							const auto index = a*nen+b;
+								const auto gradient_dot = basis.gradient[a][0]*basis.gradient[b][0]
 								+ basis.gradient[a][1]*basis.gradient[b][1] + basis.gradient[a][2]*basis.gradient[b][2];
 							if (term.kind == TermKind::TimeDerivative) {
 								const auto mass = term.coefficient * test * basis.value[b] * measure;
-								matrices.left[index] += mass;
-								matrices.previous[index] += mass;
-							} else if (term.kind == TermKind::Diffusion) {
-								const auto weak_gradient = supg[term.equation] ? test*gradient_dot : gradient_dot;
-								matrices.left[index] += system.dt * term.coefficient * weak_gradient * measure;
-							} else if (term.kind == TermKind::Advection) {
-								matrices.left[index] += system.dt * term.coefficient * test
-									* (velocity[0]*basis.gradient[b][0] + velocity[1]*basis.gradient[b][1]
-										+ velocity[2]*basis.gradient[b][2]) * measure;
-							} else if (term.kind == TermKind::LinearCoupling) {
-								matrices.left[index] += system.dt * term.coefficient * test * basis.value[b] * measure;
+									left_block[index] += mass;
+									previous_block[index] += mass;
+								} else if (term.kind == TermKind::Diffusion) {
+								const auto weak_gradient = matrices.supg[term.equation]
+									? test*gradient_dot : gradient_dot;
+									left_block[index] += system.dt * term.coefficient * weak_gradient * measure;
+								} else if (term.kind == TermKind::Advection) {
+									left_block[index] += system.dt * term.coefficient * test
+										* (velocity[0]*basis.gradient[b][0] + velocity[1]*basis.gradient[b][1]
+											+ velocity[2]*basis.gradient[b][2]) * measure;
+								} else if (term.kind == TermKind::LinearCoupling) {
+									left_block[index] += system.dt * term.coefficient * test * basis.value[b] * measure;
 							}
 						}
 					}
@@ -135,17 +180,37 @@ inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const E
 						else {
 							matrices.source[row] += system.dt * condition.coefficient
 								* condition.exterior_value * basis.value[a] * measure;
+							auto* left_block = matrices.left.Block(field->second, field->second);
 							for (std::size_t b = 0; b < nen; ++b) {
-								const auto column = b*fields + field->second;
-								matrices.left[row*ndof+column] += system.dt * condition.coefficient
-									* basis.value[a] * basis.value[b] * measure;
+								left_block[a*nen+b] += system.dt * condition.coefficient
+										* basis.value[a] * basis.value[b] * measure;
 							}
 						}
 					}
 				}
 			}
 	}
+}
+
+template <class VelocityAt>
+inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const Element& element,
+	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration)
+{
+	GenericTransportMatrices matrices(BuildTransportCouplingPatterns(system, configuration));
+	BuildGenericTransportElementWithVelocity(element, std::forward<VelocityAt>(velocity_at),
+		system, configuration, matrices);
 	return matrices;
+}
+
+inline void BuildGenericTransportElement(const Element& element,
+	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices)
+{
+	BuildGenericTransportElementWithVelocity(element,
+		[&nodal_velocity](std::int32_t node) -> const std::array<double, 3>& {
+			return nodal_velocity.at(static_cast<std::size_t>(node));
+		}, system, configuration, matrices);
 }
 
 inline GenericTransportMatrices BuildGenericTransportElement(const Element& element,

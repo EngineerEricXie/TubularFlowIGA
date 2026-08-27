@@ -238,9 +238,23 @@ mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
   --checkpoint neuron-checkpoint --checkpoint-every 10
 
 mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_solve" \
-  "$DATABASE" "$CASE_DIR" --system neuron_transport \
-  --output neuron-resumed.txt --restart neuron-checkpoint
+	"$DATABASE" "$CASE_DIR" --system neuron_transport \
+	--output neuron-resumed.txt --restart neuron-checkpoint
 ~~~
+
+Add `--memory-report transport-memory.jsonl` to collect one JSON object per
+stage after database loading, required-element expansion, matrix
+preallocation, first operator assembly, first KSP setup, and the completed
+solve loop. The report
+contains current and peak RSS, PETSc process memory, and PETSc allocator usage
+for every rank plus maximum and aggregate values. Allocation tracking is
+enabled before `PetscInitialize` only when this option is present, so normal
+runs do not pay the PETSc malloc-debug overhead.
+
+Configured transport derives separate left/previous field-coupling patterns
+from the compiled terms and Robin/Dirichlet requirements. PETSc scalar AIJ
+preallocation and reusable element `nen x nen` blocks include only those active
+equation/trial pairs; `MAT_NEW_NONZERO_ALLOCATION_ERR` remains enabled.
 
 Validate one velocity snapshot, or a complete manifest with an optional cardiac
 period for cycle-to-cycle comparison:
