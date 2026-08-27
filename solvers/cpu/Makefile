@@ -5,7 +5,7 @@ LDLIBS ?= -lstdc++fs
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := petsc petsc-test generic_transport_test navier_stokes_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+PETSC_TARGETS := petsc petsc-test generic_transport_test navier_stokes_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
 
 ifneq ($(strip $(filter $(PETSC_TARGETS),$(MAKECMDGOALS))),)
 ifeq ($(strip $(PETSC_DIR)),)
@@ -88,9 +88,10 @@ boundary_flow_test: tests/test_boundary_flow.cpp include/BoundaryFlow.hpp includ
 womersley_reference_test: tests/test_womersley_reference.cpp include/WomersleyReference.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-petsc-test: generic_transport_test navier_stokes_test vca_3d_runtime_test vca_3d_smoke_test
+petsc-test: generic_transport_test navier_stokes_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test
 	./generic_transport_test
 	./navier_stokes_test
+	PATH="$(PETSC_PREFIX)/bin:$$PATH" mpiexec -np 2 ./transport_boundary_preflight_test
 	./vca_3d_runtime_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./vca_3d_smoke_test
 
@@ -100,10 +101,13 @@ vca_3d_runtime_test: tests/test_vca_3d_runtime.cpp include/IgaDatabase.hpp inclu
 vca_3d_smoke_test: tests/test_vca_3d_smoke.cpp iga_navier_stokes include/IgaDatabase.hpp ../../include/SimulationConfig.hpp ../../include/VcaCheckpoint.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
+transport_boundary_preflight_test: tests/test_transport_boundary_preflight.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/TransportElement.hpp ../../include/SimulationConfig.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
 iga_assembly_smoke: src/iga_assembly_smoke.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-iga_solve: src/iga_solve.cpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp
+iga_solve: src/iga_solve.cpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 iga_transport: src/iga_transport.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/TransportElement.hpp ../../include/CaseConfig.hpp
@@ -116,4 +120,4 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 clean:
-	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test vtk_output_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test vtk_output_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check

@@ -256,6 +256,12 @@ from the compiled terms and Robin/Dirichlet requirements. PETSc scalar AIJ
 preallocation and reusable element `nen x nen` blocks include only those active
 equation/trial pairs; `MAT_NEW_NONZERO_ALLOCATION_ERR` remains enabled.
 
+Distributed transport diagnostics and Flux/Robin boundary preflight assign
+each required element to the PETSc owner of its minimum global connectivity
+node. This counts every packed element exactly once without loading a second
+METIS-owned element copy; METIS `element.owner` is not the ownership rule for
+the row-owner-loaded assembler set.
+
 Validate one velocity snapshot, or a complete manifest with an optional cardiac
 period for cycle-to-cycle comparison:
 

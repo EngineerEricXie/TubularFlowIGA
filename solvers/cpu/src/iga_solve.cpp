@@ -6,6 +6,7 @@
 #include "OwnedRowAssembler.hpp"
 #include "SimulationConfig.hpp"
 #include "TemporalFunction.hpp"
+#include "TransportBoundaryPreflight.hpp"
 #include "FlowCheckpoint.hpp"
 #include "TransportCheckpoint.hpp"
 #include "VelocitySeries.hpp"
@@ -20,7 +21,6 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
-#include <map>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -263,29 +263,12 @@ int main(int argc, char** argv)
 
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, fields);
 		memory.Record("required_elements_loaded");
-		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
-		std::map<int, long long> surface_faces;
-		for (const auto& boundary : configuration.boundaries)
-			for (const auto& condition : boundary.conditions)
-				if (system.field_index.count(condition.field)
-					&& (condition.kind == iga::FieldBoundaryKind::Flux
-						|| condition.kind == iga::FieldBoundaryKind::Robin))
-					surface_faces.emplace(boundary.label, 0);
-		for (const auto& element : assembler.elements()) {
-			if (element.owner != rank) continue;
-			for (const auto label : element.boundary_labels) {
-				auto found = surface_faces.find(label);
-				if (found != surface_faces.end()) ++found->second;
-			}
-		}
-		for (auto& entry : surface_faces) {
-			long long global_faces = 0;
-			MPI_Allreduce(&entry.second, &global_faces, 1, MPI_LONG_LONG, MPI_SUM, PETSC_COMM_WORLD);
-			entry.second = global_faces;
-			if (global_faces == 0)
-				throw std::runtime_error("configured scalar surface boundary label "
-					+ std::to_string(entry.first) + " has no boundary faces in the .ntiga database; repack with iga_pack");
-		}
+		iga::RequireValidGeometry(assembler.elements(),
+			[&assembler](const iga::Element& element) {
+				return assembler.OwnsElementByMinimumNode(element);
+			}, PETSC_COMM_WORLD);
+		iga::RequireConfiguredScalarSurfaceFaces(
+			configuration, system, assembler, PETSC_COMM_WORLD);
 		Mat left = assembler.CreateMatrix(coupling_patterns.left);
 		Mat previous = assembler.CreateMatrix(coupling_patterns.previous);
 		memory.Record("matrix_preallocation");

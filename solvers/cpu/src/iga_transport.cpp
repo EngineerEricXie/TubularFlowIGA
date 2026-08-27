@@ -36,7 +36,10 @@ int main(int argc, char** argv)
 		if (rank == 0) std::cout << "boundary_config=" << (case_configuration.present ? "case_config.json" : "legacy-defaults")
 			<< " transport_nodes=" << boundaries.transport_nodes << '\n';
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, 2);
-		iga::RequireValidGeometry(assembler.elements(), rank, PETSC_COMM_WORLD);
+		iga::RequireValidGeometry(assembler.elements(),
+			[&assembler](const iga::Element& element) {
+				return assembler.OwnsElementByMinimumNode(element);
+			}, PETSC_COMM_WORLD);
 		const auto coupling_patterns = iga::BuildTransportCouplingPatterns(system, converted);
 		Mat left = assembler.CreateMatrix(coupling_patterns.left);
 		Mat previous = assembler.CreateMatrix(coupling_patterns.previous);

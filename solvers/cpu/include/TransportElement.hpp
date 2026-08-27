@@ -12,6 +12,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace iga {
@@ -78,12 +79,14 @@ struct GeometryQuality {
 	double minimum_determinant = std::numeric_limits<double>::infinity();
 };
 
-inline GeometryQuality InspectGeometry(const std::vector<Element>& elements, int rank, MPI_Comm communicator)
+template <class OwnsElement>
+inline GeometryQuality InspectGeometry(const std::vector<Element>& elements,
+	OwnsElement&& owns_element, MPI_Comm communicator)
 {
 	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
 	GeometryQuality local, global;
 	for (const auto& element : elements) {
-		if (element.owner != rank) continue;
+		if (!owns_element(element)) continue;
 		bool bad = false;
 		for (double w : points) for (double v : points) for (double u : points) {
 			const auto determinant = ElementJacobianDeterminant(element, u, v, w);
@@ -99,12 +102,30 @@ inline GeometryQuality InspectGeometry(const std::vector<Element>& elements, int
 	return global;
 }
 
+inline GeometryQuality InspectGeometry(const std::vector<Element>& elements,
+	int rank, MPI_Comm communicator)
+{
+	return InspectGeometry(elements,
+		[rank](const Element& element) { return element.owner == rank; }, communicator);
+}
+
+template <class OwnsElement>
+inline void RequireValidGeometry(const std::vector<Element>& elements,
+	OwnsElement&& owns_element, MPI_Comm communicator)
+{
+	const auto quality = InspectGeometry(
+		elements, std::forward<OwnsElement>(owns_element), communicator);
+	if (quality.bad_elements)
+		throw std::runtime_error("invalid mesh: " + std::to_string(quality.bad_elements)
+			+ " elements have non-positive Jacobians; first element "
+			+ std::to_string(quality.first_bad_element) + ", minimum detJ "
+			+ std::to_string(quality.minimum_determinant));
+}
+
 inline void RequireValidGeometry(const std::vector<Element>& elements, int rank, MPI_Comm communicator)
 {
-	const auto quality = InspectGeometry(elements, rank, communicator);
-	if (quality.bad_elements)
-		throw std::runtime_error("invalid mesh: " + std::to_string(quality.bad_elements) + " elements have non-positive Jacobians; first element "
-			+ std::to_string(quality.first_bad_element) + ", minimum detJ " + std::to_string(quality.minimum_determinant));
+	RequireValidGeometry(elements,
+		[rank](const Element& element) { return element.owner == rank; }, communicator);
 }
 
 inline BasisValues EvaluateBasis(const Element& element, double u, double v, double w, bool with_hessian = false)

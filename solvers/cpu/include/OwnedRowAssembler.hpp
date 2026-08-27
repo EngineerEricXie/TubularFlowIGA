@@ -37,6 +37,12 @@ public:
 	PetscInt local_rows() const { return CheckedPetsc((node_end_ - node_begin_) * fields_); }
 	PetscInt global_rows() const { return CheckedPetsc(database_.header().nodes * fields_); }
 	const std::vector<Element>& elements() const { return local_elements_; }
+	bool OwnsElementByMinimumNode(const Element& element) const
+	{
+		if (element.connectivity.empty())
+			throw std::invalid_argument("cannot assign ownership to an empty element");
+		return Owns(*std::min_element(element.connectivity.begin(), element.connectivity.end()));
+	}
 
 	Mat CreateMatrix(bool keep_nonzero_pattern = false) const
 	{
