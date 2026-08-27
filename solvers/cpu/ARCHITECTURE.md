@@ -2,10 +2,13 @@
 
 ## Data path
 
-Control-mesh generation writes `controlmesh.vtk`; spline preprocessing produces
-`bzmeshinfo.txt` and a versioned sparse `spline_cache.igacache`. `iga_pack`
-validates the mesh hash and cache records, combines them with the METIS
-partition, and creates an indexed `.ntiga` database. Legacy `cmat.txt` and
+Control-mesh generation writes `controlmesh.vtk` plus JSON/VTP geometry-risk
+diagnostics. Spline preprocessing produces `bzmeshinfo.txt`, a versioned sparse
+`spline_cache.igacache`, and `geometry_transform.json`. `iga_pack` validates
+the mesh hash and cache records, combines them with the METIS partition, and
+creates an indexed version-5 `.ntiga` database. The database preserves the
+source origin, normalized-unit scale, and source-to-metre scale; version 3 and
+4 databases are still read with an identity transform. Legacy `cmat.txt` and
 `bzpt.txt` remain an explicit fallback. Each MPI rank seeks only the element
 records needed for its owned rows.
 

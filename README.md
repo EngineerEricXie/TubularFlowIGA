@@ -62,8 +62,9 @@ SWC or radius-annotated line-OBJ centerline
 ## Choose a first example
 
 Every 3D runnable example contains `skeleton_initial.swc` or
-`skeleton_initial.obj`, plus `mesh_parameter.txt` and
-`simulation_config.json`. A native 1D example needs only the skeleton and
+`skeleton_initial.obj` plus a schema-v4 `simulation_config.json`; its
+`geometry` and `mesh` blocks configure preprocessing in the same validated
+document as the physics. A native 1D example needs only the skeleton and
 schema-v3 configuration. Generated meshes, databases, and results are written
 to a separate work directory.
 
@@ -164,8 +165,12 @@ The prepared directory contains, among other generated files:
 
 - `skeleton_normalized.swc`: validated, rooted canonical skeleton;
 - `skeleton.vtp`: centerline, radius, topology, and branch data for ParaView;
+- `mesh_diagnostics.json` and `skeleton_diagnostics.vtp`: geometry feasibility,
+  dimensionless quality metrics, and collision candidates;
 - `controlmesh.vtk`: labeled hexahedral control mesh;
+- `mesh_quality.json`: final Jacobian and surface-intersection results;
 - `bzmesh.vtk` and `bzmeshinfo.txt`: Bezier visualization and extraction data;
+- `geometry_transform.json`: the source-to-normalized coordinate transform;
 - `initial_velocityfield.txt`: generated spatial velocity profile;
 - `straight_tube-2.ntiga`: packed solver database.
 
@@ -274,16 +279,17 @@ legacy reference workflow.
 For 3D, copy one complete directory from `examples/neuron_transport/` or
 `examples/vascular_flow/` to a work directory, then:
 
-1. Edit `skeleton_initial.swc` or `skeleton_initial.obj` for the centerline and radii.
-2. Edit `mesh_parameter.txt` for smoothing, segment length, and refinement.
-3. Edit `simulation_config.json` for fields, equations, time integration, and
-   named boundary conditions.
+1. Edit the SWC or OBJ named by `geometry.file` for the centerline and radii.
+2. Edit the schema-v4 `geometry` and `mesh` blocks in `simulation_config.json`
+   for smoothing, adaptive spacing, junction clearance, and quality gates.
+3. Edit the remaining blocks for fields, equations, time integration, and named
+   boundary conditions.
 4. Run the preparation pipeline, inspect positive Jacobians and boundary labels,
    then execute the matching solver.
 
 For 1D, copy a directory from `examples/one_d/`, edit its SWC and schema-v3
 configuration, then run `iga_1d CASE_DIR --check` before simulation. There is no
-`mesh_parameter.txt`, control-mesh generation, or `.ntiga` packing step.
+control-mesh generation or `.ntiga` packing step.
 
 The mesh generator assigns wall label 0, inlet label 1, and terminal outlet
 labels starting at 2. Do not assume a branch label without checking
@@ -291,6 +297,8 @@ labels starting at 2. Do not assume a branch label without checking
 
 The spline stage translates coordinates by the domain minima and divides them
 by the smallest domain-axis extent before writing the IGA representation.
+`geometry_transform.json` records that affine map, and version-5 `.ntiga`
+databases also store it together with `geometry.length_scale_to_m`.
 Consequently, the packed database uses normalized coordinates. Example
 viscosity, density, time, velocity, and transport coefficients are internally
 consistent numerical values, not automatic SI or patient-specific parameters.

@@ -17,7 +17,7 @@ For configured transport, `flux` specifies the outward diffusive flux
 `D grad(c) dot n = q` and contributes `dt q N_a` to the right-hand side.
 `robin` uses `D grad(c) dot n = h(c_ext - c)`, contributing
 `dt h N_a N_b` to the left-hand side and `dt h c_ext N_a` to the
-right-hand side. Surface execution requires a version 4 `.ntiga` database
+right-hand side. Surface execution requires a version 4-or-later `.ntiga` database
 containing element-face labels. A configured surface label with no packed face
 is rejected with a request to rerun `iga_pack`.
 
@@ -61,7 +61,7 @@ For example:
 }
 ```
 
-The solver integrates `u dot n` from version 4 packed boundary faces and
+The solver integrates `u dot n` from version 4-or-later packed boundary faces and
 fixed-point couples each outlet pressure to the 3D solve. R/RC/RCR values are
 lowered to the same natural `-p n` traction, not pressure Dirichlet nodes.
 RC/RCR require `backward_euler`; a pure resistance also works in steady flow. Checkpoints store

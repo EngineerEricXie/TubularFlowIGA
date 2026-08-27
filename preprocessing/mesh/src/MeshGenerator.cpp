@@ -268,6 +268,72 @@ std::vector<int> TrimSection(const SwcGraph& graph, const std::vector<int>& sect
 	return std::vector<int>(section.begin()+begin, section.begin()+end);
 }
 
+std::vector<std::vector<int>> BuildEdgeNeighbors(
+	std::size_t point_count,
+	const std::vector<Hex>& elements)
+{
+	static const std::array<std::array<int,2>,12> edges{{
+		{{0,1}},{{1,2}},{{2,3}},{{3,0}},{{4,5}},{{5,6}},
+		{{6,7}},{{7,4}},{{0,4}},{{1,5}},{{2,6}},{{3,7}}
+	}};
+	std::vector<std::vector<int>> result(point_count);
+	for(const auto& element:elements) for(const auto& edge:edges) {
+		const int a=element[edge[0]],b=element[edge[1]];
+		result[a].push_back(b);result[b].push_back(a);
+	}
+	for(auto& row:result) {
+		std::sort(row.begin(),row.end());
+		row.erase(std::unique(row.begin(),row.end()),row.end());
+	}
+	return result;
+}
+
+bool ImprovePointQuality(
+	std::vector<Vec3>& points,
+	const std::vector<Hex>& elements,
+	const std::vector<std::vector<int>>& incident,
+	const std::vector<std::vector<int>>& neighbors,
+	int point,
+	double required_scaled_jacobian)
+{
+	if(neighbors[point].empty()||incident[point].empty()) return false;
+	Vec3 candidate;
+	for(int neighbor:neighbors[point]) candidate+=points[neighbor];
+	candidate/=static_cast<double>(neighbors[point].size());
+	const Vec3 original=points[point];
+	const auto baseline=EvaluateHexQuality(points,elements,&incident[point]);
+	double best=baseline.minimum_scaled_jacobian;
+	double best_alpha=0.0;
+	static const std::array<double,5> alphas{{1.0,0.5,0.25,0.125,0.0625}};
+	for(double alpha:alphas) {
+		points[point]=original+(candidate-original)*alpha;
+		const auto quality=EvaluateHexQuality(points,elements,&incident[point]);
+		if(quality.bad_elements==0&&quality.minimum_determinant>0.0
+			&&quality.minimum_scaled_jacobian>=required_scaled_jacobian
+			&&quality.minimum_scaled_jacobian>best+1.0e-8) {
+			best=quality.minimum_scaled_jacobian;best_alpha=alpha;
+		}
+	}
+	points[point]=original+(candidate-original)*best_alpha;
+	return best_alpha>0.0;
+}
+
+void TransportFrame(
+	Vec3& tangent,
+	Vec3& reference,
+	Vec3& second_axis,
+	const Vec3& new_direction,
+	const std::string& context)
+{
+	const Vec3 old_tangent=Normalized(tangent,context+" old tangent");
+	const Vec3 new_tangent=Normalized(new_direction,context+" new tangent");
+	reference=RotateSurface(reference,old_tangent,new_tangent);
+	reference-=new_tangent*Dot(reference,new_tangent);
+	reference=Normalized(reference,context+" transported reference");
+	second_axis=Normalized(Cross(new_tangent,reference),context+" transported second axis");
+	tangent=new_tangent;
+}
+
 } // namespace
 
 ControlMesh GenerateControlMesh(
@@ -277,6 +343,7 @@ ControlMesh GenerateControlMesh(
 	double minimum_scaled_jacobian)
 {
 	skeleton.Validate();
+	parameters.Validate();
 	if (!std::isfinite(minimum_scaled_jacobian) || minimum_scaled_jacobian <= 0.0)
 		throw std::runtime_error("minimum scaled Jacobian must be positive");
 	const Templates t = ReadTemplates(template_directory);
@@ -297,7 +364,8 @@ ControlMesh GenerateControlMesh(
 			const double diameter = std::min(skeleton.nodes[i].diameter, skeleton.nodes[parent].diameter);
 			if (!std::isfinite(length) || length <= 0.0 || !std::isfinite(diameter) || diameter <= 0.0)
 				throw std::runtime_error("invalid skeleton segment at node "+std::to_string(i+1));
-			layer_count[i] = std::max(1, static_cast<int>(std::ceil(length/(1.1*diameter))));
+			layer_count[i] = std::max(1, static_cast<int>(std::ceil(
+				length/(parameters.max_spacing_over_diameter*diameter))));
 			if (skeleton.is_branch(static_cast<int>(i)) || skeleton.is_branch(parent)) {
 				if (parameters.bifurcation_refinement <= 0.0)
 					throw std::runtime_error("bifurcation refinement must be positive for branched skeletons");
@@ -437,7 +505,7 @@ ControlMesh GenerateControlMesh(
 
 	if (branch_nodes.empty()) {
 		const auto& section=sections.at(0);
-		Vec3 w,reference;
+		Vec3 w,reference,tangent;
 		for(std::size_t q=0;q<section.size();++q) {
 			int node=section[q];
 			Vec3 direction;
@@ -445,9 +513,9 @@ ControlMesh GenerateControlMesh(
 			if(q==0) {
 				reference=Normalized(RotateSurface({1,0,0},{0,0,1},direction),"pipe initial reference");
 				w=Normalized(Cross(direction,reference),"pipe initial frame");
+				tangent=Normalized(direction,"pipe initial tangent");
 			} else {
-				reference=Normalized(Cross(w,direction),"pipe propagated reference");
-				w=Normalized(Cross(direction,reference),"pipe propagated frame");
+				TransportFrame(tangent,reference,w,direction,"pipe frame");
 			}
 			std::vector<Vec3> points;
 			if(q==0) {
@@ -475,12 +543,12 @@ ControlMesh GenerateControlMesh(
 				Vec3 reference=layers[end].reference;
 				Vec3 w=Normalized(Cross(direction_end,reference),"root-bifurcation frame");
 				reference=Normalized(reference,"root-bifurcation reference");
+				Vec3 tangent=Normalized(direction_end,"root-bifurcation tangent");
 				for(std::size_t rev=trim.size()-1;rev>0;--rev) {
 					const int child=trim[rev], node=trim[rev-1];
 					const Vec3 direction=segment[child];
-					reference=Normalized(Cross(w,direction),"root-bifurcation propagated reference");
+					TransportFrame(tangent,reference,w,direction,"root-bifurcation frame");
 					auto points=MakeCircle(t,skeleton.nodes[node].diameter/2.0,reference,w,skeleton.nodes[node].position-root_position);
-					w=Normalized(Cross(direction,reference),"root-bifurcation propagated frame");
 					std::vector<Vec3> velocities(points.size());
 					for(std::size_t k=0;k<points.size();++k) velocities[k]=VelocityAt(direction,t.circle[k]);
 					const int offset=static_cast<int>(mesh.points.size());
@@ -496,11 +564,11 @@ ControlMesh GenerateControlMesh(
 				Vec3 reference=layers[start].reference;
 				Vec3 w=Normalized(Cross(segment[start],reference),"bifurcation-terminal frame");
 				reference=Normalized(reference,"bifurcation-terminal reference");
+				Vec3 tangent=Normalized(segment[start],"bifurcation-terminal tangent");
 				for(std::size_t q=1;q<trim.size();++q) {
 					const int node=trim[q];
 					const Vec3 direction=segment[node];
-					reference=Normalized(Cross(w,direction),"bifurcation-terminal propagated reference");
-					w=Normalized(Cross(direction,reference),"bifurcation-terminal propagated frame");
+					TransportFrame(tangent,reference,w,direction,"bifurcation-terminal frame");
 					auto points=MakeCircle(t,skeleton.nodes[node].diameter/2.0,reference,w,skeleton.nodes[node].position-root_position);
 					std::vector<Vec3> velocities(points.size());
 					for(std::size_t k=0;k<points.size();++k) velocities[k]=VelocityAt(direction,t.circle[k]);
@@ -622,14 +690,44 @@ ControlMesh GenerateControlMesh(
 			}
 		}
 	}
+	if(parameters.junction_optimization_iterations>0&&!bifurcations.empty()) {
+		const auto neighbors=BuildEdgeNeighbors(mesh.points.size(),mesh.elements);
+		for(int iteration=0;iteration<parameters.junction_optimization_iterations;++iteration) {
+			int improved=0;
+			for(const auto& bifurcation:bifurcations) {
+				const int begin=bifurcation.offsets[0];
+				const int end=begin+static_cast<int>(t.merge.size());
+				for(int point=begin;point<end;++point) {
+					if(mesh.labels[point]==0) continue;
+					if(ImprovePointQuality(mesh.points,mesh.elements,incident,neighbors,point,
+						minimum_scaled_jacobian)) ++improved;
+				}
+			}
+			std::cout<<"junction_optimization_iteration="<<iteration+1
+				<<" improved_points="<<improved<<'\n';
+			if(improved==0) break;
+		}
+	}
 
 	if(mesh.points.size()!=mesh.labels.size()||mesh.points.size()!=mesh.velocity.size())
 		throw std::runtime_error("control mesh point data arrays are inconsistent");
 	mesh.quality=EvaluateHexQuality(mesh.points,mesh.elements);
 	if(mesh.quality.bad_elements>0)
-		throw std::runtime_error("generated mesh has invalid elements; first="+std::to_string(mesh.quality.first_bad_element));
+		throw std::runtime_error("generated mesh has invalid elements; first="
+			+std::to_string(mesh.quality.first_bad_element)+" minimum_detJ="
+			+std::to_string(mesh.quality.minimum_determinant)+" minimum_scaled_J="
+			+std::to_string(mesh.quality.minimum_scaled_jacobian));
 	if(mesh.quality.minimum_scaled_jacobian<minimum_scaled_jacobian)
-		throw std::runtime_error("generated mesh is below the scaled-Jacobian quality floor");
+		throw std::runtime_error("generated mesh minimum_scaled_J="
+			+std::to_string(mesh.quality.minimum_scaled_jacobian)+" is below required "
+			+std::to_string(minimum_scaled_jacobian));
+	if(parameters.check_self_intersection) {
+		mesh.surface_intersections=EvaluateBoundarySelfIntersections(mesh.points,mesh.elements);
+		if(mesh.surface_intersections.intersections>0)
+			throw std::runtime_error("generated mesh boundary self-intersects between faces "
+				+std::to_string(mesh.surface_intersections.first_face)+" and "
+				+std::to_string(mesh.surface_intersections.second_face));
+	}
 	return mesh;
 }
 
@@ -638,7 +736,7 @@ void WriteControlMeshVtk(const ControlMesh& mesh,const std::filesystem::path& pa
 	std::ofstream out(path);
 	if(!out)throw std::runtime_error("cannot write control mesh: "+path.string());
 	out<<"# vtk DataFile Version 3.1\nTubularFlowIGA control mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
-	out<<"POINTS "<<mesh.points.size()<<" FLOAT\n"<<std::fixed<<std::setprecision(6);
+	out<<"POINTS "<<mesh.points.size()<<" double\n"<<std::setprecision(17);
 	for(const auto&p:mesh.points)out<<p.x<<' '<<p.y<<' '<<p.z<<'\n';
 	out<<"CELLS "<<mesh.elements.size()<<' '<<9*mesh.elements.size()<<'\n';
 	for(const auto&e:mesh.elements)out<<"8 "<<e[0]<<' '<<e[1]<<' '<<e[2]<<' '<<e[3]<<' '<<e[4]<<' '<<e[5]<<' '<<e[6]<<' '<<e[7]<<'\n';
@@ -646,6 +744,27 @@ void WriteControlMeshVtk(const ControlMesh& mesh,const std::filesystem::path& pa
 	for(std::size_t i=0;i<mesh.elements.size();++i)out<<"12\n";
 	out<<"POINT_DATA "<<mesh.points.size()<<"\nSCALARS label float 1\nLOOKUP_TABLE default\n";
 	for(int label:mesh.labels)out<<label<<'\n';
+}
+
+void WriteMeshQualityJson(
+	const ControlMesh& mesh,
+	double required_scaled_jacobian,
+	const std::filesystem::path& path)
+{
+	std::ofstream out(path);
+	if(!out) throw std::runtime_error("cannot write mesh quality report: "+path.string());
+	out<<std::setprecision(17)
+		<<"{\n  \"schema_version\": 1,\n"
+		<<"  \"points\": "<<mesh.points.size()<<",\n"
+		<<"  \"elements\": "<<mesh.elements.size()<<",\n"
+		<<"  \"required_minimum_scaled_jacobian\": "<<required_scaled_jacobian<<",\n"
+		<<"  \"minimum_determinant\": "<<mesh.quality.minimum_determinant<<",\n"
+		<<"  \"minimum_scaled_jacobian\": "<<mesh.quality.minimum_scaled_jacobian<<",\n"
+		<<"  \"bad_elements\": "<<mesh.quality.bad_elements<<",\n"
+		<<"  \"first_bad_element\": "<<mesh.quality.first_bad_element<<",\n"
+		<<"  \"surface_intersections\": "<<mesh.surface_intersections.intersections<<",\n"
+		<<"  \"first_intersecting_face\": "<<mesh.surface_intersections.first_face<<",\n"
+		<<"  \"second_intersecting_face\": "<<mesh.surface_intersections.second_face<<"\n}\n";
 }
 
 void WriteVelocity(const ControlMesh& mesh,const std::filesystem::path& path)

@@ -1,7 +1,9 @@
 #ifndef IGA_DATABASE_HPP
 #define IGA_DATABASE_HPP
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <limits>
@@ -13,8 +15,15 @@ namespace iga {
 
 constexpr std::array<char, 8> kMagic{{'N', 'T', 'I', 'G', 'A', 'D', 'B', '2'}};
 constexpr std::uint32_t kLegacyVersion = 3;
-constexpr std::uint32_t kVersion = 4;
+constexpr std::uint32_t kBoundaryLabelVersion = 4;
+constexpr std::uint32_t kVersion = 5;
 constexpr std::uint32_t kBezierPointCount = 64;
+
+struct GeometryTransform {
+	std::array<double, 3> source_origin{{0.0, 0.0, 0.0}};
+	double source_units_per_normalized_unit = 1.0;
+	double source_length_scale_to_m = 1.0;
+};
 
 struct Header {
 	std::array<char, 8> magic{};
@@ -25,6 +34,7 @@ struct Header {
 	std::uint32_t bezier_points = 0;
 	std::uint32_t reserved = 0;
 	std::uint64_t rank_index_offset = 0;
+	GeometryTransform geometry_transform;
 };
 
 struct Element {
@@ -63,8 +73,20 @@ inline Header ReadHeader(std::istream& in)
 	Read(in, h.reserved);
 	Read(in, h.rank_index_offset);
 	if (h.magic != kMagic) throw std::runtime_error("not a supported .ntiga database");
-	if (h.version != kLegacyVersion && h.version != kVersion)
+	if (h.version != kLegacyVersion && h.version != kBoundaryLabelVersion && h.version != kVersion)
 		throw std::runtime_error("unsupported database version");
+	if (h.version >= kVersion) {
+		for (double& value : h.geometry_transform.source_origin) Read(in, value);
+		Read(in, h.geometry_transform.source_units_per_normalized_unit);
+		Read(in, h.geometry_transform.source_length_scale_to_m);
+		if (!std::all_of(h.geometry_transform.source_origin.begin(),
+			h.geometry_transform.source_origin.end(), [](double value) { return std::isfinite(value); })
+			|| !(h.geometry_transform.source_units_per_normalized_unit > 0.0)
+			|| !std::isfinite(h.geometry_transform.source_units_per_normalized_unit)
+			|| !(h.geometry_transform.source_length_scale_to_m > 0.0)
+			|| !std::isfinite(h.geometry_transform.source_length_scale_to_m))
+			throw std::runtime_error("invalid database geometry transform");
+	}
 	if (h.bezier_points != kBezierPointCount) throw std::runtime_error("unsupported Bezier point count");
 	if (h.nodes == 0 || h.rank_index_offset == 0) throw std::runtime_error("invalid database ownership index");
 	return h;
@@ -111,7 +133,7 @@ public:
 		Read(input_, e.type);
 		Read(input_, e.owner);
 		Read(input_, nen);
-		if (header_.version >= kVersion)
+		if (header_.version >= kBoundaryLabelVersion)
 			input_.read(reinterpret_cast<char*>(e.boundary_labels.data()),
 				static_cast<std::streamsize>(sizeof(e.boundary_labels)));
 		if (nen == 0 || nen > 4096) throw std::runtime_error("invalid element basis count");

@@ -19,10 +19,21 @@ struct QualityResult
 	int first_bad_element = -1;
 };
 
+struct SurfaceIntersectionResult
+{
+	std::size_t intersections = 0;
+	int first_face = -1;
+	int second_face = -1;
+};
+
 QualityResult EvaluateHexQuality(
 	const std::vector<Vec3>& points,
 	const std::vector<Hex>& elements,
 	const std::vector<int>* subset = nullptr);
+
+SurfaceIntersectionResult EvaluateBoundarySelfIntersections(
+	const std::vector<Vec3>& points,
+	const std::vector<Hex>& elements);
 
 double MovePointSafely(
 	std::vector<Vec3>& points,

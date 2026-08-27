@@ -18,24 +18,57 @@ MeshParameters MeshParameters::Read(const std::filesystem::path& path)
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open mesh parameters: "+path.string());
 	MeshParameters result;
-	std::string name;
-	if (!(input >> name >> result.noise_iterations)
-		|| !(input >> name >> result.bifurcation_smoothing)
-		|| !(input >> name >> result.noise_smoothing)
-		|| !(input >> name >> result.segment_length)
-		|| !(input >> name >> result.bifurcation_refinement))
+	std::string noise_name, bifurcation_name, smoothing_name, segment_name, refinement_name;
+	if (!(input >> noise_name >> result.noise_iterations)
+		|| !(input >> bifurcation_name >> result.bifurcation_smoothing)
+		|| !(input >> smoothing_name >> result.noise_smoothing)
+		|| !(input >> segment_name >> result.segment_length)
+		|| !(input >> refinement_name >> result.bifurcation_refinement))
 		throw std::runtime_error("mesh parameter file must contain five name/value pairs");
-	if (result.noise_iterations < 0)
-		throw std::runtime_error("noise iterations must be non-negative");
-	if (!std::isfinite(result.bifurcation_smoothing) || result.bifurcation_smoothing < 0.0 || result.bifurcation_smoothing > 1.0)
-		throw std::runtime_error("bifurcation smoothing ratio must be in [0,1]");
-	if (!std::isfinite(result.noise_smoothing) || result.noise_smoothing < 0.0 || result.noise_smoothing > 1.0)
-		throw std::runtime_error("noise smoothing ratio must be in [0,1]");
-	if (!std::isfinite(result.segment_length) || result.segment_length <= 0.0)
-		throw std::runtime_error("segment length must be positive");
-	if (!std::isfinite(result.bifurcation_refinement) || result.bifurcation_refinement < 0.0)
-		throw std::runtime_error("bifurcation refinement ratio must be non-negative");
+	if (noise_name != "n_noisesmooth" || bifurcation_name != "ratio_bifur_node"
+		|| smoothing_name != "ratio_noisesmooth" || segment_name != "seg_length"
+		|| refinement_name != "ratio_refine")
+		throw std::runtime_error("legacy mesh parameter names or order are invalid");
+	std::string extra;
+	if (input >> extra) throw std::runtime_error("legacy mesh parameter file contains unexpected data");
+	result.max_spacing_over_diameter = 1.1;
+	result.minimum_scaled_jacobian = 1.0e-3;
+	result.junction_optimization_iterations = 0;
+	result.check_self_intersection = true;
+	result.Validate();
 	return result;
+}
+
+void MeshParameters::Validate() const
+{
+	if (noise_iterations < 0)
+		throw std::runtime_error("noise iterations must be non-negative");
+	if (!std::isfinite(bifurcation_smoothing) || bifurcation_smoothing < 0.0 || bifurcation_smoothing > 1.0)
+		throw std::runtime_error("bifurcation smoothing ratio must be in [0,1]");
+	if (!std::isfinite(noise_smoothing) || noise_smoothing < 0.0 || noise_smoothing > 1.0)
+		throw std::runtime_error("noise smoothing ratio must be in [0,1]");
+	if (!std::isfinite(segment_length) || segment_length <= 0.0)
+		throw std::runtime_error("segment length must be positive");
+	if (!std::isfinite(max_spacing_over_diameter) || max_spacing_over_diameter <= 0.0
+		|| !std::isfinite(max_turn_degrees) || max_turn_degrees <= 0.0 || max_turn_degrees > 90.0
+		|| !std::isfinite(max_diameter_change_fraction) || max_diameter_change_fraction <= 0.0
+		|| max_diameter_change_fraction > 1.0
+		|| !std::isfinite(maximum_curvature_radius_product)
+		|| maximum_curvature_radius_product <= 0.0 || maximum_curvature_radius_product >= 1.0)
+		throw std::runtime_error("adaptive centerline controls are invalid");
+	if (!std::isfinite(bifurcation_refinement) || bifurcation_refinement < 0.0)
+		throw std::runtime_error("bifurcation refinement ratio must be non-negative");
+	if (!std::isfinite(upstream_clearance_over_diameter) || upstream_clearance_over_diameter <= 0.0
+		|| !std::isfinite(downstream_clearance_over_diameter) || downstream_clearance_over_diameter <= 0.0
+		|| !std::isfinite(minimum_bifurcation_angle_degrees)
+		|| minimum_bifurcation_angle_degrees <= 0.0 || minimum_bifurcation_angle_degrees >= 90.0
+		|| !std::isfinite(maximum_junction_radius_ratio) || maximum_junction_radius_ratio < 1.0
+		|| junction_optimization_iterations < 0 || junction_optimization_iterations > 1000)
+		throw std::runtime_error("junction controls are invalid");
+	if (!std::isfinite(minimum_scaled_jacobian) || minimum_scaled_jacobian <= 0.0
+		|| minimum_scaled_jacobian > 1.0 || !std::isfinite(collision_safety_factor)
+		|| collision_safety_factor <= 0.0)
+		throw std::runtime_error("mesh quality controls are invalid");
 }
 
 SwcGraph SwcGraph::Read(const std::filesystem::path& path)
@@ -225,6 +258,7 @@ std::vector<std::vector<int>> SwcGraph::Sections() const
 
 SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 {
+	parameters.Validate();
 	SwcGraph work = input;
 	const auto sections = work.Sections();
 	std::vector<int> branches;
@@ -266,6 +300,13 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 		}
 	}
 	const bool no_bifurcations = branches.empty();
+	BranchSamplingOptions sampling;
+	sampling.target_spacing = parameters.segment_length;
+	sampling.max_spacing_over_diameter = parameters.max_spacing_over_diameter;
+	sampling.max_turn_degrees = parameters.max_turn_degrees;
+	sampling.max_diameter_change_fraction = parameters.max_diameter_change_fraction;
+	sampling.upstream_clearance_over_diameter = parameters.upstream_clearance_over_diameter;
+	sampling.downstream_clearance_over_diameter = parameters.downstream_clearance_over_diameter;
 	for (const auto& section : sections) {
 		std::vector<Vec3> points;
 		std::vector<double> diameters;
@@ -279,7 +320,9 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 		else if (work.is_terminal(section.back())) mode = 2;
 		else if (section.front() == work.root()) mode = 3;
 		else throw std::runtime_error("cannot classify skeleton section");
-		const auto samples = SampleBranch(points, diameters, parameters.segment_length, mode);
+		const auto samples = SampleBranch(points, diameters, sampling, mode,
+			"section "+std::to_string(work.nodes[section.front()].id)
+			+"->"+std::to_string(work.nodes[section.back()].id));
 		int parent = critical_map.at(section.front());
 		if (parent < 0) throw std::runtime_error("section start is not a critical node");
 		for (std::size_t j=1; j+1<samples.size(); ++j) {

@@ -4,7 +4,7 @@ CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 LDLIBS ?= -lstdc++fs
 
 TARGET := tubular_mesh
-CORE := src/SwcGraph.cpp src/BSpline.cpp src/HexMesh.cpp src/MeshGenerator.cpp
+CORE := src/SwcGraph.cpp src/BSpline.cpp src/GeometryDiagnostics.cpp src/HexMesh.cpp src/MeshGenerator.cpp
 OBJECTS := $(CORE:.cpp=.o)
 TEST_TARGET := mesh_core_test
 

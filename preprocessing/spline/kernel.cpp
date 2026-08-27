@@ -2,6 +2,7 @@
 #include "IgaPreprocessCache.hpp"
 
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -1055,7 +1056,7 @@ void kernel::InitializeMesh(string fn)
 	}
 
 
-	RescaleDomain();
+	RescaleDomain(fn);
 
 	InitialConnect();
 	//SetSharpFeature_1();
@@ -1067,7 +1068,7 @@ void kernel::InitializeMesh(string fn)
 	//getchar();
 }
 
-void kernel::RescaleDomain()
+void kernel::RescaleDomain(const string& fn)
 {
 	double tmp(1.e6);
 	double x_range[3][2] = { { tmp, -tmp },{ tmp, -tmp },{ tmp, -tmp } };
@@ -1086,6 +1087,16 @@ void kernel::RescaleDomain()
 	{
 		if (xh[i] < dim_min) dim_min = xh[i];
 	}
+	if (!(dim_min > 0.0) || !isfinite(dim_min))
+	{
+		throw runtime_error("control mesh has a degenerate normalization extent");
+	}
+	ofstream transform(fn + "geometry_transform.json");
+	if (!transform) throw runtime_error("cannot write geometry_transform.json under " + fn);
+	transform << setprecision(17)
+		<< "{\n  \"schema_version\": 1,\n  \"mapping\": \"normalized=(source-origin)/source_units_per_normalized_unit\",\n"
+		<< "  \"source_origin\": [" << x_range[0][0] << ", " << x_range[1][0] << ", "
+		<< x_range[2][0] << "],\n  \"source_units_per_normalized_unit\": " << dim_min << "\n}\n";
 	//xh[0] /= dim_min; xh[1] /= dim_min; xh[2] /= dim_min;
 
 	for (i = 0; i <cp.size(); i++)

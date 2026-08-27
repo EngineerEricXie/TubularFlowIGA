@@ -47,6 +47,13 @@ int main(int argc, char** argv)
 			<< " fields=" << configuration.fields.size()
 			<< " systems=" << configuration.equation_systems.size()
 			<< " boundaries=" << configuration.boundaries.size() << '\n';
+		if (configuration.has_mesh)
+			std::cout << "geometry=" << configuration.geometry.kind
+				<< " file=" << configuration.geometry.file
+				<< " target_spacing=" << configuration.mesh.centerline.target_spacing
+				<< " min_scaled_J=" << configuration.mesh.quality.minimum_scaled_jacobian
+				<< " self_intersection="
+				<< (configuration.mesh.quality.check_self_intersection ? "on" : "off") << '\n';
 		for (const auto& system : configuration.equation_systems) {
 			std::cout << "system=" << system.name << " unknowns=" << system.unknowns.size();
 			if (system.kind == iga::EquationKind::LinearTransport)

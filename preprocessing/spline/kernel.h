@@ -31,7 +31,7 @@ private:
 	void BuildElementSplines_Interior(int eid);
 	void BuildElementSplines_Boundary(int eid);
 	void InitializeMesh(string fn);
-	void RescaleDomain();
+	void RescaleDomain(const string& fn);
 	void InitialConnect();
 	void BuildInitialEdges();
 };

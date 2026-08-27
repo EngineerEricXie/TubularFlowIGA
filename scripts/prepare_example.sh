@@ -30,25 +30,18 @@ if [[ ! -d $source_dir ]]; then
 	exit 2
 fi
 
-required=(mesh_parameter.txt simulation_config.json)
+required=(simulation_config.json)
 for file in "${required[@]}"; do
 	if [[ ! -f $source_dir/$file ]]; then
 		printf 'example is missing required input: %s/%s\n' "$source_dir" "$file" >&2
 		exit 2
 	fi
 done
-skeleton_source=
-for candidate in skeleton_initial.swc skeleton_initial.obj; do
-	if [[ -f $source_dir/$candidate ]]; then
-		if [[ -n $skeleton_source ]]; then
-			printf 'example must contain only one skeleton_initial.swc or skeleton_initial.obj: %s\n' "$source_dir" >&2
-			exit 2
-		fi
-		skeleton_source=$candidate
-	fi
-done
-if [[ -z $skeleton_source ]]; then
-	printf 'example is missing skeleton_initial.swc or skeleton_initial.obj: %s\n' "$source_dir" >&2
+shopt -s nullglob
+geometry_sources=("$source_dir"/*.swc "$source_dir"/*.obj)
+shopt -u nullglob
+if (( ${#geometry_sources[@]} == 0 )); then
+	printf 'example has no SWC or OBJ geometry file: %s\n' "$source_dir" >&2
 	exit 2
 fi
 
@@ -65,12 +58,14 @@ fi
 
 "$repo_dir/scripts/check_dependencies.sh" preprocessing
 for file in "${required[@]}"; do cp "$source_dir/$file" "$work_dir/$file"; done
-cp "$source_dir/$skeleton_source" "$work_dir/$skeleton_source"
+cp "${geometry_sources[@]}" "$work_dir/"
 
 make -C "$repo_dir" mesh spline cpu
 "$repo_dir/preprocessing/mesh/tubular_mesh" pipeline \
 	"$work_dir" "$repo_dir/meshgeneration/template"
-for generated in skeleton_normalized.swc skeleton.vtp skeleton_smooth.swc controlmesh.vtk; do
+for generated in skeleton_normalized.swc skeleton.vtp skeleton_smooth.swc \
+	mesh_diagnostics.json skeleton_diagnostics.vtp controlmesh.vtk mesh_quality.json \
+	initial_velocityfield.txt; do
 	if [[ ! -s $work_dir/$generated ]]; then
 		printf 'preprocessing did not create required output: %s/%s\n' "$work_dir" "$generated" >&2
 		exit 1
@@ -78,6 +73,12 @@ for generated in skeleton_normalized.swc skeleton.vtp skeleton_smooth.swc contro
 done
 OMP_NUM_THREADS=${OMP_NUM_THREADS:-2} \
 	"$repo_dir/preprocessing/spline/spline" "$work_dir/" --no-legacy-text
+for generated in bzmeshinfo.txt spline_cache.igacache bzmesh.vtk geometry_transform.json; do
+	if [[ ! -s $work_dir/$generated ]]; then
+		printf 'spline preprocessing did not create required output: %s/%s\n' "$work_dir" "$generated" >&2
+		exit 1
+	fi
+done
 mpmetis "$work_dir/bzmeshinfo.txt" "$ranks"
 database=$work_dir/$case_name-$ranks.ntiga
 "$repo_dir/solvers/cpu/iga_pack" "$work_dir" "$ranks" "$database"

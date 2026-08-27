@@ -10,6 +10,12 @@ the same systems as v2; v2 remains supported unchanged. A v3/1d document uses
 the native SWC-network flow, transport, physiology, and topological-boundary
 contract documented in the [native 1D guide](ONE_D.md).
 
+Schema version 4 is the canonical 3D case format. It retains the v3 physics
+blocks and requires `geometry` plus `mesh`, so geometry selection, adaptive
+discretization, junction feasibility, collision checks, and the solver setup
+share one strictly validated document. Schema-v2/v3 3D remains readable for
+legacy cases but does not accept these new blocks.
+
 ## Fields and equation systems
 
 Each field has a unique `name` and a `kind`: `scalar`, `vector3`, or `pressure`.

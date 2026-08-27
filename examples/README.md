@@ -30,22 +30,23 @@ inputs and is not a standalone geometry case.
 
 Every 3D runnable case directory requires:
 
-- `skeleton_initial.swc` or `skeleton_initial.obj`: centerline coordinates and radius;
-- `mesh_parameter.txt`: five control-mesh generation parameters;
-- `simulation_config.json`: schema-v2 or schema-v3 fields, equations, time, and boundaries.
+- the `.swc` or `.obj` file named by `geometry.file`: centerline coordinates and radius;
+- `simulation_config.json`: schema-v4 geometry, adaptive mesh controls, quality
+  gates, fields, equations, time, and boundaries.
 
 A case may also contain a `README.md` with provenance, resource requirements,
 case-specific commands, and validation evidence. It is documentation rather
 than a generated solver input.
 
 The preparation pipeline generates all downstream files, including
-`skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, `controlmesh.vtk`,
+`skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, geometry diagnostics,
+`controlmesh.vtk`, `mesh_quality.json`,
 `initial_velocityfield.txt`, `bzmeshinfo.txt`, the spline cache, METIS
 partitions, and the `.ntiga` database. Do not commit these generated artifacts.
 
 Native 1D directories instead contain only `skeleton_initial.swc` or
 `skeleton_initial.obj` and a schema-v3 `simulation_config.json`. Run them
-directly with `iga_1d`; they do not use `mesh_parameter.txt`, the preparation
+directly with `iga_1d`; they do not use the 3D mesh block, the preparation
 pipeline, or a packed database. See the [1D example guide](one_d/README.md).
 
 ## Prepare a case
@@ -134,8 +135,9 @@ pvbatch --force-offscreen-rendering scripts/render_example.py \
 
 ## Keep or remove generated data
 
-The work directory is fully reproducible from the three committed inputs. Keep
-it while inspecting results; remove the entire work directory when those
+The work directory is fully reproducible from the committed geometry and
+configuration. Keep it while inspecting results; remove the entire work
+directory when those
 results are no longer needed. Never point a cleanup command at the repository
 root or at a directory containing unrelated case data.
 

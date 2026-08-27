@@ -321,7 +321,7 @@ For PSC module, interactive-node, and Slurm examples, see the
   per-step velocity Dirichlet and pressure-traction waveforms,
   checkpoint/restart, and time-indexed output.
 - Configured scalar flux/Robin surface assembly is available in `iga_solve`
-  with a version 4 `.ntiga` database.
+  with a version 4-or-later `.ntiga` database.
 - Natural pressure traction and R/RC/RCR outlets are available on CPU. The
   outlet models apply `-p n` without replacing continuity rows; compliant walls
   are not implemented.

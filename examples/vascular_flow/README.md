@@ -73,7 +73,9 @@ pvbatch scripts/render_multiphysics_gif.py --dimension 3d \
 
 The wordmark is larger than the quick-start cases. Its two connector arcs move
 behind the lettering in the z direction, producing one continuous 3D pipe
-without planar self-intersections.
+without planar self-intersections. The current source radius is `0.12`; the
+older `0.28` stroke exceeded the local curvature-radius limit and intersected
+non-adjacent strokes.
 
 ```bash
 IGA_WORK="$(mktemp -d /tmp/tubularflowiga-iga-wordmark.XXXXXX)"
@@ -92,7 +94,7 @@ mpiexec -np 2 ./solvers/cpu/iga_navier_stokes \
   "$IGA_DB" "$IGA_WORK/velocity-cpu.txt"
 ```
 
-The validated 2026-08-25 run used 24,924 nodes and 22,140 elements, converged
+The historical 2026-08-25 solver run used 24,924 nodes and 22,140 elements, converged
 in 1,304 total Krylov iterations, and reached relative mass imbalance
 `9.79398e-8`. See the [public validation report](../VALIDATION.md) for the
 remaining norms and timing.
@@ -149,8 +151,8 @@ Build with `make cuda CUDA_ARCHS=YOUR_GPU_ARCH` and verify
 
 - Change centerline coordinates and radii in `skeleton_initial.swc` or the
   radius-annotated `skeleton_initial.obj` used by `liver_vein_obj_segment`.
-- Change segment length, smoothing, or bifurcation refinement in
-  `mesh_parameter.txt`.
+- Change adaptive spacing, smoothing, junction clearance, or quality gates in
+  the `mesh` block of `simulation_config.json`.
 - Change viscosity, density, time integration, inlet profile scale, temporal
   functions, or outlet models in `simulation_config.json`.
 

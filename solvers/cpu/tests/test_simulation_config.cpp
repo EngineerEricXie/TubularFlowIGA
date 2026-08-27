@@ -73,6 +73,38 @@ int main()
 	const auto v3_configuration = iga::ParseSimulationConfiguration(v3_json);
 	assert(v3_configuration.schema_version == 3);
 	assert(v3_configuration.dimension == "3d");
+	auto v4_json = json;
+	const auto v4_version_position = v4_json.find("\"schema_version\": 2,");
+	assert(v4_version_position != std::string::npos);
+	v4_json.replace(v4_version_position, std::string("\"schema_version\": 2,").size(), R"json(
+		"schema_version": 4, "dimension": "3d",
+		"geometry": {"kind":"swc_network","file":"skeleton_initial.swc","length_scale_to_m":0.001},
+		"mesh": {
+			"smoothing":{"iterations":0,"bifurcation_ratio":0.2,"noise_ratio":0},
+			"centerline":{"target_spacing":1,"max_spacing_over_diameter":1,
+				"max_turn_degrees":12,"max_diameter_change_fraction":0.15,
+				"maximum_curvature_radius_product":0.8},
+			"junction":{"max_spacing_over_diameter":0.25,
+				"upstream_clearance_over_diameter":1,"downstream_clearance_over_diameter":1.5,
+				"minimum_angle_degrees":10,"maximum_radius_ratio":8,"optimization_iterations":4},
+			"quality":{"minimum_scaled_jacobian":0.1,"check_self_intersection":true,
+				"collision_safety_factor":1}
+		},)json");
+	const auto v4_configuration = iga::ParseSimulationConfiguration(v4_json);
+	assert(v4_configuration.schema_version == 4);
+	assert(v4_configuration.has_mesh);
+	assert(v4_configuration.geometry.file == "skeleton_initial.swc");
+	assert(v4_configuration.mesh.quality.minimum_scaled_jacobian == 0.1);
+	auto invalid_v4_json = v4_json;
+	const auto optimization_position = invalid_v4_json.find("\"optimization_iterations\":4");
+	assert(optimization_position != std::string::npos);
+	invalid_v4_json.replace(optimization_position,
+		std::string("\"optimization_iterations\":4").size(),
+		"\"optimization_iterations\":1001");
+	bool invalid_mesh_rejected = false;
+	try { iga::ParseSimulationConfiguration(invalid_v4_json); }
+	catch(const std::runtime_error&) { invalid_mesh_rejected = true; }
+	assert(invalid_mesh_rejected);
 	assert(configuration.fields.size() == 4);
 	assert(configuration.equation_systems.size() == 2);
 	assert(configuration.equation_systems[0].density == 1060.0);

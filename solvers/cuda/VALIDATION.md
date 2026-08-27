@@ -105,7 +105,7 @@ point samples must not be treated as IGA coefficients.
 Job `44364589` ran the public 4,221-node, 3,600-element smoke database on one
 Bridges-2 Tesla V100-SXM2-32GB with CUDA 12.4. The tracer wall used
 `D grad(c) dot n = 0.5(2-c)`; both backends ran two time steps from the same
-version 4 `.ntiga` database and configuration.
+version 4-or-later `.ntiga` database and configuration.
 
 ```text
 CPU final L2:  31.3588

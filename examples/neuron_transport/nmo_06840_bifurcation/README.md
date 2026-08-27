@@ -2,8 +2,8 @@
 
 This source-only case transports the configured `N0` and `Nplus` fields through
 a large 3D neurite bifurcation derived from NeuroMorpho.Org reconstruction
-`NMO_06840`. The 13-node source subtree generates a 29,238-control-point,
-25,920-element IGA mesh with one inlet, two outlets, and 6,300 external faces.
+`NMO_06840`. The 13-node source subtree generates a 41,097-control-point,
+36,540-element IGA mesh with one inlet, two outlets, and 8,660 external faces.
 
 The same geometry was used to diagnose a Navier--Stokes solver regression, but
 that does not make it a vascular example. The public configuration contains
@@ -13,11 +13,10 @@ field; it does not run a blood-flow solve.
 ## Resource warning
 
 This is not a quick-start example. Preparing the case creates a sparse spline
-cache and packed database of about 258 MiB and 259 MiB, respectively. A
-single-database work directory occupies about 534 MiB. Allow at least 1 GiB of
-free disk space, several GiB of RAM, and several minutes for preprocessing,
-packing, solving, and validation. A first build or slower laptop can take tens
-of minutes.
+cache and packed database of about 363 MiB and 365 MiB, respectively. Allow at
+least 1.5 GiB of free disk space, several GiB of RAM, and several minutes for
+preprocessing, packing, solving, and validation. A first build or slower
+laptop can take tens of minutes.
 
 Use `neuron_transport/straight_neurite` first if the goal is only to check an
 installation. Run this large case on a local workstation or an allocated
@@ -74,16 +73,21 @@ the packed geometry check, and the complete transport solve on a CUDA-capable
 host. Consumer GPUs with weak FP64 throughput may be much slower than
 scientific GPUs.
 
-## Recorded acceptance evidence
+## Current geometry acceptance evidence
 
-The source inputs reproduce 29,238 nodes, 25,920 elements, wall label 0, inlet
-label 1, outlet labels 2 and 3, and 6,300 boundary faces. Control-mesh
-generation reports `min_scaled_J=0.136359`; 12-rank packed geometry validation
-reports `minimum_detJ=4.5706e-11`, zero bad elements, and zero bad quadrature
-samples.
+The schema-v4 source inputs reproduce 41,097 nodes and 36,540 elements. They
+contain 8,120 wall faces and 180 faces on each of the inlet and two outlet
+caps. Control-mesh generation reports `min_scaled_J=0.288586`, zero invalid
+elements, and zero boundary-surface intersections. Two-rank packed geometry
+validation reports `minimum_detJ=7.24399e-11`, zero bad elements, and zero bad
+quadrature samples. Geometry preflight also reports zero hard errors.
 
-The final public configuration was run on 2026-08-26 under WSL on an Intel
-Core i9-14900KF with PETSc 3.15.5, OpenMPI 4.1.2, and 12 MPI ranks:
+## Historical two-step transport evidence
+
+The pre-schema-v4 29,238-node, 25,920-element mesh was run on 2026-08-26 under
+WSL on an Intel Core i9-14900KF with PETSc 3.15.5, OpenMPI 4.1.2, and 12 MPI
+ranks. These solver values are historical and must not be presented as results
+from the current adaptive mesh:
 
 | Measurement | Result |
 |---|---:|

@@ -36,11 +36,11 @@ and boundary labels.
 
 Use this small straight tube for installation checks. The source-only
 [NMO_06840 neuron transport](../examples/neuron_transport/nmo_06840_bifurcation/README.md)
-is a separate 29,238-node regression whose preparation and solve can take many
-minutes and create more than 500 MiB of work files.
+is a separate 41,097-node regression whose preparation and solve can take many
+minutes and create more than 700 MiB of cache/database files.
 
 Successful output includes `bad_elements=0` with a positive control-mesh
-`min_detJ`, a successfully validated packed element count, `schema_version=2`,
+`min_detJ`, a successfully validated packed element count, `schema_version=4`,
 and resolved wall/inlet/outlet conditions.
 
 ## 3. Prepare a neuron example
@@ -133,8 +133,12 @@ Its flow solver writes a VTK file next to the requested text output.
 |---|---|
 | `skeleton_normalized.swc` | Validated, explicitly rooted skeleton |
 | `skeleton.vtp` | ParaView centerline with radius and topology arrays |
+| `mesh_diagnostics.json` | Machine-readable geometry risks, limits, and failures |
+| `skeleton_diagnostics.vtp` | ParaView centerline colored by geometry risk |
 | `controlmesh.vtk` | Labeled hexahedral control mesh |
+| `mesh_quality.json` | Final Jacobian and surface-intersection results |
 | `bzmesh.vtk` | Bezier visualization mesh |
+| `geometry_transform.json` | Source-to-normalized coordinate transform |
 | `*.ntiga` | Packed binary database consumed by CPU and CUDA |
 | `velocity-cpu.txt` | Three velocity coefficients per node |
 | `velocity-cpu.txt.pressure` | One pressure coefficient per node |

@@ -26,9 +26,14 @@
 /solvers/cpu/iga_flow_validate
 /solvers/cpu/iga_womersley_reference
 /solvers/cpu/boundary_flow_test
+/solvers/cpu/boundary_support_test
 /solvers/cpu/flow_checkpoint_test
 /solvers/cpu/outlet_model_test
 /solvers/cpu/transport_checkpoint_test
+/solvers/cpu/transport_boundary_preflight_test
+/solvers/cpu/vca_3d_runtime_test
+/solvers/cpu/vca_3d_smoke_test
+/solvers/cpu/vca_checkpoint_test
 /solvers/cpu/womersley_reference_test
 /solvers/one_d/iga_1d
 /solvers/one_d/one_d_core_test
@@ -71,6 +76,10 @@ bzmeshinfo.txt
 skeleton_smooth.swc
 skeleton_normalized.swc
 skeleton.vtp
+skeleton_diagnostics.vtp
+mesh_diagnostics.json
+mesh_quality.json
+geometry_transform.json
 initial_velocityfield.txt
 cmat.txt
 bzpt.txt

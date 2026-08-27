@@ -24,22 +24,26 @@ filesystem library is built in.
 
 ## Run a Case
 
-Create a case directory containing exactly one `skeleton_initial.swc` or
-`skeleton_initial.obj`, plus `mesh_parameter.txt`, then run from the repository
-root:
+Create a case directory containing the geometry named by a schema-v4
+`simulation_config.json`. Its `geometry` block selects the SWC or radius-annotated
+OBJ and its `mesh` block contains all preprocessing controls. Then run from the
+repository root:
 
 ```bash
 ./preprocessing/mesh/tubular_mesh pipeline \
-  /path/to/case meshgeneration/template 0.001
+  /path/to/case meshgeneration/template
 ```
 
-The final argument is the minimum accepted scaled Jacobian and is optional.
 The command writes:
 
 - `skeleton_normalized.swc`: strictly validated, explicitly rooted skeleton;
 - `skeleton.vtp`: ParaView line data with radius and topology arrays;
 - `skeleton_smooth.swc`: smoothed and resampled centerline;
+- `mesh_diagnostics.json`: effective limits, per-segment and per-junction metrics,
+  warnings, and errors;
+- `skeleton_diagnostics.vtp`: the same risk metrics as ParaView point/cell arrays;
 - `controlmesh.vtk`: labeled eight-node control elements;
+- `mesh_quality.json`: final determinant, scaled-Jacobian, and surface-intersection gates;
 - `initial_velocityfield.txt`: branch-aligned initial velocities.
 
 OBJ input is accepted only when it follows the documented radius-annotated
@@ -55,12 +59,18 @@ tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR \
   controlmesh.vtk initial_velocityfield.txt MIN_SCALED_J
 ```
 
+These two commands retain the strictly parsed five-line legacy format for
+regression work. A pipeline case may use either schema v4 or legacy
+`mesh_parameter.txt`, never both. Public cases use schema v4.
+
 ## Parameters and Assumptions
 
-`mesh_parameter.txt` contains five values: smoothing iteration count,
-bifurcation smoothing ratio, noise smoothing ratio, target axial segment
-length, and bifurcation refinement ratio. SWC column 6 is interpreted as a
-radius and converted internally to diameter, matching the MATLAB workflow.
+The schema-v4 `mesh` block separates smoothing, centerline, junction, and
+quality controls. Centerline resampling is by approximate arc length and limits
+spacing by target length, local diameter, tangent rotation, and fractional
+diameter change. Junction controls reserve explicit upstream/downstream
+clearance and reject unsupported angles or radius ratios with the SWC node ID.
+SWC column 6 remains a radius and is converted internally to diameter.
 
 The topology must be a connected rooted tree. Each nonterminal node must have
 one child or exactly two children; higher-order junctions are not yet
@@ -69,17 +79,22 @@ supported. The 201-point tube and 294-point merge templates under
 
 ## Geometry Safety
 
-Element quality is sampled at corners and a `4 x 4 x 4` Gauss grid. Point
-updates use adjacency-aware backtracking and are rejected if they invert a
-neighboring element. Generation fails before output when a determinant is
-nonpositive or the requested scaled-Jacobian floor is violated. For production
-meshes, inspect the VTK geometry and use `iga_mesh_check` again after Bezier
-extraction.
+Preflight reports dimensionless `length/diameter`, diameter gradients,
+`curvature*radius`, bifurcation angles/clearance, and broad-phase swept-tube
+collision candidates. The curvature-radius safety limit, bifurcation limits,
+and diameter-transition limit are hard preflight gates; swept-tube candidates
+remain warnings until the exact generated-surface check runs. Element quality
+is sampled at corners and a `4 x 4 x 4` Gauss grid. Point updates use
+adjacency-aware backtracking; junction interiors undergo configured
+quality-improving iterations. Generation fails when a determinant is
+nonpositive, the scaled-Jacobian floor is violated, or non-adjacent exterior
+triangles intersect. Use `iga_mesh_check` again after Bezier extraction.
 
 The pipeline writes SWC coordinates to eight decimal places and reads that file
 back before meshing. This deliberate quantization preserves the MATLAB file
 contract and prevents `ceil()` layer counts from changing at roundoff
-boundaries.
+boundaries. The generated VTK coordinates use double precision so this
+topology quantization does not impose a six-decimal absolute geometry scale.
 
 See [the validation report](../../docs/MESH_CPP_VALIDATION.md) for regression
 and large-case results.

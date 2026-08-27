@@ -3,6 +3,7 @@
 
 #include "CaseConfig.hpp"
 #include "CouplingConfig.hpp"
+#include "MeshConfig.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -130,6 +131,9 @@ struct PhysiologyDefinition {
 struct SimulationConfiguration {
 	int schema_version = 2;
 	std::string dimension = "3d";
+	ThreeDGeometryDefinition geometry;
+	MeshDefinition mesh;
+	bool has_mesh = false;
 	std::vector<FieldDefinition> fields;
 	std::vector<EquationSystemDefinition> equation_systems;
 	std::vector<NamedBoundaryDefinition> boundaries;
@@ -244,19 +248,27 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 	using namespace simulation_detail;
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
-	RequireKnownKeys(root, {"schema_version", "dimension", "fields", "equation_systems", "boundaries",
+	RequireKnownKeys(root, {"schema_version", "dimension", "geometry", "mesh", "fields", "equation_systems", "boundaries",
 		"time", "temporal_functions", "velocity_sources", "physiology",
 		"simulation_scope", "perfusate", "external_circuit", "coupling"}, "root");
 	SimulationConfiguration configuration;
 	configuration.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	const auto* dimension = Find(root, "dimension");
 	if (configuration.schema_version == 2) {
-		if (dimension)
-			throw std::runtime_error("simulation_config.json: schema_version 2 does not accept dimension");
+		if (dimension || Find(root, "geometry") || Find(root, "mesh"))
+			throw std::runtime_error("simulation_config.json: schema_version 2 does not accept dimension, geometry, or mesh");
 	} else if (configuration.schema_version == 3) {
 		if (!dimension || RequireString(*dimension, "dimension") != "3d")
 			throw std::runtime_error("simulation_config.json: schema_version 3 3d configuration requires dimension '3d'");
-	} else throw std::runtime_error("simulation_config.json: supported schema versions are 2 and 3");
+		if (Find(root, "geometry") || Find(root, "mesh"))
+			throw std::runtime_error("simulation_config.json: schema_version 3 3d configuration does not accept geometry or mesh");
+	} else if (configuration.schema_version == 4) {
+		if (!dimension || RequireString(*dimension, "dimension") != "3d")
+			throw std::runtime_error("simulation_config.json: schema_version 4 requires dimension '3d'");
+		configuration.geometry = ParseThreeDGeometryDefinition(Required(root, "geometry", "root"));
+		configuration.mesh = ParseMeshDefinition(Required(root, "mesh", "root"));
+		configuration.has_mesh = true;
+	} else throw std::runtime_error("simulation_config.json: supported schema versions are 2, 3, and 4");
 
 	const auto& fields = RequireArray(Required(root, "fields", "root"), "fields");
 	std::set<std::string> field_names;

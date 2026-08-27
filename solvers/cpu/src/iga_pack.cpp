@@ -1,7 +1,9 @@
 #include "IgaDatabase.hpp"
 #include "IgaPreprocessCache.hpp"
+#include "MeshConfig.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -65,6 +67,7 @@ void RequireCacheEnd(std::istream& in)
 struct ControlMesh
 {
 	std::uint64_t nodes = 0;
+	std::vector<std::array<double, 3>> points;
 	std::vector<std::array<std::int32_t, 8>> cells;
 	std::vector<std::int32_t> labels;
 };
@@ -80,8 +83,8 @@ ControlMesh ReadControlMesh(const fs::path& path)
 			std::string type;
 			if (!(in >> mesh.nodes >> type) || mesh.nodes == 0)
 				throw std::runtime_error("invalid POINTS record in controlmesh.vtk");
-			double coordinate = 0.0;
-			for (std::uint64_t i = 0; i < 3*mesh.nodes; ++i)
+			mesh.points.resize(static_cast<std::size_t>(mesh.nodes));
+			for (auto& point : mesh.points) for (double& coordinate : point)
 				if (!(in >> coordinate)) throw std::runtime_error("truncated POINTS data in controlmesh.vtk");
 		} else if (token == "CELLS") {
 			std::uint64_t cells = 0, entries = 0;
@@ -115,6 +118,33 @@ ControlMesh ReadControlMesh(const fs::path& path)
 	if (mesh.nodes == 0 || mesh.cells.empty() || mesh.labels.size() != mesh.nodes)
 		throw std::runtime_error("controlmesh.vtk is missing points, cells, or labels");
 	return mesh;
+}
+
+iga::GeometryTransform GeometryTransform(const ControlMesh& mesh, const fs::path& directory)
+{
+	if (mesh.points.empty()) throw std::runtime_error("cannot derive geometry transform from an empty mesh");
+	std::array<double,3> lower=mesh.points.front(),upper=mesh.points.front();
+	for(const auto& point:mesh.points) for(int axis=0;axis<3;++axis) {
+		lower[axis]=std::min(lower[axis],point[axis]);
+		upper[axis]=std::max(upper[axis],point[axis]);
+	}
+	double scale=std::numeric_limits<double>::infinity();
+	for(int axis=0;axis<3;++axis) scale=std::min(scale,upper[axis]-lower[axis]);
+	if(!(scale>0.0)||!std::isfinite(scale))
+		throw std::runtime_error("control mesh has a degenerate normalization extent");
+	double length_scale_to_m=1.0;
+	const auto configuration_path=directory/"simulation_config.json";
+	if(fs::exists(configuration_path)) {
+		std::ifstream input(configuration_path);
+		std::ostringstream contents;contents<<input.rdbuf();
+		const auto root=iga::config_detail::RequireObject(
+			iga::config_detail::JsonParser(contents.str()).Parse(),"root");
+		if(const auto* version=iga::config_detail::Find(root,"schema_version"))
+			if(iga::config_detail::RequireInteger(*version,"schema_version")==4)
+				length_scale_to_m=iga::ParseThreeDMeshCaseConfiguration(contents.str())
+					.geometry.length_scale_to_m;
+	}
+	return {lower,scale,length_scale_to_m};
 }
 
 std::vector<std::array<std::int32_t, 6>> BoundaryFaceLabels(const ControlMesh& mesh)
@@ -262,6 +292,7 @@ int main(int argc, char** argv)
 		const fs::path output(argv[3]);
 		const auto control_mesh = ReadControlMesh(dir / "controlmesh.vtk");
 		const auto nodes = control_mesh.nodes;
+		const auto geometry_transform = GeometryTransform(control_mesh,dir);
 
 		const fs::path cache_path = dir / "spline_cache.igacache";
 		const bool use_cache = !force_legacy && fs::exists(cache_path);
@@ -310,6 +341,9 @@ int main(int argc, char** argv)
 		iga::Write(out, std::uint32_t{0});
 		const auto rank_index_header_position = out.tellp();
 		iga::Write(out, std::uint64_t{0});
+		for (const double value : geometry_transform.source_origin) iga::Write(out, value);
+		iga::Write(out, geometry_transform.source_units_per_normalized_unit);
+		iga::Write(out, geometry_transform.source_length_scale_to_m);
 		const auto index_position = out.tellp();
 		std::vector<std::uint64_t> offsets(static_cast<std::size_t>(elements + 1), 0);
 		out.write(reinterpret_cast<const char*>(offsets.data()),

@@ -232,7 +232,7 @@ and `sbatch` commands.
   stabilization, physical-time stepping, per-step boundary waveforms, and
   checkpoint/restart. The multi-cycle Womersley gate passes on SM 89.
 - Configured scalar flux/Robin surface assembly matches the CPU weak form and
-  requires version 4 `.ntiga` face labels.
+  requires version 4-or-later `.ntiga` face labels.
 - Configured transport supports per-step temporal Dirichlet waveforms.
 - Configured transport raw-state checkpoint/restart validates ordered fields,
   system, velocity source, step, time, and `dt`; GPU restart validation passes.

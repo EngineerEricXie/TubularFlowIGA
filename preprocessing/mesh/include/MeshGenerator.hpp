@@ -15,6 +15,7 @@ struct ControlMesh
 	std::vector<int> labels;
 	std::vector<Vec3> velocity;
 	QualityResult quality;
+	SurfaceIntersectionResult surface_intersections;
 };
 
 ControlMesh GenerateControlMesh(
@@ -24,6 +25,10 @@ ControlMesh GenerateControlMesh(
 	double minimum_scaled_jacobian = 1.0e-3);
 
 void WriteControlMeshVtk(const ControlMesh& mesh, const std::filesystem::path& path);
+void WriteMeshQualityJson(
+	const ControlMesh& mesh,
+	double required_scaled_jacobian,
+	const std::filesystem::path& path);
 void WriteVelocity(const ControlMesh& mesh, const std::filesystem::path& path);
 
 } // namespace tubular

@@ -1,5 +1,13 @@
 {
-  "schema_version": 2,
+  "schema_version": 4,
+  "dimension": "3d",
+  "geometry": {"kind": "swc_network", "file": "skeleton_initial.swc", "length_scale_to_m": 1.0},
+  "mesh": {
+    "smoothing": {"iterations": 0, "bifurcation_ratio": 0.0, "noise_ratio": 0.0},
+    "centerline": {"target_spacing": 1.0, "max_spacing_over_diameter": 1.0, "max_turn_degrees": 12.0, "max_diameter_change_fraction": 0.15, "maximum_curvature_radius_product": 0.8},
+    "junction": {"max_spacing_over_diameter": 0.25, "upstream_clearance_over_diameter": 1.0, "downstream_clearance_over_diameter": 1.5, "minimum_angle_degrees": 10.0, "maximum_radius_ratio": 8.0, "optimization_iterations": 0},
+    "quality": {"minimum_scaled_jacobian": 0.1, "check_self_intersection": true, "collision_safety_factor": 1.0}
+  },
   "fields": [
     {"name": "velocity", "kind": "vector3"},
     {"name": "pressure", "kind": "pressure"}

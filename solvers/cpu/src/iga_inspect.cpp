@@ -38,6 +38,13 @@ int main(int argc, char** argv)
 		std::cout << "elements: " << db.header().elements << '\n'
 			<< "nodes: " << db.header().nodes << '\n'
 			<< "ranks: " << db.header().ranks << '\n'
+			<< "source origin: [" << db.header().geometry_transform.source_origin[0] << ", "
+			<< db.header().geometry_transform.source_origin[1] << ", "
+			<< db.header().geometry_transform.source_origin[2] << "]\n"
+			<< "source units/normalized unit: "
+			<< db.header().geometry_transform.source_units_per_normalized_unit << '\n'
+			<< "source length scale to m: "
+			<< db.header().geometry_transform.source_length_scale_to_m << '\n'
 			<< "basis/element mean: " << static_cast<double>(total_basis) / db.header().elements << '\n'
 			<< "basis/element max: " << max_basis << '\n'
 			<< "elements/rank min: " << *minimum << '\n'

@@ -1,21 +1,23 @@
 # Simple-geometry validation
 
-All three committed cases were prepared and solved on 2026-08-24. CPU runs
-used two MPI ranks with PETSc 3.15.5. CUDA runs used one NVIDIA GeForce RTX
-4080 SUPER (SM 89) with CUDA 12.6.3. Results are correctness evidence for the
-example inputs, not cross-hardware performance benchmarks.
+All three committed cases were prepared with the schema-v4 adaptive mesh
+pipeline on 2026-08-27. The CPU/CUDA solve results below were recorded on the
+older meshes on 2026-08-24 and are retained as historical numerical evidence;
+they must be rerun before comparing solution norms against the current meshes.
+Those runs used two CPU MPI ranks with PETSc 3.15.5 and one NVIDIA GeForce RTX
+4080 SUPER (SM 89) with CUDA 12.6.3.
 
 ## Geometry and packing
 
 | Case | Nodes | Elements | Control-mesh minimum scaled J | Packed minimum detJ |
 |---|---:|---:|---:|---:|
-| `straight_tube` | 1,005 | 720 | 0.763084 | `9.00989e-5` |
-| `bent_tube` | 2,010 | 1,620 | 0.750036 | `5.92202e-5` |
-| `y_bifurcation` | 7,329 | 6,300 | 0.305198 | `1.52566e-5` |
+| `straight_tube` | 1,005 | 720 | 0.763084 | `9.01032e-5` |
+| `bent_tube` | 1,809 | 1,440 | 0.745694 | `6.70743e-5` |
+| `y_bifurcation` | 7,731 | 6,660 | 0.533324 | `1.5105e-5` |
 
-Every sampled Jacobian was positive. The schema-v2 case checker found the
-expected wall/inlet/outlet labels and successfully resolved both configured
-equation systems without any legacy input file.
+Every sampled Jacobian was positive. The schema-v4 case checker found the
+expected wall/inlet/outlet labels, and the exact boundary-surface intersection
+check reported zero intersections.
 
 ## Historical two-step tracer transport
 
@@ -32,7 +34,7 @@ the vascular-flow example configuration.
 
 All solves reported zero singular diagonal blocks on CUDA.
 
-## Steady Navier–Stokes
+## Historical steady Navier–Stokes
 
 The inlet profile scale was `0.01`, viscosity and density were `1`, walls were
 no-slip, and terminal pressures were natural zero-pressure tractions.

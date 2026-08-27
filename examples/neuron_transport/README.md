@@ -21,8 +21,8 @@ terminal labels use advective outflow.
 
 ## Large NMO transport regression
 
-The `nmo_06840_bifurcation` input produces 29,238 control points and 25,920
-elements. Its cache and database are each about 260 MiB, so preparation and
+The schema-v4 `nmo_06840_bifurcation` input produces 41,097 control points and
+36,540 elements. Its cache and database are each about 365 MiB, so preparation and
 the two-step transport solve can take many minutes on a slower workstation.
 It is not an installation smoke test.
 
@@ -101,9 +101,10 @@ case configuration and `.ntiga` database.
 ## Customize
 
 - Change geometry and radius in `skeleton_initial.swc`.
-- Change discretization controls in `mesh_parameter.txt`.
+- Change adaptive discretization, junction, and quality controls in the `mesh`
+  block of `simulation_config.json`.
 - Change diffusivity, coupling coefficients, time step, inlet values, or number
-  of steps in `simulation_config.json`.
+  of steps in the same file.
 
 Field names and coefficients are explicit configuration values; the solver
 does not silently apply additional neuron biology. See the

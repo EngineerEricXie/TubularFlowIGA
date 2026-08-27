@@ -1,11 +1,12 @@
 # Public-example validation
 
-These checks were rerun on 2026-08-25 after separating the public neuron and
-vascular configurations. The local x86_64 workstation used an Intel Core
-i9-14900KF, GCC 11.4.0, OpenMPI 4.1.2, and PETSc 3.15.5. Earlier gallery
-checks used two MPI ranks; the pulse multispecies case used eight.
-The updated branched-neurite animation case also used eight ranks.
-ParaView 5.13.1 rendered the committed gallery images in offscreen batch mode.
+The geometry-preparation gates were rerun on 2026-08-27 after the schema-v4
+adaptive-meshing migration. The earlier solver and gallery evidence below used
+the pre-migration meshes and is retained explicitly as historical evidence; it
+must be rerun before quoting solver norms for the new meshes. The local x86_64
+workstation used an Intel Core i9-14900KF, GCC 11.4.0, OpenMPI 4.1.2, and PETSc
+3.15.5. ParaView 5.13.1 rendered the committed gallery images in offscreen
+batch mode.
 
 ## Preparation gates
 
@@ -16,19 +17,19 @@ resolution. Every sampled control-mesh Jacobian was positive.
 | Case | Nodes | Elements | Minimum scaled J | Packed boundary labels |
 |---|---:|---:|---:|---|
 | `vascular_flow/straight_tube` | 1,005 | 720 | `0.763084` | wall 0, inlet 1, outlet 2 |
-| `vascular_flow/y_bifurcation` | 7,329 | 6,300 | `0.305198` | wall 0, inlet 1, outlets 2 and 3 |
-| `vascular_flow/iga_wordmark` | 24,924 | 22,140 | `0.149585` | wall 0, inlet 1, outlet 2 |
-| `vascular_flow/multispecies_pulse` | 2,010 | 1,620 | `0.750036` | wall 0, inlet 1, outlet 2 |
-| `neuron_transport/branched_neurite` | 7,329 | 6,300 | `0.305198` | wall 0, inlet 1, outlets 2 and 3 |
+| `vascular_flow/y_bifurcation` | 7,731 | 6,660 | `0.533324` | wall 0, inlet 1, outlets 2 and 3 |
+| `vascular_flow/iga_wordmark` | 41,205 | 36,720 | `0.743503` | wall 0, inlet 1, outlet 2 |
+| `vascular_flow/multispecies_pulse` | 1,809 | 1,440 | `0.745694` | wall 0, inlet 1, outlet 2 |
+| `neuron_transport/branched_neurite` | 7,731 | 6,660 | `0.533324` | wall 0, inlet 1, outlets 2 and 3 |
 
-The large `neuron_transport/nmo_06840_bifurcation` regression was validated
-separately on 2026-08-26. It produces 29,238 nodes and 25,920 elements; its
-12-rank packed geometry check reported `minimum_detJ=4.5706e-11`, zero bad
+The large `neuron_transport/nmo_06840_bifurcation` preparation was validated
+separately on 2026-08-27. It produces 41,097 nodes and 36,540 elements; its
+two-rank packed geometry check reported `minimum_detJ=7.24399e-11`, zero bad
 elements, zero bad quadrature samples, and wall/inlet/outlet labels 0/1/2/3.
 See its [case README](neuron_transport/nmo_06840_bifurcation/README.md) for the
 resource warning, exact commands, provenance, and transport evidence.
 
-## Steady vascular flow
+## Historical steady vascular flow
 
 The straight and Y cases converged after six Newton updates. The wordmark is a
 Stokes-limit showcase with density `1e-5`, viscosity `1`, and inlet-profile
@@ -49,7 +50,7 @@ restart 200 plus overlapping additive Schwarz (`PCASM`, overlap 2, local ILU
 level 1). Its final nonlinear residual was `1.78285e-7`, below the
 `3.7574e-7` tolerance, and its net outward flow was `1.98302e-11`.
 
-## Branched neuron transport
+## Historical branched neuron transport
 
 The configured `N0`/`Nplus` showcase completed 40 physical steps on eight MPI
 ranks in 1,215 Krylov iterations. Assembly took `8.57693 s`, the time-loop
@@ -64,7 +65,7 @@ visualization case, not a positivity-preserving or biologically calibrated
 transport benchmark; the undershoots must not be interpreted as physical
 concentrations.
 
-## Large NMO neuron transport
+## Historical large NMO neuron transport
 
 The two-step `neuron_transport/nmo_06840_bifurcation` acceptance run used 12
 OpenMPI ranks. Assembly took `26.6397 s`, the time-loop solve took `109.36 s`,
@@ -75,7 +76,7 @@ Final ranges were `0.0403333` to `1.0001424` for `N0` and `1.7740167` to
 output, not biological steady state. CUDA runtime validation remains pending
 for this large public case.
 
-## Pulse multispecies showcase
+## Historical pulse multispecies showcase
 
 The curved `multispecies_pulse` case was packed for eight MPI ranks and ran
 eight backward-Euler flow steps followed by eight six-species transport steps.

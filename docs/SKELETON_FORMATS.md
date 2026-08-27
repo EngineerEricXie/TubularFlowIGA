@@ -70,10 +70,11 @@ network solver supports any number of child branches at a junction. Its
 `skeleton.vtp` uses those SI coordinates so it overlays the time-series VTP;
 the normalized SWC retains source units.
 
-For the 3D preparation pipeline, name the input `skeleton_initial.swc` or
-`skeleton_initial.obj`; exactly one must exist. Mesh `seg_length` uses the same
+For the 3D preparation pipeline, schema-v4 `geometry.file` names the input SWC
+or OBJ in the case directory. Mesh `centerline.target_spacing` uses the same
 coordinate unit as the skeleton. The resulting spline representation is later
-normalized as documented in the [pipeline guide](PIPELINE.md).
+normalized, with the affine transform retained, as documented in the
+[pipeline guide](PIPELINE.md).
 
 The current 3D control-mesh generator supports binary branching: after root
 orientation, a node may have at most two children. A 3D preparation stops with

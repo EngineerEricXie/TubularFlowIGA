@@ -3,6 +3,7 @@
 #include <array>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -22,6 +23,29 @@ std::set<int> Set(const std::array<int, 16>& values)
 int main()
 {
 	try {
+		std::stringstream version_four(std::ios::in | std::ios::out | std::ios::binary);
+		version_four.write(iga::kMagic.data(), static_cast<std::streamsize>(iga::kMagic.size()));
+		iga::Write(version_four, iga::kBoundaryLabelVersion);
+		const std::uint32_t ranks = 1;
+		const std::uint64_t elements = 1;
+		const std::uint64_t nodes = 8;
+		const std::uint32_t reserved = 0;
+		const std::uint64_t rank_index_offset = 64;
+		iga::Write(version_four, ranks);
+		iga::Write(version_four, elements);
+		iga::Write(version_four, nodes);
+		iga::Write(version_four, iga::kBezierPointCount);
+		iga::Write(version_four, reserved);
+		iga::Write(version_four, rank_index_offset);
+		version_four.seekg(0);
+		const iga::Header legacy_header = iga::ReadHeader(version_four);
+		Require(legacy_header.version == iga::kBoundaryLabelVersion,
+			"version-4 database header compatibility failed");
+		Require(legacy_header.geometry_transform.source_origin == std::array<double, 3>{{0.0, 0.0, 0.0}}
+			&& legacy_header.geometry_transform.source_units_per_normalized_unit == 1.0
+			&& legacy_header.geometry_transform.source_length_scale_to_m == 1.0,
+			"legacy database did not receive the identity geometry transform");
+
 		for (int face = 0; face < 6; ++face)
 			Require(Set(iga::FaceBezierColumns(face)).size() == 16,
 				"Bezier face columns are not unique");

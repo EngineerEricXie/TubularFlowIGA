@@ -24,7 +24,7 @@ void WriteUnitDatabase(const fs::path& path, std::uint32_t ranks = 1)
 {
 	std::ofstream output(path, std::ios::binary | std::ios::trunc);
 	if (!output) throw std::runtime_error("cannot create VCA smoke-test database");
-	constexpr std::uint64_t header_size = 48;
+	constexpr std::uint64_t header_size = 88;
 	const std::uint64_t element_offset = header_size + 2*sizeof(std::uint64_t)
 		+ sizeof(std::int32_t);
 	output.write(iga::kMagic.data(), iga::kMagic.size());
@@ -36,6 +36,9 @@ void WriteUnitDatabase(const fs::path& path, std::uint32_t ranks = 1)
 	iga::Write(output, std::uint32_t{0});
 	const auto rank_index_position = output.tellp();
 	iga::Write(output, std::uint64_t{0});
+	for (int axis = 0; axis < 3; ++axis) iga::Write(output, 0.0);
+	iga::Write(output, 1.0);
+	iga::Write(output, 1.0);
 	iga::Write(output, element_offset);
 	iga::Write(output, std::uint64_t{0});
 	iga::Write(output, std::int32_t{0});

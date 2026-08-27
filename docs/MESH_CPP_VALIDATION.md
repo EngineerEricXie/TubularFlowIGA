@@ -1,10 +1,47 @@
 # C++ Mesh Generator Validation
 
-The C++ control-mesh generator was validated on PSC Bridges-2 compute nodes on
-2026-08-04. Timings use optimized builds and `/usr/bin/time -v`; generated case
-data is not committed.
+## Current adaptive-mesh regression
 
-## MATLAB Compatibility
+The schema-v4 generator and all committed 3D geometries were rerun locally on
+2026-08-27. Every case had zero invalid hexahedra, zero exterior-surface
+intersections, and a minimum scaled Jacobian above its configured `0.1` floor.
+
+| Case | Points | Hexes | Minimum scaled J |
+|---|---:|---:|---:|
+| `neuron_transport/straight_neurite` | 1,005 | 720 | `0.763084` |
+| `neuron_transport/branched_neurite` | 7,731 | 6,660 | `0.533324` |
+| `neuron_transport/nmo_06840_bifurcation` | 41,097 | 36,540 | `0.288586` |
+| `vascular_flow/straight_tube` | 1,005 | 720 | `0.763084` |
+| `vascular_flow/bent_tube` | 1,809 | 1,440 | `0.745694` |
+| `vascular_flow/y_bifurcation` | 7,731 | 6,660 | `0.533324` |
+| `vascular_flow/vca_bifurcation` | 7,731 | 6,660 | `0.533324` |
+| `vascular_flow/multispecies_pulse` | 1,809 | 1,440 | `0.745694` |
+| `vascular_flow/iga_wordmark` | 41,205 | 36,720 | `0.743503` |
+| `vascular_flow/liver_vein_obj_segment` | 2,412 | 1,980 | `0.763032` |
+
+The regression suite also rejects short/thick and near-collinear Y junctions,
+extreme junction radius ratios, overlapping swept centerlines, and intersecting
+disconnected volumes. It verifies adaptive turn/diameter limits at very small
+coordinate scale and runs cleanly under AddressSanitizer and
+UndefinedBehaviorSanitizer (leak detection disabled where the sandbox cannot
+support it).
+
+The current Y and NMO meshes also completed spline extraction, METIS packing,
+version-5 database inspection, boundary-label resolution, and two-rank PETSc
+geometry checks. The Y reported `minimum_detJ=1.5105e-5`; NMO reported
+`minimum_detJ=7.24399e-11`. Both had zero bad elements and zero bad quadrature
+samples. The crossing-sensitive wordmark also passed all 36,720 packed elements
+with `minimum_detJ=2.24357e-8`.
+
+## Historical MATLAB compatibility
+
+The following pre-adaptive generator was validated on PSC Bridges-2 compute
+nodes on 2026-08-04. These results document lineage and the retained file
+interfaces, not byte-for-byte equivalence of the current adaptive meshes.
+Timings use optimized builds and `/usr/bin/time -v`; generated case data is not
+committed.
+
+### MATLAB compatibility
 
 Reference meshes were regenerated with the tracked `TreeSmooth.m` and
 `Hexmesh_main.m`, using TREES 1.15. Comparisons parse VTK data rather than
@@ -22,7 +59,7 @@ The three-bifurcation velocity field matched exactly. A regression test also
 checks rotations, cubic B-spline endpoints and derivatives, unit-cube
 Jacobians, SWC section traversal, and a 3,600-element cylinder mesh.
 
-## Resource Results
+### Resource results
 
 | Case | Wall time | Peak RSS | Minimum determinant | Minimum scaled J |
 | --- | ---: | ---: | ---: | ---: |
@@ -34,7 +71,7 @@ The corrected NMO case produced 35,949 control points and 31,680 elements with
 zero invalid elements. The older VTK stored in the historical example folder
 has 35,748 points and is stale, so it was not used as a golden mesh.
 
-## Downstream Large-Case Gate
+### Downstream large-case gate
 
 The NMO C++ output was passed through spline extraction, partitioned with METIS
 for eight ranks, packed into `.ntiga`, and checked with:
