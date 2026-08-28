@@ -35,6 +35,8 @@
 /solvers/cpu/vca_3d_smoke_test
 /solvers/cpu/vca_checkpoint_test
 /solvers/cpu/womersley_reference_test
+/solvers/cpu/bezier_visualization_test
+/solvers/cpu/temporal_vtkhdf_test
 /solvers/one_d/iga_1d
 /solvers/one_d/one_d_core_test
 /solvers/one_d/one_d_petsc_test
@@ -51,6 +53,8 @@
 *.txt.vtk
 *.vtu
 *.pvd
+*.vtkhdf
+*.bezier_geometry.json
 *.bp/
 *.out
 *.err

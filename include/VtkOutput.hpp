@@ -12,6 +12,26 @@
 
 namespace iga {
 
+enum class VisualizationFormat { Automatic, Vtu, BezierVtkHdf };
+
+inline VisualizationFormat ParseVisualizationFormat(const std::string& value)
+{
+	if (value == "auto") return VisualizationFormat::Automatic;
+	if (value == "vtu") return VisualizationFormat::Vtu;
+	if (value == "vtkhdf" || value == "bezier-vtkhdf")
+		return VisualizationFormat::BezierVtkHdf;
+	throw std::runtime_error(
+		"--visualization-format must be auto, vtu, or vtkhdf");
+}
+
+inline VisualizationFormat ResolveVisualizationFormat(
+	VisualizationFormat requested, bool transient)
+{
+	if (requested != VisualizationFormat::Automatic) return requested;
+	return transient ? VisualizationFormat::BezierVtkHdf
+		: VisualizationFormat::Vtu;
+}
+
 struct VtkPointArray {
 	std::string name;
 	int components = 1;

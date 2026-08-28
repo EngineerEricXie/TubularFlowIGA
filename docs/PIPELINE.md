@@ -109,7 +109,9 @@ It reads `controlmesh.vtk` and writes:
 
 - `bzmeshinfo.txt`: Bezier element connectivity;
 - `spline_cache.igacache`: versioned sparse coefficients and Bezier points;
-- `bzmesh.vtk`: visualization output;
+- `bzmesh.vtk`: legacy preprocessing visualization output (its element-local
+  points may repeat; production temporal visualization uses the packed
+  database and the extraction-signature registry instead);
 - `geometry_transform.json`: source origin and normalization scale.
 
 ### Coordinate normalization
@@ -127,6 +129,10 @@ patient-specific SI calibrations.
 Omit `--no-legacy-text` to additionally reproduce `cmat.txt` and `bzpt.txt`.
 The binary cache records a control-mesh content hash; `iga_pack` rejects stale,
 truncated, malformed, or version-incompatible caches.
+
+The production solvers preserve `controlmesh.vtk` as this pipeline interface.
+Transient results default to the deduplicated Bézier representation described
+in the [visualization output guide](VISUALIZATION.md).
 
 ## 3. Partition and pack
 

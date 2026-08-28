@@ -11,6 +11,7 @@
 #include "TransportCheckpoint.hpp"
 #include "VelocitySeries.hpp"
 #include "PhysiologyOutput.hpp"
+#include "TemporalVtkHdf.hpp"
 #include "VtkOutput.hpp"
 
 #include <petscksp.h>
@@ -21,6 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -52,6 +54,7 @@ struct TransportOptions {
 	fs::path checkpoint;
 	fs::path restart;
 	fs::path memory_report;
+	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
@@ -77,7 +80,8 @@ TransportOptions ParseOptions(int argc, char** argv)
 		"usage: iga_solve DATABASE.ntiga CASE_DIR [SYSTEM] [OUTPUT] [VELOCITY] "
 		"[--system NAME] [--output PATH] [--velocity PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [--memory-report PATH]");
+		"[--stop-after-step N] [--memory-report PATH] "
+		"[--visualization-format auto|vtu|vtkhdf]");
 	TransportOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -104,9 +108,12 @@ TransportOptions ParseOptions(int argc, char** argv)
 			options.checkpoint_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--memory-report") options.memory_report = value;
+		else if (argument == "--visualization-format")
+			options.visualization_format = iga::ParseVisualizationFormat(value);
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
+		PetscOptionsClearValue(nullptr, argument.c_str());
 	}
 	if (options.output_every > 0 && options.output.empty())
 		throw std::runtime_error("--output-every requires --output");
@@ -118,7 +125,9 @@ TransportOptions ParseOptions(int argc, char** argv)
 void WriteTransportOutput(Vec state, std::uint64_t nodes,
 	const std::vector<std::string>& fields, const fs::path& path,
 	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time,
-	const iga::PhysiologyDefinition& physiology, int rank)
+	const iga::PhysiologyDefinition& physiology, int rank,
+	iga::VisualizationFormat visualization_format,
+	iga::TemporalVtkHdfWriter* vtkhdf)
 {
 	Vec root = nullptr;
 	VecScatter scatter = nullptr;
@@ -159,8 +168,14 @@ void WriteTransportOutput(Vec state, std::uint64_t nodes,
 			auto derived = iga::ComputePhysiologyPointArrays(physiology, fields, interleaved);
 			arrays.insert(arrays.end(), std::make_move_iterator(derived.begin()),
 				std::make_move_iterator(derived.end()));
-			iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
-		} catch (const std::exception&) {
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
+			else {
+				if (!vtkhdf) throw std::runtime_error("VTKHDF writer is unavailable");
+				vtkhdf->Append(physical_time, arrays);
+			}
+		} catch (const std::exception& error) {
+			std::cerr << "rank 0: " << error.what() << '\n';
 			write_failed = 1;
 		}
 	}
@@ -223,6 +238,8 @@ int main(int argc, char** argv)
 		iga::DistributedMemoryRecorder memory(PETSC_COMM_WORLD, options.memory_report);
 		iga::Database database(options.database.string());
 		memory.Record("database_open");
+		std::unique_ptr<iga::BezierVisualizationMesh> bezier_mesh;
+		std::unique_ptr<iga::TemporalVtkHdfWriter> vtkhdf;
 		const auto& case_dir = options.case_dir;
 			const auto configuration = iga::ReadSimulationConfiguration(
 				(case_dir / "simulation_config.json").string());
@@ -234,6 +251,8 @@ int main(int argc, char** argv)
 			throw std::runtime_error("--stop-after-step exceeds configured transport steps");
 		const auto run_end_step = options.stop_after_step > 0
 			? options.stop_after_step : system.steps;
+		const auto visualization_format = iga::ResolveVisualizationFormat(
+			options.visualization_format, true);
 		const auto labels = iga::ReadPointLabels((case_dir / "controlmesh.vtk").string(), database.header().nodes);
 		std::vector<std::array<double, 3>> prescribed_velocity;
 		std::vector<iga::VelocitySnapshot> velocity_snapshots;
@@ -354,6 +373,32 @@ int main(int argc, char** argv)
 				<< " completed_step=" << start_step
 				<< " physical_time=" << metadata.physical_time << '\n';
 		}
+		if (!options.output.empty()
+			&& visualization_format == iga::VisualizationFormat::BezierVtkHdf) {
+			int initialization_failed = 0;
+			if (rank == 0) {
+				try {
+					bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
+						iga::BuildBezierVisualizationMesh(database, false));
+					const auto report = iga::BezierGeometryReportPath(options.output);
+					iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
+					iga::RequireValidBezierGeometry(bezier_mesh->validation);
+					vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
+						iga::VtkHdfPath(options.output), *bezier_mesh,
+						!options.restart.empty());
+					std::cout << "bezier_geometry_points=" << bezier_mesh->points.size()
+						<< " local_point_references=" << bezier_mesh->validation.local_points
+						<< " geometry_report=" << report.string()
+						<< " vtkhdf=" << vtkhdf->path().string() << '\n';
+				} catch (const std::exception& error) {
+					std::cerr << "rank 0: " << error.what() << '\n';
+					initialization_failed = 1;
+				}
+			}
+			MPI_Bcast(&initialization_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+			if (initialization_failed)
+				throw std::runtime_error("cannot initialize Bezier VTKHDF output");
+		}
 
 		KSP solver = nullptr;
 		KSPCreate(PETSC_COMM_WORLD, &solver);
@@ -380,8 +425,10 @@ int main(int argc, char** argv)
 			const auto vtk_path = iga::VtuStepPath(options.output, start_step);
 			WriteTransportOutput(current, database.header().nodes, system.fields,
 				text_path, case_dir/"controlmesh.vtk", vtk_path,
-				start_step*system.dt, configuration.physiology, rank);
-			vtk_snapshots.push_back({start_step*system.dt, vtk_path});
+				start_step*system.dt, configuration.physiology, rank,
+				visualization_format, vtkhdf.get());
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				vtk_snapshots.push_back({start_step*system.dt, vtk_path});
 		}
 		for (int step = start_step; step < run_end_step; ++step) {
 			if (velocity_source) {
@@ -425,8 +472,10 @@ int main(int argc, char** argv)
 				const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
 				WriteTransportOutput(current, database.header().nodes, system.fields,
 					text_path, case_dir/"controlmesh.vtk", vtk_path,
-					completed_step*system.dt, configuration.physiology, rank);
-				vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
+					completed_step*system.dt, configuration.physiology, rank,
+					visualization_format, vtkhdf.get());
+				if (visualization_format == iga::VisualizationFormat::Vtu)
+					vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
 			}
 			if (!options.checkpoint.empty()
 				&& (completed_step == run_end_step
@@ -455,12 +504,15 @@ int main(int argc, char** argv)
 			WriteTransportOutput(current, database.header().nodes,
 				system.fields, options.output, case_dir/"controlmesh.vtk",
 				iga::VtuFinalPath(options.output), run_end_step*system.dt,
-				configuration.physiology, rank);
+				configuration.physiology, rank, visualization_format,
+				vtkhdf.get());
 			if (rank == 0) {
-				if (vtk_snapshots.empty())
-					vtk_snapshots.push_back({run_end_step*system.dt,
-						iga::VtuFinalPath(options.output)});
-				iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				if (visualization_format == iga::VisualizationFormat::Vtu) {
+					if (vtk_snapshots.empty())
+						vtk_snapshots.push_back({run_end_step*system.dt,
+							iga::VtuFinalPath(options.output)});
+					iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				}
 				iga::WritePhysiologyManifest(
 					options.output.parent_path()/"physiology_fields.json",
 					configuration.physiology, system.fields);

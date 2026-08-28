@@ -18,6 +18,7 @@
 #include "TransportCheckpoint.hpp"
 #include "VelocitySeries.hpp"
 #include "PhysiologyOutput.hpp"
+#include "TemporalVtkHdf.hpp"
 #include "VtkOutput.hpp"
 
 #include <cuda_runtime.h>
@@ -33,6 +34,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
@@ -44,6 +46,26 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 namespace iga::cuda {
+
+struct BezierVtkHdfOutput {
+	std::unique_ptr<iga::BezierVisualizationMesh> mesh;
+	std::unique_ptr<iga::TemporalVtkHdfWriter> writer;
+
+	void Initialize(iga::Database& database, const fs::path& output, bool resume)
+	{
+		mesh = std::make_unique<iga::BezierVisualizationMesh>(
+			iga::BuildBezierVisualizationMesh(database, false));
+		const auto report = iga::BezierGeometryReportPath(output);
+		iga::WriteBezierGeometryReport(report, mesh->validation);
+		iga::RequireValidBezierGeometry(mesh->validation);
+		writer = std::make_unique<iga::TemporalVtkHdfWriter>(
+			iga::VtkHdfPath(output), *mesh, resume);
+		std::cout << "bezier_geometry_points=" << mesh->points.size()
+			<< " local_point_references=" << mesh->validation.local_points
+			<< " geometry_report=" << report.string()
+			<< " vtkhdf=" << writer->path().string() << '\n';
+	}
+};
 
 class ReferenceData {
 public:
@@ -324,7 +346,9 @@ void WriteNavierStokesVtk(const fs::path& mesh_path, const fs::path& path, const
 }
 
 void WriteNavierStokesVtu(const fs::path& mesh_path, const fs::path& path,
-	const std::vector<double>& values, double physical_time)
+	const std::vector<double>& values, double physical_time,
+	iga::VisualizationFormat visualization_format,
+	iga::TemporalVtkHdfWriter* vtkhdf)
 {
 	std::vector<double> velocity(3*values.size()/4), pressure(values.size()/4);
 	for (std::size_t node = 0; node < values.size()/4; ++node) {
@@ -332,9 +356,15 @@ void WriteNavierStokesVtu(const fs::path& mesh_path, const fs::path& path,
 			velocity[3*node+component] = values[4*node+component];
 		pressure[node] = values[4*node+3];
 	}
-	iga::WriteVtu(mesh_path, path,
-		{{"velocity", 3, std::move(velocity)}, {"pressure", 1, std::move(pressure)}},
-		physical_time);
+	std::vector<iga::VtkPointArray> arrays{
+		{"velocity", 3, std::move(velocity)},
+		{"pressure", 1, std::move(pressure)}};
+	if (visualization_format == iga::VisualizationFormat::Vtu)
+		iga::WriteVtu(mesh_path, path, arrays, physical_time);
+	else {
+		if (!vtkhdf) throw std::runtime_error("VTKHDF writer is unavailable");
+		vtkhdf->Append(physical_time, arrays);
+	}
 }
 
 void WriteNavierStokes(const fs::path& path, const std::vector<double>& values)
@@ -362,6 +392,7 @@ struct CudaFlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 };
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
@@ -399,7 +430,7 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] "
-		"[--mass-rtol R]");
+		"[--mass-rtol R] [--visualization-format auto|vtu|vtkhdf]");
 	CudaFlowOptions options;
 	options.database = argv[2];
 	options.case_dir = argv[3];
@@ -433,6 +464,8 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 			options.nonlinear_absolute_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else if (argument == "--mass-rtol")
 			options.mass_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--visualization-format")
+			options.visualization_format = iga::ParseVisualizationFormat(value);
 		else throw std::runtime_error("unknown option: "+argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
@@ -672,6 +705,7 @@ int NavierStokes(int argc, char** argv)
 	const auto options = ParseCudaFlowOptions(argc, argv);
 	const auto total_start = Clock::now();
 	iga::Database database(options.database.string());
+	BezierVtkHdfOutput vtkhdf;
 	const auto& case_dir = options.case_dir;
 	const int maximum_newton = options.maximum_newton;
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
@@ -720,6 +754,8 @@ int NavierStokes(int argc, char** argv)
 		throw std::runtime_error("--stop-after-step exceeds configured physical steps");
 	const auto run_end_step = options.stop_after_step > 0
 		? options.stop_after_step : physical_steps;
+	const auto visualization_format = iga::ResolveVisualizationFormat(
+		options.visualization_format, transient);
 	std::cout << "boundary_config=" << boundary_config << " viscosity=" << viscosity
 		<< " density=" << density
 		<< " time_integration=" << (transient ? "backward_euler" : "steady")
@@ -800,6 +836,9 @@ int NavierStokes(int argc, char** argv)
 		state.CopyFromHost(initial_state.data(), initial_state.size());
 		previous.CopyFromHost(initial_state.data(), initial_state.size());
 	}
+	if (!options.output.empty()
+		&& visualization_format == iga::VisualizationFormat::BezierVtkHdf)
+		vtkhdf.Initialize(database, options.output, !options.restart.empty());
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	BlasHandle blas;
 	long long total_iterations = 0;
@@ -817,8 +856,10 @@ int NavierStokes(int argc, char** argv)
 		const auto vtk_path = iga::VtuStepPath(options.output, start_step);
 		WriteNavierStokes(text_path, initial_output);
 		WriteNavierStokesVtu(case_dir/"controlmesh.vtk", vtk_path,
-			initial_output, start_step*dt);
-		vtk_snapshots.push_back({start_step*dt, vtk_path});
+			initial_output, start_step*dt, visualization_format,
+			vtkhdf.writer.get());
+		if (visualization_format == iga::VisualizationFormat::Vtu)
+			vtk_snapshots.push_back({start_step*dt, vtk_path});
 		velocity_snapshots_written.push_back({start_step*dt, text_path});
 	}
 	for (int step = start_step; step < run_end_step; ++step) {
@@ -993,8 +1034,9 @@ int NavierStokes(int argc, char** argv)
 			const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
 			WriteNavierStokes(text_path, values);
 			WriteNavierStokesVtu(case_dir/"controlmesh.vtk", vtk_path, values,
-				completed_step*dt);
-			vtk_snapshots.push_back({completed_step*dt, vtk_path});
+				completed_step*dt, visualization_format, vtkhdf.writer.get());
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				vtk_snapshots.push_back({completed_step*dt, vtk_path});
 			velocity_snapshots_written.push_back({completed_step*dt, text_path});
 		}
 		if (!options.checkpoint.empty()
@@ -1026,13 +1068,18 @@ int NavierStokes(int argc, char** argv)
 	}
 	if (!options.output.empty()) {
 		WriteNavierStokes(options.output, output);
-		WriteNavierStokesVtk(case_dir/"controlmesh.vtk", options.output.string()+".vtk", output);
+		if (visualization_format == iga::VisualizationFormat::Vtu)
+			WriteNavierStokesVtk(
+				case_dir/"controlmesh.vtk", options.output.string()+".vtk", output);
 		const double final_time = transient ? run_end_step*dt : 0.0;
 		WriteNavierStokesVtu(case_dir/"controlmesh.vtk",
-			iga::VtuFinalPath(options.output), output, final_time);
-		if (vtk_snapshots.empty())
-			vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
-		iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+			iga::VtuFinalPath(options.output), output, final_time,
+			visualization_format, vtkhdf.writer.get());
+		if (visualization_format == iga::VisualizationFormat::Vtu) {
+			if (vtk_snapshots.empty())
+				vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
+			iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+		}
 		if (!velocity_snapshots_written.empty())
 			iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output),
 				velocity_snapshots_written);

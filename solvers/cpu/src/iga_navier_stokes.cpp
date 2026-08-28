@@ -11,6 +11,7 @@
 #include "TransientTransportRuntime.hpp"
 #include "VcaCheckpoint.hpp"
 #include "VelocitySeries.hpp"
+#include "TemporalVtkHdf.hpp"
 #include "VtkOutput.hpp"
 
 #include <petscksp.h>
@@ -39,6 +40,7 @@ struct FlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 	double nonlinear_relative_tolerance = 1e-5;
 	double nonlinear_absolute_tolerance = 1e-10;
 	double mass_relative_tolerance = 1e-3;
@@ -78,7 +80,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R]");
+		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
+		"[--visualization-format auto|vtu|vtkhdf]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -107,6 +110,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 			options.nonlinear_absolute_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else if (argument == "--mass-rtol")
 			options.mass_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
+		else if (argument == "--visualization-format")
+			options.visualization_format = iga::ParseVisualizationFormat(value);
 		else throw std::runtime_error("unknown option: "+argument);
 		PetscOptionsClearValue(nullptr, argument.c_str());
 	}
@@ -118,7 +123,9 @@ FlowOptions ParseOptions(int argc, char** argv)
 }
 
 void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
-	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time, int rank)
+	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time, int rank,
+	iga::VisualizationFormat visualization_format,
+	iga::TemporalVtkHdfWriter* vtkhdf)
 {
 	Vec root = nullptr;
 	VecScatter scatter = nullptr;
@@ -149,10 +156,17 @@ void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
 			}
 			VecRestoreArrayRead(root, &values);
 			if (!output || !pressure_output) throw std::runtime_error("cannot write Navier-Stokes output");
-			iga::WriteVtu(mesh_path, vtk_path,
-				{{"velocity", 3, std::move(velocity)}, {"pressure", 1, std::move(pressure)}},
-				physical_time);
-		} catch (const std::exception&) {
+			std::vector<iga::VtkPointArray> arrays{
+				{"velocity", 3, std::move(velocity)},
+				{"pressure", 1, std::move(pressure)}};
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
+			else {
+				if (!vtkhdf) throw std::runtime_error("VTKHDF writer is unavailable");
+				vtkhdf->Append(physical_time, arrays);
+			}
+		} catch (const std::exception& error) {
+			std::cerr << "rank 0: " << error.what() << '\n';
 			write_failed = 1;
 		}
 	}
@@ -208,6 +222,8 @@ int main(int argc, char** argv)
 	try {
 		const auto options = ParseOptions(argc, argv);
 		iga::Database database(options.database.string());
+		std::unique_ptr<iga::BezierVisualizationMesh> bezier_mesh;
+		std::unique_ptr<iga::TemporalVtkHdfWriter> vtkhdf;
 		const auto mesh = iga::ReadLabeledHexMesh((options.case_dir/"controlmesh.vtk").string(),
 			database.header().nodes, database.header().elements);
 		const auto& labels = mesh.labels;
@@ -264,6 +280,8 @@ int main(int argc, char** argv)
 		if (options.stop_after_step > physical_steps)
 			throw std::runtime_error("--stop-after-step exceeds configured physical steps");
 		const auto run_end_step = options.stop_after_step > 0 ? options.stop_after_step : physical_steps;
+		const auto visualization_format = iga::ResolveVisualizationFormat(
+			options.visualization_format, transient);
 		if (vca_circuit && !vca_has_transport
 			&& (!options.restart.empty() || !options.checkpoint.empty()))
 			throw std::runtime_error("VCA flow-only checkpoint/restart requires a transport state and is unavailable");
@@ -401,6 +419,32 @@ int main(int argc, char** argv)
 			}
 		}
 		flow.CopyStateToPrevious();
+		if (!options.output.empty()
+			&& visualization_format == iga::VisualizationFormat::BezierVtkHdf) {
+			int initialization_failed = 0;
+			if (rank == 0) {
+				try {
+					bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
+						iga::BuildBezierVisualizationMesh(database, false));
+					const auto report = iga::BezierGeometryReportPath(options.output);
+					iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
+					iga::RequireValidBezierGeometry(bezier_mesh->validation);
+					vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
+						iga::VtkHdfPath(options.output), *bezier_mesh,
+						!options.restart.empty());
+					std::cout << "bezier_geometry_points=" << bezier_mesh->points.size()
+						<< " local_point_references=" << bezier_mesh->validation.local_points
+						<< " geometry_report=" << report.string()
+						<< " vtkhdf=" << vtkhdf->path().string() << '\n';
+				} catch (const std::exception& error) {
+					std::cerr << "rank 0: " << error.what() << '\n';
+					initialization_failed = 1;
+				}
+			}
+			MPI_Bcast(&initialization_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
+			if (initialization_failed)
+				throw std::runtime_error("cannot initialize Bezier VTKHDF output");
+		}
 
 		const auto start = std::chrono::steady_clock::now();
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
@@ -409,8 +453,10 @@ int main(int argc, char** argv)
 			const auto text_path = iga::TimeIndexedPath(options.output, start_step);
 			const auto vtk_path = iga::VtuStepPath(options.output, start_step);
 			WriteFlowOutput(flow.State(), database.header().nodes, text_path,
-				options.case_dir/"controlmesh.vtk", vtk_path, start_step*parameters.dt, rank);
-			vtk_snapshots.push_back({start_step*parameters.dt, vtk_path});
+				options.case_dir/"controlmesh.vtk", vtk_path, start_step*parameters.dt, rank,
+				visualization_format, vtkhdf.get());
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				vtk_snapshots.push_back({start_step*parameters.dt, vtk_path});
 			velocity_snapshots.push_back({start_step*parameters.dt, text_path});
 		}
 		for (int step = start_step; step < run_end_step; ++step) {
@@ -484,8 +530,10 @@ int main(int argc, char** argv)
 				const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
 				const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
 				WriteFlowOutput(flow.State(), database.header().nodes, text_path,
-					options.case_dir/"controlmesh.vtk", vtk_path, physical_time, rank);
-				vtk_snapshots.push_back({physical_time, vtk_path});
+					options.case_dir/"controlmesh.vtk", vtk_path, physical_time, rank,
+					visualization_format, vtkhdf.get());
+				if (visualization_format == iga::VisualizationFormat::Vtu)
+					vtk_snapshots.push_back({physical_time, vtk_path});
 				velocity_snapshots.push_back({physical_time, text_path});
 			}
 			if (!options.checkpoint.empty() && (completed_step == run_end_step
@@ -550,10 +598,14 @@ int main(int argc, char** argv)
 		if (!options.output.empty()) {
 			const auto final_time = transient ? run_end_step*parameters.dt : 0.0;
 			WriteFlowOutput(flow.State(), database.header().nodes, options.output,
-				options.case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output), final_time, rank);
+				options.case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output), final_time, rank,
+				visualization_format, vtkhdf.get());
 			if (rank == 0) {
-				if (vtk_snapshots.empty()) vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
-				iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				if (visualization_format == iga::VisualizationFormat::Vtu) {
+					if (vtk_snapshots.empty())
+						vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
+					iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+				}
 				if (!velocity_snapshots.empty())
 					iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output), velocity_snapshots);
 			}

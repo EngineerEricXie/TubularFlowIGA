@@ -122,6 +122,8 @@ ignored.
 - A CUDA GPU with FP64 support. The fat binary targets SM 70, 80, 89, and 90.
 - A C++17-compatible host compiler.
 - cuBLAS.
+- HDF5 development headers and library. Temporal VTKHDF uses serial HDF5 calls
+  on the host.
 - The in-tree CPU backend, which provides the shared `IgaDatabase.hpp` format reader.
 
 ~~~text
@@ -200,10 +202,9 @@ relative boundary-flow imbalance `1e-3`). A Newton state is accepted only when
 both the nonlinear residual and mass-balance criteria pass. Iteration output
 includes residual RMS, the unmodified continuity residual, net boundary flow,
 and relative mass imbalance.
-Both CUDA production paths also write a final ParaView `.vtu`; time-indexed
-output creates step `.vtu` files and a `.pvd` collection using the same point
-array names as CPU. The legacy flow `.vtk` companion remains for compatibility.
-Transient collections include the initialized `step000000` state.
+Transient CUDA output defaults to temporal Bézier VTKHDF; steady output
+defaults to VTU. CPU and CUDA share the same output implementation. See the
+[visualization output guide](../../docs/VISUALIZATION.md).
 The fixed `transport` command remains only for old input compatibility. See the
 [configurable PDE guide](../../docs/PDE_CONFIGURATION.md).
 

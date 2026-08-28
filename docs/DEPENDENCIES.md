@@ -13,9 +13,9 @@ required only by the MPI CPU solvers. CUDA does not use PETSc.
 | Mode | Required software | PETSc | GPU |
 |---|---|---:|---:|
 | Preprocessing-only | GNU Make, C++ compiler, Eigen 3, OpenMP, METIS/`mpmetis` | No | No |
-| CPU-only solver | Preprocessing requirements, MPI, optimized PETSc with C++ | Yes | No |
+| CPU-only solver | Preprocessing requirements, MPI, optimized PETSc with C++, HDF5 | Yes | No |
 | Native 1D solver | C++17, OpenMP, MPI, PETSc; MUMPS recommended for multi-rank nonlinear solves | Yes | No |
-| CUDA-only solver | Preprocessing requirements, CUDA Toolkit and cuBLAS | No | Yes at runtime |
+| CUDA-only solver | Preprocessing requirements, CUDA Toolkit, cuBLAS, HDF5 | No | Yes at runtime |
 
 The CPU and CUDA solvers consume the same packed `.ntiga` database. Preparing
 that database requires Eigen and `mpmetis`, regardless of the selected solver.
@@ -45,6 +45,8 @@ export EIGEN_DIR=/path/to/eigen3       # directory containing Eigen/
 export PETSC_DIR=/path/to/petsc
 export PETSC_ARCH=arch-linux-c-opt     # omit for an installed PETSc prefix
 export NVCC=nvcc
+export HDF5_CFLAGS="-I/path/to/hdf5/include"  # optional override
+export HDF5_LIBS="-L/path/to/hdf5/lib -lhdf5"
 ```
 
 ## General Linux installation
@@ -62,7 +64,7 @@ sudo apt install \
   build-essential git \
   libeigen3-dev metis \
   openmpi-bin libopenmpi-dev \
-  libblas-dev liblapack-dev
+  libblas-dev liblapack-dev libhdf5-dev pkg-config
 ```
 
 On these systems Eigen is normally under `/usr/include/eigen3`, so the default
@@ -78,7 +80,7 @@ sudo dnf install \
   gcc-c++ make git \
   eigen3-devel metis \
   openmpi openmpi-devel \
-  blas-devel lapack-devel
+  blas-devel lapack-devel hdf5-devel pkgconf-pkg-config
 ```
 
 Some RHEL-family installations expose OpenMPI through Environment Modules. If
@@ -91,6 +93,11 @@ module load mpi/openmpi-x86_64
 ```
 
 Do not mix MPI implementations between PETSc compilation and solver runtime.
+The temporal VTKHDF writer runs only on rank zero and uses serial HDF5 calls.
+Prefer a serial HDF5 development package. If only parallel HDF5 is available,
+it must use the same MPI implementation as PETSc. `HDF5_CFLAGS` and
+`HDF5_LIBS` can override `pkg-config hdf5`; this is useful on systems exposing
+more than one HDF5 installation.
 
 ### If Eigen or `mpmetis` is unavailable
 

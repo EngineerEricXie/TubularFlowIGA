@@ -7,6 +7,7 @@ struct CudaConfiguredTransportOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 };
 
 CudaConfiguredTransportOptions ParseCudaConfiguredTransportOptions(int argc, char** argv)
@@ -36,6 +37,8 @@ CudaConfiguredTransportOptions ParseCudaConfiguredTransportOptions(int argc, cha
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
+		else if (argument == "--visualization-format")
+			options.visualization_format = iga::ParseVisualizationFormat(value);
 		else throw std::runtime_error("unknown option: "+argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
@@ -94,7 +97,9 @@ void WriteCudaConfiguredOutput(const fs::path& path,
 	const std::vector<std::string>& fields, std::size_t nodes,
 	const DeviceBuffer<double>& state, const fs::path& mesh_path,
 	const fs::path& vtk_path, double physical_time,
-	const iga::PhysiologyDefinition& physiology)
+	const iga::PhysiologyDefinition& physiology,
+	iga::VisualizationFormat visualization_format,
+	iga::TemporalVtkHdfWriter* vtkhdf)
 {
 	std::vector<double> output(nodes*Fields);
 	state.CopyToHost(output.data(), output.size());
@@ -122,7 +127,12 @@ void WriteCudaConfiguredOutput(const fs::path& path,
 	auto derived = iga::ComputePhysiologyPointArrays(physiology, fields, output);
 	arrays.insert(arrays.end(), std::make_move_iterator(derived.begin()),
 		std::make_move_iterator(derived.end()));
-	iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
+	if (visualization_format == iga::VisualizationFormat::Vtu)
+		iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
+	else {
+		if (!vtkhdf) throw std::runtime_error("VTKHDF writer is unavailable");
+		vtkhdf->Append(physical_time, arrays);
+	}
 }
 
 template <int Fields>
@@ -137,6 +147,9 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		throw std::runtime_error("--stop-after-step exceeds configured transport steps");
 	const auto run_end_step = options.stop_after_step > 0
 		? options.stop_after_step : system.steps;
+	const auto visualization_format = iga::ResolveVisualizationFormat(
+		options.visualization_format, true);
+	BezierVtkHdfOutput vtkhdf;
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
 	std::vector<std::array<double, 3>> prescribed_velocity;
 	std::vector<iga::VelocitySnapshot> velocity_snapshots;
@@ -282,6 +295,9 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 			<< " completed_step=" << start_step
 			<< " physical_time=" << metadata.physical_time << '\n';
 	}
+	if (!options.output.empty()
+		&& visualization_format == iga::VisualizationFormat::BezierVtkHdf)
+		vtkhdf.Initialize(database, options.output, !options.restart.empty());
 
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	double assembly_seconds = 0.0;
@@ -335,8 +351,10 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		WriteCudaConfiguredOutput<Fields>(
 			text_path, system.fields, host.nodes, current,
 			case_dir/"controlmesh.vtk", vtk_path,
-			start_step*system.dt, configuration.physiology);
-		vtk_snapshots.push_back({start_step*system.dt, vtk_path});
+			start_step*system.dt, configuration.physiology,
+			visualization_format, vtkhdf.writer.get());
+		if (visualization_format == iga::VisualizationFormat::Vtu)
+			vtk_snapshots.push_back({start_step*system.dt, vtk_path});
 	}
 	const int vector_size = static_cast<int>(host.nodes*Fields);
 	const int vector_blocks = (vector_size+255)/256;
@@ -374,8 +392,10 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 			WriteCudaConfiguredOutput<Fields>(
 				text_path, system.fields, host.nodes, current,
 				case_dir/"controlmesh.vtk", vtk_path,
-				completed_step*system.dt, configuration.physiology);
-			vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
+				completed_step*system.dt, configuration.physiology,
+				visualization_format, vtkhdf.writer.get());
+			if (visualization_format == iga::VisualizationFormat::Vtu)
+				vtk_snapshots.push_back({completed_step*system.dt, vtk_path});
 		}
 		if (!options.checkpoint.empty()
 			&& (completed_step == run_end_step
@@ -404,11 +424,14 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		WriteCudaConfiguredOutput<Fields>(
 			options.output, system.fields, host.nodes, current,
 			case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output),
-			run_end_step*system.dt, configuration.physiology);
-		if (vtk_snapshots.empty())
-			vtk_snapshots.push_back({run_end_step*system.dt,
-				iga::VtuFinalPath(options.output)});
-		iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+			run_end_step*system.dt, configuration.physiology,
+			visualization_format, vtkhdf.writer.get());
+		if (visualization_format == iga::VisualizationFormat::Vtu) {
+			if (vtk_snapshots.empty())
+				vtk_snapshots.push_back({run_end_step*system.dt,
+					iga::VtuFinalPath(options.output)});
+			iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
+		}
 		iga::WritePhysiologyManifest(options.output.parent_path()/"physiology_fields.json",
 			configuration.physiology, system.fields);
 	}
@@ -429,7 +452,7 @@ int SolveConfigured(int argc, char** argv)
 		"usage: iga_cuda solve DATABASE.ntiga CASE_DIR [SYSTEM] [OUTPUT] [VELOCITY] "
 		"[--system NAME] [--output PATH] [--velocity PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N]");
+		"[--stop-after-step N] [--visualization-format auto|vtu|vtkhdf]");
 	const auto options = ParseCudaConfiguredTransportOptions(argc, argv);
 	iga::Database database(argv[2]);
 	const fs::path case_dir(argv[3]);

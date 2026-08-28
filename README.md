@@ -111,12 +111,13 @@ backend:
 ```
 
 The CPU simulation executables additionally require PETSc built with the same
-MPI implementation used at runtime. CUDA compilation requires the CUDA Toolkit,
-while an NVIDIA GPU and compatible driver are needed only at runtime. See the
+MPI implementation used at runtime. CPU and CUDA visualization builds require
+HDF5. CUDA compilation requires the CUDA Toolkit, while an NVIDIA GPU and
+compatible driver are needed only at runtime. See the
 [dependency and installation guide](docs/DEPENDENCIES.md) for PETSc setup,
 CUDA/Conda on WSL, RHEL-family systems, and Bridges-2.
 ParaView/`pvbatch` and Pillow (`python3-pil`) are optional and are needed only
-to inspect PVD/VTU results or regenerate the README animations.
+to inspect PVD/VTU/VTKHDF results or regenerate the README animations.
 
 ## Native 1D quick start
 
@@ -221,8 +222,8 @@ The flow solver writes three velocity columns to the requested path and one
 pressure column to the neighboring `.pressure` file. Configured transport
 writes `node_id` followed by fields in configured order; the neighboring
 `.fields` file records their names. Both solvers also write a ParaView-ready
-final `.vtu`; `--output-every N` additionally creates step-indexed `.vtu`
-snapshots and a `.pvd` time collection.
+result: transient solvers default to temporal Bézier VTKHDF, while steady flow
+uses VTU. See the [visualization output guide](docs/VISUALIZATION.md).
 
 ## Run on one CUDA GPU
 

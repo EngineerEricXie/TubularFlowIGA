@@ -119,6 +119,9 @@ are intentionally ignored.
 - MPI; Bridges-2 validation used OpenMPI 4.0.5.
 - PETSc with C++ and MPI support; the validated build uses optimized
   `arch-linux-c-opt`.
+- HDF5 development headers and library for temporal VTKHDF output. The writer
+  uses serial HDF5 calls from rank zero; do not mix a parallel HDF5 built for a
+  different MPI implementation with PETSc.
 - METIS/`mpmetis` to create a partition matching the MPI rank count.
 - Spline outputs: `bzmeshinfo.txt` and `spline_cache.igacache`.
 - Optional legacy outputs: `cmat.txt` and `bzpt.txt`.
@@ -211,12 +214,10 @@ mpiexec -np "$RANKS" "$IGA_CPU_ROOT/iga_navier_stokes" \
   --restart flow-checkpoint
 ~~~
 
-Alongside text output, both production solvers write a final ParaView XML
-`.vtu`. With `--output-every N`, they also write step-indexed `.vtu` files and
-a `.pvd` time collection. Flow arrays are `velocity` and `pressure`; transport
-arrays include every configured species and requested derived physiology
-field. Transient collections begin with the initialized `step000000` state, so
-animations preserve the configured initial values before the first solve.
+Transient output defaults to temporal Bézier VTKHDF; steady output defaults to
+VTU. Use `--visualization-format auto|vtkhdf|vtu` to select explicitly. File
+layout, geometry validation, restart behavior, and ParaView validation are in
+the [visualization output guide](../../docs/VISUALIZATION.md).
 
 The metadata validates node count, completed step, physical time, `dt`, density,
 and viscosity before restart. A final checkpoint is written even when the final

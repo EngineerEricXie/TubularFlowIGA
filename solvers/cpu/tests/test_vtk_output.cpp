@@ -9,6 +9,15 @@ namespace fs = std::filesystem;
 
 int main()
 {
+	assert(iga::ResolveVisualizationFormat(
+		iga::VisualizationFormat::Automatic, true)
+		== iga::VisualizationFormat::BezierVtkHdf);
+	assert(iga::ResolveVisualizationFormat(
+		iga::VisualizationFormat::Automatic, false)
+		== iga::VisualizationFormat::Vtu);
+	assert(iga::ResolveVisualizationFormat(
+		iga::VisualizationFormat::Vtu, true)
+		== iga::VisualizationFormat::Vtu);
 	const auto directory = fs::temp_directory_path()/"tubularflowiga-vtk-output-test";
 	fs::create_directories(directory);
 	const auto mesh = directory/"mesh.vtk";

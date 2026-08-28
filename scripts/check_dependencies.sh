@@ -49,6 +49,29 @@ check_cpu() {
 	fi
 }
 
+check_hdf5() {
+	if [[ -n ${HDF5_CFLAGS:-} && -n ${HDF5_LIBS:-} ]]; then
+		pass "HDF5 compiler/link overrides"
+		return
+	fi
+	for prefix in "${CONDA_PREFIX:-}" "${CONDA_ROOT:-}"; do
+		if [[ -n $prefix && -f $prefix/include/hdf5.h \
+			&& ( -f $prefix/lib/libhdf5.so || -f $prefix/lib/libhdf5.dylib ) ]]; then
+			pass "HDF5 Conda prefix: $prefix"
+			return
+		fi
+	done
+	if ! command -v pkg-config >/dev/null 2>&1; then
+		fail "pkg-config (needed to locate HDF5)"
+		return
+	fi
+	if pkg-config --exists hdf5; then
+		pass "HDF5: $(pkg-config --modversion hdf5)"
+	else
+		fail "HDF5 development package (pkg-config hdf5 or HDF5_CFLAGS/HDF5_LIBS)"
+	fi
+}
+
 check_cuda() {
 	have_command "${NVCC:-nvcc}"
 }
@@ -83,11 +106,13 @@ case "$component" in
 		check_base
 		check_preprocessing
 		check_cpu
+		check_hdf5
 		;;
 	cuda)
 		check_base
 		check_preprocessing
 		check_cuda
+		check_hdf5
 		;;
 	one-d)
 		check_base
@@ -98,6 +123,7 @@ case "$component" in
 		check_preprocessing
 		check_cpu
 		check_cuda
+		check_hdf5
 		;;
 	*)
 		printf 'usage: %s preprocessing|cpu|one-d|cuda|all\n' "$0" >&2
