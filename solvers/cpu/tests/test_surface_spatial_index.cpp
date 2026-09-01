@@ -27,6 +27,13 @@ iga::RawSurfaceSoup Tetrahedron()
 	result.triangles = {Face(0,2,1), Face(0,1,3), Face(0,3,2), Face(1,2,3)};
 	return result;
 }
+iga::RawSurfaceSoup TransformedTetrahedron(double scale, const std::array<double, 3>& translation)
+{
+	auto result = Tetrahedron();
+	for (auto& vertex : result.vertices)
+		for (std::size_t axis = 0; axis < 3; ++axis) vertex[axis] = scale*vertex[axis]+translation[axis];
+	return result;
+}
 iga::SurfaceAabb Box(double x0, double y0, double z0, double x1, double y1, double z1)
 { iga::SurfaceAabb result; result.minimum = {{x0,y0,z0}}; result.maximum = {{x1,y1,z1}}; return result; }
 template <class Function> void RequireRejected(Function&& function) { bool rejected = false; try { function(); } catch (const std::exception&) { rejected = true; } assert(rejected); }
@@ -47,6 +54,12 @@ int main()
 	assert(tetra.LocatePoint({{0.1,0.1,0.1}}) == iga::PointLocation::Inside);
 	assert(tetra.LocatePoint({{0.7,0.7,0.1}}) == iga::PointLocation::Outside);
 	assert(tetra.LocatePoint({{0.2,0.2,0.6}}) == iga::PointLocation::Boundary);
+	// Coordinate faces merely touch the closed root box, but the oblique face
+	// enters its open interior.  Aggregation must therefore report Interior.
+	assert(tetra.IntersectBox(Box(0,0,0,1,1,1)) == iga::BoxContact::Interior);
+	assert(tetra.IntersectBox(Box(0,0.2,0.2,0,0.3,0.3)) == iga::BoxContact::BoundaryOnly);
+	assert(tetra.IntersectBox(Box(0.2,0,0,0.8,0,0)) == iga::BoxContact::BoundaryOnly);
+	assert(tetra.IntersectBox(Box(0,0,0,0,0,0)) == iga::BoxContact::BoundaryOnly);
 	// The oblique face x+y+z=1 slices this box without containing any tetra
 	// vertex, exercising the edge-cross-box SAT axes rather than vertex tests.
 	assert(tetra.IntersectBox(Box(0.30,0.30,0.30,0.40,0.40,0.40)) == iga::BoxContact::Interior);
@@ -54,11 +67,20 @@ int main()
 	// representable step separates all points of the closed box from the tetra.
 	assert(tetra.IntersectBox(Box(0.40,0.30,0.30,0.50,0.40,0.40)) == iga::BoxContact::BoundaryOnly);
 	assert(tetra.IntersectBox(Box(std::nextafter(0.40,1.0),0.30,0.30,0.50,0.40,0.40)) == iga::BoxContact::None);
+	assert(tetra.IntersectBox(Box(std::nextafter(0.40,0.0),0.30,0.30,0.50,0.40,0.40)) == iga::BoxContact::Interior);
 	assert(tetra.IntersectBox(Box(0.40,0.30,0.30,0.50,0.40,0.30)) == iga::BoxContact::BoundaryOnly);
 	// The box overlaps the tetra AABB and the oblique face's supporting plane,
 	// but an edge×box SAT axis separates it from the triangular face.
 	assert(tetra.IntersectBox(Box(0.80,0.30,-0.20,0.90,0.40,0.10)) == iga::BoxContact::None);
 	assert(tetra.IntersectBox(Box(0.70,0.20,-0.05,0.85,0.35,0.10)) == iga::BoxContact::Interior);
+	// This box intersects only the large oblique face x+y+z=4: every face
+	// edge and vertex lies outside the box, so vertex containment cannot decide it.
+	const iga::SurfaceSpatialIndex large_tetra(iga::ClosedTriangulatedSurface::Build(TransformedTetrahedron(4.0, {{0,0,0}})));
+	assert(large_tetra.IntersectBox(Box(1,1,1,2,2,2)) == iga::BoxContact::Interior);
+	const iga::SurfaceSpatialIndex translated_tetra(iga::ClosedTriangulatedSurface::Build(TransformedTetrahedron(1.0, {{1024,-2048,4096}})));
+	assert(translated_tetra.IntersectBox(Box(1024,-2048,4096,1025,-2047,4097)) == iga::BoxContact::Interior);
+	const iga::SurfaceSpatialIndex scaled_tetra(iga::ClosedTriangulatedSurface::Build(TransformedTetrahedron(8.0, {{0,0,0}})));
+	assert(scaled_tetra.IntersectBox(Box(0,0,0,8,8,8)) == iga::BoxContact::Interior);
 	assert(index.IntersectBox(Box(0.2,0.2,0.2,0.8,0.8,0.8)) == iga::BoxContact::None);
 	assert(index.IntersectBox(Box(-0.1,0.2,0.2,0.1,0.8,0.8)) == iga::BoxContact::Interior);
 	assert(index.IntersectBox(Box(1.0,0.2,0.2,1.0,0.8,0.8)) == iga::BoxContact::BoundaryOnly);

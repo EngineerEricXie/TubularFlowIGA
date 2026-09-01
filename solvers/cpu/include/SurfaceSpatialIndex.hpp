@@ -153,21 +153,35 @@ private:
 	}
 	BoxContact TriangleBoxContact(std::size_t id, const SurfaceAabb& box) const
 	{
-		using exact_dyadic::Add; using exact_dyadic::CompareSigned; using exact_dyadic::Cross; using exact_dyadic::Dot; using exact_dyadic::FromDouble; using exact_dyadic::Multiply; using exact_dyadic::Point; using exact_dyadic::PointFromDouble; using exact_dyadic::Sign; using exact_dyadic::Subtract; using exact_dyadic::SubtractPoint;
+		using exact_dyadic::Add; using exact_dyadic::CompareSigned; using exact_dyadic::Cross; using exact_dyadic::Dot; using exact_dyadic::FromDouble; using exact_dyadic::Multiply; using exact_dyadic::Negate; using exact_dyadic::Number; using exact_dyadic::Point; using exact_dyadic::PointFromDouble; using exact_dyadic::Sign; using exact_dyadic::Subtract; using exact_dyadic::SubtractPoint;
 		const auto& tri = surface_.Triangles()[id]; const auto& vertices = surface_.Vertices(); const std::array<Point, 3> p{{PointFromDouble(vertices[tri.indices[0]]), PointFromDouble(vertices[tri.indices[1]]), PointFromDouble(vertices[tri.indices[2]])}};
 		const Point e0 = SubtractPoint(p[1], p[0]), e1 = SubtractPoint(p[2], p[1]), e2 = SubtractPoint(p[0], p[2]);
 		std::array<Point, 13> axes{}; axes[0] = {{FromDouble(1),FromDouble(0),FromDouble(0)}}; axes[1] = {{FromDouble(0),FromDouble(1),FromDouble(0)}}; axes[2] = {{FromDouble(0),FromDouble(0),FromDouble(1)}}; axes[3] = Cross(e0,e1); std::size_t next = 4;
 		for (const auto& edge : {e0,e1,e2}) for (std::size_t coordinate = 0; coordinate < 3; ++coordinate) { Point unit{{FromDouble(0),FromDouble(0),FromDouble(0)}}; unit[coordinate]=FromDouble(1); axes[next++] = Cross(edge,unit); }
-		const Point lower = PointFromDouble(box.minimum), upper = PointFromDouble(box.maximum); bool strict_all = true;
+		const Point lower = PointFromDouble(box.minimum), upper = PointFromDouble(box.maximum);
+		const Number two = FromDouble(2); bool strict_all = true, positive_volume = true;
+		for (std::size_t coordinate = 0; coordinate < 3; ++coordinate)
+			if (CompareSigned(upper[coordinate], lower[coordinate]) <= 0) positive_volume = false;
 		for (const auto& axis : axes) {
 			if (Sign(axis[0]) == 0 && Sign(axis[1]) == 0 && Sign(axis[2]) == 0) continue;
-			auto minimum = Dot(p[0],axis), maximum = minimum; for (std::size_t corner = 1; corner < 3; ++corner) { const auto value = Dot(p[corner],axis); if (CompareSigned(value,minimum)<0) minimum=value; if (CompareSigned(value,maximum)>0) maximum=value; }
-			auto box_min = FromDouble(0), box_max = FromDouble(0); for (std::size_t coordinate=0; coordinate<3; ++coordinate) { const auto low = Multiply(axis[coordinate],lower[coordinate]), high = Multiply(axis[coordinate],upper[coordinate]); box_min=Add(box_min,CompareSigned(low,high)<0?low:high); box_max=Add(box_max,CompareSigned(low,high)<0?high:low); }
-			if (CompareSigned(maximum,box_min)<0 || CompareSigned(minimum,box_max)>0) return BoxContact::None;
-			if (CompareSigned(maximum,box_min)==0 || CompareSigned(minimum,box_max)==0) strict_all=false;
+			Number radius, minimum, maximum;
+			for (std::size_t coordinate = 0; coordinate < 3; ++coordinate) {
+				const Number extent = Subtract(upper[coordinate], lower[coordinate]);
+				const Number magnitude = Sign(axis[coordinate]) < 0 ? Negate(axis[coordinate]) : axis[coordinate];
+				radius = Add(radius, Multiply(magnitude, extent));
+			}
+			for (std::size_t vertex = 0; vertex < 3; ++vertex) {
+				Number value;
+				for (std::size_t coordinate = 0; coordinate < 3; ++coordinate)
+					value = Add(value, Multiply(axis[coordinate], Subtract(Multiply(two, p[vertex][coordinate]), Add(lower[coordinate], upper[coordinate]))));
+				if (vertex == 0 || CompareSigned(value, minimum) < 0) minimum = value;
+				if (vertex == 0 || CompareSigned(value, maximum) > 0) maximum = value;
+			}
+			const Number negative_radius = Negate(radius);
+			if (CompareSigned(maximum, negative_radius) < 0 || CompareSigned(minimum, radius) > 0) return BoxContact::None;
+			if (CompareSigned(maximum, negative_radius) <= 0 || CompareSigned(minimum, radius) >= 0) strict_all = false;
 		}
-		for (std::size_t axis=0; axis<3; ++axis) if (exact_dyadic::CoordinateDifferenceSign(box.maximum[axis],box.minimum[axis]) <= 0) strict_all=false;
-		return strict_all ? BoxContact::Interior : BoxContact::BoundaryOnly;
+		return positive_volume && strict_all ? BoxContact::Interior : BoxContact::BoundaryOnly;
 	}
 
 	ClosedTriangulatedSurface surface_;
