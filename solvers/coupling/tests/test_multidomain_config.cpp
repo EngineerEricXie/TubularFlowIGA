@@ -94,7 +94,11 @@ std::string ValidSpeciesConfiguration()
     {"id":"drug_parent","concentration_unit":"mol/m^3"}
   ],
   "time":{"dt":0.01,"steps":2},"start_domain":"upstream",
-  "execution":{"kind":"explicit"},
+  "execution":{"kind":"explicit",
+    "species_routing":{"flow_switch_m3_s":1e-12,"flow_absolute_tolerance_m3_s":1e-14,"flow_relative_tolerance":1e-8},
+    "species_amount_tolerances":{
+      "tracer_alpha":{"absolute_tolerance":1e-15,"reference_amount":1e-12,"relative_tolerance":1e-7},
+      "drug_parent":{"absolute_tolerance":2e-15,"reference_amount":2e-12,"relative_tolerance":2e-7}}},
   "domains":[
     {"id":"upstream","dimension":"1d","kind":"network_flow",
      "case":"upstream","inlet_policy":"configured_open_loop",
@@ -147,6 +151,30 @@ int main()
 			== "native_tracer");
 		assert(species.graph.Edge("interface").species
 			== std::set<std::string>({"drug_parent", "tracer_alpha"}));
+		assert(species.execution.species_routing->flow_switch_m3_s == 1.0e-12);
+		assert(species.execution.species_amount_tolerances.at("drug_parent").reference_amount
+			== 2.0e-12);
+		const auto species_controls = iga::SpeciesPressureFlowControlsFor(species);
+		assert(species_controls.amount_tolerances.size() == 2
+			&& species_controls.routing.flow_relative_tolerance == 1.0e-8);
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+			"\"species_routing\":{\"flow_switch_m3_s\":1e-12,\"flow_absolute_tolerance_m3_s\":1e-14,\"flow_relative_tolerance\":1e-8},",
+			""));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+			"\"drug_parent\":{\"absolute_tolerance\":2e-15,\"reference_amount\":2e-12,\"relative_tolerance\":2e-7}",
+			"\"extra\":{\"absolute_tolerance\":2e-15,\"reference_amount\":2e-12,\"relative_tolerance\":2e-7}"));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+			"\"flow_relative_tolerance\":1e-8", "\"flow_relative_tolerance\":0"));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+			"\"relative_tolerance\":1e-7", "\"relative_tolerance\":0"));
+		});
 		RequireRejected([] {
 			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
 				"{\"id\":\"drug_parent\",\"concentration_unit\":\"mol/m^3\"}",
@@ -172,6 +200,15 @@ int main()
 	assert(configuration.start_domain_id == "upstream");
 	assert(configuration.execution.kind == iga::GraphExecutionKind::Aitken);
 	assert(configuration.execution.maximum_iterations == 12);
+	assert(!configuration.execution.species_routing
+		&& configuration.execution.species_amount_tolerances.empty());
+	RequireRejected([&configuration] {
+		(void)iga::SpeciesPressureFlowControlsFor(configuration.execution);
+	});
+	RequireRejected([] {
+		iga::ParseMultidomainConfiguration(Replace(ValidConfiguration(),
+			"\"kind\": \"aitken\"", "\"kind\": \"aitken\",\"species_routing\":{}"));
+	});
 	assert(configuration.domains.size() == 3);
 	assert(configuration.domains[0].one_d_inlet_policy
 		== iga::OneDInletPolicy::ConfiguredOpenLoop);

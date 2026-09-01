@@ -4,11 +4,13 @@
 #include "CaseConfig.hpp"
 #include "FlowDomainPortMetadata.hpp"
 #include "SimulationGraph.hpp"
+#include "SpeciesCoupling.hpp"
 
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -33,6 +35,8 @@ struct GraphExecutionDefinition {
 	double relaxation_factor = 0.5;
 	double minimum_relaxation = 0.05;
 	double maximum_relaxation = 1.0;
+	std::optional<SpeciesRoutingControls> species_routing;
+	std::map<std::string, SpeciesAmountTolerance> species_amount_tolerances;
 };
 
 struct GraphDomainDefinition {
@@ -248,12 +252,76 @@ inline PortRef ParseEndpoint(const JsonValue& value, const std::string& context)
 		RequireString(Required(object, "port", context), context+".port")};
 }
 
-inline GraphExecutionDefinition ParseExecution(const JsonValue& value)
+inline SpeciesRoutingControls ParseSpeciesRoutingControls(const JsonValue& value)
+{
+	const auto& object = RequireObject(value, "execution.species_routing");
+	RequireKnownKeys(object, {"flow_switch_m3_s", "flow_absolute_tolerance_m3_s",
+		"flow_relative_tolerance"}, "execution.species_routing");
+	SpeciesRoutingControls result;
+	result.flow_switch_m3_s = RequireNumber(Required(object, "flow_switch_m3_s",
+		"execution.species_routing"), "execution.species_routing.flow_switch_m3_s");
+	result.flow_absolute_tolerance_m3_s = RequireNumber(Required(object,
+		"flow_absolute_tolerance_m3_s", "execution.species_routing"),
+		"execution.species_routing.flow_absolute_tolerance_m3_s");
+	result.flow_relative_tolerance = RequireNumber(Required(object,
+		"flow_relative_tolerance", "execution.species_routing"),
+		"execution.species_routing.flow_relative_tolerance");
+	try { result.Validate(); }
+	catch (const std::exception&) {
+		throw std::runtime_error("simulation_config.json: species routing controls are invalid");
+	}
+	return result;
+}
+
+inline std::map<std::string, SpeciesAmountTolerance> ParseSpeciesAmountTolerances(
+	const JsonValue& value, const std::map<std::string, SpeciesDefinition>& species)
+{
+	const auto& object = RequireObject(value, "execution.species_amount_tolerances");
+	if (object.empty() || object.size() != species.size())
+		throw std::runtime_error("simulation_config.json: species amount tolerances require exact species coverage");
+	std::map<std::string, SpeciesAmountTolerance> result;
+	for (const auto& definition : species) {
+		const auto found = object.find(definition.first);
+		if (found == object.end())
+			throw std::runtime_error("simulation_config.json: species amount tolerances are missing '"
+				+definition.first+"'");
+		const auto context = "execution.species_amount_tolerances."+definition.first;
+		const auto& tolerance = RequireObject(found->second, context);
+		RequireKnownKeys(tolerance, {"absolute_tolerance", "reference_amount",
+			"relative_tolerance"}, context);
+		SpeciesAmountTolerance parsed;
+		parsed.absolute_tolerance = RequireNumber(Required(tolerance, "absolute_tolerance", context),
+			context+".absolute_tolerance");
+		parsed.reference_amount = RequireNumber(Required(tolerance, "reference_amount", context),
+			context+".reference_amount");
+		parsed.relative_tolerance = RequireNumber(Required(tolerance, "relative_tolerance", context),
+			context+".relative_tolerance");
+		try { parsed.Validate(); }
+		catch (const std::exception&) {
+			throw std::runtime_error("simulation_config.json: species amount tolerance is invalid for '"
+				+definition.first+"'");
+		}
+		result.emplace(definition.first, parsed);
+	}
+	for (const auto& value : object)
+		if (!species.count(value.first))
+			throw std::runtime_error("simulation_config.json: species amount tolerance references undeclared species '"
+				+value.first+"'");
+	return result;
+}
+
+inline GraphExecutionDefinition ParseExecution(const JsonValue& value, int schema_version,
+	const std::map<std::string, SpeciesDefinition>& species)
 {
 	const auto& object = RequireObject(value, "execution");
-	RequireKnownKeys(object, {"kind", "maximum_iterations", "pressure_relative_tolerance",
+	auto keys = std::set<std::string>{"kind", "maximum_iterations", "pressure_relative_tolerance",
 		"pressure_reference_pa", "flow_relative_tolerance", "relaxation_factor",
-		"minimum_relaxation", "maximum_relaxation"}, "execution");
+		"minimum_relaxation", "maximum_relaxation"};
+	if (schema_version == 6) {
+		keys.insert("species_routing");
+		keys.insert("species_amount_tolerances");
+	}
+	RequireKnownKeys(object, keys, "execution");
 	GraphExecutionDefinition result;
 	const auto kind = RequireString(Required(object, "kind", "execution"), "execution.kind");
 	if (kind == "explicit") result.kind = GraphExecutionKind::Explicit;
@@ -276,6 +344,12 @@ inline GraphExecutionDefinition ParseExecution(const JsonValue& value)
 		result.minimum_relaxation = RequireNumber(*item, "execution.minimum_relaxation");
 	if (const auto* item = Find(object, "maximum_relaxation"))
 		result.maximum_relaxation = RequireNumber(*item, "execution.maximum_relaxation");
+	if (schema_version == 6) {
+		result.species_routing = ParseSpeciesRoutingControls(Required(object,
+			"species_routing", "execution"));
+		result.species_amount_tolerances = ParseSpeciesAmountTolerances(Required(object,
+			"species_amount_tolerances", "execution"), species);
+	}
 	if (result.maximum_iterations < 1 || !(result.pressure_relative_tolerance > 0.0)
 		|| !(result.pressure_reference_pa > 0.0) || !(result.flow_relative_tolerance > 0.0)
 		|| !(result.relaxation_factor > 0.0) || result.relaxation_factor > 1.0
@@ -334,7 +408,8 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		throw std::runtime_error("simulation_config.json: graph time requires positive dt and steps");
 	const auto start_domain = RequireString(Required(root, "start_domain", "root"),
 		"start_domain");
-	const auto execution = ParseExecution(Required(root, "execution", "root"));
+	const auto execution = ParseExecution(Required(root, "execution", "root"), schema_version,
+		MakeSpeciesRegistry(species));
 	std::vector<GraphDomainDefinition> domains;
 	std::vector<DomainNode> nodes;
 	const auto& domain_values = RequireArray(Required(root, "domains", "root"), "domains");

@@ -3,6 +3,7 @@
 
 #include "MultidomainConfig.hpp"
 #include "PressureFlowComponentExecutor.hpp"
+#include "SpeciesPressureFlowComponentExecutor.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -204,6 +205,32 @@ inline PressureFlowExecutionControls PressureFlowControlsFor(
 	controls.minimum_relaxation = definition.minimum_relaxation;
 	controls.maximum_relaxation = definition.maximum_relaxation;
 	ValidatePressureFlowExecutionControls(controls);
+	return controls;
+}
+
+inline SpeciesPressureFlowExecutionControls SpeciesPressureFlowControlsFor(
+	const GraphExecutionDefinition& definition)
+{
+	if (!definition.species_routing || definition.species_amount_tolerances.empty())
+		throw std::runtime_error(
+			"graph execution has no complete schema-v6 species execution controls");
+	SpeciesPressureFlowExecutionControls controls;
+	controls.hydraulic = PressureFlowControlsFor(definition);
+	controls.routing = *definition.species_routing;
+	controls.amount_tolerances = definition.species_amount_tolerances;
+	controls.Validate();
+	return controls;
+}
+
+inline SpeciesPressureFlowExecutionControls SpeciesPressureFlowControlsFor(
+	const MultidomainConfiguration& configuration)
+{
+	auto controls = SpeciesPressureFlowControlsFor(configuration.execution);
+	if (controls.amount_tolerances.size() != configuration.graph.Species().size())
+		throw std::runtime_error("graph execution species amount tolerances have incomplete coverage");
+	for (const auto& species : configuration.graph.Species())
+		if (!controls.amount_tolerances.count(species.first))
+			throw std::runtime_error("graph execution species amount tolerances have incomplete coverage");
 	return controls;
 }
 

@@ -15,20 +15,6 @@
 
 namespace iga {
 
-struct SpeciesAmountTolerance {
-	double absolute_tolerance = 0.0;
-	double reference_amount = 0.0;
-	double relative_tolerance = 1.0e-10;
-
-	void Validate() const
-	{
-		if (!(absolute_tolerance >= 0.0) || !std::isfinite(absolute_tolerance)
-			|| !(reference_amount >= 0.0) || !std::isfinite(reference_amount)
-			|| !(relative_tolerance > 0.0) || !std::isfinite(relative_tolerance))
-			throw std::runtime_error("species amount tolerance is invalid");
-	}
-};
-
 struct SpeciesPressureFlowExecutionControls {
 	PressureFlowExecutionControls hydraulic;
 	SpeciesRoutingControls routing;

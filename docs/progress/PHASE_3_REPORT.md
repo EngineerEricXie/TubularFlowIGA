@@ -273,6 +273,14 @@ edge/domain/global gates; callback, transport, and partial-prepare failure; and
 cleanup error aggregation. Focused Sol review and re-review accepted the
 formulation, conservation scales, ownership, and transaction semantics.
 
-The remaining PR 3.2 work is schema-v6 execution-control plumbing and native
-runner integration. PR 3.3 then closes the phase with a two-species
-1D-to-3D-to-1D production regression and verified per-species global balances.
+Schema v6 now requires explicit `execution.species_routing` controls and an
+exact `execution.species_amount_tolerances` entry for every declared species.
+Each amount entry supplies its unit-bearing absolute tolerance and reference
+amount plus a dimensionless relative tolerance. Values are finite and validated;
+missing or extra species fail parsing. Schema v5 rejects these keys and retains
+its prior defaults and conversion path. A validated conversion produces the
+executor controls without changing their numerical formulas.
+
+The remaining PR 3.2 work is native runner integration. PR 3.3 then closes the
+phase with a two-species 1D-to-3D-to-1D production regression and verified
+per-species global balances.

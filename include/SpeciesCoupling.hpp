@@ -59,6 +59,20 @@ struct SpeciesRoutingControls {
 	}
 };
 
+struct SpeciesAmountTolerance {
+	double absolute_tolerance = 0.0;
+	double reference_amount = 0.0;
+	double relative_tolerance = 1.0e-10;
+
+	void Validate() const
+	{
+		if (!(absolute_tolerance >= 0.0) || !std::isfinite(absolute_tolerance)
+			|| !(reference_amount >= 0.0) || !std::isfinite(reference_amount)
+			|| !(relative_tolerance > 0.0) || !std::isfinite(relative_tolerance))
+			throw std::runtime_error("species amount tolerance is invalid");
+	}
+};
+
 enum class SpeciesDonor { First, Second };
 
 inline SpeciesDonor ResolveSpeciesDonor(double first_outward_flow_m3_s,
