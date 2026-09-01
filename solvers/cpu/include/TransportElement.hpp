@@ -2,6 +2,7 @@
 #define TRANSPORT_ELEMENT_HPP
 
 #include "CaseInput.hpp"
+#include "ElementGeometry.hpp"
 #include "IgaDatabase.hpp"
 
 #include <petscsys.h>
@@ -22,6 +23,8 @@ struct BasisValues {
 	std::vector<std::array<double, 3>> gradient;
 	std::vector<std::array<std::array<double, 3>, 3>> hessian;
 	std::array<std::array<double, 3>, 3> inverse_jacobian{};
+	double raw_determinant = 0.0;
+	// Historical assembly measure: raw det(dx/dxi)/8.  Retained for parity.
 	double determinant = 0.0;
 };
 
@@ -49,27 +52,7 @@ inline void Inverse(const double a[3][3], double inverse[3][3])
 
 inline double ElementJacobianDeterminant(const Element& element, double u, double v, double w)
 {
-	const double b[3][4] = {
-		{std::pow(1.0-u,3), 3.0*std::pow(1.0-u,2)*u, 3.0*(1.0-u)*u*u, u*u*u},
-		{std::pow(1.0-v,3), 3.0*std::pow(1.0-v,2)*v, 3.0*(1.0-v)*v*v, v*v*v},
-		{std::pow(1.0-w,3), 3.0*std::pow(1.0-w,2)*w, 3.0*(1.0-w)*w*w, w*w*w}
-	};
-	const double db[3][4] = {
-		{-3.0*std::pow(1.0-u,2), 3.0-12.0*u+9.0*u*u, 3.0*(2.0-3.0*u)*u, 3.0*u*u},
-		{-3.0*std::pow(1.0-v,2), 3.0-12.0*v+9.0*v*v, 3.0*(2.0-3.0*v)*v, 3.0*v*v},
-		{-3.0*std::pow(1.0-w,2), 3.0-12.0*w+9.0*w*w, 3.0*(2.0-3.0*w)*w, 3.0*w*w}
-	};
-	double jacobian[3][3]{};
-	std::size_t p = 0;
-	for (int k = 0; k < 4; ++k)
-		for (int j = 0; j < 4; ++j)
-			for (int i = 0; i < 4; ++i, ++p) {
-				const double derivative[3] = {db[0][i]*b[1][j]*b[2][k], b[0][i]*db[1][j]*b[2][k], b[0][i]*b[1][j]*db[2][k]};
-				for (int physical = 0; physical < 3; ++physical)
-					for (int parameter = 0; parameter < 3; ++parameter)
-						jacobian[physical][parameter] += element.bezier_points[p][physical] * derivative[parameter];
-			}
-	return 0.125 * Determinant(jacobian);
+	return 0.125 * EvaluateElementGeometry(element, {{u, v, w}}).raw_determinant;
 }
 
 struct GeometryQuality {
@@ -175,7 +158,8 @@ inline BasisValues EvaluateBasis(const Element& element, double u, double v, dou
 	result.gradient.assign(element.connectivity.size(), {0.0, 0.0, 0.0});
 	result.inverse_jacobian = {{{inverse[0][0], inverse[0][1], inverse[0][2]},
 		{inverse[1][0], inverse[1][1], inverse[1][2]}, {inverse[2][0], inverse[2][1], inverse[2][2]}}};
-	result.determinant = 0.125 * Determinant(jacobian);
+	result.raw_determinant = Determinant(jacobian);
+	result.determinant = 0.125 * result.raw_determinant;
 	if (!(result.determinant > 0.0)) throw std::runtime_error("non-positive element Jacobian");
 	for (std::size_t a = 0; a < element.extraction.size(); ++a)
 		for (std::size_t p = 0; p < 64; ++p) {
