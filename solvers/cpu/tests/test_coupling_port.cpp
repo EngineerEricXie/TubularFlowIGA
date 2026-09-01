@@ -115,19 +115,17 @@ int main()
 		invalid.locator.clear();
 		iga::ValidateCouplingPort(invalid);
 	}, "empty locator");
-	RequireRejected([&port] {
-		auto invalid = port;
-		invalid.provides.insert(iga::PortQuantity::SpeciesConcentration);
-		iga::ValidateCouplingPort(invalid);
-	}, "contradictory quantity declaration");
+	auto bidirectional = port;
+	bidirectional.provides.insert(iga::PortQuantity::SpeciesConcentration);
+	iga::ValidateCouplingPort(bidirectional);
+	assert(bidirectional.provides.count(iga::PortQuantity::SpeciesConcentration));
+	assert(bidirectional.requires.count(iga::PortQuantity::SpeciesConcentration));
 	RequireRejected([] {
 		iga::ValidatePortQuantityDeclarations(
 			{iga::PortQuantity::FlowRate, iga::PortQuantity::FlowRate}, {});
 	}, "duplicate provided quantity declaration");
-	RequireRejected([] {
-		iga::ValidatePortQuantityDeclarations({iga::PortQuantity::FlowRate},
-			{iga::PortQuantity::FlowRate});
-	}, "provided and required quantity declaration");
+	iga::ValidatePortQuantityDeclarations({iga::PortQuantity::FlowRate},
+		{iga::PortQuantity::FlowRate});
 	RequireRejected([] {
 		iga::ValidatePortQuantityDeclarations(
 			{static_cast<iga::PortQuantity>(99)}, {});

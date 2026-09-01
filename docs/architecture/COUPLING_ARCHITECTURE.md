@@ -1,8 +1,9 @@
 # Coupling Architecture
 
-Status: Phase 1 in progress. The documented 3D and native 1D flow lifecycle
-boundaries are implemented, along with a narrow explicit straight-chain
-prototype; general multidomain coupling remains deferred.
+Status: Phase 1 complete; Phase 2 in progress. The verified 1D--3D--1D
+lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
+topology. Generic runtime-owned graph execution and schema v5 remain deferred
+to the subsequent Phase 2 PRs.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
@@ -205,8 +206,13 @@ Field presence in `PortBoundaryData` is explicit. A numeric zero is valid data
 and must not mean "not provided." Species concentration units are defined by
 each configured species; species flux uses concentration unit times m^3/s.
 The first implementation validates finite values, positive area when area is
-provided, a sign of exactly `+1` or `-1`, unique non-empty identifiers, and no
-quantity appearing in both `provides` and `requires` for the same direction.
+provided, a sign of exactly `+1` or `-1`, and unique non-empty identifiers.
+Beginning with PR 2.1, `provides` means a quantity readable from a logical
+physical port and `requires` means a boundary quantity accepted at that port.
+The sets may overlap: a controlled 3D inlet, for example, both accepts a target
+flow and reports its realized flow for conservation. Edge-law validation, not
+an artificial split into input and measurement port IDs, determines whether
+the bidirectional exchange is well posed.
 
 ## SI units and sign convention
 
@@ -401,6 +407,39 @@ claiming compliant-wave behavior.
 
 Schema v5 is deferred until a runnable multidomain graph exists. No file
 format version is introduced for runtime-only coupling data.
+
+## Phase 2 PR 2.1 topology boundary
+
+`SimulationGraph` is initially an immutable, dependency-free topology object.
+It owns copied `DomainNode` and `CouplingEdge` metadata, not solver runtimes.
+Each domain has its own `DomainKind`; there is no case-global dimension. A
+typed `pressure_flow` edge joins two logical ports and requires one flow
+receiver opposite one mean-pressure receiver. Both endpoints must report flow
+and pressure, so outward-flow conservation and pressure diagnostics remain
+available independently of which boundary value each side accepts.
+
+The existing production driver now constructs the in-memory
+`upstream 1D -- body-fitted 3D -- downstream 1D` graph after its established
+backend preflight. It obtains the runtime port locators and unified 3D inlet and
+outlet descriptors from that graph, then retains the verified Phase 1 solve,
+rollback, commit, diagnostics, and output sequence unchanged. A sequential
+plan requires an explicit start domain and accepts only one connected,
+heterogeneous, acyclic chain. The core graph itself permits branches and
+disconnected components so PR 2.4 and PR 2.5 do not require a topology rewrite;
+their executors will add the corresponding execution plans.
+
+Runtime ownership is deliberately deferred to PR 2.3. The native 1D and 3D
+APIs are not yet substitutable: the 3D lifecycle needs solver controls and a
+materialized boundary configuration, while scalar inlet flow is converted to
+a profile outside `SetPortInput`. Moving those details behind domain adapters
+must occur together with multi-interface transaction design, including how an
+opened trial is aborted and how partial graph commits are prevented. Coupling
+algorithm state also belongs to a connected-component integrator rather than
+individual edges because the current two interface pressures form one Aitken
+residual vector.
+
+No schema parser or file format changes in PR 2.1. Schema v5 remains deferred
+until the graph has runtime adapters and a runnable graph-authored case.
 
 ## Validation manifest
 

@@ -178,9 +178,6 @@ inline void ValidatePortQuantityDeclarations(const std::vector<PortQuantity>& pr
 		if (!required.insert(quantity).second)
 			throw std::runtime_error(std::string("port requires duplicate quantity ")
 				+PortQuantityName(quantity));
-		if (provided.count(quantity))
-			throw std::runtime_error(std::string("port both provides and requires quantity ")
-				+PortQuantityName(quantity));
 	}
 	if (provided.empty() && required.empty())
 		throw std::runtime_error("port must provide or require at least one quantity");
