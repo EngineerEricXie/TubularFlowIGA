@@ -48,6 +48,22 @@ compatibility.
 
 ## PR 3.2 numerical gate
 
+### Transactional 3D transport foundation
+
+`TransientTransportRuntime` now has the same trial lifecycle needed by a
+composite flow/transport adapter: `BeginStep`, deterministic `SolveTrial`,
+`RollbackTrial`, idempotent `AbortStep`, two-stage prepare/finalize, and the
+existing `Advance` compatibility wrapper. The committed PETSc concentration
+vector and logical step count are snapshotted and restored together. Failed or
+replayed trials cannot increment physical time state, and finalization is
+nonthrowing. The legacy VCA runtime regression covers exact rollback, exact
+replay, one commit, open-step abort, and `Advance` parity.
+The focused Sol review accepted physical-state ownership, failed-solve
+recovery, prepared-step abort, nonthrowing finalization, checkpoint refresh,
+and legacy wrapper semantics.
+
+The remaining numerical gate is:
+
 Flow and species will share one graph transaction: converge flow, hold the
 accepted velocity, perform rollback-safe species trials, validate interface
 and global balances, then prepare all domains before any finalization. The 3D

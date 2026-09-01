@@ -185,7 +185,7 @@ configuration are rebuildable or reusable scratch and are not physical state.
 | 3D flow runtime | `outlet_models_`, including flow, pressure, and capacitor pressure | Snapshot and restore with the flow vector. |
 | 3D flow runtime | `boundaries_` and `pressure_tractions_` | Treat materialized trial inputs as trial state; restore the committed values. |
 | 3D flow runtime | linear/nonlinear diagnostic counters | Trial diagnostics remain attributable to the attempt; physical cumulative counters update only on commit. |
-| 3D transport runtime | PETSc `current_` and logical `steps_` | Add to the coupled snapshot when transport enters the lifecycle; do not advance on rejected flow trials. |
+| 3D transport runtime | PETSc `current_` and logical `steps_` | `BeginStep` snapshots both; rollback/abort restore both; prepare/finalize publish once. Do not advance on rejected flow trials. |
 | 3D CLI/VCA | `VcaExternalCircuit` state, last arterial species, and previous species mass | Advance exactly once after the coupled step converges. |
 | 1D flow runtime | area, flow, pressure, nodal pressure, segment flow, inlet flow, outlet/RCR states | Copy as one committed `OneDFlowState` snapshot. |
 | 1D flow runtime | physical time, completed step, internal substep count | Advance in the trial copy; publish only on commit. |

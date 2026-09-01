@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <map>
 #include <stdexcept>
@@ -19,6 +20,8 @@
 #include <vector>
 
 namespace iga {
+
+enum class TransportStepPhase { Committed, TrialOpen, TrialSolved, CommitPrepared };
 
 class TransientTransportRuntime {
 public:
@@ -45,6 +48,7 @@ public:
 		previous_ = assembler_.CreateMatrix(coupling_patterns_.previous);
 		forcing_ = assembler_.CreateVector();
 		current_ = assembler_.CreateVector();
+		committed_ = assembler_.CreateVector();
 		next_ = assembler_.CreateVector();
 		rhs_ = assembler_.CreateVector();
 		MatSetOption(left_, MAT_KEEP_NONZERO_PATTERN, PETSC_TRUE);
@@ -61,6 +65,7 @@ public:
 				values[local] = boundaries.constrained[global] ? boundaries.value[global] : initial[field];
 			}
 		VecRestoreArray(current_, &values);
+		VecCopy(current_, committed_);
 		BuildGhostScatter();
 		KSPCreate(communicator_, &solver_);
 		KSPSetType(solver_, KSPGMRES);
@@ -79,7 +84,8 @@ public:
 		ISDestroy(&destination_rows_);
 		VecDestroy(&ghost_state_);
 		ISDestroy(&source_rows_);
-		VecDestroy(&rhs_); VecDestroy(&next_); VecDestroy(&current_); VecDestroy(&forcing_);
+		VecDestroy(&rhs_); VecDestroy(&next_); VecDestroy(&committed_);
+		VecDestroy(&current_); VecDestroy(&forcing_);
 		MatDestroy(&previous_); MatDestroy(&left_);
 	}
 
@@ -87,8 +93,36 @@ public:
 		const std::vector<std::int32_t>& velocity_nodes,
 		const std::vector<std::array<double, 3>>& velocity)
 	{
+		BeginStep();
+		try {
+			SolveTrial(step_configuration, velocity_nodes, velocity);
+			PrepareCommitStep();
+			FinalizeCommitStep();
+		} catch (...) {
+			AbortStep();
+			throw;
+		}
+	}
+
+	void BeginStep()
+	{
+		RequirePhase(TransportStepPhase::Committed, "BeginStep");
+		VecCopy(current_, committed_);
+		committed_steps_ = steps_;
+		trial_solve_succeeded_ = false;
+		phase_ = TransportStepPhase::TrialOpen;
+	}
+
+	void SolveTrial(const SimulationConfiguration& step_configuration,
+		const std::vector<std::int32_t>& velocity_nodes,
+		const std::vector<std::array<double, 3>>& velocity)
+	{
+		RequirePhase(TransportStepPhase::TrialOpen, "SolveTrial");
 		if (velocity_nodes != ghost_nodes_ || velocity.size() != ghost_nodes_.size())
 			throw std::runtime_error("VCA transport velocity nodes do not match required transport nodes");
+		RestoreCommitted();
+		trial_solve_succeeded_ = false;
+		try {
 		const auto boundaries = ResolveScalarBoundaries(step_configuration, system_, labels_);
 		MatZeroEntries(left_);
 		MatZeroEntries(previous_);
@@ -127,7 +161,54 @@ public:
 		KSPGetConvergedReason(solver_, &reason);
 		if (reason <= 0) throw std::runtime_error("VCA transport linear solve did not converge");
 		VecSwap(current_, next_);
-		++steps_;
+		steps_ = committed_steps_+1;
+		trial_solve_succeeded_ = true;
+		phase_ = TransportStepPhase::TrialSolved;
+		} catch (...) {
+			phase_ = TransportStepPhase::TrialSolved;
+			throw;
+		}
+	}
+
+	void RollbackTrial()
+	{
+		RequirePhase(TransportStepPhase::TrialSolved, "RollbackTrial");
+		RestoreCommitted();
+		trial_solve_succeeded_ = false;
+		phase_ = TransportStepPhase::TrialOpen;
+	}
+
+	void AbortStep()
+	{
+		if (phase_ == TransportStepPhase::Committed) return;
+		if (phase_ != TransportStepPhase::TrialOpen
+			&& phase_ != TransportStepPhase::TrialSolved
+			&& phase_ != TransportStepPhase::CommitPrepared)
+			throw std::runtime_error("illegal transport runtime transition: AbortStep");
+		RestoreCommitted();
+		trial_solve_succeeded_ = false;
+		phase_ = TransportStepPhase::Committed;
+	}
+
+	void PrepareCommitStep()
+	{
+		RequirePhase(TransportStepPhase::TrialSolved, "PrepareCommitStep");
+		if (!trial_solve_succeeded_)
+			throw std::runtime_error(
+				"transport PrepareCommitStep requires a successful trial solve");
+		phase_ = TransportStepPhase::CommitPrepared;
+	}
+
+	void FinalizeCommitStep() noexcept
+	{
+		if (phase_ != TransportStepPhase::CommitPrepared) std::terminate();
+		phase_ = TransportStepPhase::Committed;
+	}
+
+	void CommitStep()
+	{
+		PrepareCommitStep();
+		FinalizeCommitStep();
 	}
 
 	std::vector<double> GatherState() const
@@ -170,12 +251,18 @@ public:
 
 	void ReadState(const std::filesystem::path& path)
 	{
+		RequirePhase(TransportStepPhase::Committed, "ReadState");
 		PetscViewer viewer = nullptr;
 		PetscViewerBinaryOpen(communicator_, path.string().c_str(), FILE_MODE_READ, &viewer);
 		VecLoad(current_, viewer);
 		PetscViewerDestroy(&viewer);
 		steps_ = 1;
+		VecCopy(current_, committed_);
+		committed_steps_ = steps_;
 	}
+
+	TransportStepPhase Phase() const noexcept { return phase_; }
+	int Steps() const noexcept { return steps_; }
 
 	std::map<std::string, double> TotalMass(const std::vector<double>& state) const
 	{
@@ -264,6 +351,19 @@ public:
 	}
 
 private:
+	void RequirePhase(TransportStepPhase required, const char* operation) const
+	{
+		if (phase_ != required)
+			throw std::runtime_error(std::string("transport ")+operation
+				+" called in an invalid lifecycle phase");
+	}
+
+	void RestoreCommitted()
+	{
+		VecCopy(committed_, current_);
+		steps_ = committed_steps_;
+	}
+
 	void BuildGhostScatter()
 	{
 		for (const auto& element : assembler_.elements())
@@ -302,12 +402,16 @@ private:
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;
 	Mat left_ = nullptr, previous_ = nullptr;
-	Vec forcing_ = nullptr, current_ = nullptr, next_ = nullptr, rhs_ = nullptr;
+	Vec forcing_ = nullptr, current_ = nullptr, committed_ = nullptr;
+	Vec next_ = nullptr, rhs_ = nullptr;
 	IS source_rows_ = nullptr, destination_rows_ = nullptr;
 	Vec ghost_state_ = nullptr;
 	VecScatter scatter_ = nullptr;
 	KSP solver_ = nullptr;
 	int steps_ = 0;
+	int committed_steps_ = 0;
+	bool trial_solve_succeeded_ = false;
+	TransportStepPhase phase_ = TransportStepPhase::Committed;
 };
 
 } // namespace iga

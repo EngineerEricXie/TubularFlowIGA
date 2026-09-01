@@ -564,8 +564,46 @@ int main(int argc, char** argv)
 			initial_configuration, system, std::vector<int>(64, 1));
 		auto step_configuration = MakeConfiguration(2.0);
 		assert(runtime.RequiredNodes().size() == 64);
-		runtime.Advance(step_configuration, runtime.RequiredNodes(),
-			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}));
+		const auto transport_velocity
+			= std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0});
+		const auto initial_transport_state = runtime.GatherState();
+		runtime.BeginStep();
+		RequireRejected([&runtime] { runtime.BeginStep(); },
+			"nested transport BeginStep");
+		runtime.SolveTrial(step_configuration, runtime.RequiredNodes(), transport_velocity);
+		const auto first_transport_trial = runtime.GatherState();
+		assert(first_transport_trial != initial_transport_state);
+		assert(runtime.Steps() == 1);
+		runtime.RollbackTrial();
+		assert(runtime.GatherState() == initial_transport_state);
+		assert(runtime.Steps() == 0);
+		runtime.SolveTrial(step_configuration, runtime.RequiredNodes(), transport_velocity);
+		assert(runtime.GatherState() == first_transport_trial);
+		runtime.PrepareCommitStep();
+		assert(runtime.Phase() == iga::TransportStepPhase::CommitPrepared);
+		runtime.FinalizeCommitStep();
+		assert(runtime.Phase() == iga::TransportStepPhase::Committed);
+		assert(runtime.Steps() == 1);
+		runtime.AbortStep();
+		assert(runtime.GatherState() == first_transport_trial);
+		runtime.BeginStep();
+		RequireRejected([&runtime] { runtime.PrepareCommitStep(); },
+			"transport prepare before solve");
+		runtime.SolveTrial(step_configuration, runtime.RequiredNodes(), transport_velocity);
+		runtime.PrepareCommitStep();
+		runtime.AbortStep();
+		assert(runtime.Phase() == iga::TransportStepPhase::Committed);
+		assert(runtime.GatherState() == first_transport_trial);
+		assert(runtime.Steps() == 1);
+		iga::TransientTransportRuntime advance_transport(database, PETSC_COMM_WORLD,
+			initial_configuration, system, std::vector<int>(64, 1));
+		advance_transport.Advance(step_configuration, advance_transport.RequiredNodes(),
+			transport_velocity);
+		assert(advance_transport.GatherState() == first_transport_trial);
+		runtime.BeginStep();
+		runtime.AbortStep();
+		assert(runtime.GatherState() == first_transport_trial);
+		assert(runtime.Steps() == 1);
 		const auto state = runtime.GatherState();
 		const auto required_state = runtime.GatherRequiredState();
 		assert(state.size() == 64);
