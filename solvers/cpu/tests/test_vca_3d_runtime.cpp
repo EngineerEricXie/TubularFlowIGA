@@ -1,5 +1,6 @@
 #include "CouplingPort.hpp"
 #include "IgaDatabase.hpp"
+#include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "TransientFlowRuntime.hpp"
 #include "TransientTransportRuntime.hpp"
 
@@ -479,6 +480,46 @@ int main(int argc, char** argv)
 		assert(lifecycle.Summary().linear_iterations == first_trial_iterations);
 		assert(lifecycle.TrialLinearIterations() == 0);
 		lifecycle.AbortStep();
+		{
+			auto profile_configuration = MakeFlowConfiguration(0.0, 0.0);
+			auto& profile = profile_configuration.boundaries.front().conditions.front();
+			profile.value.clear();
+			profile.profile = "initial_velocityfield.txt";
+			profile.scale = 1.0;
+			const std::vector<std::array<double, 3>> reference_velocity(
+				64, {0.0, 0.0, 0.125});
+			iga::TransientFlowRuntime adapter_native(database, PETSC_COMM_WORLD, true, true,
+				{1.0, 1.0, 0.1},
+				iga::ResolveFlowBoundaries(profile_configuration,
+					profile_configuration.equation_systems.front(), lifecycle_labels,
+					reference_velocity),
+				lifecycle_labels, reference_velocity, {}, {});
+			adapter_native.InitializeState(profile_configuration);
+			const double reference_flow = adapter_native.ReferenceBoundaryFlow(1);
+			assert(reference_flow != 0.0 && std::isfinite(reference_flow));
+			iga::CouplingPort inlet;
+			inlet.id = "inlet";
+			inlet.subsystem_id = "adapter_three_d";
+			inlet.locator_kind = "boundary_label";
+			inlet.locator = "1";
+			inlet.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+				iga::PortQuantity::MeanPressure};
+			inlet.requires = {iga::PortQuantity::FlowRate};
+			iga::ThreeDBodyFittedFlowDomainAdapter adapter("adapter_three_d",
+				adapter_native, {inlet}, profile_configuration,
+				std::filesystem::temp_directory_path(), {{"inlet", reference_flow}});
+			adapter.BeginStep({0, 0.0, 0.1});
+			iga::PortBoundaryData flow_input;
+			flow_input.time_s = 0.1;
+			flow_input.outward_flow_m3_s = reference_flow;
+			adapter.SetPortInput("inlet", flow_input);
+			adapter.SolveTrial();
+			const auto adapter_state = adapter.GetPortState("inlet");
+			assert(adapter_state.outward_flow_m3_s.has_value());
+			adapter.PrepareCommitStep();
+			adapter.FinalizeCommitStep();
+			assert(adapter_native.Phase() == iga::FlowStepPhase::Committed);
+		}
 
 		auto outlet_model = iga::OutletModelState{};
 		outlet_model.label = 1;

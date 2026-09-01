@@ -1,9 +1,9 @@
 # Phase 2 report
 
-Status: **in progress**. PR 2.1 provides the validated in-memory domain and
-coupling-edge topology for the existing sequential 1D--3D--1D case. Schema v5,
-generic runtime ownership, branching execution, and multiple 3D islands remain
-open.
+Status: **in progress**. PR 2.1 provides validated in-memory topology, and the
+first PR 2.3 slices provide atomic domain transactions, backend adapters, exact
+runtime binding, and a runnable sequential 1D--3D--1D graph executor. Schema
+v5, branching execution, and multiple 3D islands remain open.
 
 ## Objective
 
@@ -43,9 +43,8 @@ algorithm state was incorrectly moved onto individual edges.
 
 ## Design decisions and limitations
 
-- The graph is immutable topology metadata. Runtime-owning adapters wait for
-  PR 2.3, where 1D/3D lifecycle mismatches and graph transaction atomicity can
-  be handled deliberately.
+- The graph remains immutable topology metadata. Runtime ownership and
+  transaction state live in the separate PR 2.3 registry and executor.
 - Schema v5 waits for a runnable graph-authored case in PR 2.2/2.3. Existing
   v3/v4 dispatch and `.ntiga` files are unchanged.
 - `DomainKind` currently lists native 1D flow and body-fitted 3D flow. Future
@@ -68,7 +67,41 @@ committing a graph when a later domain rejects its trial. Native tests cover
 open, solved, failed-solved, and prepared aborts, committed-state restoration,
 trial-work reset, boundary-traction restoration, idempotence, and legacy
 commit behavior. Runtime adapters, registry binding, and the sequential
-multi-interface executor remain the next PR 2.3 slice.
+multi-interface executor are supplied by the next PR 2.3 slice.
+
+## PR 2.3: runtime adapters and multiple interfaces
+
+`CoupledDomainRuntime` is a dependency-free lifecycle and port contract.
+`DomainRuntimeRegistry` owns exactly one adapter for every graph domain and
+rejects mismatched domain kinds or any difference in logical port metadata.
+The 1D adapter makes the inlet policy explicit: an upstream domain uses its
+configured open-loop waveform, while a downstream domain receives coupled
+root flow. The body-fitted 3D adapter caches logical inputs and executes the
+required order: materialize endpoint waveforms, scale reference flow profiles,
+install the trial boundary configuration, apply pressure inputs, then solve.
+
+`PressureFlowComponentExecutor` consumes the deterministic sequential plan and
+supports any length alternating 1D/body-fitted-3D chain whose pressure
+receivers precede its flow receivers. It transfers outward-positive flow with
+the opposite sign at the peer, updates all interface pressures as one vector
+with explicit, fixed, or dynamic Aitken iteration, checks every pressure and
+flow residual, rolls retries back in reverse order, and prepares every domain
+before any nonthrowing finalizer. Cleanup attempts every active domain and
+reports both the primary and any abort failures. A precommit observation hook
+lets output/history code inspect accepted trial states without taking ownership
+of runtime state or weakening atomic commit. Every adapter state is validated
+at the executor boundary before transfer or commit. A typed nonconvergence
+error retains every iteration and the final pressure/flow residuals.
+
+The production explicit 1D--3D--1D driver now binds its three native runtimes
+to the graph and advances its two interfaces through this executor. Its CSV,
+manifest, work counters, lagged-pressure behavior, and injected precommit
+failure test remain unchanged. The existing strong-mode loop remains in place
+for its established detailed iteration diagnostics; component-wide fixed and
+Aitken behavior in the generic executor is covered independently before a
+schema-v5 graph-authored case adopts it. Per-attempt backend work remains
+adapter-specific, so the strong production loop will not migrate until the
+generic diagnostic API can retain those counters as well.
 
 ## Verification
 
@@ -77,6 +110,13 @@ insertion-order-independent planning, logical-port overlap, query behavior,
 invalid identifiers/references/ownership, duplicate physical locators,
 capability mismatches, endpoint reuse, self-edges, branches, disconnected
 components, and same-kind sequential plans.
+
+The executor suite covers explicit, fixed, and component-wide dynamic Aitken
+execution over two interfaces, deterministic retry counts, complete port
+observation, exact registry binding, direction rejection, solve and prepare
+failures, and best-effort cleanup with combined error reporting. Native adapter
+tests cover both 1D inlet policies and an actual PETSc body-fitted 3D reference
+profile solve.
 
 Validation commands for this snapshot:
 
@@ -88,10 +128,10 @@ make coupling-petsc-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-
 git diff --check
 ```
 
-The long steady-spatial and pulsatile-temporal ladders need not be rerun for
-this metadata-only refactor because the numerical loop, schemas, CSV fields,
-manifest fields, boundary materialization, and runtime lifecycle are unchanged.
-The final smoke run passed explicit, strong-fixed, and strong-Aitken modes with
+The long steady-spatial and pulsatile-temporal ladders need not be rerun because
+the same native solvers, schemas, boundary values, and output definitions are
+used. The final smoke run passed explicit, strong-fixed, and strong-Aitken
+modes with
 `N=4` subcycling on one and two MPI ranks, including invalid-input rejection,
 injected precommit failure suppression, work accounting, and rank-parity
 checks.
@@ -103,3 +143,4 @@ the dependency-free and one-/two-rank MPI smoke gates. The parser must produce
 the same validated `SimulationGraph` metadata and must not force existing v3/v4
 standalone cases through graph dispatch. A graph-authored case is not considered
 runnable until PR 2.3 supplies backend adapters and a multi-interface executor.
+That runtime gate is now satisfied; schema-v5 parsing is the next active slice.

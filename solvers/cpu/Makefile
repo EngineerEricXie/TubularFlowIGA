@@ -118,7 +118,7 @@ petsc-test: generic_transport_test navier_stokes_test transport_boundary_preflig
 	./vca_3d_runtime_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./vca_3d_smoke_test
 
-vca_3d_runtime_test: tests/test_vca_3d_runtime.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp ../../include/CouplingPort.hpp ../../include/SimulationConfig.hpp
+vca_3d_runtime_test: tests/test_vca_3d_runtime.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/CoupledDomainRuntime.hpp ../../include/CouplingPort.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 vca_3d_smoke_test: tests/test_vca_3d_smoke.cpp iga_navier_stokes include/IgaDatabase.hpp ../../include/SimulationConfig.hpp ../../include/VcaCheckpoint.hpp

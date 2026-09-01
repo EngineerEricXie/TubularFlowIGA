@@ -2,10 +2,14 @@
 #include "AitkenRelaxation.hpp"
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
+#include "DomainRuntimeRegistry.hpp"
 #include "OneDImplicit.hpp"
+#include "OneDFlowDomainAdapter.hpp"
 #include "OneDRuntime.hpp"
+#include "PressureFlowComponentExecutor.hpp"
 #include "SimulationGraph.hpp"
 #include "StrongOneDThreeDCoupling.hpp"
+#include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "ThreeDFlowCoupling.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -20,6 +24,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <numeric>
 #include <sstream>
@@ -213,6 +218,20 @@ iga::CouplingPort MakeOneDLogicalPort(const std::string& subsystem_id, const std
 	port.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
 		iga::PortQuantity::MeanPressure};
 	port.requires = {accepted};
+	iga::ValidateCouplingPort(port);
+	return port;
+}
+
+iga::CouplingPort MakeOneDObservationPort(const std::string& subsystem_id,
+	const std::string& id, const std::string& runtime_port_id)
+{
+	iga::CouplingPort port;
+	port.id = id;
+	port.subsystem_id = subsystem_id;
+	port.locator_kind = "runtime_port";
+	port.locator = runtime_port_id;
+	port.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+		iga::PortQuantity::MeanPressure};
 	iga::ValidateCouplingPort(port);
 	return port;
 }
@@ -634,11 +653,19 @@ int main(int argc, char** argv)
 			{iga::PortQuantity::MeanPressure});
 		auto downstream_graph_port = MakeOneDLogicalPort("downstream", "root", "root",
 			iga::PortQuantity::FlowRate);
+		auto upstream_root_graph_port = MakeOneDObservationPort("upstream", "root_state", "root");
+		auto downstream_terminal_graph_port = MakeOneDObservationPort("downstream",
+			"terminal_state", downstream_terminal_runtime_id);
+		auto three_d_wall_graph_port = MakeThreeDPort("three_d", "wall", 0,
+			{iga::PortQuantity::FlowRate}, {});
 		const iga::SimulationGraph simulation_graph({
-			{"downstream", iga::DomainKind::OneDFlow, {std::move(downstream_graph_port)}},
+			{"downstream", iga::DomainKind::OneDFlow, {std::move(downstream_graph_port),
+				std::move(downstream_terminal_graph_port)}},
 			{"three_d", iga::DomainKind::ThreeDBodyFittedFlow,
-				{std::move(three_d_outlet_graph_port), std::move(three_d_inlet_graph_port)}},
-			{"upstream", iga::DomainKind::OneDFlow, {std::move(upstream_graph_port)}}}, {
+				{std::move(three_d_outlet_graph_port), std::move(three_d_inlet_graph_port),
+				 std::move(three_d_wall_graph_port)}},
+			{"upstream", iga::DomainKind::OneDFlow, {std::move(upstream_graph_port),
+				std::move(upstream_root_graph_port)}}}, {
 			{"upstream_to_three_d", {"upstream", "terminal"}, {"three_d", "inlet"},
 				iga::CouplingLaw::PressureFlow},
 			{"three_d_to_downstream", {"three_d", "outlet"}, {"downstream", "root"},
@@ -651,11 +678,10 @@ int main(int argc, char** argv)
 		const auto& three_d_inlet_port = simulation_graph.Port({"three_d", "inlet"});
 		const auto& three_d_outlet_port = simulation_graph.Port({"three_d", "outlet"});
 		const auto& downstream_root_port = simulation_graph.Port({"downstream", "root"});
+		const auto& three_d_wall_measure = simulation_graph.Port({"three_d", "wall"});
 		const auto& upstream_terminal = upstream_terminal_port.locator;
 		const auto& downstream_root = downstream_root_port.locator;
 		const auto& downstream_terminal = downstream_terminal_runtime_id;
-		const auto three_d_wall_measure = MakeThreeDPort("three_d", "wall", 0,
-			{iga::PortQuantity::FlowRate}, {});
 
 		const double initial_upstream_flow = iga::EvaluateOneDInlet(upstream.Configuration(), upstream.InletDefinition(),
 			options.upstream_case, 0.0, upstream.Network().segments.front().area0);
@@ -976,100 +1002,83 @@ int main(int argc, char** argv)
 					throw;
 				}
 			}
-		} else for (int step = 1; step <= final_step; ++step) {
-			const double time = step*scalar.dt_s;
-			try {
-				upstream.BeginStep(upstream.FlowState().physical_time, scalar.dt_s);
-				upstream.SetConfiguredOpenLoopInlet();
-				iga::PortBoundaryData upstream_pressure;
-				upstream_pressure.time_s = time;
-				upstream_pressure.mean_pressure_pa = lagged_three_d_inlet_pressure;
-				upstream.SetPortInput(upstream_terminal, upstream_pressure);
-				upstream.SolveTrial();
-				const auto upstream_port = upstream.GetPortState(upstream_terminal);
-				const double upstream_q = RequirePortValue(upstream_port.outward_flow_m3_s, "upstream terminal flow");
-
-				auto three_d_step = iga::MaterializeBoundaryWaveforms(three_d_configuration,
-					options.three_d_case.string(), time);
-				iga::PortBoundaryData three_d_profile_input;
-				three_d_profile_input.time_s = time;
-				three_d_profile_input.outward_flow_m3_s = -upstream_q;
-				iga::ApplyThreeDReferenceProfileInput(three_d_step,
-					three_d_step.equation_systems.front(), three_d_inlet_port,
-					three_d_profile_input, reference_inlet_flow);
-				three_d.BeginStep(step-1, time, options.three_d_max_newton,
-					kThreeDNonlinearRelativeTolerance, kThreeDNonlinearAbsoluteTolerance,
-					kThreeDMassRelativeTolerance);
-				three_d.SetTrialBoundaryConfiguration(three_d_step);
-				iga::PortBoundaryData three_d_pressure_input;
-				three_d_pressure_input.time_s = time;
-				three_d_pressure_input.mean_pressure_pa = lagged_downstream_root_pressure;
-				three_d.SetPortInput(three_d_outlet_port, three_d_pressure_input);
-				three_d.SolveTrial();
-				const auto three_d_inlet = three_d.GetPortState(three_d_inlet_port);
-				const auto three_d_outlet = three_d.GetPortState(three_d_outlet_port);
-				const auto three_d_wall = three_d.GetPortState(three_d_wall_measure);
-				const double three_d_outlet_q = RequirePortValue(three_d_outlet.outward_flow_m3_s, "3D outlet flow");
-
-				downstream.BeginStep(downstream.FlowState().physical_time, scalar.dt_s);
-				iga::PortBoundaryData downstream_input;
-				downstream_input.time_s = time;
-				downstream_input.outward_flow_m3_s = -three_d_outlet_q;
-				downstream.SetPortInput(downstream_root, downstream_input);
-				downstream.SolveTrial();
-				const auto downstream_root_state = downstream.GetPortState(downstream_root);
-				const auto downstream_terminal_port = downstream.GetPortState(downstream_terminal);
-				const auto upstream_root = upstream.GetPortState("root");
-
+		} else {
+			std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
+			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>("upstream",
+				upstream, simulation_graph.Domain("upstream").ports,
+				iga::OneDInletPolicy::ConfiguredOpenLoop));
+			iga::ThreeDFlowDomainControls three_d_controls;
+			three_d_controls.maximum_newton = options.three_d_max_newton;
+			three_d_controls.nonlinear_relative_tolerance = kThreeDNonlinearRelativeTolerance;
+			three_d_controls.nonlinear_absolute_tolerance = kThreeDNonlinearAbsoluteTolerance;
+			three_d_controls.mass_relative_tolerance = kThreeDMassRelativeTolerance;
+			runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
+				"three_d", three_d, simulation_graph.Domain("three_d").ports,
+				three_d_configuration, options.three_d_case,
+				std::map<std::string, double>{{"inlet", reference_inlet_flow}}, three_d_controls));
+			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>("downstream",
+				downstream, simulation_graph.Domain("downstream").ports,
+				iga::OneDInletPolicy::CoupledRoot));
+			iga::DomainRuntimeRegistry runtime_registry(simulation_graph, std::move(runtimes));
+			iga::PressureFlowExecutionControls execution_controls;
+			iga::PressureFlowComponentExecutor executor(runtime_registry, "upstream",
+				execution_controls);
+			for (int step = 1; step <= final_step; ++step) {
+				const double time = step*scalar.dt_s;
 				iga::ExplicitCouplingHistoryRow row;
-				row.time_s = time;
-				row.upstream_root_pressure_pa = RequirePortValue(upstream_root.mean_pressure_pa, "upstream root pressure");
-				row.upstream_root_outward_flow_m3_s = RequirePortValue(upstream_root.outward_flow_m3_s, "upstream root flow");
-				row.upstream_root_area_m2 = RequirePortValue(upstream_root.area_m2, "upstream root area");
-				row.upstream_terminal_pressure_pa = RequirePortValue(upstream_port.mean_pressure_pa, "upstream terminal pressure");
-				row.upstream_terminal_outward_flow_m3_s = upstream_q;
-				row.upstream_terminal_area_m2 = RequirePortValue(upstream_port.area_m2, "upstream terminal area");
-				row.three_d_inlet_pressure_pa = RequirePortValue(three_d_inlet.mean_pressure_pa, "3D inlet pressure");
-				row.three_d_inlet_outward_flow_m3_s = RequirePortValue(three_d_inlet.outward_flow_m3_s, "3D inlet flow");
-				row.three_d_inlet_area_m2 = RequirePortValue(three_d_inlet.area_m2, "3D inlet area");
-				row.three_d_outlet_pressure_pa = RequirePortValue(three_d_outlet.mean_pressure_pa, "3D outlet pressure");
-				row.three_d_outlet_outward_flow_m3_s = three_d_outlet_q;
-				row.three_d_outlet_area_m2 = RequirePortValue(three_d_outlet.area_m2, "3D outlet area");
-				row.downstream_root_pressure_pa = RequirePortValue(downstream_root_state.mean_pressure_pa, "downstream root pressure");
-				row.downstream_root_outward_flow_m3_s = RequirePortValue(downstream_root_state.outward_flow_m3_s, "downstream root flow");
-				row.downstream_root_area_m2 = RequirePortValue(downstream_root_state.area_m2, "downstream root area");
-				row.downstream_terminal_pressure_pa = RequirePortValue(downstream_terminal_port.mean_pressure_pa, "downstream terminal pressure");
-				row.downstream_terminal_outward_flow_m3_s = RequirePortValue(downstream_terminal_port.outward_flow_m3_s, "downstream terminal flow");
-				row.downstream_terminal_area_m2 = RequirePortValue(downstream_terminal_port.area_m2, "downstream terminal area");
-				row.upstream_three_d_flow_residual_m3_s = row.upstream_terminal_outward_flow_m3_s+row.three_d_inlet_outward_flow_m3_s;
-				row.three_d_downstream_flow_residual_m3_s = row.three_d_outlet_outward_flow_m3_s+row.downstream_root_outward_flow_m3_s;
-				row.upstream_three_d_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.upstream_terminal_outward_flow_m3_s, row.three_d_inlet_outward_flow_m3_s);
-				row.three_d_downstream_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.three_d_outlet_outward_flow_m3_s, row.downstream_root_outward_flow_m3_s);
-				row.three_d_wall_outward_flow_m3_s = RequirePortValue(
-					three_d_wall.outward_flow_m3_s, "3D wall flow");
-				row.three_d_mass_imbalance_m3_s = row.three_d_inlet_outward_flow_m3_s
-					+row.three_d_outlet_outward_flow_m3_s+row.three_d_wall_outward_flow_m3_s;
-				row.net_external_outward_flow_m3_s = row.upstream_root_outward_flow_m3_s
-					+row.downstream_terminal_outward_flow_m3_s;
-				row.external_pressure_drop_pa = row.upstream_root_pressure_pa-row.downstream_terminal_pressure_pa;
-				row.upstream_three_d_pressure_jump_pa = row.upstream_terminal_pressure_pa-row.three_d_inlet_pressure_pa;
-				row.three_d_downstream_pressure_jump_pa = row.three_d_outlet_pressure_pa-row.downstream_root_pressure_pa;
-				row.three_d_trial_linear_iterations = three_d.TrialLinearIterations();
-				SetOneDAttemptWork(row, upstream, downstream);
-				iga::ValidateExplicitCouplingHistoryRow(row);
-				if (injected_failure_step == step)
-					throw std::runtime_error("injected explicit coupling failure before commit");
-				upstream.CommitStep();
-				three_d.CommitStep();
-				downstream.CommitStep();
+				bool row_ready = false;
+				executor.Advance({step-1, upstream.FlowState().physical_time, scalar.dt_s}, {
+					{"upstream_to_three_d", lagged_three_d_inlet_pressure},
+					{"three_d_to_downstream", lagged_downstream_root_pressure}},
+					[&](const iga::PressureFlowStepResult& result) {
+						const auto& upstream_root = result.accepted_ports.at({"upstream", "root_state"});
+						const auto& upstream_port = result.accepted_ports.at({"upstream", "terminal"});
+						const auto& three_d_inlet = result.accepted_ports.at({"three_d", "inlet"});
+						const auto& three_d_outlet = result.accepted_ports.at({"three_d", "outlet"});
+						const auto& three_d_wall = result.accepted_ports.at({"three_d", "wall"});
+						const auto& downstream_root_state = result.accepted_ports.at({"downstream", "root"});
+						const auto& downstream_terminal_port = result.accepted_ports.at(
+							{"downstream", "terminal_state"});
+						row.time_s = time;
+						row.upstream_root_pressure_pa = RequirePortValue(upstream_root.mean_pressure_pa, "upstream root pressure");
+						row.upstream_root_outward_flow_m3_s = RequirePortValue(upstream_root.outward_flow_m3_s, "upstream root flow");
+						row.upstream_root_area_m2 = RequirePortValue(upstream_root.area_m2, "upstream root area");
+						row.upstream_terminal_pressure_pa = RequirePortValue(upstream_port.mean_pressure_pa, "upstream terminal pressure");
+						row.upstream_terminal_outward_flow_m3_s = RequirePortValue(upstream_port.outward_flow_m3_s, "upstream terminal flow");
+						row.upstream_terminal_area_m2 = RequirePortValue(upstream_port.area_m2, "upstream terminal area");
+						row.three_d_inlet_pressure_pa = RequirePortValue(three_d_inlet.mean_pressure_pa, "3D inlet pressure");
+						row.three_d_inlet_outward_flow_m3_s = RequirePortValue(three_d_inlet.outward_flow_m3_s, "3D inlet flow");
+						row.three_d_inlet_area_m2 = RequirePortValue(three_d_inlet.area_m2, "3D inlet area");
+						row.three_d_outlet_pressure_pa = RequirePortValue(three_d_outlet.mean_pressure_pa, "3D outlet pressure");
+						row.three_d_outlet_outward_flow_m3_s = RequirePortValue(three_d_outlet.outward_flow_m3_s, "3D outlet flow");
+						row.three_d_outlet_area_m2 = RequirePortValue(three_d_outlet.area_m2, "3D outlet area");
+						row.downstream_root_pressure_pa = RequirePortValue(downstream_root_state.mean_pressure_pa, "downstream root pressure");
+						row.downstream_root_outward_flow_m3_s = RequirePortValue(downstream_root_state.outward_flow_m3_s, "downstream root flow");
+						row.downstream_root_area_m2 = RequirePortValue(downstream_root_state.area_m2, "downstream root area");
+						row.downstream_terminal_pressure_pa = RequirePortValue(downstream_terminal_port.mean_pressure_pa, "downstream terminal pressure");
+						row.downstream_terminal_outward_flow_m3_s = RequirePortValue(downstream_terminal_port.outward_flow_m3_s, "downstream terminal flow");
+						row.downstream_terminal_area_m2 = RequirePortValue(downstream_terminal_port.area_m2, "downstream terminal area");
+						row.upstream_three_d_flow_residual_m3_s = row.upstream_terminal_outward_flow_m3_s+row.three_d_inlet_outward_flow_m3_s;
+						row.three_d_downstream_flow_residual_m3_s = row.three_d_outlet_outward_flow_m3_s+row.downstream_root_outward_flow_m3_s;
+						row.upstream_three_d_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.upstream_terminal_outward_flow_m3_s, row.three_d_inlet_outward_flow_m3_s);
+						row.three_d_downstream_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.three_d_outlet_outward_flow_m3_s, row.downstream_root_outward_flow_m3_s);
+						row.three_d_wall_outward_flow_m3_s = RequirePortValue(three_d_wall.outward_flow_m3_s, "3D wall flow");
+						row.three_d_mass_imbalance_m3_s = row.three_d_inlet_outward_flow_m3_s+row.three_d_outlet_outward_flow_m3_s+row.three_d_wall_outward_flow_m3_s;
+						row.net_external_outward_flow_m3_s = row.upstream_root_outward_flow_m3_s+row.downstream_terminal_outward_flow_m3_s;
+						row.external_pressure_drop_pa = row.upstream_root_pressure_pa-row.downstream_terminal_pressure_pa;
+						row.upstream_three_d_pressure_jump_pa = row.upstream_terminal_pressure_pa-row.three_d_inlet_pressure_pa;
+						row.three_d_downstream_pressure_jump_pa = row.three_d_outlet_pressure_pa-row.downstream_root_pressure_pa;
+						row.three_d_trial_linear_iterations = three_d.TrialLinearIterations();
+						SetOneDAttemptWork(row, upstream, downstream);
+						iga::ValidateExplicitCouplingHistoryRow(row);
+						row_ready = true;
+						if (injected_failure_step == step)
+							throw std::runtime_error("injected explicit coupling failure before commit");
+					});
+				if (!row_ready) throw std::runtime_error("explicit graph executor omitted its precommit observation");
 				history.push_back(row);
 				lagged_three_d_inlet_pressure = row.three_d_inlet_pressure_pa;
 				lagged_downstream_root_pressure = row.downstream_root_pressure_pa;
-			} catch (...) {
-				RollbackSolved(upstream);
-				RollbackSolved(three_d);
-				RollbackSolved(downstream);
-				throw;
 			}
 		}
 		int output_failed = 0;

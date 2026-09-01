@@ -1,4 +1,5 @@
 #include "OneDRuntime.hpp"
+#include "OneDFlowDomainAdapter.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -491,6 +492,61 @@ int main()
 		macro.SolveTrial();
 		assert(Close(macro.FlowState().outlets.front().capacitor_pressure,
 			sequential.FlowState().outlets.front().capacitor_pressure));
+	}
+	{
+		iga::CouplingPort terminal;
+		terminal.id = "terminal";
+		terminal.subsystem_id = "configured";
+		terminal.locator_kind = "runtime_port";
+		terminal.locator = "outlet:2";
+		terminal.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+			iga::PortQuantity::MeanPressure};
+		terminal.requires = {iga::PortQuantity::MeanPressure};
+		iga::OneDFlowRuntime native(configuration, flow, network,
+			iga::ResolveOneDInlet(configuration), directory);
+		native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowDomainAdapter adapter("configured", native, {terminal},
+			iga::OneDInletPolicy::ConfiguredOpenLoop);
+		adapter.BeginStep({0, 0.0, configuration.time.dt});
+		iga::PortBoundaryData pressure;
+		pressure.time_s = configuration.time.dt;
+		pressure.mean_pressure_pa = 5.0;
+		adapter.SetPortInput("terminal", pressure);
+		adapter.SolveTrial();
+		assert(adapter.GetPortState("terminal").mean_pressure_pa.has_value());
+		adapter.PrepareCommitStep();
+		adapter.FinalizeCommitStep();
+		assert(native.FlowState().completed_step == 1);
+
+		auto root = terminal;
+		root.id = "inlet";
+		root.subsystem_id = "coupled";
+		root.locator = "root";
+		root.requires = {iga::PortQuantity::FlowRate};
+		iga::OneDFlowRuntime coupled_native(configuration, flow, network,
+			iga::ResolveOneDInlet(configuration), directory);
+		coupled_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowDomainAdapter coupled("coupled", coupled_native, {root},
+			iga::OneDInletPolicy::CoupledRoot);
+		coupled.BeginStep({0, 0.0, configuration.time.dt});
+		iga::PortBoundaryData root_flow;
+		root_flow.time_s = configuration.time.dt;
+		root_flow.outward_flow_m3_s = -2.0e-9;
+		coupled.SetPortInput("inlet", root_flow);
+		coupled.SolveTrial();
+		assert(Close(*coupled.GetPortState("inlet").outward_flow_m3_s, -2.0e-9));
+		coupled.AbortStep();
+		assert(coupled_native.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		RequireRejected([&native, &root] {
+			iga::OneDFlowDomainAdapter invalid("configured", native, {root},
+				iga::OneDInletPolicy::ConfiguredOpenLoop);
+		});
+		auto reversed = terminal;
+		reversed.orientation.native_to_outward_sign = -1;
+		RequireRejected([&native, &reversed] {
+			iga::OneDFlowDomainAdapter invalid("configured", native, {reversed},
+				iga::OneDInletPolicy::ConfiguredOpenLoop);
+		});
 	}
 	fs::remove_all(directory);
 	std::cout << "one-dimensional runtime tests passed\n";
