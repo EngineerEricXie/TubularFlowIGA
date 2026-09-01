@@ -56,6 +56,12 @@ int main()
 	});
 	assert(Close(measured_concentration.species_flux.at("glucose"), -8.0));
 	assert(Close(measured_concentration.flux_weighted_concentration.at("glucose"), 5.0));
+	const auto stagnant_diffusion = iga::AggregateVascularOutlets({
+		{2, 2.0, 10.0, {{"glucose", 4.0}}, {{"glucose", 3.0}}, {}, true},
+		{3, 0.0, 4.0, {{"glucose", -8.0}}, {{"glucose", 7.0}}, {}, false},
+	});
+	assert(Close(stagnant_diffusion.species_flux.at("glucose"), -4.0));
+	assert(Close(stagnant_diffusion.flux_weighted_concentration.at("glucose"), 3.0));
 
 	{
 		iga::CouplingDefinition definition;

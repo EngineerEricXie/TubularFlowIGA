@@ -500,8 +500,7 @@ int main(int argc, char** argv)
 						> configuration.coupling.flow_epsilon_m3_s;
 					const auto concentration
 						= ports.species_concentrations.find(outlet.outlet_id);
-					if (outlet.average_valid
-						&& concentration != ports.species_concentrations.end())
+					if (concentration != ports.species_concentrations.end())
 						outlet.flux_weighted_concentration = concentration->second;
 				}
 				if (vca_transport) {

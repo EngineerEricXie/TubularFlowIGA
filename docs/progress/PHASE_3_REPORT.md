@@ -147,3 +147,8 @@ the physical boundary flux; any discrete mismatch is reported as a residual.
 Focused numerical re-review accepted the surface metric, cofactor orientation,
 compiled cross-field mapping, independent concentration semantics, and the
 `dM/dt + sum(Phi_outward) - source` diagnostic with no remaining blocker.
+Measured concentration is retained even on a stagnant outlet: its total
+diffusive flux still contributes to species transfer, while its zero flow
+contributes no `Q*C` weight to the aggregate concentration. A focused
+flowing-plus-stagnant regression prevents fallback contamination; narrow
+numerical re-review accepted the fix.
