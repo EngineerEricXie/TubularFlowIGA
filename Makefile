@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test coupling coupling-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test coupling coupling-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
 
 all: cpu
 
@@ -47,6 +47,12 @@ coupling-convergence-length-diagnostic:
 
 coupling-convergence-bulk-diagnostic:
 	$(MAKE) -C solvers/coupling convergence-bulk-diagnostic
+
+coupling-temporal-convergence-test:
+	$(MAKE) -C solvers/coupling temporal-convergence-test
+
+coupling-temporal-fixture-test:
+	$(MAKE) -C solvers/coupling temporal-fixture-test
 
 cuda:
 	$(MAKE) -C solvers/cuda

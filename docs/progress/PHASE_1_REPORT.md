@@ -1,9 +1,128 @@
 # Phase 1 report
 
-Status: PR 1.4 and the straight-vessel steady spatial gate are complete.
-Phase 1 remains in progress pending temporal waveform/timestep verification
-and the final phase-level compatibility/architecture review. Restart and a
-general multidomain graph remain deferred.
+Status: PR 1.4 and the straight-vessel steady spatial gate are complete. The
+pulsatile harness establishes rank-one, fixed-spatial-mesh temporal
+self-consistency and coupling-tolerance sensitivity, but is not yet the
+physically equivalent all-1D wave-reference gate required to close Phase 1.
+Restart and a general multidomain graph remain deferred.
+
+## Pulsatile straight-vessel temporal and tolerance verification
+
+`make coupling-temporal-convergence-test` is deliberately separate from the
+fast smoke and steady spatial targets.  It creates every input at runtime and
+does not commit a database, VTK/control mesh, velocity field, case, or result.
+The fixture is the existing open-uniform cubic C2 unit-square duct with two
+transverse and two axial elements.  This is a fixed, modest spatial mesh: it
+keeps the test practical and is intentionally *not* a replacement for the
+completed spatial-convergence gate above. The temporal report therefore labels
+coupled-versus-reference pressure differences as a combination of fixed
+spatial error, temporal/coupling effects, and the rigid algebraic 1D versus
+unsteady 3D model mismatch. Only comparisons made at the same spatial mesh and
+between coupled cases isolate temporal or coupling changes.
+
+The generated upstream 1D input is a sinusoid with mean `1e-3 m3/s`, 20%
+amplitude, and period `0.16 s`.  Density is `1 kg/m3` and viscosity is
+`1 Pa s`, retaining low Reynolds number while making the unsteady 3D response
+measurable over the pulse. The simulation advances four periods and measures
+the final period, separating the convergence metrics from the initial
+adjustment of the steady mean-flow profile; an explicit cycle-to-cycle audit
+also requires the third and fourth pressure and flow waveforms to agree within
+`1e-10` relative L-infinity. The three-dimensional macro grids
+are `dt = 0.01, 0.005, 0.0025 s`, giving respectively 16, 32, and 64 endpoint
+samples per period. Both 1D domains use `N=2` configured substeps per macro
+step, so their open-loop sinusoid is sampled at substep endpoints while the
+interface data are held zero-order over the macro interval, exactly as
+documented by the coupling architecture. Strong Aitken is used with a tight
+pressure reference tolerance `1e-10`, flow tolerance `1e-10`, and a
+60-Newton-iteration 3D budget.
+
+For every run the harness parses the rank-zero strong history, iteration
+history, and manifest.  It checks macro time alignment, finite P/Q data,
+conservative interface transfer, 3D mass and wall-flow diagnostics, committed
+iteration counts, Aitken factors, accepted/all/rejected 1D work identities,
+and the manifest's endpoint/ZOH/subcycling semantics.  It calculates L2 and
+L-infinity waveform differences on nested macro grids, first-harmonic pressure
+drop amplitude and phase, and checks that the medium--fine waveform difference
+does not exceed the coarse--medium difference apart from floating-point
+roundoff.  This is a temporal self-convergence comparison at fixed spatial
+resolution; it makes no claim of a spatially converged pulsatile field.
+
+The same generated geometry also supplies an independently advanced all-1D
+reference: a single rigid three-segment runtime with the area-matched circular
+radius and the square duct's hydraulic-equivalent middle length.  It advances
+on the 1D substep grid, independently of the coupling driver.  The harness
+requires external Q(t) agreement at macro endpoints and reports pressure-drop
+waveform, amplitude, and phase differences.  The all-1D pressure waveform is
+a hydraulic reference, not a claim that a circle and a square are geometrically
+identical; it is most directly meaningful for the external-flow transfer and
+the steady hydraulic component.  The fixed square-duct spatial error and any
+resolved 3D inertial response remain visible rather than being hidden.
+
+The fine `dt=0.0025 s` case is repeated at pressure tolerances `1e-4`, `1e-6`,
+and `1e-10` (the last is the tight reference).  The reported pressure-drop and
+upstream-root waveform distance to the tight result must be non-increasing as
+the configured tolerance tightens.  This is an ordering check with only a
+machine-roundoff allowance, not an arbitrary absolute waveform threshold.
+
+The dependency-free generation/audit command is:
+
+```text
+make coupling-temporal-fixture-test
+```
+
+For a quick PETSc diagnostic of the first 16-sample-per-period macro grid,
+without claiming the complete ladder, run:
+
+```text
+TUBULARFLOWIGA_TEMPORAL_SINGLE_CASE=1 \
+  ./solvers/coupling/pulsatile_straight_vessel_temporal_test
+```
+
+The full command must be run where MPI local sockets and the full runtime are
+permitted:
+
+```text
+make coupling-temporal-convergence-test
+```
+
+Set `TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1` to retain the generated cases and CSV
+artifacts for review.
+
+The full target passed locally with PETSc 3.15. Across the final period, the
+maximum normalized pressure L2 difference decreased from `0.00955211` on the
+coarse--medium comparison to `0.00538689` on medium--fine; the corresponding
+L-infinity difference decreased from `0.0157750` to `0.00911057`. Every
+pressure field passed separately. In particular, the 3D-outlet pressure L2
+difference decreased `0.00353307 -> 0.00304419` and its L-infinity difference
+decreased `0.00422934 -> 0.00416772`; this per-field gate prevents the aggregate
+external drop from hiding a nonconvergent interface quantity. Interface-flow
+differences remained at roundoff.
+
+The coupled external-drop first-harmonic amplitudes were
+`0.0202688, 0.0195659, 0.0191344 Pa`, so consecutive differences decreased
+`0.000702961 -> 0.000431453 Pa`. Endpoint phases referred to the common period
+origin were `-1.08715, -1.05078, -1.03304 rad`, with consecutive differences
+decreasing `0.0363708 -> 0.0177448 rad`. The independently advanced all-1D
+reference had amplitude `0.0157439 Pa`; at the fine grid the coupled/reference normalized
+pressure-drop L2 difference was `0.0884427` and phase difference was
+`0.537761 rad`, while endpoint flow agreed to `4.27e-14` relative L-infinity.
+Those nonzero pressure and phase differences are consistent with the fixed
+square-duct discretization and its resolved inertial response; they are
+reported, not interpreted as temporal error or hidden by calibration. Because
+the current rigid `steady_poiseuille` 1D scheme is algebraic, however, this
+reference has no fluid inertia, compliance, or pulse propagation. It therefore
+cannot by itself validate physical pressure-wave phase or pulse transit, and
+Phase 1 remains open pending a transient reference or manufactured comparison
+that supplies those dynamics.
+
+At the fine timestep, waveform distances to the `1e-10` pressure-tolerance
+reference decreased from `7.37420e-5` at `1e-4` to `1.01375e-7` at `1e-6` and
+zero by definition for the tight reference. Every run also passed time alignment,
+finite P/Q, conservation, wall flow, residual, iteration/Aitken, subcycling
+work, and artifact/manifest audits. The maximum cycle-3-to-cycle-4 pressure
+relative L-infinity difference was `1.45499e-11`; the maximum flow relative
+L-infinity difference was `2.40693e-14`. The corrected production target
+exited zero in `10:19.12` with `44884 kB` peak RSS.
 
 ## Straight-vessel steady spatial verification
 

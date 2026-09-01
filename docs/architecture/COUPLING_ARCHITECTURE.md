@@ -369,11 +369,18 @@ that assumption. The fine cases additionally compare the absolute external
 drop with the all-1D reference and bound both interface pressure jumps.
 
 All cases use identical SI density, viscosity, terminal model, inlet waveform,
-macro-step interval, and outward-normal port convention. The broader temporal
-benchmark records P/Q waveforms at both interfaces, pressure drop, phase and
-pulse transit, per-step mass imbalance, coupling residual histories, iteration
-counts, and tolerance sensitivity. Phase 1 cannot close until those temporal
-checks supplement the completed spatial gate.
+macro-step interval, and outward-normal port convention. The temporal benchmark
+advances four pulse periods, checks the final two for repeatability, and
+measures the final period on nested macro grids.
+It records P/Q waveforms at both interfaces, pressure drop, first-harmonic
+amplitude and phase, per-step mass imbalance, coupling residual histories,
+iteration counts, and tolerance sensitivity. Fieldwise pressure and flow
+self-convergence supplements the completed spatial gate; an independently
+advanced, hydraulically equivalent rigid all-1D path supplies a quasi-steady
+external-flow and pressure baseline without asserting geometric equivalence to
+the square 3D duct. Because that 1D formulation contains neither fluid inertia
+nor compliance, it is not the transient wave reference needed for final Phase
+1 closure.
 
 ## Compatibility matrix
 
