@@ -1,7 +1,6 @@
 # Phase 0 Progress Report
 
-Status: in progress — lifecycle corrections and base-versus-HEAD numerical
-parity are complete; final phase-gate review is pending.
+Status: complete — implementation revision `dc05f8a` passes Gates A, B, and C.
 
 ## Objective
 
@@ -156,10 +155,10 @@ On 2026-08-31, before Phase 0 implementation:
 | four documented `iga_1d --check` cases after PR 0.5 | pass | rigid, compliant, physiology, and VCA schema-v3 configuration compatibility |
 | direct three-step rigid run versus one-step checkpoint plus restart to step three | pass | final `profile_1d_000003.vtp` byte-identical, SHA-256 `3cbb0781eaefce6df3c39e9437401871797bd4a0729d7af153280fb6426b7472` |
 | two-step `vca_pfc_closed_loop` run after PR 0.5 | pass | external circuit path remains executable with advancement after runtime commit |
-| base `9aa28d3` versus Phase-0 HEAD configured transient 3D VCA fixture | pass | velocity, pressure, flow checkpoint, transport checkpoint, reservoir metadata, and coupling manifest are byte-identical |
-| base `9aa28d3` versus Phase-0 HEAD three-step compliant PETSc/multispecies 1D case | pass | time-series/profile outputs and final VTP are byte-identical |
+| base `9aa28d3` versus Phase 0 implementation `dc05f8a` configured transient 3D VCA fixture | pass | velocity, pressure, flow checkpoint, transport checkpoint, reservoir metadata, and coupling manifest are byte-identical |
+| base `9aa28d3` versus Phase 0 implementation `dc05f8a` three-step compliant PETSc/multispecies 1D case | pass | time-series/profile outputs and final VTP are byte-identical |
 
-Base-versus-HEAD hashes for the final 3D velocity and pressure fields are
+Base-versus-implementation hashes for the final 3D velocity and pressure fields are
 `9c6394c7b66cf2af9105986fdff21c607cf9ded795679272c9074d1c972f2f51`
 and `407c77b51d739e08d9870c48fa1b82bcbd06c01e47150d7114e4efb59469e46e`.
 The 3D flow checkpoint hash is
@@ -170,8 +169,48 @@ The final 1D VTP hash is
 `55cf6a8efbab2d9a2d908f7265f4eba63824347543824c74a6bfebe7ea526d01`.
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
-runtime, multi-rank VCA, and numerical parity gates remain required when their
-corresponding implementation slices begin.
+runtime, multi-rank VCA, and numerical parity gates passed for Phase 0 and
+remain required for later implementation slices that affect them.
+
+### Reproduction commands
+
+The final warning-clean and MPI/PETSc gate commands were:
+
+```bash
+make cpu-test
+make -C solvers/one_d core-test
+make -C solvers/cpu petsc-test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+make one-d-test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+The base/current executables were built from separate source trees at
+`9aa28d3` and `dc05f8a`, then run against identical copied case directories.
+The byte comparisons and recorded hashes used these commands, where
+`BASE_3D`, `PHASE0_3D`, `BASE_1D`, and `PHASE0_1D` name the four output
+directories:
+
+```bash
+cmp "$BASE_3D/flow.txt" "$PHASE0_3D/flow.txt"
+cmp "$BASE_3D/flow.txt.pressure" "$PHASE0_3D/flow.txt.pressure"
+cmp "$BASE_3D/checkpoint.state" "$PHASE0_3D/checkpoint.state"
+cmp "$BASE_3D/checkpoint.vca_transport.state" \
+  "$PHASE0_3D/checkpoint.vca_transport.state"
+cmp "$BASE_3D/checkpoint.vca.json" "$PHASE0_3D/checkpoint.vca.json"
+cmp "$BASE_3D/coupling_manifest.json" \
+  "$PHASE0_3D/coupling_manifest.json"
+
+for artifact in branch_flow_1d.csv derived_profile_1d.csv flow_1d.csv \
+  profile_1d.csv species_profile_1d.csv profile_1d.pvd \
+  physiology_manifest.json profile_1d_000003.vtp; do
+  cmp "$BASE_1D/$artifact" "$PHASE0_1D/$artifact"
+done
+
+sha256sum "$PHASE0_3D/flow.txt" "$PHASE0_3D/flow.txt.pressure" \
+  "$PHASE0_3D/checkpoint.state" "$PHASE0_3D/coupling_manifest.json" \
+  "$PHASE0_1D/profile_1d_000003.vtp"
+```
 
 ## Design decisions
 
@@ -210,16 +249,25 @@ test and VCA smoke regression pass.
 - Full numerical regression cases can require PETSc, MPI, generated databases,
   or an allocated compute resource.
 
-## Remaining Phase 0 work
+## Phase-gate result
 
-1. Complete the final Sol-level phase review and close all Phase 0 gates.
-2. Commit the phase correction and final report.
-3. Extend lifecycle rollback to 3D transport when a later coupled-transport
-   phase makes transport part of rejected trial iterations.
+| Gate | Result | Evidence |
+|---|---|---|
+| A: lifecycle correctness | pass | Both runtimes restore identical committed physical state before every trial, replay deterministically after rollback, publish provisional counters only on commit, and reject duplicate or out-of-order transitions. The 1D test includes real RCR capacitor mutation and restoration. |
+| B: numerical and backward compatibility | pass | Dependency-free, PETSc, and MPI suites pass. Base `9aa28d3` and implementation `dc05f8a` produce byte-identical 3D VCA and compliant/multispecies 1D artifacts. Existing schemas and file formats are unchanged. |
+| C: coupling contract readiness | pass | Ports use explicit SI quantities and outward-positive orientation, constraints and unsupported inputs fail early, 3D PETSc boundary-row topology cannot change during a trial, and subsystem side effects occur only after commit. |
+
+The final Sol-level review found no unresolved lifecycle, SI-unit, sign,
+topology, or compatibility defect. Extending rollback to 3D transport is
+deliberately deferred until transport participates in rejected coupled trials;
+it is not needed for the flow-only Phase 1 prototype.
 
 ## Phase 0 exit condition
 
-Phase 1 may begin only when both runtimes solve from identical committed state
-after rollback, commit exactly once, reject invalid lifecycle transitions,
-preserve standalone and VCA results, and expose port measurements using the
-documented SI/outward-positive contract.
+The condition is satisfied at `dc05f8a`: both runtimes solve from identical
+committed state after rollback, commit exactly once, reject invalid lifecycle
+transitions, preserve standalone and VCA results, and expose port measurements
+using the documented SI/outward-positive contract. Phase 1 PR 1.1 may begin
+from this revision. Its first deliverable is the flow-only explicit-staggered
+straight-vessel path `1D -> body-fitted 3D -> 1D`; strong coupling, schema v5,
+and coupled transport remain out of scope until that path passes its own gate.
