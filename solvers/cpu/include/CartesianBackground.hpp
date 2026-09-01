@@ -50,12 +50,23 @@ public:
 			throw std::overflow_error("Cartesian background count exceeds supported id or int32 connectivity range");
 		element_count_ = count;
 		node_count_ = nodes;
-		for (int axis = 0; axis < 3; ++axis) BuildAxis(axis);
+		for (int axis = 0; axis < 3; ++axis) {
+			planes_[axis].resize(static_cast<std::size_t>(spec_.cells[axis])+1);
+			planes_[axis][0] = spec_.lower_m[axis]; planes_[axis].back() = spec_.upper_m[axis];
+			for (std::uint32_t plane = 1; plane < spec_.cells[axis]; ++plane) planes_[axis][plane] = spec_.lower_m[axis]+h_[axis]*plane;
+			for (std::size_t plane = 1; plane < planes_[axis].size(); ++plane) if (!(planes_[axis][plane] > planes_[axis][plane-1])) throw std::invalid_argument("Cartesian background grid plane is not representable");
+			BuildAxis(axis);
+		}
 	}
 
 	std::uint64_t ElementCount() const noexcept { return element_count_; }
 	std::uint64_t NodeCount() const noexcept { return node_count_; }
 	const CubicCartesianGridSpec& Spec() const noexcept { return spec_; }
+	double Plane(std::size_t axis, std::uint32_t plane) const
+	{
+		if (axis >= 3 || plane > spec_.cells[axis]) throw std::out_of_range("Cartesian background plane index is out of range");
+		return planes_[axis][plane];
+	}
 	std::array<double, 3> Greville(std::uint32_t i, std::uint32_t j, std::uint32_t k) const
 	{
 		const std::array<std::uint32_t, 3> index{{i, j, k}};
@@ -78,8 +89,8 @@ public:
 			static_cast<std::uint32_t>((id/spec_.cells[0])%spec_.cells[1]),
 			static_cast<std::uint32_t>(id/(static_cast<std::uint64_t>(spec_.cells[0])*spec_.cells[1]))}};
 		for (int axis = 0; axis < 3; ++axis) {
-			result.lower_m[axis] = spec_.lower_m[axis]+h_[axis]*result.index[axis];
-			result.upper_m[axis] = result.lower_m[axis]+h_[axis];
+			result.lower_m[axis] = Plane(axis, result.index[axis]);
+			result.upper_m[axis] = Plane(axis, result.index[axis]+1);
 		}
 		if (result.index[2]) result.neighbor[ZMinus] = id-static_cast<std::uint64_t>(spec_.cells[0])*spec_.cells[1];
 		if (result.index[1]) result.neighbor[YMinus] = id-spec_.cells[0];
@@ -116,8 +127,9 @@ public:
 		for (int c = 0; c < 4; ++c)
 			for (int b = 0; b < 4; ++b)
 				for (int a = 0; a < 4; ++a, ++point)
-					element.bezier_points[point] = {{spec_.lower_m[0]+h_[0]*(ex+a/3.0),
-						spec_.lower_m[1]+h_[1]*(ey+b/3.0), spec_.lower_m[2]+h_[2]*(ez+c/3.0)}};
+						element.bezier_points[point] = {{a == 0 ? Plane(0,ex) : a == 3 ? Plane(0,ex+1) : Plane(0,ex)+(Plane(0,ex+1)-Plane(0,ex))*a/3.0,
+							b == 0 ? Plane(1,ey) : b == 3 ? Plane(1,ey+1) : Plane(1,ey)+(Plane(1,ey+1)-Plane(1,ey))*b/3.0,
+							c == 0 ? Plane(2,ez) : c == 3 ? Plane(2,ez+1) : Plane(2,ez)+(Plane(2,ez+1)-Plane(2,ez))*c/3.0}};
 		return element;
 	}
 
@@ -197,6 +209,7 @@ private:
 
 	CubicCartesianGridSpec spec_;
 	std::array<double, 3> h_{};
+	std::array<std::vector<double>, 3> planes_;
 	std::array<std::vector<double>, 3> knots_;
 	std::array<std::vector<std::array<std::array<double, 4>, 4>>, 3> extraction_;
 	std::uint64_t element_count_ = 0;

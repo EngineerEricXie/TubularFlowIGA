@@ -80,6 +80,10 @@ void RequireAxisExtraction(int axis)
 
 int main()
 {
+	bool oversized_rejected = false;
+	try { iga::CubicCartesianBackground oversized({{{0.0,0.0,0.0}},{{1.0,1.0,1.0}},{{std::numeric_limits<std::uint32_t>::max(),1,1}}}); }
+	catch (const std::overflow_error&) { oversized_rejected = true; }
+	assert(oversized_rejected);
 	iga::CubicCartesianGridSpec one{{{0.0, 0.0, 0.0}}, {{1.0, 2.0, 3.0}}, {{1, 1, 1}}};
 	iga::CubicCartesianBackground grid(one);
 	assert(grid.ElementCount() == 1 && grid.NodeCount() == 64);

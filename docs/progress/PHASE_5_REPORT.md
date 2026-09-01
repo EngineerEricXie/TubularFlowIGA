@@ -59,6 +59,14 @@ preserve its established validation behavior.
 Focused coverage is `make -C solvers/cpu surface_spatial_index_test`; it is
 included in `make -C solvers/cpu test`.
 
+## PR 5.3b: Cartesian domain catalog
+
+`CartesianDomainClassification` retains every background cell id and
+connectivity while recording x-fast Outside, Inside, or conservative Cut
+classification, canonical intersecting surface triangle ids, and ambiguity
+diagnostics. Surface contact always wins over point classification. Focused
+coverage is `make -C solvers/cpu cartesian_domain_classification_test`.
+
 ## PR 5.2 prerequisite: canonical hashing
 
 The dependency-free CPU layer includes a self-contained incremental SHA-256
