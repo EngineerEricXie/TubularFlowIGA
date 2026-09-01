@@ -793,16 +793,31 @@ int main()
 			|| fs::exists(root/"invalid_fixed_aitken_max/explicit_coupling_history.csv")
 			|| fs::exists(root/"invalid_fixed_aitken_max/strong_coupling_history.csv"))
 			throw std::runtime_error("strong-fixed mode accepted an Aitken maximum option or wrote output");
+		const std::array<std::string, 3> invalid_newton_options{{
+			" --three-d-max-newton", " --three-d-max-newton 0", " --three-d-max-newton nope"}};
+		for (std::size_t invalid_index = 0; invalid_index < invalid_newton_options.size(); ++invalid_index) {
+			const auto output = root/("invalid_newton_"+std::to_string(invalid_index));
+			if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", output, "", "",
+				invalid_newton_options[invalid_index]) == 0
+				|| fs::exists(output/"explicit_coupling_history.csv")
+				|| fs::exists(output/"explicit_coupling_manifest.json")
+				|| fs::exists(output/"strong_coupling_history.csv")
+				|| fs::exists(output/"strong_coupling_iterations.csv")
+				|| fs::exists(output/"strong_coupling_manifest.json"))
+				throw std::runtime_error("invalid --three-d-max-newton unexpectedly succeeded or wrote output");
+		}
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_noninteger", root/"downstream_subcycled", root/"invalid_noninteger_subcycling", "") == 0
 			|| fs::exists(root/"invalid_noninteger_subcycling/explicit_coupling_history.csv"))
 			throw std::runtime_error("noninteger 1D subcycling ratio unexpectedly succeeded");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_bad_horizon", root/"downstream_subcycled", root/"invalid_horizon_subcycling", "") == 0
 			|| fs::exists(root/"invalid_horizon_subcycling/explicit_coupling_history.csv"))
 			throw std::runtime_error("mismatched 1D subcycling horizon unexpectedly succeeded");
-		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"one", "") != 0)
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"one", "", "", " --three-d-max-newton 31") != 0)
 			throw std::runtime_error("one-rank explicit coupling smoke run failed");
 		const auto one = ReadHistory(root/"one/explicit_coupling_history.csv");
 		RequireManifest(root/"one/explicit_coupling_manifest.json");
+		if (ManifestNumber(root/"one/explicit_coupling_manifest.json", "maximum_iterations") != 31.0)
+			throw std::runtime_error("explicit manifest did not record custom 3D Newton budget");
 		RequireManifestSubcycling(root/"one/explicit_coupling_manifest.json", one, kDtS, kSteps, 1);
 		ValidateRows(one);
 		WriteUnitDatabase(root/"two.ntiga", 2);
@@ -810,16 +825,20 @@ int main()
 			throw std::runtime_error("two-rank explicit coupling smoke run failed");
 		const auto two = ReadHistory(root/"two/explicit_coupling_history.csv");
 		RequireManifest(root/"two/explicit_coupling_manifest.json");
+		if (ManifestNumber(root/"two/explicit_coupling_manifest.json", "maximum_iterations") != 30.0)
+			throw std::runtime_error("default explicit manifest did not retain the 3D Newton budget of 30");
 		ValidateRows(two);
 		RequireSameHistory(one, two);
 		const std::string strong_arguments = " --coupling-mode strong-fixed --strong-max-iterations 50"
 			" --strong-pressure-relative-tol 1e-6 --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)
-			+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5";
+			+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5 --three-d-max-newton 32";
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_one", "", "", strong_arguments) != 0)
 			throw std::runtime_error("one-rank strong coupling smoke run failed");
 		const auto strong_one = ReadHistory(root/"strong_one/strong_coupling_history.csv");
 		const auto strong_one_iterations = ReadHistory(root/"strong_one/strong_coupling_iterations.csv");
 		RequireStrongManifest(root/"strong_one/strong_coupling_manifest.json");
+		if (ManifestNumber(root/"strong_one/strong_coupling_manifest.json", "maximum_iterations") != 32.0)
+			throw std::runtime_error("strong manifest did not record custom 3D Newton budget");
 		RequireManifestSubcycling(root/"strong_one/strong_coupling_manifest.json", strong_one, kDtS, kSteps, 1);
 		ValidateStrongRun(strong_one, strong_one_iterations, root/"strong_one/strong_coupling_manifest.json");
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_two", "mpiexec -np 2 ", "", strong_arguments) != 0)

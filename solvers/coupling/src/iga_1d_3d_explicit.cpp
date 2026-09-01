@@ -43,6 +43,7 @@ struct Options {
 	int upstream_terminal_node = -1;
 	fs::path output_directory;
 	int stop_after_step = 0;
+	int three_d_max_newton = kThreeDMaximumNewtonIterations;
 	bool strong_fixed = false;
 	bool strong_aitken = false;
 	iga::StrongCouplingControls strong_controls;
@@ -84,7 +85,7 @@ Options ParseOptions(int argc, char** argv)
 {
 	if (argc < 5) throw std::runtime_error(
 		"usage: iga_1d_3d_explicit DB THREE_D_CASE UPSTREAM_1D_CASE DOWNSTREAM_1D_CASE "
-		"--upstream-terminal-node ID --output-dir DIR [--stop-after-step N] "
+		"--upstream-terminal-node ID --output-dir DIR [--stop-after-step N] [--three-d-max-newton N] "
 		"[--coupling-mode explicit|strong-fixed|strong-aitken --strong-max-iterations N "
 		"--strong-pressure-relative-tol R --strong-pressure-reference-pa PA "
 		"--strong-flow-relative-tol R --strong-relaxation W "
@@ -97,7 +98,7 @@ Options ParseOptions(int argc, char** argv)
 	for (int i = 5; i < argc; ++i) {
 		const std::string argument(argv[i]);
 		if (argument == "--upstream-terminal-node" || argument == "--output-dir"
-			|| argument == "--stop-after-step" || argument == "--coupling-mode"
+			|| argument == "--stop-after-step" || argument == "--three-d-max-newton" || argument == "--coupling-mode"
 			|| argument == "--strong-max-iterations" || argument == "--strong-pressure-relative-tol"
 			|| argument == "--strong-pressure-reference-pa" || argument == "--strong-flow-relative-tol"
 			|| argument == "--strong-relaxation" || argument == "--strong-aitken-min-relaxation"
@@ -107,6 +108,7 @@ Options ParseOptions(int argc, char** argv)
 			if (argument == "--upstream-terminal-node") options.upstream_terminal_node = PositiveInteger(value, argument);
 			else if (argument == "--output-dir") options.output_directory = value;
 			else if (argument == "--stop-after-step") options.stop_after_step = PositiveInteger(value, argument);
+			else if (argument == "--three-d-max-newton") options.three_d_max_newton = PositiveInteger(value, argument);
 			if (argument == "--coupling-mode") {
 				if (value == "explicit") { options.strong_fixed = false; options.strong_aitken = false; }
 				else if (value == "strong-fixed") { options.strong_fixed = true; options.strong_aitken = false; }
@@ -274,7 +276,8 @@ void WriteExplicitCouplingManifest(const fs::path& path, int upstream_terminal_n
 	double density_kg_m3, double dynamic_viscosity_pa_s, double normalized_length_m,
 	double reference_inlet_outward_flow_m3_s, double initial_three_d_inlet_pressure_pa,
 	double initial_downstream_root_pressure_pa, const iga::OneDSubcyclingPlan& upstream_subcycling,
-	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history)
+	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history,
+	int three_d_max_newton)
 {
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create explicit coupling manifest");
@@ -299,7 +302,7 @@ void WriteExplicitCouplingManifest(const fs::path& path, int upstream_terminal_n
 		<< "  \"dynamic_viscosity_pa_s\": " << dynamic_viscosity_pa_s << ",\n"
 		<< "  \"geometry_transform_product_m\": " << normalized_length_m << ",\n"
 		<< "  \"reference_inlet_outward_flow_m3_s\": " << reference_inlet_outward_flow_m3_s << ",\n"
-		<< "  \"newton_controls\": {\"maximum_iterations\": " << kThreeDMaximumNewtonIterations
+		<< "  \"newton_controls\": {\"maximum_iterations\": " << three_d_max_newton
 		<< ", \"nonlinear_relative_tolerance\": " << kThreeDNonlinearRelativeTolerance
 		<< ", \"nonlinear_absolute_tolerance\": " << kThreeDNonlinearAbsoluteTolerance
 		<< ", \"mass_relative_tolerance\": " << kThreeDMassRelativeTolerance << "},\n"
@@ -334,7 +337,8 @@ void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCoupling
 	double initial_three_d_outlet_traction_pressure_pa, long long total_coupling_iterations,
 	double reference_inlet_outward_flow_m3_s, const std::array<long long, 6>& aitken_status_counts,
 	long long accepted_ksp, long long all_ksp, const iga::OneDSubcyclingPlan& upstream_subcycling,
-	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history)
+	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history,
+	int three_d_max_newton)
 {
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create strong coupling manifest");
@@ -360,7 +364,7 @@ void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCoupling
 		<< "  \"initial_pressure_guesses_pa\": {\"upstream_terminal\": "
 		<< initial_upstream_pressure_pa << ", \"three_d_outlet_traction\": "
 		<< initial_three_d_outlet_traction_pressure_pa << "},\n"
-		<< "  \"newton_controls\": {\"maximum_iterations\": " << kThreeDMaximumNewtonIterations
+		<< "  \"newton_controls\": {\"maximum_iterations\": " << three_d_max_newton
 		<< ", \"nonlinear_relative_tolerance\": " << kThreeDNonlinearRelativeTolerance
 		<< ", \"nonlinear_absolute_tolerance\": " << kThreeDNonlinearAbsoluteTolerance
 		<< ", \"mass_relative_tolerance\": " << kThreeDMassRelativeTolerance << "},\n"
@@ -664,7 +668,7 @@ int main(int argc, char** argv)
 				aitken.Reset();
 				try {
 					upstream.BeginStep(upstream.FlowState().physical_time, scalar.dt_s);
-					three_d.BeginStep(step-1, time, kThreeDMaximumNewtonIterations,
+					three_d.BeginStep(step-1, time, options.three_d_max_newton,
 						kThreeDNonlinearRelativeTolerance, kThreeDNonlinearAbsoluteTolerance,
 						kThreeDMassRelativeTolerance);
 					downstream.BeginStep(downstream.FlowState().physical_time, scalar.dt_s);
@@ -954,7 +958,7 @@ int main(int argc, char** argv)
 				iga::ApplyThreeDReferenceProfileInput(three_d_step,
 					three_d_step.equation_systems.front(), three_d_inlet_profile,
 					three_d_profile_input, reference_inlet_flow);
-				three_d.BeginStep(step-1, time, kThreeDMaximumNewtonIterations,
+				three_d.BeginStep(step-1, time, options.three_d_max_newton,
 					kThreeDNonlinearRelativeTolerance, kThreeDNonlinearAbsoluteTolerance,
 					kThreeDMassRelativeTolerance);
 				three_d.SetTrialBoundaryConfiguration(three_d_step);
@@ -1044,7 +1048,8 @@ int main(int argc, char** argv)
 					scalar.steps, static_cast<int>(history.size()), scalar.density_kg_m3,
 					scalar.dynamic_viscosity_pa_s, normalized_length,
 					reference_inlet_flow, initial_lagged_three_d_inlet_pressure,
-					initial_lagged_downstream_root_pressure, upstream_subcycling, downstream_subcycling, history);
+					initial_lagged_downstream_root_pressure, upstream_subcycling, downstream_subcycling, history,
+					options.three_d_max_newton);
 			} else {
 				std::ofstream history_output(options.output_directory/"strong_coupling_history.csv");
 				std::ofstream iteration_output(options.output_directory/"strong_coupling_iterations.csv");
@@ -1097,7 +1102,7 @@ int main(int argc, char** argv)
 					options.upstream_terminal_node, ports.inlet_label, ports.outlet_labels.front(),
 					initial_lagged_three_d_inlet_pressure, initial_lagged_downstream_root_pressure,
 					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, aitken_status_counts, accepted_ksp, all_ksp,
-					upstream_subcycling, downstream_subcycling, history);
+					upstream_subcycling, downstream_subcycling, history, options.three_d_max_newton);
 			}
 		} catch (const std::exception& error) {
 			output_failed = 1;

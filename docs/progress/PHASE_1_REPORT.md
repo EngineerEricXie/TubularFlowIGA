@@ -4,6 +4,14 @@ Status: PR 1.4 complete; Phase 1 remains in progress pending the full
 straight-vessel convergence benchmark. Restart and a
 general multidomain graph remain deferred.
 
+The 3D nonlinear budget remains backward-compatible at 30 iterations and is
+now configurable in every coupling mode with `--three-d-max-newton N` (positive
+integer). The selected value is recorded as
+`newton_controls.maximum_iterations` in the corresponding manifest. A
+preliminary H2 steady-ladder run exceeded the default budget and passed with a
+budget of 60 on the current fixture; it is evidence for the configurable
+budget only, not a completed convergence gate.
+
 ## PR 1.4 time-subcycling status
 
 The 1D runtime now executes an integer number of configured-time substeps
