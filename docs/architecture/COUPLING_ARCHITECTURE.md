@@ -481,6 +481,13 @@ and Aitken relaxation therefore remain one component-wide operation across all
 interfaces. Cycles, disconnected components, and same-kind edges remain
 unsupported.
 
+The PR 2.4 bifurcation resolver narrows this general executor to one supported
+production topology: a configured-open-loop 1D source, one body-fitted 3D
+junction, and at least two coupled-root 1D leaves. Branch identity and ordering
+come from directed interfaces and stable edge IDs; domain and port names carry
+no semantics. Required source-root, 3D-wall, and branch-terminal observation
+ports keep output construction explicit rather than inferring native state.
+
 ## Validation manifest
 
 Fast dependency-free baseline:

@@ -1,4 +1,5 @@
 #include "MultidomainConfig.hpp"
+#include "BifurcationMultidomainCase.hpp"
 #include "SequentialMultidomainCase.hpp"
 
 #include <cassert>
@@ -139,6 +140,9 @@ int main()
 	const auto controls = iga::PressureFlowControlsFor(configuration.execution);
 	assert(controls.method == iga::PressureFlowIterationMethod::Aitken);
 	assert(controls.maximum_iterations == 12);
+	RequireRejected([&configuration] {
+		(void)iga::ResolveOneDThreeDBifurcation(configuration);
+	});
 	{
 		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
 		const auto root = std::filesystem::temp_directory_path()
@@ -326,7 +330,9 @@ int main()
 		auto branch_text = Replace(ValidConfiguration(),
 			R"json({"id":"wall","locator_kind":"boundary_label","locator":"0",
          "provides":["flow_rate"],"requires":[]})json",
-			R"json({"id":"branch_outlet","locator_kind":"boundary_label","locator":"3",
+			R"json({"id":"wall","locator_kind":"boundary_label","locator":"0",
+         "provides":["flow_rate"],"requires":[]},
+        {"id":"branch_outlet","locator_kind":"boundary_label","locator":"3",
          "provides":["area","flow_rate","mean_pressure"],"requires":["mean_pressure"]})json");
 		branch_text = Replace(branch_text, R"json(    }
   ],
@@ -336,7 +342,9 @@ int main()
       "case": "domains/branch", "inlet_policy": "coupled_root",
       "ports": [
         {"id":"root","locator_kind":"runtime_port","locator":"root",
-         "provides":["area","flow_rate","mean_pressure"],"requires":["flow_rate"]}
+         "provides":["area","flow_rate","mean_pressure"],"requires":["flow_rate"]},
+        {"id":"terminal_state","locator_kind":"runtime_port","locator":"outlet:2",
+         "provides":["area","flow_rate","mean_pressure"],"requires":[]}
       ]
     }
   ],
@@ -349,6 +357,21 @@ int main()
 		assert(branch.graph.Domains().size() == 4 && branch.graph.Edges().size() == 3);
 		RequireRejected([&branch] {
 			(void)iga::MakeSequentialPressureFlowPlan(branch.graph, branch.start_domain_id);
+		});
+		const auto branch_plan = iga::MakeAcyclicPressureFlowPlan(branch.graph,
+			branch.start_domain_id);
+		assert(branch_plan.interfaces.size() == 3);
+		const auto resolved_branch = iga::ResolveOneDThreeDBifurcation(branch);
+		assert(resolved_branch.upstream_domain_id == "upstream");
+		assert(resolved_branch.three_d_domain_id == "roi");
+		assert(resolved_branch.upstream_edge_id == "upstream_to_roi");
+		assert(resolved_branch.branches.size() == 2);
+		assert(resolved_branch.branches[0].edge_id == "roi_to_branch");
+		assert(resolved_branch.branches[1].edge_id == "roi_to_downstream");
+		RequireRejected([&branch_text] {
+			(void)iga::ParseMultidomainConfiguration(Replace(branch_text,
+				"\"case\": \"domains/branch\", \"inlet_policy\": \"coupled_root\"",
+				"\"case\": \"domains/branch\", \"inlet_policy\": \"configured_open_loop\""));
 		});
 	}
 	std::cout << "multidomain configuration tests passed\n";

@@ -223,5 +223,14 @@ and endpoint permutation; explicit, fixed, and vector Aitken execution over
 three interfaces; distinct sibling flow routing; exactly one junction solve
 per iteration; missing initial pressure; nonfinite state; callback, sibling
 solve, and prepare failures; and all-domain abort without partial commit. The
-production graph resolver, Y-junction fixture, and long-form output remain the
+production runtime builder, Y-junction fixture, and long-form output remain the
 next PR 2.4 slices.
+
+`ResolveOneDThreeDBifurcation` now supplies the topology-to-runtime boundary
+for that production work. It accepts exactly one configured-open-loop 1D
+source, one body-fitted 3D junction with one flow-receiving inlet and at least
+two pressure-receiving outlets, and coupled-root 1D leaves. It derives all
+roles from the directed plan, inlet policies, port capabilities, and physical
+locators, sorts branch records by edge ID, and requires the root, wall, and
+terminal observations needed by the benchmark. Multiple 3D domains, deeper
+trees, missing observations, and incorrect inlet policies remain rejected.
