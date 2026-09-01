@@ -168,13 +168,21 @@ std::string Quote(const fs::path& path)
 	return "'"+path.string()+"'";
 }
 
+std::string ReadText(const fs::path& path)
+{
+	std::ifstream input(path);
+	if (!input) throw std::runtime_error("cannot read smoke diagnostic: "+path.string());
+	return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
+
 int Run(const fs::path& database, const fs::path& three_d, const fs::path& upstream,
 	const fs::path& downstream, const fs::path& output, const std::string& launcher,
-	const std::string& prefix = {}, const std::string& arguments = {})
+	const std::string& prefix = {}, const std::string& arguments = {}, const fs::path& stderr_path = {})
 {
-	const std::string command = prefix+launcher+"./iga_1d_3d_explicit "+Quote(database)+" "+Quote(three_d)
+	std::string command = prefix+launcher+"./iga_1d_3d_explicit "+Quote(database)+" "+Quote(three_d)
 		+" "+Quote(upstream)+" "+Quote(downstream)+" --upstream-terminal-node 2 --output-dir "
 		+Quote(output)+" -ksp_type preonly -pc_type lu"+arguments;
+	if (!stderr_path.empty()) command += " 2>"+Quote(stderr_path);
 	return std::system(command.c_str());
 }
 
@@ -326,6 +334,47 @@ void RequireSameHistory(const std::vector<CsvRow>& first, const std::vector<CsvR
 	}
 }
 
+struct PhysicalHistoryDifference {
+	double maximum_pressure_difference_pa = 0.0;
+	double maximum_nonpressure_difference = 0.0;
+	std::string maximum_pressure_field;
+	std::string maximum_nonpressure_field;
+};
+
+PhysicalHistoryDifference RequireEquivalentPhysicalHistory(const std::vector<CsvRow>& fixed, const std::vector<CsvRow>& aitken)
+{
+	if (fixed.size() != aitken.size()) throw std::runtime_error("fixed/Aitken physical step counts differ");
+	const double pressure_tolerance = 4.0*kPressureReferencePa*1.0e-6+1.0e-12;
+	PhysicalHistoryDifference difference;
+	for (std::size_t i = 0; i < fixed.size(); ++i)
+		for (const auto& value : fixed[i]) {
+			if (value.first.find("iteration") != std::string::npos || value.first.find("ksp") != std::string::npos
+				|| value.first.find("relaxation") != std::string::npos || value.first.find("residual") != std::string::npos)
+				continue;
+			const double peer = Value(aitken[i], value.first.c_str());
+			const double absolute_difference = std::abs(value.second-peer);
+			const bool pressure = value.first.find("pressure") != std::string::npos || value.first.find("drop") != std::string::npos;
+			if (pressure && absolute_difference > difference.maximum_pressure_difference_pa) {
+				difference.maximum_pressure_difference_pa = absolute_difference;
+				difference.maximum_pressure_field = value.first;
+			}
+			if (!pressure && absolute_difference > difference.maximum_nonpressure_difference) {
+				difference.maximum_nonpressure_difference = absolute_difference;
+				difference.maximum_nonpressure_field = value.first;
+			}
+			const double tolerance = pressure
+				? pressure_tolerance : 1.0e-10*std::max({1.0, std::abs(value.second), std::abs(peer)});
+			if (absolute_difference > tolerance)
+				throw std::runtime_error("fixed/Aitken physical history differs: "+value.first);
+		}
+	std::cout << std::setprecision(17) << "fixed/Aitken physical equivalence max_pressure_difference_pa="
+		<< difference.maximum_pressure_difference_pa << " field=" << difference.maximum_pressure_field
+		<< " tolerance_pa=" << pressure_tolerance << " max_nonpressure_difference="
+		<< difference.maximum_nonpressure_difference << " field=" << difference.maximum_nonpressure_field
+		<< " tolerance_relative=1e-10\n";
+	return difference;
+}
+
 double ManifestNumber(const fs::path& path, const std::string& key)
 {
 	std::ifstream input(path);
@@ -340,7 +389,7 @@ double ManifestNumber(const fs::path& path, const std::string& key)
 }
 
 void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<CsvRow>& iterations,
-	const fs::path& manifest)
+	const fs::path& manifest, bool fixed_mode = true)
 {
 	if (history.size() != static_cast<std::size_t>(kSteps) || iterations.size() <= history.size())
 		throw std::runtime_error("strong coupling smoke did not perform more than one sweep per step");
@@ -361,6 +410,12 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 		if (rows.empty() || rows.size() > 50) throw std::runtime_error("strong iteration count is invalid");
 		long long attempt_sum = 0;
 		for (std::size_t index = 0; index < rows.size(); ++index) {
+			if (fixed_mode && (!Close(Value(rows[index], "relaxation_factor_for_next_guess"), 0.5)
+				|| !Close(Value(rows[index], "unclamped_relaxation_factor"), 0.5)
+				|| Value(rows[index], "aitken_status_code") != -1.0
+				|| Value(rows[index], "aitken_has_previous_residual") != 0.0
+				|| Value(rows[index], "relaxation_update_applied") != (index+1 == rows.size() ? 0.0 : 1.0)))
+				throw std::runtime_error("fixed strong proposal diagnostics are inconsistent");
 			const double upstream_q = Value(rows[index], "upstream_terminal_outward_flow_m3_s");
 			const double inlet_q = Value(rows[index], "three_d_inlet_outward_flow_m3_s");
 			const double outlet_q = Value(rows[index], "three_d_outlet_outward_flow_m3_s");
@@ -399,10 +454,10 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 				&& std::abs(normalized_downstream_flow_residual) <= flow_relative_tolerance;
 			if (Value(rows[index], "converged") != (expected_converged ? 1.0 : 0.0))
 				throw std::runtime_error("strong serialized convergence flag is incorrect");
-			if (!Close(Value(rows[index], "next_upstream_terminal_pressure_pa"),
+			if (fixed_mode && (!Close(Value(rows[index], "next_upstream_terminal_pressure_pa"),
 				Value(rows[index], "applied_upstream_terminal_pressure_pa")+0.5*(Value(rows[index], "measured_three_d_inlet_pressure_pa")-Value(rows[index], "applied_upstream_terminal_pressure_pa")))
 				|| !Close(Value(rows[index], "next_three_d_outlet_traction_pressure_pa"),
-				Value(rows[index], "applied_three_d_outlet_traction_pressure_pa")+0.5*(Value(rows[index], "measured_downstream_root_pressure_pa")-Value(rows[index], "applied_three_d_outlet_traction_pressure_pa"))))
+				Value(rows[index], "applied_three_d_outlet_traction_pressure_pa")+0.5*(Value(rows[index], "measured_downstream_root_pressure_pa")-Value(rows[index], "applied_three_d_outlet_traction_pressure_pa")))))
 				throw std::runtime_error("strong fixed-relaxation next guess is not exact");
 			if (index > 0 && (!Close(Value(rows[index], "applied_upstream_terminal_pressure_pa"),
 				Value(rows[index-1], "next_upstream_terminal_pressure_pa"))
@@ -435,12 +490,19 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 	for (const auto& row : history) {
 		observed_multiple_iterations = observed_multiple_iterations || Value(row, "iteration_count") > 1.0;
 		if (!(Value(row, "iteration_count") >= 1.0) || Value(row, "iteration_count") > 50.0
-			|| !Close(Value(row, "relaxation_factor"), 0.5)
+			|| (fixed_mode && !Close(Value(row, "relaxation_factor"), 0.5))
 			|| !Close(Value(row, "pressure_reference_pa"), kPressureReferencePa)
 			|| Value(row, "accepted_three_d_ksp_iterations") < 0.0
 			|| Value(row, "all_three_d_ksp_iterations") < Value(row, "accepted_three_d_ksp_iterations")
 			|| !Close(Value(row, "rejected_three_d_ksp_iterations"), Value(row, "all_three_d_ksp_iterations")-Value(row, "accepted_three_d_ksp_iterations")))
 			throw std::runtime_error("strong coupling work accounting is invalid");
+		const double updates = Value(row, "relaxation_updates_applied");
+		if (fixed_mode && (updates != Value(row, "iteration_count")-1.0
+			|| !Close(Value(row, "final_proposed_relaxation_factor"), 0.5)
+			|| Value(row, "final_proposal_applied") != 0.0
+			|| (updates == 0.0 && Value(row, "last_applied_relaxation_factor") != 0.0)
+			|| (updates > 0.0 && !Close(Value(row, "last_applied_relaxation_factor"), 0.5))))
+			throw std::runtime_error("strong step relaxation summary is invalid");
 	}
 	if (!observed_multiple_iterations)
 		throw std::runtime_error("strong coupling smoke never required a fixed-point correction");
@@ -460,8 +522,118 @@ void RequireStrongManifest(const fs::path& path)
 		|| text.find("pressure-traction parameter") == std::string::npos
 		|| text.find("geometry_transform_product_m") == std::string::npos
 		|| text.find("newton_controls") == std::string::npos
-		|| text.find("\"restart\": \"unsupported\"") == std::string::npos)
+		|| text.find("\"restart\": \"unsupported\"") == std::string::npos
+		|| text.find("aitken_controls") != std::string::npos
+		|| text.find("aitken_recurrence") != std::string::npos)
 		throw std::runtime_error("strong coupling manifest is incomplete");
+}
+
+void RequireAitkenManifest(const fs::path& path)
+{
+	std::ifstream input(path);
+	const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	if (!input || text.find("\"scheme\": \"strong_aitken\"") == std::string::npos
+		|| text.find("\"aitken_recurrence\"") == std::string::npos
+		|| text.find("omega_hat=-omega_previous") == std::string::npos
+		|| text.find("delta=(r_current/scale)-(r_previous/scale)") == std::string::npos
+		|| text.find("retains prior clamped omega") == std::string::npos
+		|| text.find("reset each macro-step") == std::string::npos
+		|| text.find("final converged proposal is unused") == std::string::npos)
+		throw std::runtime_error("Aitken coupling manifest is incomplete");
+}
+
+void ValidateAitkenRun(const std::vector<CsvRow>& history, const std::vector<CsvRow>& iterations,
+	const fs::path& manifest, std::size_t fixed_first_step_iterations)
+{
+	ValidateStrongRun(history, iterations, manifest, false);
+	ValidateRows(history, false);
+	const double reference = ManifestNumber(manifest, "pressure_reference_pa");
+	const double initial = ManifestNumber(manifest, "initial_relaxation");
+	const double minimum = ManifestNumber(manifest, "minimum_relaxation");
+	const double maximum = ManifestNumber(manifest, "maximum_relaxation");
+	const double threshold = ManifestNumber(manifest, "scaled_difference_threshold");
+	if (!Close(initial, 0.5) || !Close(minimum, 0.05) || !Close(maximum, 0.999)
+		|| !(threshold > 0.0))
+		throw std::runtime_error("Aitken manifest controls are invalid");
+	std::map<int, std::vector<CsvRow>> by_step;
+	for (const auto& row : iterations) by_step[static_cast<int>(Value(row, "physical_step"))].push_back(row);
+	bool dynamic = false;
+	std::array<long long, 6> status_counts{{0, 0, 0, 0, 0, 0}};
+	for (const auto& entry : by_step) {
+		const auto& rows = entry.second;
+		std::array<double, 2> previous_residual{{0.0, 0.0}};
+		double previous_omega = initial;
+		bool has_previous = false;
+		for (std::size_t i = 0; i < rows.size(); ++i) {
+			const auto& row = rows[i];
+			const std::array<double, 2> x{{Value(row, "applied_upstream_terminal_pressure_pa"),
+				Value(row, "applied_three_d_outlet_traction_pressure_pa")}};
+			const std::array<double, 2> residual{{Value(row, "signed_upstream_pressure_residual_pa"),
+				Value(row, "signed_downstream_pressure_residual_pa")}};
+			double omega = previous_omega, unclamped = previous_omega, numerator = 0.0, denominator = 0.0;
+			int status = 0;
+			if (has_previous) {
+				double scale = reference;
+				for (int c = 0; c < 2; ++c) scale = std::max(scale, std::max(std::abs(residual[c]), std::abs(previous_residual[c])));
+				for (int c = 0; c < 2; ++c) {
+					const double prior = previous_residual[c]/scale;
+					const double difference = residual[c]/scale-prior;
+					numerator += prior*difference;
+					denominator += difference*difference;
+				}
+				if (denominator <= threshold) status = 4;
+				else {
+					unclamped = -previous_omega*numerator/denominator;
+					if (!std::isfinite(unclamped)) status = 5;
+					else if (unclamped < minimum) { omega = minimum; status = 2; }
+					else if (unclamped > maximum) { omega = maximum; status = 3; }
+					else { omega = std::max(minimum, std::min(maximum, unclamped)); status = 1; }
+				}
+			}
+			if (Value(row, "aitken_has_previous_residual") != (has_previous ? 1.0 : 0.0)
+				|| !Close(Value(row, "aitken_scaled_numerator"), numerator)
+				|| !Close(Value(row, "aitken_scaled_denominator"), denominator)
+				|| !Close(Value(row, "unclamped_relaxation_factor"), unclamped)
+				|| !Close(Value(row, "relaxation_factor_for_next_guess"), omega)
+				|| Value(row, "aitken_status_code") != static_cast<double>(status)
+				|| !Close(Value(row, "next_upstream_terminal_pressure_pa"), x[0]+omega*residual[0])
+				|| !Close(Value(row, "next_three_d_outlet_traction_pressure_pa"), x[1]+omega*residual[1]))
+				throw std::runtime_error("Aitken CSV proposal is not independently reproducible");
+			dynamic = dynamic || std::abs(Value(row, "relaxation_factor_for_next_guess")-0.5) > 1.0e-12;
+			if (Value(row, "relaxation_update_applied") != (i+1 == rows.size() ? 0.0 : 1.0))
+				throw std::runtime_error("Aitken applied-update flag is invalid");
+			++status_counts[static_cast<std::size_t>(status)];
+			if (Value(row, "relaxation_update_applied") != 0.0) {
+				previous_residual = residual;
+				previous_omega = omega;
+				has_previous = true;
+			}
+		}
+		const auto& step = history.at(static_cast<std::size_t>(entry.first-1));
+		const double updates = Value(step, "relaxation_updates_applied");
+		if (updates != static_cast<double>(rows.size()-1)
+			|| Value(step, "final_proposal_applied") != 0.0
+			|| !Close(Value(step, "final_proposed_relaxation_factor"),
+				Value(rows.back(), "relaxation_factor_for_next_guess")))
+			throw std::runtime_error("Aitken step relaxation summary is invalid");
+		if (rows.size() == 1) {
+			if (Value(step, "last_applied_relaxation_factor") != 0.0
+				|| !Close(Value(step, "relaxation_factor"), initial))
+				throw std::runtime_error("one-sweep Aitken step relaxation summary is invalid");
+		} else if (!Close(Value(step, "last_applied_relaxation_factor"),
+			Value(rows[rows.size()-2], "relaxation_factor_for_next_guess"))
+			|| !Close(Value(step, "relaxation_factor"), Value(step, "last_applied_relaxation_factor")))
+			throw std::runtime_error("Aitken last-applied relaxation summary is invalid");
+	}
+	if (static_cast<long long>(ManifestNumber(manifest, "initial")) != status_counts[0]
+		|| static_cast<long long>(ManifestNumber(manifest, "dynamic")) != status_counts[1]
+		|| static_cast<long long>(ManifestNumber(manifest, "clamped_minimum")) != status_counts[2]
+		|| static_cast<long long>(ManifestNumber(manifest, "clamped_maximum")) != status_counts[3]
+		|| static_cast<long long>(ManifestNumber(manifest, "tiny_difference_fallback")) != status_counts[4]
+		|| static_cast<long long>(ManifestNumber(manifest, "nonfinite_candidate_fallback")) != status_counts[5])
+		throw std::runtime_error("Aitken manifest status totals do not match CSV rows");
+	if (!dynamic || by_step.at(1).size() >= fixed_first_step_iterations)
+		throw std::runtime_error("Aitken did not dynamically reduce first-step strong sweeps");
 }
 
 } // namespace
@@ -481,6 +653,17 @@ int main()
 		WriteOneDCase(root/"upstream");
 		WriteOneDCase(root/"downstream");
 		WriteUnitDatabase(root/"one.ntiga", 1);
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"invalid_explicit_aitken_min", "", "",
+			" --coupling-mode explicit --strong-aitken-min-relaxation 0.05") == 0
+			|| fs::exists(root/"invalid_explicit_aitken_min/explicit_coupling_history.csv")
+			|| fs::exists(root/"invalid_explicit_aitken_min/strong_coupling_history.csv"))
+			throw std::runtime_error("explicit mode accepted an Aitken minimum option or wrote output");
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"invalid_fixed_aitken_max", "", "",
+			" --coupling-mode strong-fixed --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)
+			+" --strong-aitken-max-relaxation 0.9") == 0
+			|| fs::exists(root/"invalid_fixed_aitken_max/explicit_coupling_history.csv")
+			|| fs::exists(root/"invalid_fixed_aitken_max/strong_coupling_history.csv"))
+			throw std::runtime_error("strong-fixed mode accepted an Aitken maximum option or wrote output");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"one", "") != 0)
 			throw std::runtime_error("one-rank explicit coupling smoke run failed");
 		const auto one = ReadHistory(root/"one/explicit_coupling_history.csv");
@@ -510,6 +693,53 @@ int main()
 		ValidateStrongRun(strong_two, strong_two_iterations, root/"strong_two/strong_coupling_manifest.json");
 		RequireSameHistory(strong_one, strong_two);
 		RequireSameHistory(strong_one_iterations, strong_two_iterations);
+		const std::string aitken_arguments = " --coupling-mode strong-aitken --strong-max-iterations 50"
+			" --strong-pressure-relative-tol 1e-6 --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)
+			+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5 --strong-aitken-min-relaxation 0.05 --strong-aitken-max-relaxation 0.999";
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_one", "", "", aitken_arguments) != 0)
+			throw std::runtime_error("one-rank Aitken coupling smoke run failed");
+		const auto aitken_one = ReadHistory(root/"aitken_one/strong_coupling_history.csv");
+		const auto aitken_one_iterations = ReadHistory(root/"aitken_one/strong_coupling_iterations.csv");
+		RequireAitkenManifest(root/"aitken_one/strong_coupling_manifest.json");
+		ValidateAitkenRun(aitken_one, aitken_one_iterations, root/"aitken_one/strong_coupling_manifest.json",
+			static_cast<std::size_t>(Value(strong_one.front(), "iteration_count")));
+		RequireEquivalentPhysicalHistory(strong_one, aitken_one);
+		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_two", "mpiexec -np 2 ", "", aitken_arguments) != 0)
+			throw std::runtime_error("two-rank Aitken coupling smoke run failed");
+		const auto aitken_two = ReadHistory(root/"aitken_two/strong_coupling_history.csv");
+		const auto aitken_two_iterations = ReadHistory(root/"aitken_two/strong_coupling_iterations.csv");
+		RequireAitkenManifest(root/"aitken_two/strong_coupling_manifest.json");
+		ValidateAitkenRun(aitken_two, aitken_two_iterations, root/"aitken_two/strong_coupling_manifest.json",
+			static_cast<std::size_t>(Value(strong_two.front(), "iteration_count")));
+		RequireSameHistory(aitken_one, aitken_two);
+		RequireSameHistory(aitken_one_iterations, aitken_two_iterations);
+		const auto aitken_nonconverged_log = root/"aitken_nonconverged.log";
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_nonconverged", "", "",
+			" --coupling-mode strong-aitken --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"
+			" --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5", aitken_nonconverged_log) == 0)
+			throw std::runtime_error("Aitken max-iteration failure unexpectedly succeeded");
+		if (fs::exists(root/"aitken_nonconverged/strong_coupling_history.csv")
+			|| fs::exists(root/"aitken_nonconverged/strong_coupling_iterations.csv")
+			|| fs::exists(root/"aitken_nonconverged/strong_coupling_manifest.json"))
+			throw std::runtime_error("nonconverged Aitken coupling wrote persistent output");
+		if (ReadText(aitken_nonconverged_log).find("iteration=1") == std::string::npos
+			|| ReadText(aitken_nonconverged_log).find("G=(") == std::string::npos
+			|| ReadText(aitken_nonconverged_log).find("normalized_q=(") == std::string::npos
+			|| ReadText(aitken_nonconverged_log).find("omega=") == std::string::npos)
+			throw std::runtime_error("Aitken max-iteration failure did not emit a complete iteration diagnostic");
+		const auto aitken_rejected_log = root/"aitken_rejected.log";
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_rejected", "",
+			"TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=1 ", aitken_arguments, aitken_rejected_log) == 0)
+			throw std::runtime_error("injected Aitken coupling failure unexpectedly succeeded");
+		if (fs::exists(root/"aitken_rejected/strong_coupling_history.csv")
+			|| fs::exists(root/"aitken_rejected/strong_coupling_iterations.csv")
+			|| fs::exists(root/"aitken_rejected/strong_coupling_manifest.json"))
+			throw std::runtime_error("rejected Aitken coupling step wrote persistent output");
+		if (ReadText(aitken_rejected_log).find("iteration=3") == std::string::npos
+			|| ReadText(aitken_rejected_log).find("G=(") == std::string::npos
+			|| ReadText(aitken_rejected_log).find("normalized_p=(") == std::string::npos
+			|| ReadText(aitken_rejected_log).find("ksp=(") == std::string::npos)
+			throw std::runtime_error("injected Aitken failure did not emit its complete final iteration diagnostic");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_nonconverged", "", "",
 			" --coupling-mode strong-fixed --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"
 			" --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5") == 0)

@@ -1,4 +1,5 @@
 #include "BoundarySupport.hpp"
+#include "AitkenRelaxation.hpp"
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
 #include "OneDImplicit.hpp"
@@ -43,9 +44,12 @@ struct Options {
 	fs::path output_directory;
 	int stop_after_step = 0;
 	bool strong_fixed = false;
+	bool strong_aitken = false;
 	iga::StrongCouplingControls strong_controls;
+	iga::AitkenRelaxationControls aitken_controls;
 	bool strong_pressure_reference_set = false;
 	bool strong_argument_seen = false;
+	bool aitken_argument_seen = false;
 };
 
 int PositiveInteger(const std::string& text, const std::string& option)
@@ -81,9 +85,10 @@ Options ParseOptions(int argc, char** argv)
 	if (argc < 5) throw std::runtime_error(
 		"usage: iga_1d_3d_explicit DB THREE_D_CASE UPSTREAM_1D_CASE DOWNSTREAM_1D_CASE "
 		"--upstream-terminal-node ID --output-dir DIR [--stop-after-step N] "
-		"[--coupling-mode explicit|strong-fixed --strong-max-iterations N "
+		"[--coupling-mode explicit|strong-fixed|strong-aitken --strong-max-iterations N "
 		"--strong-pressure-relative-tol R --strong-pressure-reference-pa PA "
-		"--strong-flow-relative-tol R --strong-relaxation W] [PETSc options]");
+		"--strong-flow-relative-tol R --strong-relaxation W "
+		"--strong-aitken-min-relaxation W --strong-aitken-max-relaxation W] [PETSc options]");
 	Options options;
 	options.database = argv[1];
 	options.three_d_case = argv[2];
@@ -95,16 +100,18 @@ Options ParseOptions(int argc, char** argv)
 			|| argument == "--stop-after-step" || argument == "--coupling-mode"
 			|| argument == "--strong-max-iterations" || argument == "--strong-pressure-relative-tol"
 			|| argument == "--strong-pressure-reference-pa" || argument == "--strong-flow-relative-tol"
-			|| argument == "--strong-relaxation") {
+			|| argument == "--strong-relaxation" || argument == "--strong-aitken-min-relaxation"
+			|| argument == "--strong-aitken-max-relaxation") {
 			if (++i >= argc) throw std::runtime_error(argument+" requires a value");
 			const std::string value(argv[i]);
 			if (argument == "--upstream-terminal-node") options.upstream_terminal_node = PositiveInteger(value, argument);
 			else if (argument == "--output-dir") options.output_directory = value;
 			else if (argument == "--stop-after-step") options.stop_after_step = PositiveInteger(value, argument);
 			if (argument == "--coupling-mode") {
-				if (value == "explicit") options.strong_fixed = false;
-				else if (value == "strong-fixed") options.strong_fixed = true;
-				else throw std::runtime_error("--coupling-mode must be explicit or strong-fixed");
+				if (value == "explicit") { options.strong_fixed = false; options.strong_aitken = false; }
+				else if (value == "strong-fixed") { options.strong_fixed = true; options.strong_aitken = false; }
+				else if (value == "strong-aitken") { options.strong_fixed = false; options.strong_aitken = true; }
+				else throw std::runtime_error("--coupling-mode must be explicit, strong-fixed, or strong-aitken");
 			} else if (argument == "--strong-max-iterations") {
 				options.strong_argument_seen = true;
 				options.strong_controls.maximum_iterations = PositiveInteger(value, argument);
@@ -121,6 +128,15 @@ Options ParseOptions(int argc, char** argv)
 			} else if (argument == "--strong-relaxation") {
 				options.strong_argument_seen = true;
 				options.strong_controls.relaxation_factor = FiniteDouble(value, argument);
+				options.aitken_controls.initial_relaxation = options.strong_controls.relaxation_factor;
+			} else if (argument == "--strong-aitken-min-relaxation") {
+				options.strong_argument_seen = true;
+				options.aitken_argument_seen = true;
+				options.aitken_controls.minimum_relaxation = FiniteDouble(value, argument);
+			} else if (argument == "--strong-aitken-max-relaxation") {
+				options.strong_argument_seen = true;
+				options.aitken_argument_seen = true;
+				options.aitken_controls.maximum_relaxation = FiniteDouble(value, argument);
 			}
 			continue;
 		}
@@ -132,12 +148,15 @@ Options ParseOptions(int argc, char** argv)
 	}
 	if (options.upstream_terminal_node < 0 || options.output_directory.empty())
 		throw std::runtime_error("--upstream-terminal-node and --output-dir are required");
-	if (!options.strong_fixed && options.strong_argument_seen)
-		throw std::runtime_error("strong coupling arguments require --coupling-mode strong-fixed");
-	if (options.strong_fixed) {
+	if (!options.strong_fixed && !options.strong_aitken && options.strong_argument_seen)
+		throw std::runtime_error("strong coupling arguments require a strong coupling mode");
+	if (!options.strong_aitken && options.aitken_argument_seen)
+		throw std::runtime_error("Aitken bounds require --coupling-mode strong-aitken");
+	if (options.strong_fixed || options.strong_aitken) {
 		if (!options.strong_pressure_reference_set)
-			throw std::runtime_error("strong-fixed coupling requires --strong-pressure-reference-pa");
+			throw std::runtime_error("strong coupling requires --strong-pressure-reference-pa");
 		iga::ValidateStrongCouplingControls(options.strong_controls);
+		if (options.strong_aitken) iga::ValidateAitkenRelaxationControls(options.aitken_controls);
 	}
 	return options;
 }
@@ -270,16 +289,18 @@ void WriteExplicitCouplingManifest(const fs::path& path, int upstream_terminal_n
 }
 
 void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCouplingControls& controls,
+	const iga::AitkenRelaxationControls& aitken_controls, bool strong_aitken,
 	int configured_steps, int completed_steps, double dt_s, double density_kg_m3,
 	double dynamic_viscosity_pa_s, double normalized_length_m, int upstream_terminal_node,
 	int three_d_inlet_label, int three_d_outlet_label, double initial_upstream_pressure_pa,
 	double initial_three_d_outlet_traction_pressure_pa, long long total_coupling_iterations,
-	double reference_inlet_outward_flow_m3_s, long long accepted_ksp, long long all_ksp)
+	double reference_inlet_outward_flow_m3_s, const std::array<long long, 6>& aitken_status_counts,
+	long long accepted_ksp, long long all_ksp)
 {
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create strong coupling manifest");
 	output << std::setprecision(17) << "{\n"
-		<< "  \"scheme\": \"strong_fixed\",\n"
+		<< "  \"scheme\": \"" << (strong_aitken ? "strong_aitken" : "strong_fixed") << "\",\n"
 		<< "  \"pressure_fixed_point\": \"x=[upstream_terminal_pressure,three_d_outlet_pressure_traction_parameter]; G=[three_d_inlet_mean_static_pressure,downstream_root_mean_static_pressure]\",\n"
 		<< "  \"pressure_traction_parameter\": \"The 3D outlet input is a pressure-traction parameter; measured 3D outlet static pressure is diagnostic only and is not the right fixed-point component.\",\n"
 		<< "  \"restart\": \"unsupported\",\n"
@@ -308,7 +329,20 @@ void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCoupling
 		<< ", \"pressure_relative_tolerance\": " << controls.pressure_relative_tolerance
 		<< ", \"pressure_reference_pa\": " << controls.pressure_reference_pa
 		<< ", \"flow_relative_tolerance\": " << controls.flow_relative_tolerance
-		<< ", \"relaxation_factor\": " << controls.relaxation_factor << "},\n"
+		<< ", \"relaxation_factor\": " << controls.relaxation_factor << "},\n";
+	if (strong_aitken) output
+		<< "  \"aitken_controls\": {\"initial_relaxation\": " << aitken_controls.initial_relaxation
+		<< ", \"minimum_relaxation\": " << aitken_controls.minimum_relaxation
+		<< ", \"maximum_relaxation\": " << aitken_controls.maximum_relaxation
+		<< ", \"scaled_difference_threshold\": " << aitken_controls.scaled_difference_threshold << "},\n"
+		<< "  \"aitken_status_mapping\": {\"0\": \"Initial\", \"1\": \"Dynamic\", \"2\": \"ClampedMinimum\", \"3\": \"ClampedMaximum\", \"4\": \"TinyDifferenceFallback\", \"5\": \"NonfiniteCandidateFallback\"},\n"
+		<< "  \"aitken_status_totals\": {\"initial\": " << aitken_status_counts[0]
+		<< ", \"dynamic\": " << aitken_status_counts[1] << ", \"clamped_minimum\": " << aitken_status_counts[2]
+		<< ", \"clamped_maximum\": " << aitken_status_counts[3] << ", \"tiny_difference_fallback\": " << aitken_status_counts[4]
+		<< ", \"nonfinite_candidate_fallback\": " << aitken_status_counts[5] << "},\n";
+	if (strong_aitken) output
+		<< "  \"aitken_recurrence\": \"r=G-x ordered [upstream_terminal/three_d_inlet,three_d_outlet_pressure_traction_parameter/downstream_root]; scale=max(Pref,abs(all previous/current r components)); delta=(r_current/scale)-(r_previous/scale); omega_hat=-omega_previous*dot(r_previous/scale,delta)/dot(delta,delta); denominator <= threshold or nonfinite candidate retains prior clamped omega; otherwise exact min/max clamp; reset each macro-step; AcceptApplied occurs only after rollback; final converged proposal is unused\",\n";
+	output
 		<< "  \"formula\": \"pressure_raw_i=G_i-x_i; eta_i=abs(pressure_raw_i)/max(Pref,abs(G_i),abs(x_i)); convergence requires both nonnegative normalized pressure residuals eta_i <= pressure_relative_tolerance and both absolute signed outward-flow residuals abs((Q_a_out+Q_b_out)/max(abs(Q_a_out),abs(Q_b_out),1e-30)) <= flow_relative_tolerance; x_next=x+omega*(G-x)\",\n"
 		<< "  \"output_semantics\": \"History, iteration CSV, and manifest are written only after the complete run succeeds; rejected trials produce no persistent coupling output.\",\n"
 		<< "  \"work_semantics\": \"accepted 3D KSP work is the final committed attempt of each step; all_attempts includes rejected strong sweeps; rejected is all_attempts minus accepted. Rejected 1D computational work is not reported.\",\n"
@@ -323,6 +357,25 @@ std::string CsvLineWithoutNewline(const std::string& line)
 {
 	if (line.empty() || line.back() != '\n') throw std::runtime_error("invalid CSV serializer output");
 	return line.substr(0, line.size()-1);
+}
+
+void WriteStrongFailureIteration(std::ostream& output, const iga::StrongCouplingIterationRow& row)
+{
+	output << std::setprecision(17) << "step=" << row.physical_step << " iteration=" << row.iteration
+		<< " x=(" << row.applied_upstream_terminal_pressure_pa << ',' << row.applied_three_d_outlet_traction_pressure_pa << ')'
+		<< " G=(" << row.measured_three_d_inlet_pressure_pa << ',' << row.measured_downstream_root_pressure_pa << ')'
+		<< " raw_p=(" << row.signed_upstream_pressure_residual_pa << ',' << row.signed_downstream_pressure_residual_pa << ')'
+		<< " normalized_p=(" << row.normalized_upstream_pressure_residual << ',' << row.normalized_downstream_pressure_residual << ')'
+		<< " q=(" << row.upstream_terminal_outward_flow_m3_s << ',' << row.three_d_inlet_outward_flow_m3_s
+		<< ',' << row.three_d_outlet_outward_flow_m3_s << ',' << row.downstream_root_outward_flow_m3_s << ')'
+		<< " raw_q=(" << row.upstream_three_d_flow_residual_m3_s << ',' << row.three_d_downstream_flow_residual_m3_s << ')'
+		<< " normalized_q=(" << row.normalized_upstream_three_d_flow_residual << ',' << row.normalized_three_d_downstream_flow_residual << ')'
+		<< " wall=" << row.three_d_wall_outward_flow_m3_s << " mass=" << row.three_d_mass_imbalance_m3_s
+		<< " omega=" << row.relaxation_factor_for_next_guess << " unclamped=" << row.unclamped_relaxation_factor
+		<< " numerator=" << row.aitken_scaled_numerator << " denominator=" << row.aitken_scaled_denominator
+		<< " status=" << row.aitken_status_code << " has_previous=" << row.aitken_has_previous_residual
+		<< " applied=" << row.relaxation_update_applied << " converged=" << row.converged
+		<< " ksp=(" << row.three_d_attempt_linear_iterations << ',' << row.three_d_cumulative_step_linear_iterations << ")\n";
 }
 
 void RollbackSolved(iga::OneDFlowRuntime& runtime)
@@ -514,14 +567,21 @@ int main(int argc, char** argv)
 		std::vector<iga::StrongCouplingIterationRow> strong_iterations;
 		std::vector<long long> strong_accepted_ksp;
 		std::vector<long long> strong_all_ksp;
+		std::vector<int> strong_relaxation_updates;
+		std::vector<double> strong_last_applied_relaxation;
+		std::vector<double> strong_final_proposed_relaxation;
 		std::string final_strong_diagnostics;
-		if (options.strong_fixed) {
+		if (options.strong_fixed || options.strong_aitken) {
 			for (int step = 1; step <= final_step; ++step) {
 				const double time = step*scalar.dt_s;
 				double applied_upstream_pressure = lagged_three_d_inlet_pressure;
 				double applied_three_d_pressure = lagged_downstream_root_pressure;
 				long long all_ksp = 0;
+				int relaxation_updates = 0;
+				double last_applied_relaxation = 0.0;
 				bool committed = false;
+				iga::AitkenRelaxation<2> aitken(options.aitken_controls);
+				aitken.Reset();
 				try {
 					upstream.BeginStep(upstream.FlowState().physical_time, scalar.dt_s);
 					three_d.BeginStep(step-1, time, kThreeDMaximumNewtonIterations,
@@ -636,12 +696,25 @@ int main(int argc, char** argv)
 						iteration_row.normalized_downstream_pressure_residual = iga::StrongCouplingPressureResidual(
 							applied_three_d_pressure, row.downstream_root_pressure_pa,
 							options.strong_controls.pressure_reference_pa);
-						iteration_row.next_upstream_terminal_pressure_pa = iga::StrongCouplingFixedUpdate(
-							applied_upstream_pressure, row.three_d_inlet_pressure_pa,
-							options.strong_controls.relaxation_factor);
-						iteration_row.next_three_d_outlet_traction_pressure_pa = iga::StrongCouplingFixedUpdate(
-							applied_three_d_pressure, row.downstream_root_pressure_pa,
-							options.strong_controls.relaxation_factor);
+						const std::array<double, 2> x{{applied_upstream_pressure, applied_three_d_pressure}};
+						const std::array<double, 2> residual{{iteration_row.signed_upstream_pressure_residual_pa,
+							iteration_row.signed_downstream_pressure_residual_pa}};
+						if (options.strong_aitken) {
+							const auto proposal = aitken.Propose(x, residual, options.strong_controls.pressure_reference_pa);
+							iteration_row.relaxation_factor_for_next_guess = proposal.relaxation_factor;
+							iteration_row.unclamped_relaxation_factor = proposal.unclamped_relaxation_factor;
+							iteration_row.aitken_scaled_numerator = proposal.scaled_numerator;
+							iteration_row.aitken_scaled_denominator = proposal.scaled_denominator;
+							iteration_row.aitken_status_code = iga::AitkenRelaxationStatusCode(proposal.status);
+							iteration_row.aitken_has_previous_residual = proposal.has_previous_residual;
+							iteration_row.next_upstream_terminal_pressure_pa = proposal.next[0];
+							iteration_row.next_three_d_outlet_traction_pressure_pa = proposal.next[1];
+						} else {
+							iteration_row.relaxation_factor_for_next_guess = options.strong_controls.relaxation_factor;
+							iteration_row.unclamped_relaxation_factor = options.strong_controls.relaxation_factor;
+							iteration_row.next_upstream_terminal_pressure_pa = iga::StrongCouplingFixedUpdate(x[0], x[0]+residual[0], options.strong_controls.relaxation_factor);
+							iteration_row.next_three_d_outlet_traction_pressure_pa = iga::StrongCouplingFixedUpdate(x[1], x[1]+residual[1], options.strong_controls.relaxation_factor);
+						}
 						iteration_row.upstream_terminal_outward_flow_m3_s = row.upstream_terminal_outward_flow_m3_s;
 						iteration_row.three_d_inlet_outward_flow_m3_s = row.three_d_inlet_outward_flow_m3_s;
 						iteration_row.three_d_outlet_outward_flow_m3_s = row.three_d_outlet_outward_flow_m3_s;
@@ -672,38 +745,55 @@ int main(int argc, char** argv)
 							std::abs(iteration_row.normalized_upstream_three_d_flow_residual),
 							std::abs(iteration_row.normalized_three_d_downstream_flow_residual));
 						if (maximum_flow_residual > options.strong_controls.flow_relative_tolerance)
+						{
+							iteration_row.relaxation_update_applied = false;
+							strong_iterations.push_back(iteration_row);
 							throw std::runtime_error("strong coupling transfer flow residual exceeds --strong-flow-relative-tol");
+						}
 						iteration_row.converged = iteration_row.normalized_upstream_pressure_residual <= options.strong_controls.pressure_relative_tolerance
 							&& iteration_row.normalized_downstream_pressure_residual <= options.strong_controls.pressure_relative_tolerance
 							&& std::abs(iteration_row.normalized_upstream_three_d_flow_residual) <= options.strong_controls.flow_relative_tolerance
 							&& std::abs(iteration_row.normalized_three_d_downstream_flow_residual) <= options.strong_controls.flow_relative_tolerance;
 						if (iteration_row.converged) {
+							iteration_row.relaxation_update_applied = false;
+							row.relaxation_factor = relaxation_updates > 0 ? last_applied_relaxation : options.strong_controls.relaxation_factor;
+							strong_iterations.push_back(iteration_row);
 							if (injected_failure_step == step)
 								throw std::runtime_error("injected strong coupling failure before commit");
 							upstream.CommitStep();
 							three_d.CommitStep();
 							downstream.CommitStep();
 							history.push_back(row);
-							strong_iterations.push_back(iteration_row);
 							strong_accepted_ksp.push_back(trial_ksp);
 							strong_all_ksp.push_back(all_ksp);
+							strong_relaxation_updates.push_back(relaxation_updates);
+							strong_last_applied_relaxation.push_back(last_applied_relaxation);
+							strong_final_proposed_relaxation.push_back(iteration_row.relaxation_factor_for_next_guess);
 							lagged_three_d_inlet_pressure = row.three_d_inlet_pressure_pa;
 							lagged_downstream_root_pressure = row.downstream_root_pressure_pa;
 							committed = true;
 							break;
 						}
-						strong_iterations.push_back(iteration_row);
 						RollbackSolved(downstream);
 						RollbackSolved(three_d);
 						RollbackSolved(upstream);
+						if (options.strong_aitken) aitken.AcceptApplied(residual, iteration_row.relaxation_factor_for_next_guess);
+						iteration_row.relaxation_update_applied = true;
+						++relaxation_updates;
+						last_applied_relaxation = iteration_row.relaxation_factor_for_next_guess;
+						strong_iterations.push_back(iteration_row);
 						applied_upstream_pressure = iteration_row.next_upstream_terminal_pressure_pa;
 						applied_three_d_pressure = iteration_row.next_three_d_outlet_traction_pressure_pa;
 					}
 					if (!committed)
 						throw std::runtime_error("strong coupling did not converge within --strong-max-iterations: "+final_strong_diagnostics);
 				} catch (...) {
-					if (rank == 0 && !final_strong_diagnostics.empty())
+					if (rank == 0 && !final_strong_diagnostics.empty()) {
+						for (const auto& row : strong_iterations)
+							if (row.physical_step == step)
+								WriteStrongFailureIteration(std::cerr, row);
 						std::cerr << "strong coupling final trial " << final_strong_diagnostics << '\n';
+					}
 					RollbackSolved(downstream);
 					RollbackSolved(three_d);
 					RollbackSolved(upstream);
@@ -811,7 +901,7 @@ int main(int argc, char** argv)
 		std::string output_error;
 		if (rank == 0) try {
 			fs::create_directories(options.output_directory);
-			if (!options.strong_fixed) {
+			if (!options.strong_fixed && !options.strong_aitken) {
 				std::ofstream output(options.output_directory/"explicit_coupling_history.csv");
 				if (!output) throw std::runtime_error("cannot create explicit coupling history");
 				iga::WriteExplicitCouplingHistoryHeader(output);
@@ -835,7 +925,8 @@ int main(int argc, char** argv)
 					<< ",final_signed_upstream_pressure_residual_pa,final_signed_downstream_pressure_residual_pa,"
 					"final_normalized_upstream_pressure_residual,final_normalized_downstream_pressure_residual,"
 					"final_max_normalized_pressure_residual,pressure_reference_pa,"
-					"accepted_three_d_ksp_iterations,all_three_d_ksp_iterations,rejected_three_d_ksp_iterations\n";
+					"accepted_three_d_ksp_iterations,all_three_d_ksp_iterations,rejected_three_d_ksp_iterations,"
+					"relaxation_updates_applied,last_applied_relaxation_factor,final_proposed_relaxation_factor,final_proposal_applied\n";
 				for (std::size_t index = 0; index < history.size(); ++index) {
 					const auto final_iteration = std::find_if(strong_iterations.rbegin(), strong_iterations.rend(),
 						[index](const iga::StrongCouplingIterationRow& row) {
@@ -854,7 +945,9 @@ int main(int argc, char** argv)
 							final_iteration->normalized_downstream_pressure_residual) << ','
 						<< options.strong_controls.pressure_reference_pa << ','
 						<< strong_accepted_ksp.at(index) << ',' << strong_all_ksp.at(index) << ','
-						<< strong_all_ksp.at(index)-strong_accepted_ksp.at(index) << '\n';
+						<< strong_all_ksp.at(index)-strong_accepted_ksp.at(index) << ','
+						<< strong_relaxation_updates.at(index) << ',' << strong_last_applied_relaxation.at(index) << ','
+						<< strong_final_proposed_relaxation.at(index) << ",0\n";
 				}
 				iga::WriteStrongCouplingIterationHeader(iteration_output);
 				for (const auto& row : strong_iterations) iga::WriteStrongCouplingIterationRow(iteration_output, row);
@@ -862,12 +955,16 @@ int main(int argc, char** argv)
 					throw std::runtime_error("cannot write strong coupling history output");
 				const long long accepted_ksp = std::accumulate(strong_accepted_ksp.begin(), strong_accepted_ksp.end(), 0LL);
 				const long long all_ksp = std::accumulate(strong_all_ksp.begin(), strong_all_ksp.end(), 0LL);
+				std::array<long long, 6> aitken_status_counts{{0, 0, 0, 0, 0, 0}};
+				for (const auto& row : strong_iterations)
+					if (row.aitken_status_code >= 0 && row.aitken_status_code < static_cast<int>(aitken_status_counts.size()))
+						++aitken_status_counts[static_cast<std::size_t>(row.aitken_status_code)];
 				WriteStrongCouplingManifest(options.output_directory/"strong_coupling_manifest.json",
-					options.strong_controls, scalar.steps, static_cast<int>(history.size()), scalar.dt_s,
+					options.strong_controls, options.aitken_controls, options.strong_aitken, scalar.steps, static_cast<int>(history.size()), scalar.dt_s,
 					scalar.density_kg_m3, scalar.dynamic_viscosity_pa_s, normalized_length,
 					options.upstream_terminal_node, ports.inlet_label, ports.outlet_labels.front(),
 					initial_lagged_three_d_inlet_pressure, initial_lagged_downstream_root_pressure,
-					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, accepted_ksp, all_ksp);
+					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, aitken_status_counts, accepted_ksp, all_ksp);
 			}
 		} catch (const std::exception& error) {
 			output_failed = 1;
@@ -878,7 +975,7 @@ int main(int argc, char** argv)
 			if (rank == 0) throw std::runtime_error(output_error);
 			throw std::runtime_error("explicit coupling output failed on rank 0");
 		}
-		if (rank == 0) std::cout << "completed " << (options.strong_fixed ? "strong fixed" : "explicit")
+		if (rank == 0) std::cout << "completed " << (options.strong_aitken ? "strong Aitken" : (options.strong_fixed ? "strong fixed" : "explicit"))
 			<< " 1D--3D coupling steps=" << history.size()
 			<< " output=" << options.output_directory << '\n';
 	} catch (const std::exception& error) {

@@ -77,6 +77,13 @@ struct StrongCouplingIterationRow {
 	double three_d_mass_imbalance_m3_s = 0.0;
 	long long three_d_attempt_linear_iterations = 0;
 	long long three_d_cumulative_step_linear_iterations = 0;
+	double relaxation_factor_for_next_guess = 1.0;
+	double unclamped_relaxation_factor = 1.0;
+	double aitken_scaled_numerator = 0.0;
+	double aitken_scaled_denominator = 0.0;
+	int aitken_status_code = -1;
+	bool relaxation_update_applied = false;
+	bool aitken_has_previous_residual = false;
 	bool converged = false;
 };
 
@@ -93,15 +100,28 @@ inline void ValidateStrongCouplingIterationRow(const StrongCouplingIterationRow&
 		row.three_d_downstream_flow_residual_m3_s,
 		row.normalized_upstream_three_d_flow_residual,
 		row.normalized_three_d_downstream_flow_residual,
-		row.three_d_wall_outward_flow_m3_s, row.three_d_mass_imbalance_m3_s};
+		row.three_d_wall_outward_flow_m3_s, row.three_d_mass_imbalance_m3_s,
+		row.relaxation_factor_for_next_guess, row.unclamped_relaxation_factor,
+		row.aitken_scaled_numerator, row.aitken_scaled_denominator};
 	for (const auto value : values) if (!std::isfinite(value))
 		throw std::runtime_error("strong coupling iteration row requires finite values");
 	if (row.physical_step < 1 || row.iteration < 1
 		|| row.normalized_upstream_pressure_residual < 0.0
 		|| row.normalized_downstream_pressure_residual < 0.0
 		|| row.three_d_attempt_linear_iterations < 0
-		|| row.three_d_cumulative_step_linear_iterations < row.three_d_attempt_linear_iterations)
+		|| row.three_d_cumulative_step_linear_iterations < row.three_d_attempt_linear_iterations
+		|| !(row.relaxation_factor_for_next_guess > 0.0) || row.relaxation_factor_for_next_guess > 1.0
+		|| row.aitken_scaled_denominator < 0.0 || row.aitken_status_code < -1 || row.aitken_status_code > 5
+		|| (row.converged && row.relaxation_update_applied))
 		throw std::runtime_error("strong coupling iteration row has invalid iteration or residual");
+	const bool no_previous_status = row.aitken_status_code == -1 || row.aitken_status_code == 0;
+	if ((no_previous_status && (row.aitken_has_previous_residual || row.aitken_scaled_numerator != 0.0
+		|| row.aitken_scaled_denominator != 0.0
+		|| row.relaxation_factor_for_next_guess != row.unclamped_relaxation_factor))
+		|| (!no_previous_status && !row.aitken_has_previous_residual)
+		|| ((row.aitken_status_code == 4 || row.aitken_status_code == 5)
+			&& row.relaxation_factor_for_next_guess != row.unclamped_relaxation_factor))
+		throw std::runtime_error("strong coupling iteration row has inconsistent Aitken status");
 }
 
 inline void WriteStrongCouplingIterationHeader(std::ostream& output)
@@ -116,7 +136,9 @@ inline void WriteStrongCouplingIterationHeader(std::ostream& output)
 		"upstream_three_d_flow_residual_m3_s,three_d_downstream_flow_residual_m3_s,"
 		"normalized_upstream_three_d_flow_residual,normalized_three_d_downstream_flow_residual,"
 		"three_d_wall_outward_flow_m3_s,three_d_mass_imbalance_m3_s,"
-		"three_d_attempt_linear_iterations,three_d_cumulative_step_linear_iterations,converged\n";
+		"three_d_attempt_linear_iterations,three_d_cumulative_step_linear_iterations,"
+		"relaxation_factor_for_next_guess,unclamped_relaxation_factor,aitken_scaled_numerator,aitken_scaled_denominator,"
+		"aitken_status_code,relaxation_update_applied,aitken_has_previous_residual,converged\n";
 }
 
 inline void WriteStrongCouplingIterationRow(std::ostream& output, const StrongCouplingIterationRow& row)
@@ -135,6 +157,9 @@ inline void WriteStrongCouplingIterationRow(std::ostream& output, const StrongCo
 		<< row.normalized_three_d_downstream_flow_residual << ','
 		<< row.three_d_wall_outward_flow_m3_s << ',' << row.three_d_mass_imbalance_m3_s << ','
 		<< row.three_d_attempt_linear_iterations << ',' << row.three_d_cumulative_step_linear_iterations << ','
+		<< row.relaxation_factor_for_next_guess << ',' << row.unclamped_relaxation_factor << ','
+		<< row.aitken_scaled_numerator << ',' << row.aitken_scaled_denominator << ',' << row.aitken_status_code << ','
+		<< (row.relaxation_update_applied ? 1 : 0) << ',' << (row.aitken_has_previous_residual ? 1 : 0) << ','
 		<< (row.converged ? 1 : 0) << '\n';
 }
 

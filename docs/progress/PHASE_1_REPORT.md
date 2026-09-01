@@ -1,7 +1,7 @@
 # Phase 1 report
 
-Status: PR 1.2 complete; Phase 1 remains in progress pending Aitken relaxation,
-subcycling, and the full convergence benchmark. Restart and a
+Status: PR 1.3 complete; Phase 1 remains in progress pending subcycling and
+the full convergence benchmark. Restart and a
 general multidomain graph remain deferred.
 
 ## PR 1.1 explicit 1D--3D--1D smoke evidence
@@ -47,6 +47,47 @@ git diff --check
 The MPI smoke passed one rank, two ranks, and injected pre-commit failure. It
 uses `-ksp_type preonly -pc_type lu` internally so trial linear-iteration
 diagnostics as well as physical history are rank-invariant for this tiny test.
+
+## PR 1.3 Aitken relaxation evidence
+
+`strong-aitken` applies a rollback-safe scalar Aitken proposal to the existing
+two-pressure strong vector, resetting at every physical step. The generated
+one- and two-rank smoke fixture completed its first strong step in 3 sweeps,
+versus 21 with fixed `omega=0.5`; subsequent seeded constant steps require one
+sweep. The smoke independently reconstructs every serialized Aitken proposal
+from `r=G-x`, including the scaled-before-subtract dot products, clamp/fallback
+status, next guess, reset-first-row state, and the final unused converged
+proposal. It also verifies the per-step summary: updates equal sweeps minus
+one, the last applied factor equals the penultimate proposal (or explicit zero
+for a one-sweep step), the final proposed factor equals the final row, and the
+legacy step factor is the last applied value or the configured initial factor.
+
+The default Aitken bound is `1`; the deterministic MPI fixture uses the
+documented `0.999` maximum only to avoid a last-bit rank-dependent exact-bound
+classification while auditing status codes. This does not weaken the default
+fast test, which separately proves the default `[2,0] -> [1.5,0]` proposal
+clamps an unclamped `2` to `1` with `ClampedMaximum` status. The generated
+manifest is checked for the signed recurrence, `omega_hat=-omega_previous`,
+scale-before-subtract rule, fallback retention, reset, and final-unused
+semantics; the fixed manifest is checked to contain no Aitken block.
+
+The current one-rank physical-history comparison reports a maximum pressure
+difference of `2.1200915592545222e-08 Pa` (`external_pressure_drop_pa`) versus
+the predeclared `3.1487954182974675e-07 Pa` tolerance
+`4*Pref*pressure_tol + 1e-12`; the maximum nonpressure difference is
+`1.0842021724855044e-18 m3/s` (`downstream_root_outward_flow_m3_s`) versus
+the `1e-10*max(1,|a|,|b|)` hybrid tolerance. The smoke checks full strong
+physics/work/conservation audit for fixed and Aitken, one/two-rank parity,
+negative rejection of Aitken-only minimum/maximum options in explicit and
+fixed modes, and no artifacts on Aitken max-iteration or injected failures.
+Those failure paths also assert the precision-17 complete current-step
+iteration diagnostics, including `G`, normalized pressure and flow residuals,
+omega/status, and KSP totals. This is an execution smoke only, not a
+convergence benchmark.
+
+Architecture Gates A, B, and C pass for PR 1.3. The dependency-free vector
+Aitken implementation is reusable by later partitioned coupling work without
+changing the 1D or 3D runtime lifecycle.
 
 ## PR 1.2 strong fixed-relaxation evidence
 

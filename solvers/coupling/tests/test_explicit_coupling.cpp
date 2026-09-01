@@ -1,4 +1,5 @@
 #include "ExplicitOneDThreeDCoupling.hpp"
+#include "AitkenRelaxation.hpp"
 #include "StrongOneDThreeDCoupling.hpp"
 
 #include <cassert>
@@ -108,4 +109,51 @@ int main()
 	assert(iteration_output.str().find("signed_upstream_pressure_residual_pa") != std::string::npos);
 	iteration.iteration = 0;
 	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
+	iteration.iteration = 2;
+	iteration.aitken_status_code = 1;
+	iteration.aitken_has_previous_residual = false;
+	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
+	iteration.aitken_status_code = -1;
+	iteration.aitken_scaled_numerator = 1.0;
+	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
+	iga::AitkenRelaxationControls aitken_controls;
+	iga::ValidateAitkenRelaxationControls(aitken_controls);
+	iga::AitkenRelaxation<2> aitken(aitken_controls);
+	const std::array<double, 2> x{{0.0, 0.0}};
+	const std::array<double, 2> first_residual{{2.0, 0.0}};
+	const auto first = aitken.Propose(x, first_residual, 1.0);
+	assert(first.status == iga::AitkenRelaxationStatus::Initial && std::abs(first.relaxation_factor-0.5) < 1.0e-15);
+	aitken.AcceptApplied(first_residual, first.relaxation_factor);
+	const auto dynamic = aitken.Propose(x, std::array<double, 2>{{1.0, 0.0}}, 1.0);
+	assert(dynamic.status == iga::AitkenRelaxationStatus::Dynamic && std::abs(dynamic.relaxation_factor-1.0) < 1.0e-15);
+	aitken.Reset();
+	assert(!aitken.Propose(x, first_residual, 1.0).has_previous_residual);
+	aitken.AcceptApplied(first_residual, 0.5);
+	const auto equal = aitken.Propose(x, first_residual, 1.0);
+	assert(equal.status == iga::AitkenRelaxationStatus::TinyDifferenceFallback);
+	iga::AitkenRelaxationControls minimum_controls;
+	minimum_controls.minimum_relaxation = 0.2;
+	minimum_controls.initial_relaxation = 0.5;
+	iga::AitkenRelaxation<2> minimum_aitken(minimum_controls);
+	minimum_aitken.AcceptApplied(std::array<double, 2>{{1.0, 0.0}}, 0.5);
+	const auto minimum = minimum_aitken.Propose(x, std::array<double, 2>{{2.0, 0.0}}, 1.0);
+	assert(minimum.status == iga::AitkenRelaxationStatus::ClampedMinimum && minimum.relaxation_factor == 0.2);
+	iga::AitkenRelaxationControls maximum_controls;
+	maximum_controls.maximum_relaxation = 0.75;
+	iga::AitkenRelaxation<2> maximum_aitken(maximum_controls);
+	maximum_aitken.AcceptApplied(std::array<double, 2>{{2.0, 0.0}}, 0.5);
+	const auto maximum = maximum_aitken.Propose(x, std::array<double, 2>{{1.0, 0.0}}, 1.0);
+	assert(maximum.status == iga::AitkenRelaxationStatus::ClampedMaximum && maximum.relaxation_factor == 0.75);
+	iga::AitkenRelaxation<2> default_maximum(iga::AitkenRelaxationControls{});
+	default_maximum.AcceptApplied(std::array<double, 2>{{2.0, 0.0}}, 0.5);
+	const auto default_clamp = default_maximum.Propose(x, std::array<double, 2>{{1.5, 0.0}}, 1.0);
+	assert(default_clamp.status == iga::AitkenRelaxationStatus::ClampedMaximum && default_clamp.relaxation_factor == 1.0);
+	const auto huge = aitken.Propose(std::array<double, 2>{{1.0e200, -1.0e200}},
+		std::array<double, 2>{{1.0e100, -1.0e100}}, 1.0);
+	assert(std::isfinite(huge.next[0]) && std::isfinite(huge.next[1]));
+	RequireRejected([&aitken] { aitken.Propose(std::array<double, 2>{{NAN, 0.0}}, std::array<double, 2>{{1.0, 0.0}}, 1.0); });
+	iga::AitkenRelaxationControls invalid_controls;
+	invalid_controls.minimum_relaxation = 0.8;
+	invalid_controls.initial_relaxation = 0.5;
+	RequireRejected([&invalid_controls] { iga::ValidateAitkenRelaxationControls(invalid_controls); });
 }

@@ -100,8 +100,13 @@ pressure because the applied 3D quantity is a pressure-traction parameter.  Reje
 attempts contribute to coordinator work diagnostics but never to runtime
 committed counters.  A successful strong run writes separate
 `strong_coupling_history.csv`, `strong_coupling_iterations.csv`, and
-`strong_coupling_manifest.json`; restart, Aitken relaxation, and subcycling
-remain unsupported.
+`strong_coupling_manifest.json`; restart and subcycling remain unsupported.
+
+PR 1.3 adds `strong-aitken` for the same two-pressure vector only. It resets
+at every macro step and uses the signed raw pressure residual `r=G-x` in the
+documented vector order. A proposed relaxation is clamped to its configured
+interval and accepted only after reverse rollback, immediately before the
+next trial uses it. It does not add subcycling, restart, or graph coupling.
 
 ## State ownership and rollback inventory
 
