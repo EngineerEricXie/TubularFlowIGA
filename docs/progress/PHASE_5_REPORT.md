@@ -2,6 +2,17 @@
 
 Status: **in progress**.
 
+## PR 5.2a3: deterministic welding and self-intersection preflight
+
+The in-memory surface preflight now supports exact or bounded deterministic
+vertex welding, retaining a lexicographic exact input representative and
+rejecting transitive clusters wider than the configured tolerance.  It records
+source/canonical/welded counts and applied physical scale/tolerance.  A
+dependency-free median-split triangle AABB BVH performs closed-shell
+self-intersection preflight after topology/orientation, with candidate-count
+diagnostics.  Readers, point classification, and cut quadrature remain
+outside this PR.
+
 ## PR 5.2 prerequisite: canonical hashing
 
 The dependency-free CPU layer includes a self-contained incremental SHA-256
@@ -27,8 +38,7 @@ minima, topology counts, flip state, label histogram, and hash.
 Focused coverage is `make -C solvers/cpu surface_geometry_test`; it is also
 included in the dependency-free aggregate `make -C solvers/cpu test`.
 
-Intersection/BVH and self-intersection validation, positive-tolerance welding,
-and STL/VTP readers remain pending work.
+STL/VTP readers remain pending work.
 
 ## PR 5.1: cubic Cartesian background
 

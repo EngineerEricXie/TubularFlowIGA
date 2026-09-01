@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <type_traits>
 
@@ -60,6 +61,35 @@ RawSurfaceSoup Cube()
 	return result;
 }
 
+RawSurfaceSoup SubdividedCube(int divisions)
+{
+	RawSurfaceSoup result;
+	std::map<std::array<int, 3>, std::int64_t> ids;
+	auto point = [&](int x, int y, int z) {
+		const std::array<int, 3> key{{x, y, z}};
+		const auto found = ids.find(key);
+		if (found != ids.end()) return found->second;
+		const auto id = static_cast<std::int64_t>(result.vertices.size());
+		ids.emplace(key, id);
+		result.vertices.push_back({{static_cast<double>(x)/divisions, static_cast<double>(y)/divisions,
+			static_cast<double>(z)/divisions}});
+		return id;
+	};
+	auto add_square = [&](std::int64_t a, std::int64_t b, std::int64_t c, std::int64_t d, bool forward) {
+		if (forward) { result.triangles.push_back(Face(a, b, c)); result.triangles.push_back(Face(a, c, d)); }
+		else { result.triangles.push_back(Face(a, c, b)); result.triangles.push_back(Face(a, d, c)); }
+	};
+	for (int i = 0; i < divisions; ++i) for (int j = 0; j < divisions; ++j) {
+		add_square(point(i, j, 0), point(i+1, j, 0), point(i+1, j+1, 0), point(i, j+1, 0), false);
+		add_square(point(i, j, divisions), point(i+1, j, divisions), point(i+1, j+1, divisions), point(i, j+1, divisions), true);
+		add_square(point(i, 0, j), point(i+1, 0, j), point(i+1, 0, j+1), point(i, 0, j+1), true);
+		add_square(point(i, divisions, j), point(i+1, divisions, j), point(i+1, divisions, j+1), point(i, divisions, j+1), false);
+		add_square(point(0, i, j), point(0, i+1, j), point(0, i+1, j+1), point(0, i, j+1), false);
+		add_square(point(divisions, i, j), point(divisions, i+1, j), point(divisions, i+1, j+1), point(divisions, i, j+1), true);
+	}
+	return result;
+}
+
 void CheckOutwardNormals(const iga::ClosedTriangulatedSurface& surface)
 {
 	std::array<double, 3> interior{{0.0, 0.0, 0.0}};
@@ -80,6 +110,35 @@ void CheckOutwardNormals(const iga::ClosedTriangulatedSurface& surface)
 
 int main()
 {
+	using iga::exact_dyadic::Add;
+	using iga::exact_dyadic::ClassifyCollinearIntervals;
+	using iga::exact_dyadic::CollinearIntervalContact;
+	using iga::exact_dyadic::CoordinateDifferenceSign;
+	using iga::exact_dyadic::FromDouble;
+	using iga::exact_dyadic::Orient2D;
+	using iga::exact_dyadic::Orient3D;
+	using iga::exact_dyadic::SegmentTriangleValues;
+	using iga::exact_dyadic::Sign;
+	using iga::exact_dyadic::Subtract;
+	const double smallest_subnormal = std::numeric_limits<double>::denorm_min();
+	const double maximum_finite = std::numeric_limits<double>::max();
+	assert(Sign(FromDouble(smallest_subnormal)) > 0);
+	assert(Sign(FromDouble(-smallest_subnormal)) < 0);
+	assert(CoordinateDifferenceSign(maximum_finite, -maximum_finite) > 0);
+	assert(Sign(Subtract(Add(FromDouble(1.0), FromDouble(smallest_subnormal)), FromDouble(1.0))) > 0);
+	const std::array<double, 3> origin{{0.0, 0.0, 0.0}}, x_axis{{1.0, 0.0, 0.0}}, y_axis{{0.0, 1.0, 0.0}}, below{{0.0, 0.0, -1.0}}, above{{0.0, 0.0, 1.0}};
+	assert(Orient2D(origin, x_axis, y_axis, 0, 1) > 0);
+	assert(Orient2D(origin, y_axis, x_axis, 0, 1) < 0);
+	assert(Orient3D(origin, x_axis, y_axis, above) > 0);
+	assert(Orient3D(origin, x_axis, y_axis, below) < 0);
+	const std::array<double, 3> segment_start{{0.25, 0.25, -1.0}}, segment_end{{0.25, 0.25, 1.0}};
+	const auto exact_segment = SegmentTriangleValues(segment_start, segment_end, origin, x_axis, y_axis);
+	for (const auto& value : exact_segment) assert(Sign(value) < 0);
+	const std::array<double, 3> line_one_end{{1.0, 0.0, 0.0}}, line_two_end{{2.0, 0.0, 0.0}}, line_disjoint_start{{3.0, 0.0, 0.0}}, line_touch_start{{1.0, 0.0, 0.0}}, line_touch_end{{2.0, 0.0, 0.0}};
+	assert(ClassifyCollinearIntervals(origin, line_one_end, origin, line_two_end) == CollinearIntervalContact::overlap);
+	assert(ClassifyCollinearIntervals(origin, line_one_end, line_disjoint_start, std::array<double, 3>{{4.0, 0.0, 0.0}}) == CollinearIntervalContact::none);
+	assert(ClassifyCollinearIntervals(origin, line_one_end, line_touch_start, line_touch_end) == CollinearIntervalContact::point);
+
 	const auto tetra = iga::ClosedTriangulatedSurface::Build(Tetrahedron());
 	assert(Near(tetra.Diagnostics().volume_m3, 1.0/6.0));
 	assert(tetra.Diagnostics().unique_edge_count == 6);
@@ -110,6 +169,99 @@ int main()
 	assert(cube.Diagnostics().vertex_fan_count == cube.Vertices().size());
 	assert(cube.Diagnostics().boundary_id_histogram.at(7) == 12);
 	CheckOutwardNormals(cube);
+	assert(cube.Diagnostics().bvh_broad_phase_candidate_count >= cube.Triangles().size()/2);
+	assert(cube.Diagnostics().accepted_self_intersection_count == 0);
+
+	auto weldable = Tetrahedron();
+	weldable.vertices.push_back({{0.01, 0.0, 0.0}});
+	weldable.triangles[0].indices[0] = 4;
+	iga::SurfaceValidationOptions weld_options;
+	weld_options.weld_tolerance_m = 0.02;
+	const auto welded = iga::ClosedTriangulatedSurface::Build(weldable, weld_options);
+	assert(welded.CanonicalSha256() == tetra.CanonicalSha256());
+	assert(welded.Diagnostics().input_vertex_count == 5);
+	assert(welded.Diagnostics().canonical_vertex_count == 4);
+	assert(welded.Diagnostics().welded_vertex_count == 1);
+	assert(welded.Diagnostics().applied_weld_tolerance_m == 0.02);
+	auto reordered_weldable = weldable;
+	std::reverse(reordered_weldable.vertices.begin(), reordered_weldable.vertices.end());
+	for (auto& face : reordered_weldable.triangles) for (auto& index : face.indices) index = 4-index;
+	assert(iga::ClosedTriangulatedSurface::Build(reordered_weldable, weld_options).CanonicalSha256()
+		== welded.CanonicalSha256());
+	auto translated_weldable = weldable;
+	auto translated_tetra = Tetrahedron();
+	for (auto* soup : {&translated_weldable, &translated_tetra})
+		for (auto& vertex : soup->vertices) { vertex[0] += 1000000.0; vertex[1] -= 2000000.0; vertex[2] += 3000000.0; }
+	assert(iga::ClosedTriangulatedSurface::Build(translated_weldable, weld_options).CanonicalSha256()
+		== iga::ClosedTriangulatedSurface::Build(translated_tetra).CanonicalSha256());
+	auto transitive_weld = Tetrahedron();
+	transitive_weld.vertices.push_back({{0.075, 0.0, 0.0}});
+	transitive_weld.vertices.push_back({{0.15, 0.0, 0.0}});
+	iga::SurfaceValidationOptions transitive_options;
+	transitive_options.weld_tolerance_m = 0.1;
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(transitive_weld, transitive_options); });
+	auto collapsed_weld = Tetrahedron();
+	collapsed_weld.vertices[1] = {{0.01, 0.0, 0.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(collapsed_weld, weld_options); });
+	iga::SurfaceValidationOptions negative_weld; negative_weld.weld_tolerance_m = -0.01;
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(Tetrahedron(), negative_weld); });
+	iga::SurfaceValidationOptions nonfinite_weld; nonfinite_weld.weld_tolerance_m = std::numeric_limits<double>::quiet_NaN();
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(Tetrahedron(), nonfinite_weld); });
+
+	auto crossing = Cube(); crossing.vertices[6] = {{1.0, 1.0, -1.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(crossing); });
+	auto touching = Cube(); touching.vertices[6] = {{0.5, 0.5, 0.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(touching); });
+	auto coplanar_overlap = Cube(); coplanar_overlap.vertices[6] = {{1.0, 1.0, 0.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(coplanar_overlap); });
+	auto adjacent_overlap = Cube(); adjacent_overlap.vertices[7] = {{0.8, 0.2, 1.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(adjacent_overlap); });
+	// The upper face is a coplanar triangle whose three vertices lie outside the
+	// lower square.  Its edges cross both lower triangles, so vertex containment
+	// alone would incorrectly accept this closed, connected soup.
+	auto coplanar_edge_crossing = Cube();
+	coplanar_edge_crossing.vertices[4] = {{0.5, -0.25, 0.0}};
+	coplanar_edge_crossing.vertices[5] = {{1.25, 0.65, 0.0}};
+	coplanar_edge_crossing.vertices[6] = {{-0.25, 0.65, 0.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(coplanar_edge_crossing); });
+	// Faces (0, 2, 1) and (2, 7, 6) share vertex 2 only.  Moving 7 through
+	// the base creates a second contact, which must not be excused as the shared
+	// vertex contact.
+	auto shared_vertex_elsewhere = Cube(); shared_vertex_elsewhere.vertices[7] = {{0.3, 0.3, -0.5}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(shared_vertex_elsewhere); });
+	// Faces (0, 2, 1) and (2, 7, 6) share vertex 2 only.  Their edges from
+	// that vertex are collinear but have unequal lengths, so the overlapping
+	// segment is forbidden rather than an allowed point contact.
+	auto unequal_shared_origin_overlap = Cube(); unequal_shared_origin_overlap.vertices[7] = {{1.0, 0.5, 0.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(unequal_shared_origin_overlap); });
+	// Mirror the non-coplanar crossing so the reciprocal edge-to-triangle query
+	// is the one that exposes the contact.
+	auto reciprocal_crossing = Cube(); reciprocal_crossing.vertices[6] = {{-1.0, 1.0, 1.0}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(reciprocal_crossing); });
+	// Preserve a small feature after normalization against a much larger shell;
+	// the result must be invariant when the same binary64 coordinates are passed
+	// in a different unit system.
+	auto large_shell = Cube();
+	for (auto& vertex : large_shell.vertices) for (auto& coordinate : vertex) coordinate *= 1.0e8;
+	large_shell.vertices[6][1] = 1.0e8-1.0;
+	const auto large_direct = iga::ClosedTriangulatedSurface::Build(large_shell);
+	auto large_shell_mm = large_shell;
+	for (auto& vertex : large_shell_mm.vertices) for (auto& coordinate : vertex) coordinate *= 1000.0;
+	iga::SurfaceValidationOptions large_shell_mm_options; large_shell_mm_options.length_scale_to_m = 0.001;
+	const auto large_from_mm = iga::ClosedTriangulatedSurface::Build(large_shell_mm, large_shell_mm_options);
+	assert(large_direct.CanonicalSha256() == large_from_mm.CanonicalSha256());
+	// This nearly coplanar but genuinely crossing configuration remains
+	// nondegenerate, so it exercises the near-boundary narrow-phase path.
+	auto near_ambiguous = Cube(); near_ambiguous.vertices[6] = {{0.5, 0.5, -0x1p-80}};
+	RequireRejected([&] { iga::ClosedTriangulatedSurface::Build(near_ambiguous); });
+	const auto moderate = iga::ClosedTriangulatedSurface::Build(SubdividedCube(4));
+	const auto moderate_repeat = iga::ClosedTriangulatedSurface::Build(SubdividedCube(4));
+	const auto coarse = iga::ClosedTriangulatedSurface::Build(SubdividedCube(2));
+	assert(moderate.CanonicalSha256() == moderate_repeat.CanonicalSha256());
+	assert(coarse.Diagnostics().bvh_narrow_phase_candidate_count < coarse.Diagnostics().bvh_broad_phase_candidate_count);
+	assert(moderate.Diagnostics().bvh_narrow_phase_candidate_count < moderate.Diagnostics().bvh_broad_phase_candidate_count);
+	assert(moderate.Diagnostics().bvh_broad_phase_candidate_count
+		< moderate.Triangles().size()*moderate.Triangles().size()/4);
 
 	auto inward = Cube();
 	for (auto& face : inward.triangles) {

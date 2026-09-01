@@ -95,7 +95,7 @@ cartesian_background_test: tests/test_cartesian_background.cpp include/Cartesian
 sha256_test: tests/test_sha256.cpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-surface_geometry_test: tests/test_surface_geometry.cpp include/SurfaceGeometry.hpp include/Sha256.hpp
+surface_geometry_test: tests/test_surface_geometry.cpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 vtk_output_test: tests/test_vtk_output.cpp ../../include/VtkOutput.hpp
