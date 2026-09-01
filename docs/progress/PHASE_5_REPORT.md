@@ -2,6 +2,16 @@
 
 Status: **in progress**.
 
+## PR 5.2a4: strict STL ingestion
+
+The dependency-free CPU layer now reads strict ASCII and binary STL buffers or
+paths into the canonical closed-surface validator.  Binary detection is based
+solely on exact record-size arithmetic, including `solid` binary headers;
+facet normals are advisory but finite, attributes must be zero, and malformed
+or trailing content is rejected.  ASCII parsing accepts only complete STL
+facet structure and finite full numeric tokens.  Physical scaling is applied
+once by the existing canonical surface builder.
+
 ## PR 5.2a3: deterministic welding and self-intersection preflight
 
 The in-memory surface preflight now supports exact or bounded deterministic
