@@ -44,6 +44,21 @@ self-intersection preflight after topology/orientation, with candidate-count
 diagnostics.  Readers, point classification, and cut quadrature remain
 outside this PR.
 
+## PR 5.3a: immutable surface spatial queries
+
+`SurfaceSpatialIndex` owns a validated canonical surface and builds a
+deterministic median-split immutable triangle BVH for point and closed-box
+queries. Point queries first use exact dyadic point-on-triangle tests, then a
+half-open exact `+x` parity ray; arithmetic-cap failures are reported as
+`Ambiguous`. Box queries use exact dyadic triangle-box SAT axes and
+distinguish no contact, boundary-only contact, and contact through the open
+box interior. Query diagnostics report checked candidate, narrow-phase, and
+crossing counts. The self-intersection preflight BVH remains separate here to
+preserve its established validation behavior.
+
+Focused coverage is `make -C solvers/cpu surface_spatial_index_test`; it is
+included in `make -C solvers/cpu test`.
+
 ## PR 5.2 prerequisite: canonical hashing
 
 The dependency-free CPU layer includes a self-contained incremental SHA-256

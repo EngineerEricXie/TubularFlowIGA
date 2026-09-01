@@ -12,6 +12,11 @@
 namespace iga {
 namespace exact_dyadic {
 
+#ifdef IGA_EXACT_DYADIC_TESTING
+inline std::size_t& TestMagnitudeCap() { static std::size_t value = 128; return value; }
+inline void SetTestMagnitudeCap(std::size_t value) { TestMagnitudeCap() = value; }
+#endif
+
 // A finite binary64 value is an integer mantissa times a power of two.  This
 // small signed-integer implementation keeps the predicate fallback exact
 // without adding a multiprecision library dependency.
@@ -24,7 +29,13 @@ struct Unsigned {
 
 inline void CheckSize(std::size_t size)
 {
-	if (size > 128) throw std::overflow_error("exact dyadic predicate magnitude overflows");
+	const std::size_t cap =
+#ifdef IGA_EXACT_DYADIC_TESTING
+		TestMagnitudeCap();
+#else
+		128;
+#endif
+	if (size > cap) throw std::overflow_error("exact dyadic predicate magnitude overflows");
 }
 inline int Compare(const Unsigned& left, const Unsigned& right)
 {
@@ -143,6 +154,12 @@ inline int CompareAbsolute(const Number& left, const Number& right)
 	const auto left_magnitude = ShiftLeft(left.magnitude, static_cast<std::size_t>(static_cast<long long>(left.exponent)-exponent));
 	const auto right_magnitude = ShiftLeft(right.magnitude, static_cast<std::size_t>(static_cast<long long>(right.exponent)-exponent));
 	return Compare(left_magnitude, right_magnitude);
+}
+inline int CompareSigned(const Number& left, const Number& right)
+{
+	if (left.sign != right.sign) return left.sign < right.sign ? -1 : 1;
+	if (left.sign == 0) return 0;
+	const int magnitude = CompareAbsolute(left, right); return left.sign < 0 ? -magnitude : magnitude;
 }
 using Point = std::array<Number, 3>;
 inline Point PointFromDouble(const std::array<double, 3>& point) { return {{FromDouble(point[0]), FromDouble(point[1]), FromDouble(point[2])}}; }
