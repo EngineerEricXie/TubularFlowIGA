@@ -1,6 +1,10 @@
 #include "MultidomainConfig.hpp"
+#include "SequentialMultidomainCase.hpp"
 
 #include <cassert>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -125,6 +129,49 @@ int main()
 	assert(iga::MakeSequentialPressureFlowPlan(configuration.graph,
 		configuration.start_domain_id).domain_ids == plan.domain_ids);
 	assert(configuration.graph.Port({"roi", "wall"}).requires.empty());
+	const auto resolved = iga::ResolveSequentialOneDThreeDOneD(configuration);
+	assert(resolved.upstream_domain_id == "upstream");
+	assert(resolved.three_d_domain_id == "roi");
+	assert(resolved.downstream_domain_id == "downstream");
+	assert(resolved.upstream_terminal == iga::PortRef({"upstream", "terminal"}));
+	assert(resolved.downstream_terminal_observation
+		== iga::PortRef({"downstream", "terminal_state"}));
+	const auto controls = iga::PressureFlowControlsFor(configuration.execution);
+	assert(controls.method == iga::PressureFlowIterationMethod::Aitken);
+	assert(controls.maximum_iterations == 12);
+	{
+		const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+		const auto root = std::filesystem::temp_directory_path()
+			/("tubularflowiga_graph_case_"+std::to_string(nonce));
+		const auto outside = std::filesystem::temp_directory_path()
+			/("tubularflowiga_graph_outside_"+std::to_string(nonce));
+		std::filesystem::create_directories(root/"domains/upstream");
+		std::filesystem::create_directories(root/"domains/roi");
+		std::filesystem::create_directories(root/"domains/downstream");
+		std::filesystem::create_directories(outside);
+		std::ofstream(root/"domains/roi/roi.ntiga") << "fixture";
+		const auto assets = iga::ResolveGraphDomainAssets(configuration, root);
+		assert(assets.at("upstream").case_directory
+			== std::filesystem::canonical(root/"domains/upstream"));
+		assert(assets.at("roi").database
+			== std::filesystem::canonical(root/"domains/roi/roi.ntiga"));
+		std::filesystem::create_directory_symlink(outside, root/"escape");
+		const auto escaped = iga::ParseMultidomainConfiguration(Replace(ValidConfiguration(),
+			"\"case\": \"domains/upstream\"", "\"case\": \"escape\""));
+		RequireRejected([&escaped, &root] {
+			(void)iga::ResolveGraphDomainAssets(escaped, root);
+		});
+		std::ofstream(outside/"network.swc") << "fixture";
+		std::filesystem::create_symlink(outside/"network.swc",
+			root/"domains/upstream/network.swc");
+		RequireRejected([&root] {
+			(void)iga::ResolveContainedCaseFile(
+				std::filesystem::canonical(root/"domains/upstream"), "network.swc",
+				"upstream geometry");
+		});
+		std::filesystem::remove_all(root);
+		std::filesystem::remove_all(outside);
+	}
 
 	RequireRejected([] {
 		iga::ParseMultidomainConfiguration(
@@ -270,6 +317,9 @@ int main()
 		RequireRejected([&reverse] {
 			(void)iga::MakeSequentialPressureFlowPlan(reverse.graph,
 				reverse.start_domain_id);
+		});
+		RequireRejected([&reverse] {
+			(void)iga::ResolveSequentialOneDThreeDOneD(reverse);
 		});
 	}
 	{

@@ -2,9 +2,10 @@
 
 Status: **in progress**. PR 2.1 provides validated in-memory topology, the
 first PR 2.3 slices provide atomic domain transactions, backend adapters, exact
-runtime binding, and a runnable sequential 1D--3D--1D graph executor, and PR
-2.2 now defines the schema-v5 graph manifest. Branching execution and multiple
-3D islands remain open.
+runtime binding, and a runnable sequential 1D--3D--1D graph executor. PR 2.2
+defines the schema-v5 graph manifest, and that manifest is now bound to the
+production coupling driver. Branching execution and multiple 3D islands remain
+open.
 
 ## Objective
 
@@ -46,8 +47,8 @@ algorithm state was incorrectly moved onto individual edges.
 
 - The graph remains immutable topology metadata. Runtime ownership and
   transaction state live in the separate PR 2.3 registry and executor.
-- Schema v5 waits for a runnable graph-authored case in PR 2.2/2.3. Existing
-  v3/v4 dispatch and `.ntiga` files are unchanged.
+- Schema v5 is runnable through the production coupling driver. Existing v3/v4
+  standalone dispatch and `.ntiga` files are unchanged.
 - `DomainKind` currently lists native 1D flow and body-fitted 3D flow. Future
   0D and immersed 3D kinds will be added when their runtime contracts exist.
 - The sequential plan rejects branches, cycles, disconnected components, and
@@ -94,13 +95,12 @@ of runtime state or weakening atomic commit. Every adapter state is validated
 at the executor boundary before transfer or commit. A typed nonconvergence
 error retains every iteration and the final pressure/flow residuals.
 
-The production explicit 1D--3D--1D driver now binds its three native runtimes
-to the graph and advances its two interfaces through this executor. Its CSV,
+The production 1D--3D--1D driver now binds its three native runtimes to the
+graph and advances its two interfaces through this executor. Its CSV,
 manifest, work counters, lagged-pressure behavior, and injected precommit
-failure test remain unchanged. The existing strong-mode loop remains in place
-for its established detailed iteration diagnostics; component-wide fixed and
-Aitken behavior in the generic executor is covered independently before a
-schema-v5 graph-authored case adopts it. Per-attempt backend work remains
+failure test remain unchanged. The established strong-mode loop remains in
+place for its detailed iteration diagnostics, while schema-v5 fixed and Aitken
+controls route to that same verified path. Per-attempt backend work remains
 adapter-specific, so the strong production loop will not migrate until the
 generic diagnostic API can retain those counters as well.
 
@@ -152,8 +152,12 @@ logical-port metadata: physical locator, optional native-to-outward sign, and
 provided/required quantities. A 1D domain declares whether its root uses the
 configured open-loop waveform or receives coupled flow. A body-fitted 3D
 domain declares its database. All asset paths are relative to the graph-case
-root and lexical `..` traversal is rejected. The future runner must additionally
-canonicalize resolved assets against that root so symlinks cannot escape it.
+root, lexical `..` traversal is rejected, and the runner canonicalizes existing
+case directories and database files against the canonical root so symlinks
+cannot escape it. It also canonicalizes each native configuration, geometry,
+mesh, initial-velocity, and periodic-table asset inside its declared case
+directory. Graph preflight failures are reduced collectively before solver
+construction so a rank-local filesystem failure cannot strand peer ranks.
 
 Each coupling names two logical endpoints, the `pressure_flow` law, and a
 finite initial interface pressure. Fixed and Aitken controls live at the
@@ -171,8 +175,28 @@ contract: one heterogeneous, acyclic, nonbranching chain whose pressure
 receivers precede its flow receivers. `iga_config_check` reports that runner
 compatibility independently of schema validity.
 
-This slice deliberately establishes parsing and inspection separately from
-driver construction. The current production driver still accepts its legacy
-positional three-domain inputs and builds an equivalent graph. The next runner
-slice will resolve v5 assets relative to a graph-case root and bind the declared
-domains to the existing adapters without changing standalone dispatch.
+## Schema-v5 production runner
+
+`iga_1d_3d_explicit --graph-case ROOT --output-dir DIR` reads
+`ROOT/simulation_config.json`, resolves the current sequential semantic roles
+without relying on domain or port names, canonicalizes the declared assets,
+and binds the native runtimes to the exact graph metadata. The schema supplies
+the start domain, interface IDs and initial pressures, time grid, and explicit,
+fixed, or Aitken execution controls. Backend preflight confirms that declared
+1D locators, 3D boundary labels, time grid, inlet policy, and databases match
+the loaded native cases.
+
+The legacy positional invocation remains available and constructs the same
+runtime graph. Successful graph runs additionally write
+`graph_binding_manifest.json` with the canonical graph root, resolved case and
+database paths, domain IDs, coupling IDs, initial pressures, and selected
+execution kind. Coupling records retain both logical endpoints. Smoke coverage
+runs graph-authored explicit, fixed, and Aitken
+cases with deliberately non-legacy IDs and compares their complete physical
+histories with the corresponding legacy invocations. The same gate retains
+one- and two-rank parity, reversed native-port orientation and conservation,
+subcycling, input rejection, and atomic failure rollback checks. The binding
+manifest is published by same-filesystem rename after the other outputs and
+serves as the graph-run completion marker. Graph output directories must not
+preexist, preventing a failed rerun from leaving an older marker beside mixed
+outputs.

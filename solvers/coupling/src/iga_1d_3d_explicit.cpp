@@ -7,6 +7,7 @@
 #include "OneDFlowDomainAdapter.hpp"
 #include "OneDRuntime.hpp"
 #include "PressureFlowComponentExecutor.hpp"
+#include "SequentialMultidomainCase.hpp"
 #include "SimulationGraph.hpp"
 #include "StrongOneDThreeDCoupling.hpp"
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
@@ -27,6 +28,7 @@
 #include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -42,6 +44,8 @@ constexpr double kThreeDNonlinearAbsoluteTolerance = 1.0e-10;
 constexpr double kThreeDMassRelativeTolerance = 1.0e-3;
 
 struct Options {
+	bool graph_case_mode = false;
+	fs::path graph_case;
 	fs::path database;
 	fs::path three_d_case;
 	fs::path upstream_case;
@@ -55,6 +59,7 @@ struct Options {
 	iga::StrongCouplingControls strong_controls;
 	iga::AitkenRelaxationControls aitken_controls;
 	bool strong_pressure_reference_set = false;
+	bool coupling_mode_argument_seen = false;
 	bool strong_argument_seen = false;
 	bool aitken_argument_seen = false;
 };
@@ -89,19 +94,30 @@ int ExplicitCouplingFailureInjectionStep()
 
 Options ParseOptions(int argc, char** argv)
 {
-	if (argc < 5) throw std::runtime_error(
-		"usage: iga_1d_3d_explicit DB THREE_D_CASE UPSTREAM_1D_CASE DOWNSTREAM_1D_CASE "
+	const std::string usage =
+		"usage: iga_1d_3d_explicit --graph-case ROOT --output-dir DIR "
+		"[--stop-after-step N] [--three-d-max-newton N] [PETSc options]\n"
+		"   or: iga_1d_3d_explicit DB THREE_D_CASE UPSTREAM_1D_CASE DOWNSTREAM_1D_CASE "
 		"--upstream-terminal-node ID --output-dir DIR [--stop-after-step N] [--three-d-max-newton N] "
 		"[--coupling-mode explicit|strong-fixed|strong-aitken --strong-max-iterations N "
 		"--strong-pressure-relative-tol R --strong-pressure-reference-pa PA "
 		"--strong-flow-relative-tol R --strong-relaxation W "
-		"--strong-aitken-min-relaxation W --strong-aitken-max-relaxation W] [PETSc options]");
+		"--strong-aitken-min-relaxation W --strong-aitken-max-relaxation W] [PETSc options]";
 	Options options;
-	options.database = argv[1];
-	options.three_d_case = argv[2];
-	options.upstream_case = argv[3];
-	options.downstream_case = argv[4];
-	for (int i = 5; i < argc; ++i) {
+	int first_option = 0;
+	if (argc >= 3 && std::string(argv[1]) == "--graph-case") {
+		options.graph_case_mode = true;
+		options.graph_case = argv[2];
+		first_option = 3;
+	} else {
+		if (argc < 5) throw std::runtime_error(usage);
+		options.database = argv[1];
+		options.three_d_case = argv[2];
+		options.upstream_case = argv[3];
+		options.downstream_case = argv[4];
+		first_option = 5;
+	}
+	for (int i = first_option; i < argc; ++i) {
 		const std::string argument(argv[i]);
 		if (argument == "--upstream-terminal-node" || argument == "--output-dir"
 			|| argument == "--stop-after-step" || argument == "--three-d-max-newton" || argument == "--coupling-mode"
@@ -116,6 +132,7 @@ Options ParseOptions(int argc, char** argv)
 			else if (argument == "--stop-after-step") options.stop_after_step = PositiveInteger(value, argument);
 			else if (argument == "--three-d-max-newton") options.three_d_max_newton = PositiveInteger(value, argument);
 			if (argument == "--coupling-mode") {
+				options.coupling_mode_argument_seen = true;
 				if (value == "explicit") { options.strong_fixed = false; options.strong_aitken = false; }
 				else if (value == "strong-fixed") { options.strong_fixed = true; options.strong_aitken = false; }
 				else if (value == "strong-aitken") { options.strong_fixed = false; options.strong_aitken = true; }
@@ -154,8 +171,15 @@ Options ParseOptions(int argc, char** argv)
 		}
 		throw std::runtime_error("unexpected argument: "+argument);
 	}
-	if (options.upstream_terminal_node < 0 || options.output_directory.empty())
-		throw std::runtime_error("--upstream-terminal-node and --output-dir are required");
+	if (options.output_directory.empty())
+		throw std::runtime_error("--output-dir is required");
+	if (!options.graph_case_mode && options.upstream_terminal_node < 0)
+		throw std::runtime_error("--upstream-terminal-node is required for legacy positional input");
+	if (options.graph_case_mode && options.upstream_terminal_node >= 0)
+		throw std::runtime_error("--graph-case derives the upstream terminal from schema v5");
+	if (options.graph_case_mode && (options.coupling_mode_argument_seen
+		|| options.strong_argument_seen))
+		throw std::runtime_error("--graph-case takes coupling execution controls from schema v5");
 	if (!options.strong_fixed && !options.strong_aitken && options.strong_argument_seen)
 		throw std::runtime_error("strong coupling arguments require a strong coupling mode");
 	if (!options.strong_aitken && options.aitken_argument_seen)
@@ -169,6 +193,25 @@ Options ParseOptions(int argc, char** argv)
 	return options;
 }
 
+void ApplyGraphExecution(Options& options, const iga::GraphExecutionDefinition& execution)
+{
+	options.strong_fixed = execution.kind == iga::GraphExecutionKind::Fixed;
+	options.strong_aitken = execution.kind == iga::GraphExecutionKind::Aitken;
+	if (!options.strong_fixed && !options.strong_aitken) return;
+	options.strong_controls.maximum_iterations = execution.maximum_iterations;
+	options.strong_controls.pressure_relative_tolerance
+		= execution.pressure_relative_tolerance;
+	options.strong_controls.pressure_reference_pa = execution.pressure_reference_pa;
+	options.strong_controls.flow_relative_tolerance = execution.flow_relative_tolerance;
+	options.strong_controls.relaxation_factor = execution.relaxation_factor;
+	options.aitken_controls.initial_relaxation = execution.relaxation_factor;
+	options.aitken_controls.minimum_relaxation = execution.minimum_relaxation;
+	options.aitken_controls.maximum_relaxation = execution.maximum_relaxation;
+	iga::ValidateStrongCouplingControls(options.strong_controls);
+	if (options.strong_aitken)
+		iga::ValidateAitkenRelaxationControls(options.aitken_controls);
+}
+
 std::string ReadText(const fs::path& path)
 {
 	std::ifstream input(path);
@@ -176,6 +219,27 @@ std::string ReadText(const fs::path& path)
 	std::ostringstream text;
 	text << input.rdbuf();
 	return text.str();
+}
+
+void RequireCollectiveGraphPreflight(const std::string& local_error, MPI_Comm communicator)
+{
+	const int local_failed = local_error.empty() ? 0 : 1;
+	int any_failed = 0;
+	MPI_Allreduce(&local_failed, &any_failed, 1, MPI_INT, MPI_MAX, communicator);
+	if (!any_failed) return;
+	if (!local_error.empty()) throw std::runtime_error(local_error);
+	throw std::runtime_error("schema-v5 graph preflight failed on another MPI rank");
+}
+
+void CanonicalizePeriodicTableAssets(std::vector<iga::TemporalFunctionDefinition>& functions,
+	const fs::path& case_directory, const std::string& context)
+{
+	for (auto& function : functions) {
+		if (function.kind != iga::TemporalFunctionKind::PeriodicTable) continue;
+		const auto resolved = iga::ResolveContainedCaseFile(case_directory, function.file,
+			context+" temporal function '"+function.name+"'");
+		function.file = fs::relative(resolved, case_directory).generic_string();
+	}
 }
 
 const iga::OneDFlowSystemDefinition& SelectFlow(const iga::OneDConfiguration& configuration)
@@ -282,6 +346,61 @@ std::string JsonEscape(const std::string& text)
 		}
 	}
 	return escaped.str();
+}
+
+const char* GraphExecutionKindName(iga::GraphExecutionKind kind)
+{
+	if (kind == iga::GraphExecutionKind::Explicit) return "explicit";
+	if (kind == iga::GraphExecutionKind::Fixed) return "fixed";
+	if (kind == iga::GraphExecutionKind::Aitken) return "aitken";
+	return "unknown";
+}
+
+void WriteGraphBindingManifest(const fs::path& path,
+	const iga::MultidomainConfiguration& configuration,
+	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
+	const fs::path& graph_case)
+{
+	auto temporary = path;
+	temporary += ".tmp";
+	std::ofstream output(temporary);
+	if (!output) throw std::runtime_error("cannot create graph binding manifest");
+	output << std::setprecision(17) << "{\n"
+		<< "  \"schema_version\": 5,\n"
+		<< "  \"graph_case\": \"" << JsonEscape(fs::canonical(graph_case).string())
+		<< "\",\n"
+		<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id)
+		<< "\",\n"
+		<< "  \"execution\": \"" << GraphExecutionKindName(configuration.execution.kind)
+		<< "\",\n"
+		<< "  \"domains\": [\n";
+	for (std::size_t i = 0; i < configuration.domains.size(); ++i) {
+		const auto& domain = configuration.domains[i];
+		const auto& resolved = assets.at(domain.id);
+		output << "    {\"id\":\"" << JsonEscape(domain.id) << "\",\"kind\":\""
+			<< iga::DomainKindName(domain.kind) << "\",\"case\":\""
+			<< JsonEscape(resolved.case_directory.string()) << "\"";
+		if (!resolved.database.empty()) output << ",\"database\":\""
+			<< JsonEscape(resolved.database.string()) << "\"";
+		output << "}" << (i+1 == configuration.domains.size() ? "\n" : ",\n");
+	}
+	output << "  ],\n  \"couplings\": [\n";
+	for (std::size_t i = 0; i < configuration.graph.Edges().size(); ++i) {
+		const auto& edge = configuration.graph.Edges()[i];
+		output << "    {\"id\":\"" << JsonEscape(edge.id)
+			<< "\",\"a\":{\"domain\":\"" << JsonEscape(edge.first.domain_id)
+			<< "\",\"port\":\"" << JsonEscape(edge.first.port_id)
+			<< "\"},\"b\":{\"domain\":\"" << JsonEscape(edge.second.domain_id)
+			<< "\",\"port\":\"" << JsonEscape(edge.second.port_id)
+			<< "\"},\"initial_pressure_pa\":"
+			<< configuration.initial_pressure_pa.at(edge.id) << "}"
+			<< (i+1 == configuration.graph.Edges().size() ? "\n" : ",\n");
+	}
+	output << "  ]\n}\n";
+	if (!output) throw std::runtime_error("cannot write graph binding manifest");
+	output.close();
+	if (!output) throw std::runtime_error("cannot close graph binding manifest");
+	std::filesystem::rename(temporary, path);
 }
 
 struct OneDWorkTotals {
@@ -510,20 +629,109 @@ int main(int argc, char** argv)
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;
 	try {
-		const auto options = ParseOptions(argc, argv);
+		auto options = ParseOptions(argc, argv);
+		std::optional<iga::MultidomainConfiguration> graph_configuration;
+		std::optional<iga::SequentialOneDThreeDOneDDefinition> graph_definition;
+		std::map<std::string, iga::ResolvedGraphDomainAssets> graph_assets;
+		fs::path graph_case_root;
+		if (options.graph_case_mode) {
+			std::string local_error;
+			try {
+				if (fs::exists(options.output_directory))
+					throw std::runtime_error(
+						"schema-v5 graph output directory must not already exist");
+				graph_case_root = iga::CanonicalGraphCaseRoot(options.graph_case);
+				const auto manifest = iga::ResolveContainedCaseFile(graph_case_root,
+					"simulation_config.json", "schema-v5 manifest");
+				graph_configuration.emplace(
+					iga::ReadMultidomainConfiguration(manifest.string()));
+				graph_definition.emplace(
+					iga::ResolveSequentialOneDThreeDOneD(*graph_configuration));
+				graph_assets = iga::ResolveGraphDomainAssets(*graph_configuration,
+					graph_case_root);
+				options.upstream_case
+					= graph_assets.at(graph_definition->upstream_domain_id).case_directory;
+				options.three_d_case
+					= graph_assets.at(graph_definition->three_d_domain_id).case_directory;
+				options.database
+					= graph_assets.at(graph_definition->three_d_domain_id).database;
+				options.downstream_case
+					= graph_assets.at(graph_definition->downstream_domain_id).case_directory;
+				options.upstream_terminal_node = iga::ParseOneDOutletNodeLocator(
+					graph_configuration->graph.Port(graph_definition->upstream_terminal));
+				ApplyGraphExecution(options, graph_configuration->execution);
+			} catch (const std::exception& error) {
+				local_error = error.what();
+			}
+			RequireCollectiveGraphPreflight(local_error, PETSC_COMM_WORLD);
+			local_error.clear();
+			try {
+				auto upstream_check = iga::ParseOneDConfiguration(ReadText(
+					iga::ResolveContainedCaseFile(options.upstream_case,
+						"simulation_config.json", "upstream configuration")));
+				auto downstream_check = iga::ParseOneDConfiguration(ReadText(
+					iga::ResolveContainedCaseFile(options.downstream_case,
+						"simulation_config.json", "downstream configuration")));
+				(void)iga::ResolveContainedCaseFile(options.upstream_case,
+					upstream_check.geometry.file, "upstream geometry");
+				(void)iga::ResolveContainedCaseFile(options.downstream_case,
+					downstream_check.geometry.file, "downstream geometry");
+				CanonicalizePeriodicTableAssets(upstream_check.temporal_functions,
+					options.upstream_case, "upstream");
+				CanonicalizePeriodicTableAssets(downstream_check.temporal_functions,
+					options.downstream_case, "downstream");
+				auto three_d_check = iga::ReadSimulationConfiguration(
+					iga::ResolveContainedCaseFile(options.three_d_case,
+						"simulation_config.json", "3D configuration").string());
+				CanonicalizePeriodicTableAssets(three_d_check.temporal_functions,
+					options.three_d_case, "3D");
+				(void)iga::ResolveContainedCaseFile(options.three_d_case,
+					"controlmesh.vtk", "3D control mesh");
+				(void)iga::ResolveContainedCaseFile(options.three_d_case,
+					"initial_velocityfield.txt", "3D initial velocity");
+				std::ifstream database_check(options.database, std::ios::binary);
+				if (!database_check)
+					throw std::runtime_error("cannot read schema-v5 3D database");
+			} catch (const std::exception& error) {
+				local_error = error.what();
+			}
+			RequireCollectiveGraphPreflight(local_error, PETSC_COMM_WORLD);
+		}
 		const int injected_failure_step = ExplicitCouplingFailureInjectionStep();
+		const auto upstream_configuration_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.upstream_case,
+				"simulation_config.json", "upstream configuration")
+			: options.upstream_case/"simulation_config.json";
+		const auto downstream_configuration_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.downstream_case,
+				"simulation_config.json", "downstream configuration")
+			: options.downstream_case/"simulation_config.json";
 		auto upstream_configuration = iga::ParseOneDConfiguration(
-			ReadText(options.upstream_case/"simulation_config.json"));
+			ReadText(upstream_configuration_path));
 		auto downstream_configuration = iga::ParseOneDConfiguration(
-			ReadText(options.downstream_case/"simulation_config.json"));
+			ReadText(downstream_configuration_path));
+		if (options.graph_case_mode) {
+			CanonicalizePeriodicTableAssets(upstream_configuration.temporal_functions,
+				options.upstream_case, "upstream");
+			CanonicalizePeriodicTableAssets(downstream_configuration.temporal_functions,
+				options.downstream_case, "downstream");
+		}
 		RequireOneDFlowOnly(upstream_configuration, "upstream");
 		RequireOneDFlowOnly(downstream_configuration, "downstream");
 		const auto upstream_flow = SelectFlow(upstream_configuration);
 		const auto downstream_flow = SelectFlow(downstream_configuration);
-		auto upstream_network = iga::ReadOneDNetwork(options.upstream_case/upstream_configuration.geometry.file,
+		const auto upstream_geometry_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.upstream_case,
+				upstream_configuration.geometry.file, "upstream geometry")
+			: options.upstream_case/upstream_configuration.geometry.file;
+		const auto downstream_geometry_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.downstream_case,
+				downstream_configuration.geometry.file, "downstream geometry")
+			: options.downstream_case/downstream_configuration.geometry.file;
+		auto upstream_network = iga::ReadOneDNetwork(upstream_geometry_path,
 			upstream_configuration.geometry.length_scale_to_m, upstream_flow.discretization.cells_per_segment,
 			upstream_flow.dynamic_viscosity, upstream_configuration.geometry.root_node_id);
-		auto downstream_network = iga::ReadOneDNetwork(options.downstream_case/downstream_configuration.geometry.file,
+		auto downstream_network = iga::ReadOneDNetwork(downstream_geometry_path,
 			downstream_configuration.geometry.length_scale_to_m, downstream_flow.discretization.cells_per_segment,
 			downstream_flow.dynamic_viscosity, downstream_configuration.geometry.root_node_id);
 		iga::ValidateOneDTopologyReferences(upstream_configuration, upstream_network);
@@ -558,8 +766,15 @@ int main(int argc, char** argv)
 				downstream.FlowState().outlets.front().node)].id);
 
 		iga::Database database(options.database.string());
+		const auto three_d_configuration_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.three_d_case,
+				"simulation_config.json", "3D configuration")
+			: options.three_d_case/"simulation_config.json";
 		auto three_d_configuration = iga::ReadSimulationConfiguration(
-			(options.three_d_case/"simulation_config.json").string());
+			three_d_configuration_path.string());
+		if (options.graph_case_mode)
+			CanonicalizePeriodicTableAssets(three_d_configuration.temporal_functions,
+				options.three_d_case, "3D");
 		if (three_d_configuration.equation_systems.size() != 1
 			|| three_d_configuration.equation_systems.front().kind != iga::EquationKind::NavierStokes
 			|| three_d_configuration.equation_systems.front().unknowns.size() != 2)
@@ -580,10 +795,18 @@ int main(int argc, char** argv)
 		if (ports.inlet_label == 0 || ports.outlet_labels.front() == 0)
 			throw std::runtime_error(
 				"explicit 1D--3D coupling reserves boundary label 0 for the no-slip wall");
-		const auto mesh = iga::ReadLabeledHexMesh((options.three_d_case/"controlmesh.vtk").string(),
+		const auto mesh_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.three_d_case,
+				"controlmesh.vtk", "3D control mesh")
+			: options.three_d_case/"controlmesh.vtk";
+		const auto velocity_path = options.graph_case_mode
+			? iga::ResolveContainedCaseFile(options.three_d_case,
+				"initial_velocityfield.txt", "3D initial velocity")
+			: options.three_d_case/"initial_velocityfield.txt";
+		const auto mesh = iga::ReadLabeledHexMesh(mesh_path.string(),
 			database.header().nodes, database.header().elements);
 		const auto boundary_velocity = iga::ReadVelocity(
-			(options.three_d_case/"initial_velocityfield.txt").string(), database.header().nodes);
+			velocity_path.string(), database.header().nodes);
 		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh, 0);
 		auto initial_three_d = iga::MaterializeBoundaryWaveforms(three_d_configuration,
 			options.three_d_case.string(), 0.0);
@@ -622,7 +845,12 @@ int main(int argc, char** argv)
 		const double normalized_length = database.header().version == iga::kVersion
 			? database.header().geometry_transform.source_units_per_normalized_unit
 				*database.header().geometry_transform.source_length_scale_to_m : 0.0;
-		const double reference_inlet_flow = three_d.ReferenceBoundaryFlow(ports.inlet_label);
+		const double native_reference_inlet_flow
+			= three_d.ReferenceBoundaryFlow(ports.inlet_label);
+		const double reference_inlet_flow = graph_definition
+			? graph_configuration->graph.Port(graph_definition->three_d_inlet)
+				.orientation.ToOutward(native_reference_inlet_flow)
+			: native_reference_inlet_flow;
 		iga::ExplicitCouplingScalarPreflight scalar;
 		scalar.dt_s = three_d_configuration.time.dt;
 		scalar.steps = three_d_configuration.time.steps;
@@ -631,6 +859,14 @@ int main(int argc, char** argv)
 		scalar.normalized_length_m = normalized_length;
 		scalar.reference_inlet_outward_flow_m3_s = reference_inlet_flow;
 		iga::ValidateExplicitCouplingScalarPreflight(scalar);
+		if (graph_configuration) {
+			const double time_scale = std::max({1.0, std::abs(scalar.dt_s),
+				std::abs(graph_configuration->time.dt_s)});
+			if (std::abs(scalar.dt_s-graph_configuration->time.dt_s)
+				> 1.0e-12*time_scale || scalar.steps != graph_configuration->time.steps)
+				throw std::runtime_error(
+					"schema-v5 time must match the body-fitted 3D case time grid");
+		}
 		const auto upstream_subcycling = iga::MakeOneDSubcyclingPlan(upstream.Configuration().time.dt,
 			upstream.Configuration().time.steps, scalar.dt_s, scalar.steps);
 		const auto downstream_subcycling = iga::MakeOneDSubcyclingPlan(downstream.Configuration().time.dt,
@@ -642,43 +878,85 @@ int main(int argc, char** argv)
 			throw std::runtime_error("explicit 1D--3D coupling requires identical density and viscosity");
 		(void)upstream_subcycling;
 		(void)downstream_subcycling;
-		auto upstream_graph_port = MakeOneDLogicalPort("upstream", "terminal",
-			upstream_terminal_runtime_id, iga::PortQuantity::MeanPressure);
-		auto three_d_inlet_graph_port = MakeThreeDPort("three_d", "inlet", ports.inlet_label,
-			{iga::PortQuantity::Area, iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure},
-			{iga::PortQuantity::FlowRate});
-		auto three_d_outlet_graph_port = MakeThreeDPort("three_d", "outlet",
-			ports.outlet_labels.front(),
-			{iga::PortQuantity::Area, iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure},
-			{iga::PortQuantity::MeanPressure});
-		auto downstream_graph_port = MakeOneDLogicalPort("downstream", "root", "root",
-			iga::PortQuantity::FlowRate);
-		auto upstream_root_graph_port = MakeOneDObservationPort("upstream", "root_state", "root");
-		auto downstream_terminal_graph_port = MakeOneDObservationPort("downstream",
-			"terminal_state", downstream_terminal_runtime_id);
-		auto three_d_wall_graph_port = MakeThreeDPort("three_d", "wall", 0,
-			{iga::PortQuantity::FlowRate}, {});
-		const iga::SimulationGraph simulation_graph({
-			{"downstream", iga::DomainKind::OneDFlow, {std::move(downstream_graph_port),
-				std::move(downstream_terminal_graph_port)}},
-			{"three_d", iga::DomainKind::ThreeDBodyFittedFlow,
-				{std::move(three_d_outlet_graph_port), std::move(three_d_inlet_graph_port),
-				 std::move(three_d_wall_graph_port)}},
-			{"upstream", iga::DomainKind::OneDFlow, {std::move(upstream_graph_port),
-				std::move(upstream_root_graph_port)}}}, {
-			{"upstream_to_three_d", {"upstream", "terminal"}, {"three_d", "inlet"},
-				iga::CouplingLaw::PressureFlow},
-			{"three_d_to_downstream", {"three_d", "outlet"}, {"downstream", "root"},
-				iga::CouplingLaw::PressureFlow}});
-		const auto sequential_plan = iga::MakeSequentialPlan(simulation_graph, "upstream");
-		if (sequential_plan.domain_ids
-			!= std::vector<std::string>{"upstream", "three_d", "downstream"})
+		std::string upstream_domain_id = "upstream";
+		std::string three_d_domain_id = "three_d";
+		std::string downstream_domain_id = "downstream";
+		std::string upstream_edge_id = "upstream_to_three_d";
+		std::string downstream_edge_id = "three_d_to_downstream";
+		iga::PortRef upstream_terminal_ref{"upstream", "terminal"};
+		iga::PortRef upstream_root_ref{"upstream", "root_state"};
+		iga::PortRef three_d_inlet_ref{"three_d", "inlet"};
+		iga::PortRef three_d_outlet_ref{"three_d", "outlet"};
+		iga::PortRef three_d_wall_ref{"three_d", "wall"};
+		iga::PortRef downstream_root_ref{"downstream", "root"};
+		iga::PortRef downstream_terminal_ref{"downstream", "terminal_state"};
+		if (graph_definition) {
+			upstream_domain_id = graph_definition->upstream_domain_id;
+			three_d_domain_id = graph_definition->three_d_domain_id;
+			downstream_domain_id = graph_definition->downstream_domain_id;
+			upstream_edge_id = graph_definition->upstream_edge_id;
+			downstream_edge_id = graph_definition->downstream_edge_id;
+			upstream_terminal_ref = graph_definition->upstream_terminal;
+			upstream_root_ref = graph_definition->upstream_root_observation;
+			three_d_inlet_ref = graph_definition->three_d_inlet;
+			three_d_outlet_ref = graph_definition->three_d_outlet;
+			three_d_wall_ref = graph_definition->three_d_wall_observation;
+			downstream_root_ref = graph_definition->downstream_root;
+			downstream_terminal_ref = graph_definition->downstream_terminal_observation;
+		}
+		const iga::SimulationGraph simulation_graph = [&] {
+			if (graph_configuration) return graph_configuration->graph;
+			auto upstream_graph_port = MakeOneDLogicalPort("upstream", "terminal",
+				upstream_terminal_runtime_id, iga::PortQuantity::MeanPressure);
+			auto three_d_inlet_graph_port = MakeThreeDPort("three_d", "inlet",
+				ports.inlet_label, {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+					iga::PortQuantity::MeanPressure}, {iga::PortQuantity::FlowRate});
+			auto three_d_outlet_graph_port = MakeThreeDPort("three_d", "outlet",
+				ports.outlet_labels.front(), {iga::PortQuantity::Area,
+					iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure},
+				{iga::PortQuantity::MeanPressure});
+			auto downstream_graph_port = MakeOneDLogicalPort("downstream", "root", "root",
+				iga::PortQuantity::FlowRate);
+			auto upstream_root_graph_port = MakeOneDObservationPort("upstream", "root_state",
+				"root");
+			auto downstream_terminal_graph_port = MakeOneDObservationPort("downstream",
+				"terminal_state", downstream_terminal_runtime_id);
+			auto three_d_wall_graph_port = MakeThreeDPort("three_d", "wall", 0,
+				{iga::PortQuantity::FlowRate}, {});
+			return iga::SimulationGraph({
+				{"downstream", iga::DomainKind::OneDFlow, {std::move(downstream_graph_port),
+					std::move(downstream_terminal_graph_port)}},
+				{"three_d", iga::DomainKind::ThreeDBodyFittedFlow,
+					{std::move(three_d_outlet_graph_port), std::move(three_d_inlet_graph_port),
+					 std::move(three_d_wall_graph_port)}},
+				{"upstream", iga::DomainKind::OneDFlow, {std::move(upstream_graph_port),
+					std::move(upstream_root_graph_port)}}}, {
+				{"upstream_to_three_d", {"upstream", "terminal"}, {"three_d", "inlet"},
+					iga::CouplingLaw::PressureFlow},
+				{"three_d_to_downstream", {"three_d", "outlet"}, {"downstream", "root"},
+					iga::CouplingLaw::PressureFlow}});
+		}();
+		const auto sequential_plan = iga::MakeSequentialPressureFlowPlan(simulation_graph,
+			upstream_domain_id);
+		if (sequential_plan.domain_ids != std::vector<std::string>{upstream_domain_id,
+			three_d_domain_id, downstream_domain_id})
 			throw std::runtime_error("explicit coupling graph did not resolve the expected sequential chain");
-		const auto& upstream_terminal_port = simulation_graph.Port({"upstream", "terminal"});
-		const auto& three_d_inlet_port = simulation_graph.Port({"three_d", "inlet"});
-		const auto& three_d_outlet_port = simulation_graph.Port({"three_d", "outlet"});
-		const auto& downstream_root_port = simulation_graph.Port({"downstream", "root"});
-		const auto& three_d_wall_measure = simulation_graph.Port({"three_d", "wall"});
+		const auto& upstream_terminal_port = simulation_graph.Port(upstream_terminal_ref);
+		const auto& three_d_inlet_port = simulation_graph.Port(three_d_inlet_ref);
+		const auto& three_d_outlet_port = simulation_graph.Port(three_d_outlet_ref);
+		const auto& downstream_root_port = simulation_graph.Port(downstream_root_ref);
+		const auto& three_d_wall_measure = simulation_graph.Port(three_d_wall_ref);
+		if (upstream_terminal_port.locator != upstream_terminal_runtime_id
+			|| downstream_root_port.locator != "root"
+			|| simulation_graph.Port(upstream_root_ref).locator != "root"
+			|| simulation_graph.Port(downstream_terminal_ref).locator
+				!= downstream_terminal_runtime_id)
+			throw std::runtime_error("schema-v5 1D port locators do not match native cases");
+		if (iga::ParseThreeDFlowBoundaryLabel(three_d_inlet_port) != ports.inlet_label
+			|| iga::ParseThreeDFlowBoundaryLabel(three_d_outlet_port)
+				!= ports.outlet_labels.front()
+			|| iga::ParseThreeDFlowBoundaryLabel(three_d_wall_measure) != 0)
+			throw std::runtime_error("schema-v5 3D port labels do not match native case coupling ports");
 		const auto& upstream_terminal = upstream_terminal_port.locator;
 		const auto& downstream_root = downstream_root_port.locator;
 		const auto& downstream_terminal = downstream_terminal_runtime_id;
@@ -696,15 +974,20 @@ int main(int argc, char** argv)
 		iga::ApplyThreeDReferenceProfileInput(initial_three_d,
 			initial_three_d.equation_systems.front(), three_d_inlet_port,
 			initial_profile_input, reference_inlet_flow);
+		const double initial_outlet_pressure = graph_configuration
+			? graph_configuration->initial_pressure_pa.at(downstream_edge_id)
+			: RequirePortValue(initial_downstream_root.mean_pressure_pa,
+				"downstream root pressure");
 		ApplyInitialPressure(initial_three_d, three_d_pressure_unknown, ports.outlet_labels.front(),
-			RequirePortValue(initial_downstream_root.mean_pressure_pa, "downstream root pressure"));
+			initial_outlet_pressure);
 		three_d.InitializeState(initial_three_d);
 		const auto initial_three_d_ports = three_d.MeasurePorts({three_d_inlet_port, three_d_outlet_port},
 			0.0, {}, {});
-		double lagged_three_d_inlet_pressure = RequirePortValue(
-			initial_three_d_ports.at("inlet").mean_pressure_pa, "3D inlet pressure");
-		double lagged_downstream_root_pressure = RequirePortValue(
-			initial_downstream_root.mean_pressure_pa, "downstream root pressure");
+		double lagged_three_d_inlet_pressure = graph_configuration
+			? graph_configuration->initial_pressure_pa.at(upstream_edge_id)
+			: RequirePortValue(initial_three_d_ports.at(three_d_inlet_port.id).mean_pressure_pa,
+				"3D inlet pressure");
+		double lagged_downstream_root_pressure = initial_outlet_pressure;
 		const double initial_lagged_three_d_inlet_pressure = lagged_three_d_inlet_pressure;
 		const double initial_lagged_downstream_root_pressure = lagged_downstream_root_pressure;
 		const int final_step = options.stop_after_step > 0 ? options.stop_after_step : scalar.steps;
@@ -962,9 +1245,12 @@ int main(int argc, char** argv)
 							strong_iterations.push_back(iteration_row);
 							if (injected_failure_step == step)
 								throw std::runtime_error("injected strong coupling failure before commit");
-							upstream.CommitStep();
-							three_d.CommitStep();
-							downstream.CommitStep();
+							upstream.PrepareCommitStep();
+							three_d.PrepareCommitStep();
+							downstream.PrepareCommitStep();
+							upstream.FinalizeCommitStep();
+							three_d.FinalizeCommitStep();
+							downstream.FinalizeCommitStep();
 							history.push_back(row);
 							strong_accepted_ksp.push_back(trial_ksp);
 							strong_all_ksp.push_back(all_ksp);
@@ -996,16 +1282,16 @@ int main(int argc, char** argv)
 								WriteStrongFailureIteration(std::cerr, row);
 						std::cerr << "strong coupling final trial " << final_strong_diagnostics << '\n';
 					}
-					RollbackSolved(downstream);
-					RollbackSolved(three_d);
-					RollbackSolved(upstream);
+					downstream.AbortStep();
+					three_d.AbortStep();
+					upstream.AbortStep();
 					throw;
 				}
 			}
 		} else {
 			std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
-			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>("upstream",
-				upstream, simulation_graph.Domain("upstream").ports,
+			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(upstream_domain_id,
+				upstream, simulation_graph.Domain(upstream_domain_id).ports,
 				iga::OneDInletPolicy::ConfiguredOpenLoop));
 			iga::ThreeDFlowDomainControls three_d_controls;
 			three_d_controls.maximum_newton = options.three_d_max_newton;
@@ -1013,32 +1299,33 @@ int main(int argc, char** argv)
 			three_d_controls.nonlinear_absolute_tolerance = kThreeDNonlinearAbsoluteTolerance;
 			three_d_controls.mass_relative_tolerance = kThreeDMassRelativeTolerance;
 			runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
-				"three_d", three_d, simulation_graph.Domain("three_d").ports,
+				three_d_domain_id, three_d, simulation_graph.Domain(three_d_domain_id).ports,
 				three_d_configuration, options.three_d_case,
-				std::map<std::string, double>{{"inlet", reference_inlet_flow}}, three_d_controls));
-			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>("downstream",
-				downstream, simulation_graph.Domain("downstream").ports,
+				std::map<std::string, double>{{three_d_inlet_port.id, reference_inlet_flow}},
+				three_d_controls));
+			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(downstream_domain_id,
+				downstream, simulation_graph.Domain(downstream_domain_id).ports,
 				iga::OneDInletPolicy::CoupledRoot));
 			iga::DomainRuntimeRegistry runtime_registry(simulation_graph, std::move(runtimes));
 			iga::PressureFlowExecutionControls execution_controls;
-			iga::PressureFlowComponentExecutor executor(runtime_registry, "upstream",
+			iga::PressureFlowComponentExecutor executor(runtime_registry, upstream_domain_id,
 				execution_controls);
 			for (int step = 1; step <= final_step; ++step) {
 				const double time = step*scalar.dt_s;
 				iga::ExplicitCouplingHistoryRow row;
 				bool row_ready = false;
 				executor.Advance({step-1, upstream.FlowState().physical_time, scalar.dt_s}, {
-					{"upstream_to_three_d", lagged_three_d_inlet_pressure},
-					{"three_d_to_downstream", lagged_downstream_root_pressure}},
+					{upstream_edge_id, lagged_three_d_inlet_pressure},
+					{downstream_edge_id, lagged_downstream_root_pressure}},
 					[&](const iga::PressureFlowStepResult& result) {
-						const auto& upstream_root = result.accepted_ports.at({"upstream", "root_state"});
-						const auto& upstream_port = result.accepted_ports.at({"upstream", "terminal"});
-						const auto& three_d_inlet = result.accepted_ports.at({"three_d", "inlet"});
-						const auto& three_d_outlet = result.accepted_ports.at({"three_d", "outlet"});
-						const auto& three_d_wall = result.accepted_ports.at({"three_d", "wall"});
-						const auto& downstream_root_state = result.accepted_ports.at({"downstream", "root"});
-						const auto& downstream_terminal_port = result.accepted_ports.at(
-							{"downstream", "terminal_state"});
+						const auto& upstream_root = result.accepted_ports.at(upstream_root_ref);
+						const auto& upstream_port = result.accepted_ports.at(upstream_terminal_ref);
+						const auto& three_d_inlet = result.accepted_ports.at(three_d_inlet_ref);
+						const auto& three_d_outlet = result.accepted_ports.at(three_d_outlet_ref);
+						const auto& three_d_wall = result.accepted_ports.at(three_d_wall_ref);
+						const auto& downstream_root_state = result.accepted_ports.at(downstream_root_ref);
+						const auto& downstream_terminal_port
+							= result.accepted_ports.at(downstream_terminal_ref);
 						row.time_s = time;
 						row.upstream_root_pressure_pa = RequirePortValue(upstream_root.mean_pressure_pa, "upstream root pressure");
 						row.upstream_root_outward_flow_m3_s = RequirePortValue(upstream_root.outward_flow_m3_s, "upstream root flow");
@@ -1084,7 +1371,13 @@ int main(int argc, char** argv)
 		int output_failed = 0;
 		std::string output_error;
 		if (rank == 0) try {
-			fs::create_directories(options.output_directory);
+			if (graph_configuration) {
+				if (!fs::create_directories(options.output_directory))
+					throw std::runtime_error(
+						"schema-v5 graph output directory must be newly created");
+			} else {
+				fs::create_directories(options.output_directory);
+			}
 			if (!options.strong_fixed && !options.strong_aitken) {
 				std::ofstream output(options.output_directory/"explicit_coupling_history.csv");
 				if (!output) throw std::runtime_error("cannot create explicit coupling history");
@@ -1152,6 +1445,9 @@ int main(int argc, char** argv)
 					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, aitken_status_counts, accepted_ksp, all_ksp,
 					upstream_subcycling, downstream_subcycling, history, options.three_d_max_newton);
 			}
+			if (graph_configuration)
+				WriteGraphBindingManifest(options.output_directory/"graph_binding_manifest.json",
+					*graph_configuration, graph_assets, graph_case_root);
 		} catch (const std::exception& error) {
 			output_failed = 1;
 			output_error = error.what();

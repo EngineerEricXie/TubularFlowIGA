@@ -163,6 +163,56 @@ void WriteOneDCase(const fs::path& directory, double dt_s = kDtS, int steps = kS
 		<< "  ]\n}\n";
 }
 
+void WriteGraphCase(const fs::path& root, const std::string& execution_kind = "explicit",
+	int inlet_native_to_outward_sign = 1, const std::string& database = "one.ntiga")
+{
+	std::ofstream config(root/"simulation_config.json");
+	if (!config) throw std::runtime_error("cannot create multidomain smoke configuration");
+	config << "{\n"
+		<< "  \"schema_version\": 5,\n"
+		<< "  \"time\": {\"dt\": " << JsonNumber(kDtS) << ", \"steps\": "
+		<< kSteps << "},\n"
+		<< "  \"start_domain\": \"arterial_source\",\n"
+		<< "  \"execution\": {\"kind\": \"" << execution_kind << "\", "
+		<< "\"maximum_iterations\": " << (execution_kind == "explicit" ? 1 : 50) << ", "
+		<< "\"pressure_relative_tolerance\": 1e-6, "
+		<< "\"pressure_reference_pa\": " << JsonNumber(kPressureReferencePa) << ", "
+		<< "\"flow_relative_tolerance\": 1e-10, \"relaxation_factor\": 0.5, "
+		<< "\"minimum_relaxation\": 0.05, \"maximum_relaxation\": 0.999},\n"
+		<< "  \"domains\": [\n"
+		<< "    {\"id\":\"arterial_source\",\"dimension\":\"1d\",\"kind\":\"network_flow\","
+		<< "\"case\":\"upstream\",\"inlet_policy\":\"configured_open_loop\",\"ports\":["
+		<< "{\"id\":\"to_roi\",\"locator_kind\":\"runtime_port\",\"locator\":\"outlet:2\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"mean_pressure\"]},"
+		<< "{\"id\":\"source_root\",\"locator_kind\":\"runtime_port\",\"locator\":\"root\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[]}]},\n"
+		<< "    {\"id\":\"local_roi\",\"dimension\":\"3d\",\"kind\":\"body_fitted_iga_flow\","
+		<< "\"case\":\"three_d\",\"database\":\"" << database << "\",\"ports\":["
+		<< "{\"id\":\"roi_in\",\"locator_kind\":\"boundary_label\",\"locator\":\"1\","
+		<< "\"native_to_outward_sign\":" << inlet_native_to_outward_sign << ","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"flow_rate\"]},"
+		<< "{\"id\":\"roi_out\",\"locator_kind\":\"boundary_label\",\"locator\":\"2\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"mean_pressure\"]},"
+		<< "{\"id\":\"wall_flux\",\"locator_kind\":\"boundary_label\",\"locator\":\"0\","
+		<< "\"provides\":[\"flow_rate\"],\"requires\":[]}]},\n"
+		<< "    {\"id\":\"venous_sink\",\"dimension\":\"1d\",\"kind\":\"network_flow\","
+		<< "\"case\":\"downstream\",\"inlet_policy\":\"coupled_root\",\"ports\":["
+		<< "{\"id\":\"sink_root\",\"locator_kind\":\"runtime_port\",\"locator\":\"root\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"flow_rate\"]},"
+		<< "{\"id\":\"sink_terminal\",\"locator_kind\":\"runtime_port\",\"locator\":\"outlet:2\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[]}] }\n"
+		<< "  ],\n"
+		<< "  \"couplings\": [\n"
+		<< "    {\"id\":\"edge_left\",\"a\":{\"domain\":\"arterial_source\",\"port\":\"to_roi\"},"
+		<< "\"b\":{\"domain\":\"local_roi\",\"port\":\"roi_in\"},\"mode\":\"pressure_flow\","
+		<< "\"initial_pressure_pa\":0},\n"
+		<< "    {\"id\":\"edge_right\",\"a\":{\"domain\":\"local_roi\",\"port\":\"roi_out\"},"
+		<< "\"b\":{\"domain\":\"venous_sink\",\"port\":\"sink_root\"},\"mode\":\"pressure_flow\","
+		<< "\"initial_pressure_pa\":"
+		<< JsonNumber(kCircularSegmentResistancePaSM3*kFlowM3S) << "}\n"
+		<< "  ]\n}\n";
+}
+
 std::string Quote(const fs::path& path)
 {
 	return "'"+path.string()+"'";
@@ -183,6 +233,15 @@ int Run(const fs::path& database, const fs::path& three_d, const fs::path& upstr
 		+" "+Quote(upstream)+" "+Quote(downstream)+" --upstream-terminal-node 2 --output-dir "
 		+Quote(output)+" -ksp_type preonly -pc_type lu"+arguments;
 	if (!stderr_path.empty()) command += " 2>"+Quote(stderr_path);
+	return std::system(command.c_str());
+}
+
+int RunGraph(const fs::path& graph_case, const fs::path& output,
+	const std::string& launcher = {}, const std::string& arguments = {})
+{
+	const std::string command = launcher+"./iga_1d_3d_explicit --graph-case "
+		+Quote(graph_case)+" --output-dir "+Quote(output)
+		+" -ksp_type preonly -pc_type lu"+arguments;
 	return std::system(command.c_str());
 }
 
@@ -235,6 +294,20 @@ void RequireManifest(const fs::path& path)
 		|| text.find("\"geometry_transform_product_m\": 1") == std::string::npos
 		|| text.find("\"initial_lagged_pressures_pa\"") == std::string::npos)
 		throw std::runtime_error("explicit coupling manifest is incomplete");
+}
+
+void RequireGraphBindingManifest(const fs::path& path, const std::string& execution)
+{
+	const auto text = ReadText(path);
+	if (text.find("\"schema_version\": 5") == std::string::npos
+		|| text.find("\"start_domain\": \"arterial_source\"") == std::string::npos
+		|| text.find("\"execution\": \""+execution+"\"") == std::string::npos
+		|| text.find("\"id\":\"local_roi\"") == std::string::npos
+		|| text.find("\"id\":\"edge_left\"") == std::string::npos
+		|| text.find("\"domain\":\"arterial_source\",\"port\":\"to_roi\"")
+			== std::string::npos
+		|| text.find("\"database\":") == std::string::npos)
+		throw std::runtime_error("graph binding manifest is incomplete");
 }
 
 void ValidateRows(const std::vector<CsvRow>& rows, bool explicit_mode = true)
@@ -782,6 +855,16 @@ int main()
 		WriteOneDCase(root/"upstream_noninteger", 0.003, 10);
 		WriteOneDCase(root/"upstream_bad_horizon", 0.0025, 11);
 		WriteUnitDatabase(root/"one.ntiga", 1);
+		WriteGraphCase(root);
+		fs::create_directories(root/"stale_graph_output");
+		std::ofstream(root/"stale_graph_output/graph_binding_manifest.json") << "stale-marker\n";
+		if (RunGraph(root, root/"stale_graph_output") == 0
+			|| ReadText(root/"stale_graph_output/graph_binding_manifest.json") != "stale-marker\n")
+			throw std::runtime_error("graph rerun accepted or modified a stale completion marker");
+		if (RunGraph(root, root/"invalid_graph_cli_controls", "",
+			" --coupling-mode explicit") == 0
+			|| fs::exists(root/"invalid_graph_cli_controls/explicit_coupling_history.csv"))
+			throw std::runtime_error("graph case accepted conflicting CLI coupling controls");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"invalid_explicit_aitken_min", "", "",
 			" --coupling-mode explicit --strong-aitken-min-relaxation 0.05") == 0
 			|| fs::exists(root/"invalid_explicit_aitken_min/explicit_coupling_history.csv")
@@ -820,6 +903,27 @@ int main()
 			throw std::runtime_error("explicit manifest did not record custom 3D Newton budget");
 		RequireManifestSubcycling(root/"one/explicit_coupling_manifest.json", one, kDtS, kSteps, 1);
 		ValidateRows(one);
+		if (RunGraph(root, root/"graph_one") != 0)
+			throw std::runtime_error("schema-v5 graph-authored coupling smoke run failed");
+		const auto graph_one = ReadHistory(root/"graph_one/explicit_coupling_history.csv");
+		RequireManifest(root/"graph_one/explicit_coupling_manifest.json");
+		RequireGraphBindingManifest(root/"graph_one/graph_binding_manifest.json", "explicit");
+		ValidateRows(graph_one);
+		RequireSameHistory(one, graph_one);
+		WriteGraphCase(root, "explicit", -1);
+		if (RunGraph(root, root/"graph_reversed_native_orientation") != 0)
+			throw std::runtime_error("schema-v5 reversed native orientation smoke run failed");
+		const auto graph_reversed = ReadHistory(
+			root/"graph_reversed_native_orientation/explicit_coupling_history.csv");
+		RequireGraphBindingManifest(
+			root/"graph_reversed_native_orientation/graph_binding_manifest.json", "explicit");
+		double maximum_reversed_residual = 0.0;
+		for (const auto& row : graph_reversed)
+			maximum_reversed_residual = std::max(maximum_reversed_residual,
+				std::abs(Value(row, "upstream_three_d_flow_residual_m3_s")));
+		if (maximum_reversed_residual > 1.0e-12)
+			throw std::runtime_error("reversed native orientation violated upstream flow conservation");
+		WriteGraphCase(root);
 		WriteUnitDatabase(root/"two.ntiga", 2);
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"two", "mpiexec -np 2 ") != 0)
 			throw std::runtime_error("two-rank explicit coupling smoke run failed");
@@ -829,6 +933,13 @@ int main()
 			throw std::runtime_error("default explicit manifest did not retain the 3D Newton budget of 30");
 		ValidateRows(two);
 		RequireSameHistory(one, two);
+		WriteGraphCase(root, "explicit", 1, "two.ntiga");
+		if (RunGraph(root, root/"graph_two", "mpiexec -np 2 ") != 0)
+			throw std::runtime_error("two-rank schema-v5 graph coupling smoke run failed");
+		const auto graph_two = ReadHistory(root/"graph_two/explicit_coupling_history.csv");
+		RequireGraphBindingManifest(root/"graph_two/graph_binding_manifest.json", "explicit");
+		ValidateRows(graph_two);
+		RequireSameHistory(two, graph_two);
 		const std::string strong_arguments = " --coupling-mode strong-fixed --strong-max-iterations 50"
 			" --strong-pressure-relative-tol 1e-6 --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)
 			+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5 --three-d-max-newton 32";
@@ -841,6 +952,17 @@ int main()
 			throw std::runtime_error("strong manifest did not record custom 3D Newton budget");
 		RequireManifestSubcycling(root/"strong_one/strong_coupling_manifest.json", strong_one, kDtS, kSteps, 1);
 		ValidateStrongRun(strong_one, strong_one_iterations, root/"strong_one/strong_coupling_manifest.json");
+		WriteGraphCase(root, "fixed");
+		if (RunGraph(root, root/"graph_fixed") != 0)
+			throw std::runtime_error("schema-v5 fixed graph-authored coupling smoke run failed");
+		const auto graph_fixed = ReadHistory(root/"graph_fixed/strong_coupling_history.csv");
+		const auto graph_fixed_iterations = ReadHistory(
+			root/"graph_fixed/strong_coupling_iterations.csv");
+		ValidateStrongRun(graph_fixed, graph_fixed_iterations,
+			root/"graph_fixed/strong_coupling_manifest.json");
+		RequireGraphBindingManifest(root/"graph_fixed/graph_binding_manifest.json", "fixed");
+		RequireSameHistory(strong_one, graph_fixed);
+		RequireSameHistory(strong_one_iterations, graph_fixed_iterations);
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_two", "mpiexec -np 2 ", "", strong_arguments) != 0)
 			throw std::runtime_error("two-rank strong coupling smoke run failed");
 		const auto strong_two = ReadHistory(root/"strong_two/strong_coupling_history.csv");
@@ -861,6 +983,18 @@ int main()
 		ValidateAitkenRun(aitken_one, aitken_one_iterations, root/"aitken_one/strong_coupling_manifest.json",
 			static_cast<std::size_t>(Value(strong_one.front(), "iteration_count")));
 		RequireEquivalentPhysicalHistory(strong_one, aitken_one);
+		WriteGraphCase(root, "aitken");
+		if (RunGraph(root, root/"graph_aitken") != 0)
+			throw std::runtime_error("schema-v5 Aitken graph-authored coupling smoke run failed");
+		const auto graph_aitken = ReadHistory(root/"graph_aitken/strong_coupling_history.csv");
+		const auto graph_aitken_iterations = ReadHistory(
+			root/"graph_aitken/strong_coupling_iterations.csv");
+		ValidateAitkenRun(graph_aitken, graph_aitken_iterations,
+			root/"graph_aitken/strong_coupling_manifest.json",
+			static_cast<std::size_t>(Value(graph_fixed.front(), "iteration_count")));
+		RequireGraphBindingManifest(root/"graph_aitken/graph_binding_manifest.json", "aitken");
+		RequireSameHistory(aitken_one, graph_aitken);
+		RequireSameHistory(aitken_one_iterations, graph_aitken_iterations);
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_two", "mpiexec -np 2 ", "", aitken_arguments) != 0)
 			throw std::runtime_error("two-rank Aitken coupling smoke run failed");
 		const auto aitken_two = ReadHistory(root/"aitken_two/strong_coupling_history.csv");

@@ -3,8 +3,8 @@
 Status: Phase 1 complete; Phase 2 in progress. The verified 1D--3D--1D
 lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
 topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
-provides the strict schema-v5 graph manifest. Branch execution and multiple 3D
-islands remain subsequent Phase 2 work.
+provides the strict schema-v5 graph manifest and its production runner binding.
+Branch execution and multiple 3D islands remain subsequent Phase 2 work.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
@@ -89,6 +89,20 @@ supports fixed and Aitken iteration. A test-only environment variable,
 `TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=<positive-step>`, throws
 after all trial solves and history validation but before a commit; it exists to
 prove that rejected steps emit neither coupling history nor manifest output.
+
+The same executable accepts a schema-v5 case through
+`--graph-case ROOT --output-dir DIR`. This mode derives all domain, coupling,
+and logical-port identities from the manifest, resolves declared assets inside
+`ROOT`, and confines transitive native assets to their declared case
+directories. MPI ranks collectively agree on graph preflight before solver
+construction. The mode takes execution controls and initial interface
+pressures from schema v5 and applies each port's native-to-outward orientation
+to both measurements and reference-profile scaling. It publishes
+`graph_binding_manifest.json` by same-filesystem rename as the final completion
+marker, recording the canonical cases, database, graph IDs, and execution kind
+used. A graph output directory must not preexist, so a failed rerun cannot
+retain an older success marker. The positional Phase 1 CLI remains supported
+for compatibility.
 
 `--coupling-mode strong-fixed` adds the equally narrow fixed-relaxation
 alternative without changing the explicit default or its output names.  For a
@@ -448,6 +462,13 @@ runner-compatibility check: it additionally requires a heterogeneous,
 nonbranching, acyclic chain ordered from pressure receivers to flow receivers.
 The configuration checker reports this compatibility without conflating a
 future-valid branched manifest with a malformed schema.
+
+For the current sequential runner, `ResolveSequentialOneDThreeDOneD` derives
+the upstream 1D, body-fitted 3D, and downstream 1D roles from the validated
+plan and port capabilities rather than reserved IDs. It requires the upstream
+configured-open-loop inlet policy, the downstream coupled-root policy, and the
+observation ports needed by the established history contract. Native binding
+then confirms every declared locator and boundary label before the first step.
 
 ## Validation manifest
 
