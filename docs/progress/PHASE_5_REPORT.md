@@ -2,6 +2,28 @@
 
 Status: **in progress**.
 
+## PR 5.6: static immersed Nitsche wall
+
+`ImmersedNitscheWall.hpp` is a catalog-bound element adapter: it obtains both
+the volume and immersed-surface rules only through their bound `UsableRule`
+interfaces, then evaluates cubic basis values and physical gradients at each
+immersed (not face) parametric point.  The static wall uses
+`sigma=-p I + mu (grad u + grad u^T)`, outward surface normals, and the
+symmetric Nitsche residual/Jacobian with a prescribed velocity `g` that has no
+degrees of freedom.  Surface quadrature weights are already physical `dA` and
+are used directly.
+
+For cubic degree `p=3`, the penalty is
+`eta = 16 gamma0 mu / (alpha h_n)`, where `h_n=1/||J^{-1}n||` and `alpha` is
+the catalog's validated estimated reference-volume fraction (the matching
+physical fraction for an affine Cartesian cell).  The adapter rejects invalid
+binding, labels, gamma, fraction, length, penalty, and wall velocity, and
+publishes per-label selected/skipped area and point counts plus fraction,
+length, penalty, and gap diagnostics.  It deliberately neither floors
+`alpha` nor caps `eta`: PR 5.7 owns cut-independent conditioning and sliver
+stabilization.  Focused evidence is `make -C solvers/cpu nitsche_wall_test`
+with PETSc configured; it is included in `petsc-test`.
+
 ## PR 5.5: immersed surface quadrature
 
 `ImmersedSurfaceQuadratureCatalog` stores immutable, x-fast physical boundary
