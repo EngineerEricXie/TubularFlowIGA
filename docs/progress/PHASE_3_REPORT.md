@@ -62,12 +62,45 @@ The focused Sol review accepted physical-state ownership, failed-solve
 recovery, prepared-step abort, nonthrowing finalization, checkpoint refresh,
 and legacy wrapper semantics.
 
-The remaining numerical gate is:
+### Composite 3D flow/transport transaction
 
-Flow and species will share one graph transaction: converge flow, hold the
-accepted velocity, perform rollback-safe species trials, validate interface
-and global balances, then prepare all domains before any finalization. The 3D
-port flux is
+`ThreeDBodyFittedFlowTransportDomainAdapter` now holds one 3D flow trial open
+while transport advances with that trial's ordered nodal velocity. Flow and
+transport must expose identical required-node orderings. A joint trial may be
+observed or prepared only after both solves succeed; both runtimes prepare
+before either nonthrowing finalization. Rollback restores both committed
+vectors and clears the input generation so a strong-coupling replay must
+reapply, and may change, hydraulic and concentration data. A transport failure
+after a successful flow solve leaves both runtimes rollback/abort capable.
+
+Coupled scalar boundaries switch per trial: complete logical concentration
+data maps to native Dirichlet values on measured inflow, while measured
+outflow uses the natural `advective_outflow` condition. The transport runtime
+therefore rebuilds its owned Dirichlet row list from each trial configuration
+instead of retaining construction-time rows. Near-zero direction ownership is
+represented by whether the graph executor supplies the complete concentration
+set, consistent with edge hysteresis. Port output maps native scalar fields
+back to logical species and reports the already-verified compiled total
+advective/diffusive flux.
+
+Peer total species flux is deliberately not a scalar boundary condition:
+imposing it together with concentration would overconstrain the PDE. The
+adapter rejects such input explicitly. The species-aware graph executor must
+compare the two measured outward total fluxes and reject a nonconservative
+trial before preparing any domain; that executor remains part of the open PR
+3.2 gate.
+
+The focused PETSc regression covers changed inputs after rollback, exact replay,
+dynamic Dirichlet removal and recreation, logical/native mapping, reversal,
+two-stage commit, and a real transport-solve failure after accepted flow. It
+passes with the local PETSc/MPI toolchain. Focused Sol re-review accepted the
+transaction ownership, dynamic row semantics, executor-owned flux residual,
+and failure recovery.
+
+The remaining numerical gate is a species-aware graph transaction: route donor
+concentrations after each hydraulic trial, compare both measured interface
+fluxes, validate time-integrated global balances, and only then prepare every
+domain before any finalization. The 3D port flux is
 
 ```text
 integral((c*u - D*grad(c)) dot n dA).

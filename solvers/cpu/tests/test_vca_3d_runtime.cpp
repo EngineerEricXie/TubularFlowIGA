@@ -1,6 +1,7 @@
 #include "CouplingPort.hpp"
 #include "IgaDatabase.hpp"
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
+#include "ThreeDBodyFittedFlowTransportDomainAdapter.hpp"
 #include "TransientFlowRuntime.hpp"
 #include "TransientTransportRuntime.hpp"
 
@@ -194,6 +195,27 @@ iga::SimulationConfiguration MakeOutletFlowConfiguration()
 	outlet.reference_pressure = 1.0;
 	outlet.initial_pressure = 3.0;
 	configuration.boundaries.front().conditions.push_back(outlet);
+	return configuration;
+}
+
+iga::SimulationConfiguration AddTransportSystem(
+	iga::SimulationConfiguration configuration)
+{
+	configuration.time.steps = 3;
+	configuration.fields.push_back({"oxygen", iga::FieldKind::Scalar, 0.0});
+	iga::EquationSystemDefinition system;
+	system.name = "oxygen_transport";
+	system.kind = iga::EquationKind::LinearTransport;
+	system.unknowns = {"oxygen"};
+	system.terms = {{iga::TermKind::TimeDerivative, "oxygen", "oxygen", 1.0, ""},
+		{iga::TermKind::Advection, "oxygen", "oxygen", 1.0, "prescribed"}};
+	configuration.equation_systems.push_back(system);
+	configuration.velocity_sources.push_back(
+		{"in_memory_flow", "prescribed", "", "", "error"});
+	iga::FieldBoundaryCondition oxygen;
+	oxygen.field = "oxygen";
+	oxygen.kind = iga::FieldBoundaryKind::AdvectiveOutflow;
+	configuration.boundaries.front().conditions.push_back(oxygen);
 	return configuration;
 }
 
@@ -540,6 +562,158 @@ int main(int argc, char** argv)
 			adapter.FinalizeCommitStep();
 			assert(adapter_native.Phase() == iga::FlowStepPhase::Committed);
 		}
+		{
+			auto combined_configuration = MakeFlowConfiguration(0.0, 0.0);
+			auto& profile = combined_configuration.boundaries.front().conditions.front();
+			profile.value.clear();
+			profile.profile = "initial_velocityfield.txt";
+			profile.scale = 1.0;
+			combined_configuration = AddTransportSystem(std::move(combined_configuration));
+			const std::vector<std::array<double, 3>> reference_velocity(
+				64, {0.0, 0.0, 0.125});
+			iga::TransientFlowRuntime composite_flow(database, PETSC_COMM_WORLD, true, true,
+				{1.0, 1.0, 0.1},
+				iga::ResolveFlowBoundaries(combined_configuration,
+					iga::FirstNavierStokesSystem(combined_configuration), lifecycle_labels,
+					reference_velocity),
+				lifecycle_labels, reference_velocity, {}, {});
+			composite_flow.InitializeState(combined_configuration);
+			auto composite_system = iga::CompileLinearSystem(
+				combined_configuration, "oxygen_transport");
+			composite_system.velocity_source = "prescribed";
+			iga::TransientTransportRuntime composite_transport(database, PETSC_COMM_WORLD,
+				combined_configuration, composite_system, lifecycle_labels);
+			const double reference_flow = composite_flow.ReferenceBoundaryFlow(1);
+			assert(reference_flow < 0.0 && std::isfinite(reference_flow));
+			iga::CouplingPort port;
+			port.id = "inlet";
+			port.subsystem_id = "composite_three_d";
+			port.locator_kind = "boundary_label";
+			port.locator = "1";
+			port.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+				iga::PortQuantity::MeanPressure, iga::PortQuantity::SpeciesConcentration,
+				iga::PortQuantity::SpeciesFlux};
+			port.requires = {iga::PortQuantity::FlowRate,
+				iga::PortQuantity::SpeciesConcentration, iga::PortQuantity::SpeciesFlux};
+			port.species = {"tracer"};
+			iga::ThreeDBodyFittedFlowTransportDomainAdapter adapter("composite_three_d",
+				composite_flow, composite_transport, {port}, combined_configuration,
+				std::filesystem::temp_directory_path(), {{"tracer", "oxygen"}},
+				{{"inlet", reference_flow}});
+			const auto initial_flow = CopyVector(composite_flow.State());
+			const auto initial_transport = composite_transport.GatherState();
+			adapter.BeginStep({0, 0.0, 0.1});
+			iga::PortBoundaryData hydraulic;
+			hydraulic.time_s = 0.1;
+			hydraulic.outward_flow_m3_s = reference_flow;
+			adapter.SetPortInput("inlet", hydraulic);
+			iga::PortBoundaryData species;
+			species.time_s = 0.1;
+			species.concentration = {{"tracer", 2.0}};
+			iga::PortBoundaryData peer_flux;
+			peer_flux.time_s = 0.1;
+			peer_flux.outward_species_flux = {{"tracer", 0.0}};
+			RequireRejected([&adapter, &peer_flux] {
+				adapter.SetPortInput("inlet", peer_flux);
+			}, "executor-owned peer species flux as a 3D boundary input");
+			adapter.SetPortInput("inlet", species);
+			adapter.SolveTrial();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialSolved);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialSolved);
+			const auto first_flow_trial = CopyVector(composite_flow.State());
+			const auto first_transport_trial = composite_transport.GatherState();
+			for (std::size_t node = 1; node < first_transport_trial.size(); ++node)
+				RequireNear(2.0, first_transport_trial[node], 1e-11,
+					"dynamic coupled transport Dirichlet value");
+			const auto state = adapter.GetPortState("inlet");
+			assert(state.concentration.size() == 1
+				&& state.concentration.count("tracer") == 1);
+			assert(state.outward_species_flux.size() == 1
+				&& state.outward_species_flux.count("tracer") == 1);
+			adapter.RollbackTrial();
+			assert(CopyVector(composite_flow.State()) == initial_flow);
+			assert(composite_transport.GatherState() == initial_transport);
+			hydraulic.outward_flow_m3_s = 0.5*reference_flow;
+			species.concentration.at("tracer") = 3.0;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SetPortInput("inlet", species);
+			adapter.SolveTrial();
+			const auto changed_transport_trial = composite_transport.GatherState();
+			assert(changed_transport_trial != first_transport_trial);
+			for (std::size_t node = 1; node < changed_transport_trial.size(); ++node)
+				RequireNear(3.0, changed_transport_trial[node], 1e-11,
+					"updated strong-trial transport Dirichlet value");
+			adapter.RollbackTrial();
+			hydraulic.outward_flow_m3_s = reference_flow;
+			species.concentration.at("tracer") = 2.0;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SetPortInput("inlet", species);
+			adapter.SolveTrial();
+			assert(CopyVector(composite_flow.State()) == first_flow_trial);
+			assert(composite_transport.GatherState() == first_transport_trial);
+			adapter.PrepareCommitStep();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::CommitPrepared);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::CommitPrepared);
+			adapter.FinalizeCommitStep();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
+
+			adapter.BeginStep({1, 0.1, 0.1});
+			hydraulic.time_s = 0.2;
+			adapter.SetPortInput("inlet", hydraulic);
+			RequireRejected([&adapter] { adapter.SolveTrial(); },
+				"inward 3D species solve without concentration");
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialSolved);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
+			adapter.AbortStep();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
+			assert(CopyVector(composite_flow.State()) == first_flow_trial);
+			assert(composite_transport.GatherState() == first_transport_trial);
+
+			adapter.BeginStep({1, 0.1, 0.1});
+			hydraulic.outward_flow_m3_s = -reference_flow;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SolveTrial();
+			assert(*adapter.GetPortState("inlet").outward_flow_m3_s > 0.0);
+			adapter.RollbackTrial();
+			adapter.AbortStep();
+			assert(CopyVector(composite_flow.State()) == first_flow_trial);
+			assert(composite_transport.GatherState() == first_transport_trial);
+
+			auto invalid_transport_configuration = combined_configuration;
+			iga::FieldBoundaryCondition invalid_scalar;
+			invalid_scalar.field = "oxygen";
+			invalid_scalar.kind = iga::FieldBoundaryKind::Resistance;
+			invalid_transport_configuration.boundaries.back().conditions.push_back(
+				invalid_scalar);
+			iga::ThreeDBodyFittedFlowTransportDomainAdapter failing_adapter(
+				"composite_three_d", composite_flow, composite_transport, {port},
+				invalid_transport_configuration, std::filesystem::temp_directory_path(),
+				{{"tracer", "oxygen"}}, {{"inlet", reference_flow}});
+			failing_adapter.BeginStep({1, 0.1, 0.1});
+			hydraulic.outward_flow_m3_s = reference_flow;
+			species.time_s = 0.2;
+			failing_adapter.SetPortInput("inlet", hydraulic);
+			failing_adapter.SetPortInput("inlet", species);
+			RequireRejected([&failing_adapter] { failing_adapter.SolveTrial(); },
+				"transport solve failure after a successful 3D flow trial");
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialSolved);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialSolved);
+			RequireRejected([&failing_adapter] {
+				(void)failing_adapter.GetPortState("inlet");
+			}, "joint port state after a failed transport solve");
+			RequireRejected([&failing_adapter] { failing_adapter.PrepareCommitStep(); },
+				"joint prepare after a failed transport solve");
+			failing_adapter.RollbackTrial();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialReady);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
+			assert(CopyVector(composite_flow.State()) == first_flow_trial);
+			assert(composite_transport.GatherState() == first_transport_trial);
+			failing_adapter.AbortStep();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
+		}
 
 		auto outlet_model = iga::OutletModelState{};
 		outlet_model.label = 1;
@@ -621,6 +795,28 @@ int main(int argc, char** argv)
 			transport_velocity);
 		assert(advance_transport.GatherState() == first_transport_trial);
 		runtime.BeginStep();
+		runtime.AbortStep();
+		assert(runtime.GatherState() == first_transport_trial);
+		assert(runtime.Steps() == 1);
+		auto outflow_configuration = step_configuration;
+		auto& outflow_condition = outflow_configuration.boundaries.front().conditions.front();
+		outflow_condition.kind = iga::FieldBoundaryKind::AdvectiveOutflow;
+		outflow_condition.value.clear();
+		runtime.BeginStep();
+		runtime.SolveTrial(outflow_configuration, runtime.RequiredNodes(), transport_velocity);
+		assert(runtime.GatherState() == first_transport_trial);
+		runtime.RollbackTrial();
+		runtime.AbortStep();
+		assert(runtime.GatherState() == first_transport_trial);
+		assert(runtime.Steps() == 1);
+		auto renewed_dirichlet = step_configuration;
+		renewed_dirichlet.boundaries.front().conditions.front().value = {4.0};
+		runtime.BeginStep();
+		runtime.SolveTrial(renewed_dirichlet, runtime.RequiredNodes(), transport_velocity);
+		for (const auto value : runtime.GatherState())
+			RequireNear(4.0, value, 1e-11,
+				"restored dynamic transport Dirichlet row");
+		runtime.RollbackTrial();
 		runtime.AbortStep();
 		assert(runtime.GatherState() == first_transport_trial);
 		assert(runtime.Steps() == 1);

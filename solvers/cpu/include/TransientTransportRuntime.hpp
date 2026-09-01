@@ -40,10 +40,6 @@ public:
 		if (labels_.size() != database.header().nodes)
 			throw std::runtime_error("transport boundary labels do not match database nodes");
 		const auto boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
-		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
-			for (std::size_t field = 0; field < system_.fields.size(); ++field)
-				if (boundaries.constrained[static_cast<std::size_t>(node)*system_.fields.size()+field])
-					boundary_rows_.push_back(static_cast<PetscInt>(node*system_.fields.size()+field));
 		left_ = assembler_.CreateMatrix(coupling_patterns_.left);
 		previous_ = assembler_.CreateMatrix(coupling_patterns_.previous);
 		forcing_ = assembler_.CreateVector();
@@ -124,6 +120,11 @@ public:
 		trial_solve_succeeded_ = false;
 		try {
 		const auto boundaries = ResolveScalarBoundaries(step_configuration, system_, labels_);
+		std::vector<PetscInt> boundary_rows;
+		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
+			for (std::size_t field = 0; field < system_.fields.size(); ++field)
+				if (boundaries.constrained[static_cast<std::size_t>(node)*system_.fields.size()+field])
+					boundary_rows.push_back(static_cast<PetscInt>(node*system_.fields.size()+field));
 		MatZeroEntries(left_);
 		MatZeroEntries(previous_);
 		VecSet(forcing_, 0.0);
@@ -139,17 +140,17 @@ public:
 		OwnedRowAssembler::Assemble(left_);
 		OwnedRowAssembler::Assemble(previous_);
 		OwnedRowAssembler::Assemble(forcing_);
-		MatZeroRows(left_, static_cast<PetscInt>(boundary_rows_.size()),
-			boundary_rows_.data(), 1.0, nullptr, nullptr);
-		MatZeroRows(previous_, static_cast<PetscInt>(boundary_rows_.size()),
-			boundary_rows_.data(), 0.0, nullptr, nullptr);
+		MatZeroRows(left_, static_cast<PetscInt>(boundary_rows.size()),
+			boundary_rows.data(), 1.0, nullptr, nullptr);
+		MatZeroRows(previous_, static_cast<PetscInt>(boundary_rows.size()),
+			boundary_rows.data(), 0.0, nullptr, nullptr);
 		MatMult(previous_, current_, rhs_);
 		VecAXPY(rhs_, 1.0, forcing_);
 		std::vector<PetscScalar> boundary_values;
-		boundary_values.reserve(boundary_rows_.size());
-		for (const auto row : boundary_rows_)
+		boundary_values.reserve(boundary_rows.size());
+		for (const auto row : boundary_rows)
 			boundary_values.push_back(boundaries.value[static_cast<std::size_t>(row)]);
-		VecSetValues(rhs_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
+		VecSetValues(rhs_, static_cast<PetscInt>(boundary_rows.size()), boundary_rows.data(),
 			boundary_values.data(), INSERT_VALUES);
 		OwnedRowAssembler::Assemble(rhs_);
 		if (steps_ > 0) VecCopy(current_, next_);
@@ -398,7 +399,6 @@ private:
 	OwnedRowAssembler assembler_;
 	GenericTransportMatrices element_matrices_;
 	std::vector<int> labels_;
-	std::vector<PetscInt> boundary_rows_;
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;
 	Mat left_ = nullptr, previous_ = nullptr;

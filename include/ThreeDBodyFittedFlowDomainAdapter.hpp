@@ -49,9 +49,13 @@ public:
 	{
 		ValidateThreeDBodyFittedFlowDomainMetadata(domain_id_, ports_);
 		controls_.Validate();
-		if (base_configuration_.equation_systems.size() != 1
-			|| base_configuration_.equation_systems.front().kind != EquationKind::NavierStokes)
-			throw std::runtime_error("3D domain adapter requires one Navier-Stokes equation system");
+		const auto navier_stokes_systems = static_cast<std::size_t>(std::count_if(
+			base_configuration_.equation_systems.begin(), base_configuration_.equation_systems.end(),
+			[](const EquationSystemDefinition& system) {
+				return system.kind == EquationKind::NavierStokes;
+			}));
+		if (navier_stokes_systems != 1)
+			throw std::runtime_error("3D domain adapter requires exactly one Navier-Stokes equation system");
 		for (const auto& port : ports_) {
 			if (port.requires.count(PortQuantity::FlowRate)) {
 				const auto reference = reference_outward_flow_m3_s_.find(port.id);
@@ -123,7 +127,7 @@ public:
 			const auto& port = Port(input.first);
 			if (input.second.outward_flow_m3_s)
 				ApplyThreeDReferenceProfileInput(trial_configuration,
-					trial_configuration.equation_systems.front(), port, input.second,
+					FlowSystem(trial_configuration), port, input.second,
 					reference_outward_flow_m3_s_.at(port.id));
 		}
 		runtime_.SetTrialBoundaryConfiguration(trial_configuration);
@@ -152,6 +156,23 @@ public:
 	}
 
 private:
+	static const EquationSystemDefinition& FlowSystem(
+		const SimulationConfiguration& configuration)
+	{
+		const EquationSystemDefinition* result = nullptr;
+		for (const auto& system : configuration.equation_systems)
+			if (system.kind == EquationKind::NavierStokes) {
+				if (result)
+					throw std::runtime_error(
+						"3D domain adapter requires exactly one Navier-Stokes equation system");
+				result = &system;
+			}
+		if (!result)
+			throw std::runtime_error(
+				"3D domain adapter requires exactly one Navier-Stokes equation system");
+		return *result;
+	}
+
 	const CouplingPort& Port(const std::string& port_id) const
 	{
 		const auto found = std::find_if(ports_.begin(), ports_.end(),
