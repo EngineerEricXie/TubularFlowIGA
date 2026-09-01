@@ -2,6 +2,7 @@
 #define NAVIER_STOKES_ELEMENT_HPP
 
 #include "IgaDatabase.hpp"
+#include "Quadrature.hpp"
 #include "TransportElement.hpp"
 
 #include <array>
@@ -50,7 +51,7 @@ inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_ja
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
-	const NavierStokesParameters& parameters)
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature)
 {
 	if (!(parameters.density > 0.0) || !(parameters.dynamic_viscosity > 0.0) || parameters.dt < 0.0)
 		throw std::runtime_error("invalid Navier-Stokes density, dynamic viscosity, or time step");
@@ -61,16 +62,14 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 	const auto density = parameters.density;
 	const auto viscosity = parameters.dynamic_viscosity;
 	const auto kinematic_viscosity = viscosity/density;
-	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
-	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461, 0.6521451548625461, 0.3478548451374539}};
+	ValidateVolumeQuadratureRule(element, quadrature);
 	const auto nen = element.connectivity.size();
 	const auto ndof = 4 * nen;
 	NavierStokesSystem system{std::vector<PetscScalar>(ndof*ndof, 0.0), std::vector<PetscScalar>(ndof, 0.0)};
-	for (std::size_t qz = 0; qz < 4; ++qz)
-		for (std::size_t qy = 0; qy < 4; ++qy)
-			for (std::size_t qx = 0; qx < 4; ++qx) {
-				auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz], true);
-				const auto measure = weights[qx] * weights[qy] * weights[qz] * basis.determinant;
+	for (const auto& point : quadrature.Points()) {
+				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+					point.parametric[2], true);
+				const auto measure = point.weight*basis.raw_determinant;
 				std::array<double, 4> state{};
 				std::array<double, 3> previous_velocity{};
 				double gradient[4][3]{};
@@ -149,6 +148,16 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 				}
 			}
 	return system;
+}
+
+inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters)
+{
+	FullCell4x4x4VolumeQuadratureProvider quadrature(element);
+	return BuildNavierStokesElement(element, nodal_state, previous_nodal_state,
+		parameters, quadrature.Rule());
 }
 
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,

@@ -2,6 +2,7 @@
 #define IGA_BOUNDARY_FLOW_HPP
 
 #include "IgaDatabase.hpp"
+#include "Quadrature.hpp"
 
 #include <array>
 #include <cmath>
@@ -16,6 +17,7 @@ struct BoundaryBasisValues {
 	std::vector<std::array<double, 3>> gradient;
 	std::array<double, 3> physical_coordinate{};
 	std::array<std::array<double, 3>, 3> inverse_jacobian{};
+	double raw_determinant = 0.0;
 	double determinant = 0.0;
 };
 
@@ -73,7 +75,8 @@ inline BoundaryBasisValues EvaluateBoundaryBasis(
 	result.inverse_jacobian = {{{inverse[0][0], inverse[0][1], inverse[0][2]},
 		{inverse[1][0], inverse[1][1], inverse[1][2]},
 		{inverse[2][0], inverse[2][1], inverse[2][2]}}};
-	result.determinant = 0.125*determinant;
+	result.raw_determinant = determinant;
+	result.determinant = 0.125*result.raw_determinant;
 	for (std::size_t p = 0; p < 64; ++p)
 		for (int component = 0; component < 3; ++component)
 			result.physical_coordinate[component] +=
@@ -90,29 +93,73 @@ inline BoundaryBasisValues EvaluateBoundaryBasis(
 }
 
 inline double IntegrateVolumeDivergence(const Element& element,
-	const std::vector<std::array<double, 4>>& nodal_state)
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const VolumeQuadratureRule& quadrature)
 {
 	if (nodal_state.size() != element.connectivity.size())
 		throw std::runtime_error("volume-divergence state does not match element connectivity");
-	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
-		0.6699905217924281, 0.9305681557970262}};
-	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
-		0.6521451548625461, 0.3478548451374539}};
+	ValidateVolumeQuadratureRule(element, quadrature);
 	double integral = 0.0;
-	for (std::size_t qz = 0; qz < 4; ++qz)
-		for (std::size_t qy = 0; qy < 4; ++qy)
-			for (std::size_t qx = 0; qx < 4; ++qx) {
-				const auto basis = EvaluateBoundaryBasis(
-					element, points[qx], points[qy], points[qz]);
-				double divergence = 0.0;
-				for (std::size_t a = 0; a < nodal_state.size(); ++a)
-					for (int component = 0; component < 3; ++component)
-						divergence += nodal_state[a][component]
-							*basis.gradient[a][component];
-				integral += weights[qx]*weights[qy]*weights[qz]
-					*basis.determinant*divergence;
-			}
+	for (const auto& point : quadrature.Points()) {
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		double divergence = 0.0;
+		for (std::size_t a = 0; a < nodal_state.size(); ++a)
+			for (int component = 0; component < 3; ++component)
+				divergence += nodal_state[a][component]*basis.gradient[a][component];
+		integral += point.weight*basis.raw_determinant*divergence;
+	}
 	return integral;
+}
+
+inline double IntegrateVolumeDivergence(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state)
+{
+	FullCell4x4x4VolumeQuadratureProvider quadrature(element);
+	return IntegrateVolumeDivergence(element, nodal_state, quadrature.Rule());
+}
+
+inline double IntegrateBoundaryFlow(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const SurfaceQuadratureRule& quadrature, int boundary_id)
+{
+	if (nodal_state.size() != element.connectivity.size())
+		throw std::runtime_error("boundary-flow state does not match element connectivity");
+	ValidateSurfaceQuadratureRule(element, quadrature);
+	double flow = 0.0;
+	for (const auto& point : quadrature.Points()) {
+		if (point.boundary_id != boundary_id) continue;
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		std::array<double, 3> velocity{};
+		for (std::size_t a = 0; a < nodal_state.size(); ++a)
+			for (int component = 0; component < 3; ++component)
+				velocity[component] += basis.value[a]*nodal_state[a][component];
+		for (int component = 0; component < 3; ++component)
+			flow += point.weight*velocity[component]*point.normal[component];
+	}
+	return flow;
+}
+
+inline std::array<double, 2> IntegrateBoundaryScalarAndArea(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const SurfaceQuadratureRule& quadrature, int boundary_id)
+{
+	if (nodal_state.size() != element.connectivity.size())
+		throw std::runtime_error("boundary scalar state does not match element connectivity");
+	ValidateSurfaceQuadratureRule(element, quadrature);
+	std::array<double, 2> result{};
+	for (const auto& point : quadrature.Points()) {
+		if (point.boundary_id != boundary_id) continue;
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		double scalar = 0.0;
+		for (std::size_t a = 0; a < nodal_state.size(); ++a)
+			scalar += basis.value[a]*nodal_state[a][3];
+		result[0] += point.weight*scalar;
+		result[1] += point.weight;
+	}
+	return result;
 }
 
 inline double IntegrateBoundaryFlow(const Element& element, std::size_t face,
@@ -301,6 +348,25 @@ inline BoundarySpeciesMeasurement IntegrateBoundaryTransportFlux(
 				*std::sqrt(inverse_normal)*concentration[equation];
 			result.total_outward_flux += outward_sign[face]*cofactor_measure*normal_flux;
 		}
+	return result;
+}
+
+inline std::vector<double> IntegrateBoundaryPressureTraction(const Element& element,
+	const SurfaceQuadratureRule& quadrature, int boundary_id, double pressure)
+{
+	if (!std::isfinite(pressure))
+		throw std::runtime_error("pressure traction must be finite");
+	ValidateSurfaceQuadratureRule(element, quadrature);
+	std::vector<double> result(4*element.connectivity.size(), 0.0);
+	for (const auto& point : quadrature.Points()) {
+		if (point.boundary_id != boundary_id) continue;
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+			for (int component = 0; component < 3; ++component)
+				result[4*a+component] -= pressure*point.weight*point.normal[component]
+					*basis.value[a];
+	}
 	return result;
 }
 

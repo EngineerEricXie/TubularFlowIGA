@@ -2,11 +2,13 @@
 #include "OutletFlow.hpp"
 #include "PressureTractionFlow.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <utility>
 #include <vector>
 
 int main()
@@ -97,6 +99,93 @@ int main()
 	assert(std::abs(left_x-2.0) < 2e-13);
 	element.boundary_labels[2] = 2;
 	element.boundary_labels[4] = 3;
+	iga::BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
+	iga::FullCell4x4x4VolumeQuadratureProvider volume_quadrature(element);
+	for (auto& node : state) node = {2.0, 0.0, 0.0, 5.0};
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, state, surface_quadrature.Rule(), 2)
+		-iga::IntegrateBoundaryFlow(element, 2, state)) < 2e-13);
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, state, surface_quadrature.Rule(), 3)
+		-iga::IntegrateBoundaryFlow(element, 4, state)) < 2e-13);
+	const auto explicit_pressure_area = iga::IntegrateBoundaryScalarAndArea(
+		element, state, surface_quadrature.Rule(), 2);
+	const auto legacy_pressure_area = iga::IntegrateBoundaryScalarAndArea(element, 2, state);
+	assert(std::abs(explicit_pressure_area[0]-legacy_pressure_area[0]) < 2e-13
+		&& std::abs(explicit_pressure_area[1]-legacy_pressure_area[1]) < 2e-13);
+	const auto explicit_traction = iga::IntegrateBoundaryPressureTraction(
+		element, surface_quadrature.Rule(), 2, 2.0);
+	for (std::size_t row = 0; row < right_traction.size(); ++row)
+		assert(std::abs(explicit_traction[row]-right_traction[row]) < 2e-13);
+	std::vector<std::array<double, 4>> divergence_state(64);
+	for (std::size_t node = 0; node < divergence_state.size(); ++node)
+		divergence_state[node] = {element.bezier_points[node][0], 0.0, 0.0, 0.0};
+	assert(std::abs(iga::IntegrateVolumeDivergence(element, divergence_state,
+		volume_quadrature.Rule())-iga::IntegrateVolumeDivergence(element, divergence_state))
+		< 2e-13);
+	auto permuted_points = surface_quadrature.Rule().Points();
+	std::reverse(permuted_points.begin(), permuted_points.end());
+	const iga::SurfaceQuadratureRule permuted(std::move(permuted_points));
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, state, permuted, 2)
+		-iga::IntegrateBoundaryFlow(element, state, surface_quadrature.Rule(), 2)) < 2e-13);
+	const std::array<double, 3> interior_coordinate{{0.27, 0.44, 0.63}};
+	const auto synthetic_basis = iga::EvaluateBoundaryBasis(element, interior_coordinate[0],
+		interior_coordinate[1], interior_coordinate[2]);
+	iga::SurfaceQuadraturePoint interior_point;
+	interior_point.parametric = interior_coordinate;
+	interior_point.physical = synthetic_basis.physical_coordinate;
+	interior_point.normal = {{0.6, 0.8, 0.0}};
+	interior_point.weight = 0.37;
+	interior_point.boundary_id = 71;
+	const iga::SurfaceQuadratureRule interior_surface({interior_point});
+	assert(std::abs(iga::IntegrateBoundaryFlow(element, state, interior_surface, 71)
+		-2.0*0.6*0.37) < 2e-13);
+	const auto interior_scalar_area = iga::IntegrateBoundaryScalarAndArea(element, state,
+		interior_surface, 71);
+	assert(std::abs(interior_scalar_area[0]-5.0*0.37) < 2e-13);
+	assert(std::abs(interior_scalar_area[1]-0.37) < 2e-13);
+	const auto interior_traction = iga::IntegrateBoundaryPressureTraction(element,
+		interior_surface, 71, 7.0);
+	for (std::size_t a = 0; a < 64; ++a) {
+		assert(std::abs(interior_traction[4*a]
+			+7.0*0.37*0.6*synthetic_basis.value[a]) < 2e-13);
+		assert(std::abs(interior_traction[4*a+1]
+			+7.0*0.37*0.8*synthetic_basis.value[a]) < 2e-13);
+		assert(std::abs(interior_traction[4*a+2]) < 2e-13);
+	}
+	auto repeated = element;
+	repeated.boundary_labels[4] = 2;
+	iga::BodyFittedSurface4x4QuadratureProvider repeated_quadrature(repeated);
+	assert(std::abs(iga::IntegrateBoundaryFlow(repeated, state, repeated_quadrature.Rule(), 2)
+		-(iga::IntegrateBoundaryFlow(repeated, 2, state)
+			+iga::IntegrateBoundaryFlow(repeated, 4, state))) < 2e-13);
+	auto curved = element;
+	for (auto& point : curved.bezier_points) {
+		point[0] += 0.08*point[0]*point[1] + 0.03*point[2];
+		point[1] += 0.05*point[1]*point[2];
+		point[2] += 0.04*point[0]*point[2];
+	}
+	iga::BodyFittedSurface4x4QuadratureProvider curved_surface_quadrature(curved);
+	iga::FullCell4x4x4VolumeQuadratureProvider curved_volume_quadrature(curved);
+	std::vector<std::array<double, 4>> curved_state(64, {2.0, 0.0, 0.0, 5.0});
+	assert(std::abs(iga::IntegrateBoundaryFlow(curved, curved_state,
+		curved_surface_quadrature.Rule(), 2)-iga::IntegrateBoundaryFlow(curved, 2,
+		curved_state)) < 2e-12);
+	const auto curved_scalar_area = iga::IntegrateBoundaryScalarAndArea(curved,
+		curved_state, curved_surface_quadrature.Rule(), 2);
+	const auto curved_legacy_scalar_area = iga::IntegrateBoundaryScalarAndArea(
+		curved, 2, curved_state);
+	assert(std::abs(curved_scalar_area[0]-curved_legacy_scalar_area[0]) < 2e-12
+		&& std::abs(curved_scalar_area[1]-curved_legacy_scalar_area[1]) < 2e-12);
+	const auto curved_traction = iga::IntegrateBoundaryPressureTraction(curved,
+		curved_surface_quadrature.Rule(), 2, 2.0);
+	const auto curved_legacy_traction = iga::IntegrateBoundaryPressureTraction(curved, 2, 2.0);
+	for (std::size_t row = 0; row < curved_traction.size(); ++row)
+		assert(std::abs(curved_traction[row]-curved_legacy_traction[row]) < 2e-12);
+	std::vector<std::array<double, 4>> curved_divergence_state(64);
+	for (std::size_t node = 0; node < curved_divergence_state.size(); ++node)
+		curved_divergence_state[node] = {curved.bezier_points[node][0], 0.0, 0.0, 0.0};
+	assert(std::abs(iga::IntegrateVolumeDivergence(curved, curved_divergence_state,
+		curved_volume_quadrature.Rule())-iga::IntegrateVolumeDivergence(curved,
+		curved_divergence_state)) < 2e-12);
 	const auto global_traction = iga::IntegratePressureTractionForces(
 		{{2, 2.0}, {3, 2.0}}, {element}, 64);
 	double global_x = 0.0;

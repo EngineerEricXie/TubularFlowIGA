@@ -425,9 +425,8 @@ public:
 				for (int field = 0; field < 3; ++field)
 					nodal[a][field] = boundary_velocity_[node][static_cast<std::size_t>(field)];
 			}
-			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face)
-				if (element.boundary_labels[face] == label)
-					local += IntegrateBoundaryFlow(element, face, nodal);
+			BodyFittedSurface4x4QuadratureProvider quadrature(element);
+			local += IntegrateBoundaryFlow(element, nodal, quadrature.Rule(), label);
 		}
 		double global = 0.0;
 		MPI_Allreduce(&local, &global, 1, MPI_DOUBLE, MPI_SUM, communicator_);
@@ -489,14 +488,19 @@ public:
 				for (int field = 0; field < 4; ++field)
 					nodal[a][field] = PetscRealPart(values[4*position+field]);
 			}
+			BodyFittedSurface4x4QuadratureProvider quadrature(element);
+			for (const auto& entry : index) {
+				const auto port = entry.second;
+				local_flow[port] += IntegrateBoundaryFlow(element, nodal, quadrature.Rule(), entry.first);
+				const auto pressure = IntegrateBoundaryScalarAndArea(element, nodal,
+					quadrature.Rule(), entry.first);
+				local_pressure[port] += pressure[0];
+				local_area[port] += pressure[1];
+			}
 			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
 				const auto found = index.find(element.boundary_labels[face]);
 				if (found == index.end()) continue;
 				const auto port = found->second;
-				local_flow[port] += IntegrateBoundaryFlow(element, face, nodal);
-				const auto pressure = IntegrateBoundaryScalarAndArea(element, face, nodal);
-				local_pressure[port] += pressure[0];
-				local_area[port] += pressure[1];
 				std::vector<std::vector<double>> species(element.connectivity.size(),
 					std::vector<double>(species_fields.size()));
 				for (std::size_t a = 0; a < element.connectivity.size(); ++a)
@@ -765,11 +769,10 @@ private:
 				for (int field = 0; field < 4; ++field)
 					nodal[a][field] = PetscRealPart(ghost_values[4*position+field]);
 			}
-			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
-				const auto found = boundary_label_index_.find(element.boundary_labels[face]);
-				if (found != boundary_label_index_.end())
-					local_flow[found->second] += IntegrateBoundaryFlow(element, face, nodal);
-			}
+			BodyFittedSurface4x4QuadratureProvider quadrature(element);
+			for (const auto& entry : boundary_label_index_)
+				local_flow[entry.second] += IntegrateBoundaryFlow(element, nodal,
+					quadrature.Rule(), entry.first);
 		}
 		if (!local_flow.empty())
 			MPI_Allreduce(local_flow.data(), global_flow.data(), static_cast<int>(local_flow.size()),
@@ -883,11 +886,13 @@ private:
 							previous_nodal[a][field] = PetscRealPart(previous_values[4*position+field]);
 					}
 				}
-				auto local = BuildNavierStokesElement(element, nodal, previous_nodal, parameters_);
-				for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
-					const auto traction = pressure_tractions_.find(element.boundary_labels[face]);
-					if (traction == pressure_tractions_.end()) continue;
-					const auto surface = IntegrateBoundaryPressureTraction(element, face, traction->second);
+				FullCell4x4x4VolumeQuadratureProvider volume_quadrature(element);
+				auto local = BuildNavierStokesElement(element, nodal, previous_nodal,
+					parameters_, volume_quadrature.Rule());
+				BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
+				for (const auto& traction : pressure_tractions_) {
+					const auto surface = IntegrateBoundaryPressureTraction(element,
+						surface_quadrature.Rule(), traction.first, traction.second);
 					for (std::size_t row = 0; row < surface.size(); ++row)
 						local.negative_residual[row] += surface[row];
 				}
@@ -994,11 +999,10 @@ private:
 				for (int field = 0; field < 4; ++field)
 					nodal[a][field] = PetscRealPart(values[4*position+field]);
 			}
-			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
-				const auto found = indices.find(element.boundary_labels[face]);
-				if (found != indices.end())
-					local[found->second] += IntegrateBoundaryFlow(element, face, nodal);
-			}
+			BodyFittedSurface4x4QuadratureProvider quadrature(element);
+			for (const auto& entry : indices)
+				local[entry.second] += IntegrateBoundaryFlow(element, nodal,
+					quadrature.Rule(), entry.first);
 		}
 		VecRestoreArrayRead(ghost_state_, &values);
 		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()),
