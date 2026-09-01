@@ -170,11 +170,11 @@ std::string Quote(const fs::path& path)
 
 int Run(const fs::path& database, const fs::path& three_d, const fs::path& upstream,
 	const fs::path& downstream, const fs::path& output, const std::string& launcher,
-	const std::string& prefix = {})
+	const std::string& prefix = {}, const std::string& arguments = {})
 {
 	const std::string command = prefix+launcher+"./iga_1d_3d_explicit "+Quote(database)+" "+Quote(three_d)
 		+" "+Quote(upstream)+" "+Quote(downstream)+" --upstream-terminal-node 2 --output-dir "
-		+Quote(output)+" -ksp_type preonly -pc_type lu";
+		+Quote(output)+" -ksp_type preonly -pc_type lu"+arguments;
 	return std::system(command.c_str());
 }
 
@@ -229,7 +229,7 @@ void RequireManifest(const fs::path& path)
 		throw std::runtime_error("explicit coupling manifest is incomplete");
 }
 
-void ValidateRows(const std::vector<CsvRow>& rows)
+void ValidateRows(const std::vector<CsvRow>& rows, bool explicit_mode = true)
 {
 	if (rows.size() != static_cast<std::size_t>(kSteps)) throw std::runtime_error("unexpected smoke history row count");
 	double maximum_cap_relative_imbalance = 0.0;
@@ -284,9 +284,11 @@ void ValidateRows(const std::vector<CsvRow>& rows)
 		const double trial_linear_iterations = Value(row, "three_d_trial_linear_iterations");
 		maximum_trial_linear_iterations = std::max(maximum_trial_linear_iterations,
 			trial_linear_iterations);
-		if (Value(row, "iteration_count") != 1.0 || Value(row, "relaxation_factor") != 1.0
+		if ((explicit_mode && (Value(row, "iteration_count") != 1.0 || Value(row, "relaxation_factor") != 1.0))
+			|| (!explicit_mode && (!(Value(row, "iteration_count") >= 1.0)
+				|| !(Value(row, "relaxation_factor") > 0.0) || !(Value(row, "relaxation_factor") <= 1.0)))
 			|| trial_linear_iterations < 0.0)
-			throw std::runtime_error("explicit coupling staggered diagnostics are invalid");
+			throw std::runtime_error("coupling iteration diagnostics are invalid");
 		if (!(Value(row, "external_pressure_drop_pa") > 0.0)
 			|| !(Value(row, "upstream_root_pressure_pa") > Value(row, "downstream_terminal_pressure_pa")))
 			throw std::runtime_error("explicit coupling pressure does not decrease along the full path");
@@ -324,6 +326,144 @@ void RequireSameHistory(const std::vector<CsvRow>& first, const std::vector<CsvR
 	}
 }
 
+double ManifestNumber(const fs::path& path, const std::string& key)
+{
+	std::ifstream input(path);
+	const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	const auto position = text.find("\""+key+"\"");
+	if (!input || position == std::string::npos) throw std::runtime_error("missing strong manifest number: "+key);
+	const auto colon = text.find(':', position);
+	const auto end = text.find_first_of(",}\n", colon+1);
+	if (colon == std::string::npos || end == std::string::npos)
+		throw std::runtime_error("malformed strong manifest number: "+key);
+	return std::stod(text.substr(colon+1, end-colon-1));
+}
+
+void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<CsvRow>& iterations,
+	const fs::path& manifest)
+{
+	if (history.size() != static_cast<std::size_t>(kSteps) || iterations.size() <= history.size())
+		throw std::runtime_error("strong coupling smoke did not perform more than one sweep per step");
+	const double pressure_relative_tolerance = ManifestNumber(manifest, "pressure_relative_tolerance");
+	const double flow_relative_tolerance = ManifestNumber(manifest, "flow_relative_tolerance");
+	const double pressure_reference_pa = ManifestNumber(manifest, "pressure_reference_pa");
+	if (!Close(pressure_relative_tolerance, 1.0e-6) || !Close(flow_relative_tolerance, 1.0e-10)
+		|| !Close(pressure_reference_pa, kPressureReferencePa))
+		throw std::runtime_error("strong manifest controls do not match the smoke configuration");
+	ValidateRows(history, false);
+	std::map<int, std::vector<CsvRow>> by_step;
+	for (const auto& row : iterations) by_step[static_cast<int>(Value(row, "physical_step"))].push_back(row);
+	if (by_step.size() != history.size()) throw std::runtime_error("strong iteration history has wrong physical-step groups");
+	long long sum_all_ksp = 0;
+	long long sum_accepted_ksp = 0;
+	for (const auto& entry : by_step) {
+		const auto& rows = entry.second;
+		if (rows.empty() || rows.size() > 50) throw std::runtime_error("strong iteration count is invalid");
+		long long attempt_sum = 0;
+		for (std::size_t index = 0; index < rows.size(); ++index) {
+			const double upstream_q = Value(rows[index], "upstream_terminal_outward_flow_m3_s");
+			const double inlet_q = Value(rows[index], "three_d_inlet_outward_flow_m3_s");
+			const double outlet_q = Value(rows[index], "three_d_outlet_outward_flow_m3_s");
+			const double downstream_q = Value(rows[index], "downstream_root_outward_flow_m3_s");
+			const double upstream_flow_residual = upstream_q+inlet_q;
+			const double downstream_flow_residual = outlet_q+downstream_q;
+			const double normalized_upstream_flow_residual = upstream_flow_residual/std::max({std::abs(upstream_q), std::abs(inlet_q), 1.0e-30});
+			const double normalized_downstream_flow_residual = downstream_flow_residual/std::max({std::abs(outlet_q), std::abs(downstream_q), 1.0e-30});
+			const double upstream_pressure_raw = Value(rows[index], "measured_three_d_inlet_pressure_pa")
+				-Value(rows[index], "applied_upstream_terminal_pressure_pa");
+			const double downstream_pressure_raw = Value(rows[index], "measured_downstream_root_pressure_pa")
+				-Value(rows[index], "applied_three_d_outlet_traction_pressure_pa");
+			const double normalized_upstream_pressure = std::abs(upstream_pressure_raw)/std::max({pressure_reference_pa,
+				std::abs(Value(rows[index], "measured_three_d_inlet_pressure_pa")),
+				std::abs(Value(rows[index], "applied_upstream_terminal_pressure_pa"))});
+			const double normalized_downstream_pressure = std::abs(downstream_pressure_raw)/std::max({pressure_reference_pa,
+				std::abs(Value(rows[index], "measured_downstream_root_pressure_pa")),
+				std::abs(Value(rows[index], "applied_three_d_outlet_traction_pressure_pa"))});
+			if (Value(rows[index], "iteration") != static_cast<double>(index+1)
+				|| Value(rows[index], "normalized_upstream_pressure_residual") < 0.0
+				|| Value(rows[index], "normalized_downstream_pressure_residual") < 0.0
+				|| std::abs(Value(rows[index], "normalized_upstream_three_d_flow_residual")) > 1.0e-10
+				|| std::abs(Value(rows[index], "normalized_three_d_downstream_flow_residual")) > 1.0e-10
+				|| !Close(Value(rows[index], "signed_upstream_pressure_residual_pa"), upstream_pressure_raw)
+				|| !Close(Value(rows[index], "signed_downstream_pressure_residual_pa"), downstream_pressure_raw)
+				|| !Close(Value(rows[index], "normalized_upstream_pressure_residual"), normalized_upstream_pressure)
+				|| !Close(Value(rows[index], "normalized_downstream_pressure_residual"), normalized_downstream_pressure)
+				|| !Close(Value(rows[index], "upstream_three_d_flow_residual_m3_s"), upstream_flow_residual)
+				|| !Close(Value(rows[index], "three_d_downstream_flow_residual_m3_s"), downstream_flow_residual)
+				|| !Close(Value(rows[index], "normalized_upstream_three_d_flow_residual"), normalized_upstream_flow_residual)
+				|| !Close(Value(rows[index], "normalized_three_d_downstream_flow_residual"), normalized_downstream_flow_residual))
+				throw std::runtime_error("strong iteration diagnostics are invalid");
+			const bool expected_converged = normalized_upstream_pressure <= pressure_relative_tolerance
+				&& normalized_downstream_pressure <= pressure_relative_tolerance
+				&& std::abs(normalized_upstream_flow_residual) <= flow_relative_tolerance
+				&& std::abs(normalized_downstream_flow_residual) <= flow_relative_tolerance;
+			if (Value(rows[index], "converged") != (expected_converged ? 1.0 : 0.0))
+				throw std::runtime_error("strong serialized convergence flag is incorrect");
+			if (!Close(Value(rows[index], "next_upstream_terminal_pressure_pa"),
+				Value(rows[index], "applied_upstream_terminal_pressure_pa")+0.5*(Value(rows[index], "measured_three_d_inlet_pressure_pa")-Value(rows[index], "applied_upstream_terminal_pressure_pa")))
+				|| !Close(Value(rows[index], "next_three_d_outlet_traction_pressure_pa"),
+				Value(rows[index], "applied_three_d_outlet_traction_pressure_pa")+0.5*(Value(rows[index], "measured_downstream_root_pressure_pa")-Value(rows[index], "applied_three_d_outlet_traction_pressure_pa"))))
+				throw std::runtime_error("strong fixed-relaxation next guess is not exact");
+			if (index > 0 && (!Close(Value(rows[index], "applied_upstream_terminal_pressure_pa"),
+				Value(rows[index-1], "next_upstream_terminal_pressure_pa"))
+				|| !Close(Value(rows[index], "applied_three_d_outlet_traction_pressure_pa"),
+				Value(rows[index-1], "next_three_d_outlet_traction_pressure_pa"))))
+				throw std::runtime_error("strong next guess was not reapplied after rollback");
+			attempt_sum += static_cast<long long>(Value(rows[index], "three_d_attempt_linear_iterations"));
+			if (static_cast<long long>(Value(rows[index], "three_d_cumulative_step_linear_iterations")) != attempt_sum)
+				throw std::runtime_error("strong cumulative KSP work is invalid");
+		}
+		const auto& final = rows.back();
+		if (Value(final, "normalized_upstream_pressure_residual") > pressure_relative_tolerance
+			|| Value(final, "normalized_downstream_pressure_residual") > pressure_relative_tolerance
+			|| Value(final, "converged") != 1.0)
+			throw std::runtime_error("strong coupling did not meet pressure tolerance");
+		if (entry.first < 1 || entry.first > static_cast<int>(history.size()))
+			throw std::runtime_error("strong iteration physical step is invalid");
+		const auto& step = history[static_cast<std::size_t>(entry.first-1)];
+		if (Value(step, "iteration_count") != static_cast<double>(rows.size())
+			|| static_cast<long long>(Value(step, "all_three_d_ksp_iterations")) != attempt_sum
+			|| static_cast<long long>(Value(step, "accepted_three_d_ksp_iterations"))
+				!= static_cast<long long>(Value(final, "three_d_attempt_linear_iterations"))
+			|| static_cast<long long>(Value(step, "rejected_three_d_ksp_iterations"))
+				!= attempt_sum-static_cast<long long>(Value(final, "three_d_attempt_linear_iterations")))
+			throw std::runtime_error("strong step work accounting does not equal iteration attempts");
+		sum_all_ksp += attempt_sum;
+		sum_accepted_ksp += static_cast<long long>(Value(final, "three_d_attempt_linear_iterations"));
+	}
+	bool observed_multiple_iterations = false;
+	for (const auto& row : history) {
+		observed_multiple_iterations = observed_multiple_iterations || Value(row, "iteration_count") > 1.0;
+		if (!(Value(row, "iteration_count") >= 1.0) || Value(row, "iteration_count") > 50.0
+			|| !Close(Value(row, "relaxation_factor"), 0.5)
+			|| !Close(Value(row, "pressure_reference_pa"), kPressureReferencePa)
+			|| Value(row, "accepted_three_d_ksp_iterations") < 0.0
+			|| Value(row, "all_three_d_ksp_iterations") < Value(row, "accepted_three_d_ksp_iterations")
+			|| !Close(Value(row, "rejected_three_d_ksp_iterations"), Value(row, "all_three_d_ksp_iterations")-Value(row, "accepted_three_d_ksp_iterations")))
+			throw std::runtime_error("strong coupling work accounting is invalid");
+	}
+	if (!observed_multiple_iterations)
+		throw std::runtime_error("strong coupling smoke never required a fixed-point correction");
+	if (static_cast<long long>(ManifestNumber(manifest, "total_coupling_iterations"))
+		!= static_cast<long long>(iterations.size())
+		|| static_cast<long long>(ManifestNumber(manifest, "accepted")) != sum_accepted_ksp
+		|| static_cast<long long>(ManifestNumber(manifest, "all_attempts")) != sum_all_ksp)
+		throw std::runtime_error("strong manifest work totals do not match history");
+}
+
+void RequireStrongManifest(const fs::path& path)
+{
+	std::ifstream input(path);
+	const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+	if (!input || text.find("\"scheme\": \"strong_fixed\"") == std::string::npos
+		|| text.find("pressure_fixed_point") == std::string::npos
+		|| text.find("pressure-traction parameter") == std::string::npos
+		|| text.find("geometry_transform_product_m") == std::string::npos
+		|| text.find("newton_controls") == std::string::npos
+		|| text.find("\"restart\": \"unsupported\"") == std::string::npos)
+		throw std::runtime_error("strong coupling manifest is incomplete");
+}
+
 } // namespace
 
 int main()
@@ -353,6 +493,38 @@ int main()
 		RequireManifest(root/"two/explicit_coupling_manifest.json");
 		ValidateRows(two);
 		RequireSameHistory(one, two);
+		const std::string strong_arguments = " --coupling-mode strong-fixed --strong-max-iterations 50"
+			" --strong-pressure-relative-tol 1e-6 --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)
+			+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5";
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_one", "", "", strong_arguments) != 0)
+			throw std::runtime_error("one-rank strong coupling smoke run failed");
+		const auto strong_one = ReadHistory(root/"strong_one/strong_coupling_history.csv");
+		const auto strong_one_iterations = ReadHistory(root/"strong_one/strong_coupling_iterations.csv");
+		RequireStrongManifest(root/"strong_one/strong_coupling_manifest.json");
+		ValidateStrongRun(strong_one, strong_one_iterations, root/"strong_one/strong_coupling_manifest.json");
+		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_two", "mpiexec -np 2 ", "", strong_arguments) != 0)
+			throw std::runtime_error("two-rank strong coupling smoke run failed");
+		const auto strong_two = ReadHistory(root/"strong_two/strong_coupling_history.csv");
+		const auto strong_two_iterations = ReadHistory(root/"strong_two/strong_coupling_iterations.csv");
+		RequireStrongManifest(root/"strong_two/strong_coupling_manifest.json");
+		ValidateStrongRun(strong_two, strong_two_iterations, root/"strong_two/strong_coupling_manifest.json");
+		RequireSameHistory(strong_one, strong_two);
+		RequireSameHistory(strong_one_iterations, strong_two_iterations);
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_nonconverged", "", "",
+			" --coupling-mode strong-fixed --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"
+			" --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5") == 0)
+			throw std::runtime_error("strong max-iteration failure unexpectedly succeeded");
+		if (fs::exists(root/"strong_nonconverged/strong_coupling_history.csv")
+			|| fs::exists(root/"strong_nonconverged/strong_coupling_iterations.csv")
+			|| fs::exists(root/"strong_nonconverged/strong_coupling_manifest.json"))
+			throw std::runtime_error("nonconverged strong coupling wrote persistent output");
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_rejected", "",
+			"TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=1 ", strong_arguments) == 0)
+			throw std::runtime_error("injected strong coupling failure unexpectedly succeeded");
+		if (fs::exists(root/"strong_rejected/strong_coupling_history.csv")
+			|| fs::exists(root/"strong_rejected/strong_coupling_iterations.csv")
+			|| fs::exists(root/"strong_rejected/strong_coupling_manifest.json"))
+			throw std::runtime_error("rejected strong coupling step wrote persistent output");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"rejected", "",
 			"TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=1 ") == 0)
 			throw std::runtime_error("injected explicit coupling failure unexpectedly succeeded");

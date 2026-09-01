@@ -126,9 +126,9 @@ inline void ValidateExplicitCouplingHistoryRow(const ExplicitCouplingHistoryRow&
 		throw std::runtime_error("explicit coupling history requires positive port areas");
 	if (!(row.downstream_terminal_area_m2 > 0.0))
 		throw std::runtime_error("explicit coupling history requires positive external terminal area");
-	if (row.iteration_count != 1 || row.relaxation_factor != 1.0
+	if (row.iteration_count < 1 || !(row.relaxation_factor > 0.0) || row.relaxation_factor > 1.0
 		|| row.three_d_trial_linear_iterations < 0)
-		throw std::runtime_error("explicit coupling history requires one unrelaxed staggered iteration");
+		throw std::runtime_error("coupling history requires a positive iteration count and relaxation in (0,1]");
 }
 
 inline void WriteExplicitCouplingHistoryHeader(std::ostream& output)

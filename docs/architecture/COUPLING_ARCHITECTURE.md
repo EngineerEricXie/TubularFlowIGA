@@ -86,6 +86,23 @@ correction. A test-only environment variable,
 after all trial solves and history validation but before a commit; it exists to
 prove that rejected steps emit neither coupling history nor manifest output.
 
+`--coupling-mode strong-fixed` adds the equally narrow fixed-relaxation
+alternative without changing the explicit default or its output names.  For a
+single physical step all three runtimes enter `BeginStep` once.  Each trial
+sweep uses `x=[upstream terminal pressure, 3D outlet pressure-traction parameter]` and
+`G=[measured 3D inlet mean static pressure, measured downstream root mean
+static pressure]`, checks conservative flow transfer, and then either rolls
+back downstream, 3D, and upstream in that order or commits all three exactly
+once.  The update is `x_next=x+omega*(G-x)` and convergence uses
+`abs(G_i-x_i)/max(Pref,abs(G_i),abs(x_i))`.  In particular, the measured 3D
+outlet pressure remains a diagnostic; it is not the right-side fixed-point
+pressure because the applied 3D quantity is a pressure-traction parameter.  Rejected
+attempts contribute to coordinator work diagnostics but never to runtime
+committed counters.  A successful strong run writes separate
+`strong_coupling_history.csv`, `strong_coupling_iterations.csv`, and
+`strong_coupling_manifest.json`; restart, Aitken relaxation, and subcycling
+remain unsupported.
+
 ## State ownership and rollback inventory
 
 The committed snapshot is the complete physical state at `t_n`. Solver
@@ -110,6 +127,11 @@ configuration are rebuildable or reusable scratch and are not physical state.
 
 Disk checkpoint/restart remains a persistence interface. It is not the
 in-memory rollback mechanism.
+
+The 1D internal-substep count is therefore a rollback-owned physical counter:
+rejected strong sweeps restore it with the complete 1D trial state. The current
+coordinator reports accepted/rejected 3D KSP work only; rejected 1D
+computational work is intentionally not reported.
 
 ## Common port contract
 

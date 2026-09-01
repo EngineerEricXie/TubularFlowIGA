@@ -1,4 +1,5 @@
 #include "ExplicitOneDThreeDCoupling.hpp"
+#include "StrongOneDThreeDCoupling.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -55,8 +56,56 @@ int main()
 	assert(output.str().find("net_external_outward_flow_m3_s") != std::string::npos);
 	assert(output.str().find("external_pressure_drop_pa") != std::string::npos);
 	row.iteration_count = 2;
+	row.relaxation_factor = 0.5;
+	iga::ValidateExplicitCouplingHistoryRow(row);
+	row.iteration_count = 0;
 	RequireRejected([&row] { iga::ValidateExplicitCouplingHistoryRow(row); });
 	row.iteration_count = 1;
+	row.relaxation_factor = 1.0;
 	row.downstream_root_area_m2 = 0.0;
 	RequireRejected([&row] { iga::ValidateExplicitCouplingHistoryRow(row); });
+
+	iga::StrongCouplingControls controls;
+	controls.pressure_reference_pa = 100.0;
+	iga::ValidateStrongCouplingControls(controls);
+	controls.relaxation_factor = 0.0;
+	RequireRejected([&controls] { iga::ValidateStrongCouplingControls(controls); });
+	controls.relaxation_factor = 0.5;
+	assert(std::abs(iga::StrongCouplingSignedNormalizedPressureResidual(100.0, 125.0, 100.0)-0.2) < 1.0e-15);
+	assert(std::abs(iga::StrongCouplingPressureResidual(100.0, 75.0, 100.0)-0.25) < 1.0e-15);
+	assert(std::abs(iga::StrongCouplingFixedUpdate(100.0, 140.0, 0.5)-120.0) < 1.0e-15);
+	RequireRejected([] { iga::StrongCouplingFixedUpdate(1.0, 2.0, 1.1); });
+	iga::StrongCouplingIterationRow iteration;
+	iteration.physical_step = 1;
+	iteration.time_s = 0.01;
+	iteration.iteration = 2;
+	iteration.applied_upstream_terminal_pressure_pa = 100.0;
+	iteration.applied_three_d_outlet_traction_pressure_pa = 90.0;
+	iteration.measured_three_d_inlet_pressure_pa = 110.0;
+	iteration.measured_downstream_root_pressure_pa = 95.0;
+	iteration.signed_upstream_pressure_residual_pa = 10.0;
+	iteration.signed_downstream_pressure_residual_pa = 5.0;
+	iteration.normalized_upstream_pressure_residual = 1.0/11.0;
+	iteration.normalized_downstream_pressure_residual = 0.05;
+	iteration.next_upstream_terminal_pressure_pa = 105.0;
+	iteration.next_three_d_outlet_traction_pressure_pa = 92.5;
+	iteration.upstream_terminal_outward_flow_m3_s = 1.0e-3;
+	iteration.three_d_inlet_outward_flow_m3_s = -1.0e-3;
+	iteration.three_d_outlet_outward_flow_m3_s = 1.0e-3;
+	iteration.downstream_root_outward_flow_m3_s = -1.0e-3;
+	iteration.upstream_three_d_flow_residual_m3_s = 1.0e-12;
+	iteration.three_d_downstream_flow_residual_m3_s = -1.0e-12;
+	iteration.normalized_upstream_three_d_flow_residual = 1.0e-12;
+	iteration.normalized_three_d_downstream_flow_residual = -1.0e-12;
+	iteration.three_d_wall_outward_flow_m3_s = 0.0;
+	iteration.three_d_mass_imbalance_m3_s = 1.0e-12;
+	iteration.three_d_attempt_linear_iterations = 3;
+	iteration.three_d_cumulative_step_linear_iterations = 6;
+	iga::ValidateStrongCouplingIterationRow(iteration);
+	std::ostringstream iteration_output;
+	iga::WriteStrongCouplingIterationHeader(iteration_output);
+	iga::WriteStrongCouplingIterationRow(iteration_output, iteration);
+	assert(iteration_output.str().find("signed_upstream_pressure_residual_pa") != std::string::npos);
+	iteration.iteration = 0;
+	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
 }

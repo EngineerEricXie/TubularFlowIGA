@@ -1,7 +1,8 @@
 # Phase 1 report
 
-Status: PR 1.1 complete; Phase 1 remains in progress for strong coupling,
-relaxation, subcycling, and the full convergence benchmark.
+Status: PR 1.2 complete; Phase 1 remains in progress pending Aitken relaxation,
+subcycling, and the full convergence benchmark. Restart and a
+general multidomain graph remain deferred.
 
 ## PR 1.1 explicit 1D--3D--1D smoke evidence
 
@@ -46,3 +47,42 @@ git diff --check
 The MPI smoke passed one rank, two ranks, and injected pre-commit failure. It
 uses `-ksp_type preonly -pc_type lu` internally so trial linear-iteration
 diagnostics as well as physical history are rank-invariant for this tiny test.
+
+## PR 1.2 strong fixed-relaxation evidence
+
+`--coupling-mode strong-fixed` retains the PR 1.1 straight-chain scope and
+starts all three runtime trials once per physical step. It iterates the two
+applied pressures with fixed `omega=0.5`; the two fixed-point residuals are
+normalized by the required positive `Pref`, while conservative flow-transfer
+residuals remain a hard gate. Each rejected sweep rolls back downstream, 3D,
+then upstream before reapplying every input. Only the converged sweep commits.
+The strong-only output is rank-zero `strong_coupling_history.csv`,
+`strong_coupling_iterations.csv`, and `strong_coupling_manifest.json`; no
+strong artifact is written for max-iteration or injected pre-commit failure.
+
+The same generated low-Re fixture passed one and two ranks with `Pref =
+0.0787196354574 Pa`, pressure tolerance `1e-6`, flow tolerance `1e-10`, and
+maximum 50 iterations. The first step took 21 sweeps with final normalized
+residuals `5.6614468717e-7` and `8.8146926286e-17`, accepting 21 3D KSP
+iterations from 441 total (420 rejected). The two constant subsequent steps
+converged in one sweep (6 and 0 accepted/all KSP iterations respectively), as
+expected from seeding with the accepted fixed point. The smoke also checks the
+exact `x + 0.5(G-x)` update, rank-parity of both physical and iteration
+histories, flow/mass/area gates, a forced one-iteration nonconvergence, and
+the existing injection hook in strong mode. This remains a coupling-lifecycle
+smoke, not numerical convergence evidence.
+
+The strong iteration CSV records physical step and sweep index; applied,
+measured, and relaxed-next pressure guesses; signed Pa and normalized pressure
+residuals; all four constituent outward interface flows; separate signed/raw
+and normalized flow residuals; wall and total 3D mass diagnostics;
+per-attempt/cumulative 3D KSP work; and convergence. The
+step CSV records final signed/normalized pressure residuals and accepted/all/
+rejected KSP work. The manifest records the fixed-point and outward-flow
+formulas, physical inputs, port orientations, Newton controls, initial
+guesses, and post-success-only output/work semantics. Rejected 1D work is not
+reported, while the 1D internal-substep counter remains rollback-owned.
+
+Architecture Gates A, B, and C pass for PR 1.2. The serialized signed pressure
+residual vector and applied/measured/next pressure states provide the history
+required by PR 1.3 without changing the runtime lifecycle or port contract.
