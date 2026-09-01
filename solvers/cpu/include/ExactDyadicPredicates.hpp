@@ -12,9 +12,19 @@
 namespace iga {
 namespace exact_dyadic {
 
+// General predicates deliberately remain small.  Consumers which have a
+// separately reviewed arithmetic budget must pass that budget explicitly;
+// they must not widen this process-wide predicate contract.
+inline constexpr std::size_t kMaximumMagnitudeLimbs = 128;
+
 #ifdef IGA_EXACT_DYADIC_TESTING
-inline std::size_t& TestMagnitudeCap() { static std::size_t value = 128; return value; }
-inline void SetTestMagnitudeCap(std::size_t value) { TestMagnitudeCap() = value; }
+// Tests use the production capacity unless a case deliberately narrows it.
+inline std::size_t& TestMagnitudeCap() { static std::size_t value = kMaximumMagnitudeLimbs; return value; }
+inline void SetTestMagnitudeCap(std::size_t value)
+{
+	if (!value) throw std::invalid_argument("exact dyadic test magnitude cap must be positive");
+	TestMagnitudeCap() = value;
+}
 #endif
 
 // A finite binary64 value is an integer mantissa times a power of two.  This
@@ -27,16 +37,17 @@ struct Unsigned {
 	void Trim() { while (!limbs.empty() && limbs.back() == 0) limbs.pop_back(); }
 };
 
-inline void CheckSize(std::size_t size)
+inline std::size_t MagnitudeCap()
 {
-	const std::size_t cap =
 #ifdef IGA_EXACT_DYADIC_TESTING
-		TestMagnitudeCap();
+	return TestMagnitudeCap();
 #else
-		128;
+	return kMaximumMagnitudeLimbs;
 #endif
-	if (size > cap) throw std::overflow_error("exact dyadic predicate magnitude overflows");
 }
+inline void CheckSize(std::size_t size, std::size_t cap)
+{ if (!cap || size > cap) throw std::overflow_error("exact dyadic predicate magnitude overflows"); }
+inline void CheckSize(std::size_t size) { CheckSize(size, MagnitudeCap()); }
 inline int Compare(const Unsigned& left, const Unsigned& right)
 {
 	if (left.limbs.size() != right.limbs.size()) return left.limbs.size() < right.limbs.size() ? -1 : 1;
@@ -44,12 +55,12 @@ inline int Compare(const Unsigned& left, const Unsigned& right)
 		if (left.limbs[i-1] != right.limbs[i-1]) return left.limbs[i-1] < right.limbs[i-1] ? -1 : 1;
 	return 0;
 }
-inline Unsigned AddMagnitude(const Unsigned& left, const Unsigned& right)
+inline Unsigned AddMagnitude(const Unsigned& left, const Unsigned& right, std::size_t cap)
 {
 	const std::size_t largest = left.limbs.size() > right.limbs.size() ? left.limbs.size() : right.limbs.size();
-	if (largest >= 128) throw std::overflow_error("exact dyadic predicate magnitude overflows");
+	if (largest >= cap) throw std::overflow_error("exact dyadic predicate magnitude overflows");
 	Unsigned result; const std::size_t size = largest+1;
-	CheckSize(size); result.limbs.resize(size, 0);
+	CheckSize(size, cap); result.limbs.resize(size, 0);
 	std::uint64_t carry = 0;
 	for (std::size_t i = 0; i+1 < size; ++i) {
 		const std::uint64_t first = (i < left.limbs.size() ? left.limbs[i] : 0), second = (i < right.limbs.size() ? right.limbs[i] : 0);
@@ -58,6 +69,8 @@ inline Unsigned AddMagnitude(const Unsigned& left, const Unsigned& right)
 	}
 	result.limbs.back() = carry; result.Trim(); return result;
 }
+inline Unsigned AddMagnitude(const Unsigned& left, const Unsigned& right)
+{ return AddMagnitude(left, right, MagnitudeCap()); }
 inline Unsigned SubtractMagnitude(const Unsigned& left, const Unsigned& right)
 {
 	if (Compare(left, right) < 0) throw std::logic_error("exact dyadic magnitude subtraction underflows");
@@ -72,11 +85,11 @@ inline Unsigned SubtractMagnitude(const Unsigned& left, const Unsigned& right)
 	if (borrow != 0) throw std::logic_error("exact dyadic magnitude borrow remains");
 	result.Trim(); return result;
 }
-inline Unsigned ShiftLeft(const Unsigned& value, std::size_t bits)
+inline Unsigned ShiftLeft(const Unsigned& value, std::size_t bits, std::size_t cap)
 {
 	if (value.IsZero()) return {};
 	const std::size_t words = bits/64, remainder = bits%64;
-	if (words >= 128 || value.limbs.size() > 127-words) throw std::overflow_error("exact dyadic predicate magnitude overflows");
+	if (words >= cap || value.limbs.size() > cap-1-words) throw std::overflow_error("exact dyadic predicate magnitude overflows");
 	const std::size_t size = value.limbs.size()+words+1;
 	Unsigned result; result.limbs.assign(words, 0); result.limbs.resize(size, 0);
 	std::uint64_t carry = 0;
@@ -86,18 +99,22 @@ inline Unsigned ShiftLeft(const Unsigned& value, std::size_t bits)
 	}
 	result.limbs[value.limbs.size()+words] = carry; result.Trim(); return result;
 }
-inline Unsigned MultiplyMagnitude(const Unsigned& left, const Unsigned& right)
+inline Unsigned ShiftLeft(const Unsigned& value, std::size_t bits)
+{ return ShiftLeft(value, bits, MagnitudeCap()); }
+inline Unsigned MultiplyMagnitude(const Unsigned& left, const Unsigned& right, std::size_t cap)
 {
 	if (left.IsZero() || right.IsZero()) return {};
-	if (left.limbs.size() > 128 || right.limbs.size() > 128 || left.limbs.size() > 128-right.limbs.size()) throw std::overflow_error("exact dyadic predicate magnitude overflows");
+	if (left.limbs.size() > cap || right.limbs.size() > cap || left.limbs.size() > cap-right.limbs.size()) throw std::overflow_error("exact dyadic predicate magnitude overflows");
 	Unsigned result;
 	for (std::size_t word = 0; word < right.limbs.size(); ++word) for (std::size_t bit = 0; bit < 64; ++bit)
 		if ((right.limbs[word] & (UINT64_C(1) << bit)) != 0) {
 			if (word > (std::numeric_limits<std::size_t>::max()-bit)/64) throw std::overflow_error("exact dyadic predicate shift overflows");
-			result = AddMagnitude(result, ShiftLeft(left, 64*word+bit));
+			result = AddMagnitude(result, ShiftLeft(left, 64*word+bit, cap), cap);
 		}
 	return result;
 }
+inline Unsigned MultiplyMagnitude(const Unsigned& left, const Unsigned& right)
+{ return MultiplyMagnitude(left, right, MagnitudeCap()); }
 
 struct Number {
 	int sign = 0;
@@ -115,7 +132,7 @@ inline Number FromDouble(double value)
 	result.magnitude.limbs.push_back(exponent_bits == 0 ? fraction : (fraction|UINT64_C(0x0010000000000000))); return result;
 }
 inline Number Negate(Number value) { value.sign = -value.sign; return value; }
-inline Number Add(const Number& left, const Number& right)
+inline Number Add(const Number& left, const Number& right, std::size_t cap)
 {
 	if (left.sign == 0) return right;
 	if (right.sign == 0) return left;
@@ -123,22 +140,25 @@ inline Number Add(const Number& left, const Number& right)
 	const long long left_delta = static_cast<long long>(left.exponent)-static_cast<long long>(exponent), right_delta = static_cast<long long>(right.exponent)-static_cast<long long>(exponent);
 	if (left_delta < 0 || right_delta < 0 || static_cast<unsigned long long>(left_delta) > std::numeric_limits<std::size_t>::max() || static_cast<unsigned long long>(right_delta) > std::numeric_limits<std::size_t>::max()) throw std::overflow_error("exact dyadic predicate exponent difference overflows");
 	const std::size_t left_shift = static_cast<std::size_t>(left_delta), right_shift = static_cast<std::size_t>(right_delta);
-	const auto left_magnitude = ShiftLeft(left.magnitude, left_shift), right_magnitude = ShiftLeft(right.magnitude, right_shift);
+	const auto left_magnitude = ShiftLeft(left.magnitude, left_shift, cap), right_magnitude = ShiftLeft(right.magnitude, right_shift, cap);
 	Number result; result.exponent = exponent;
-	if (left.sign == right.sign) { result.sign = left.sign; result.magnitude = AddMagnitude(left_magnitude, right_magnitude); }
+	if (left.sign == right.sign) { result.sign = left.sign; result.magnitude = AddMagnitude(left_magnitude, right_magnitude, cap); }
 	else { const int comparison = Compare(left_magnitude, right_magnitude); if (comparison == 0) return {}; result.sign = comparison > 0 ? left.sign : right.sign; result.magnitude = comparison > 0 ? SubtractMagnitude(left_magnitude, right_magnitude) : SubtractMagnitude(right_magnitude, left_magnitude); }
 	if (result.magnitude.IsZero()) return {};
 	return result;
 }
-inline Number Subtract(const Number& left, const Number& right) { return Add(left, Negate(right)); }
-inline Number Multiply(const Number& left, const Number& right)
+inline Number Add(const Number& left, const Number& right) { return Add(left, right, MagnitudeCap()); }
+inline Number Subtract(const Number& left, const Number& right, std::size_t cap) { return Add(left, Negate(right), cap); }
+inline Number Subtract(const Number& left, const Number& right) { return Subtract(left, right, MagnitudeCap()); }
+inline Number Multiply(const Number& left, const Number& right, std::size_t cap)
 {
 	if (left.sign == 0 || right.sign == 0) return {};
 	Number result; result.sign = left.sign*right.sign;
 	const long long exponent = static_cast<long long>(left.exponent)+static_cast<long long>(right.exponent);
 	if (exponent > std::numeric_limits<int>::max() || exponent < std::numeric_limits<int>::min()) throw std::overflow_error("exact dyadic predicate exponent overflows");
-	result.exponent = static_cast<int>(exponent); result.magnitude = MultiplyMagnitude(left.magnitude, right.magnitude); return result;
+	result.exponent = static_cast<int>(exponent); result.magnitude = MultiplyMagnitude(left.magnitude, right.magnitude, cap); return result;
 }
+inline Number Multiply(const Number& left, const Number& right) { return Multiply(left, right, MagnitudeCap()); }
 inline int Sign(const Number& value) { return value.sign; }
 inline int CompareAbsolute(const Number& left, const Number& right)
 {

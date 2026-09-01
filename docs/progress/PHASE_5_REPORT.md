@@ -2,6 +2,29 @@
 
 Status: **in progress**.
 
+## PR 5.5: immersed surface quadrature
+
+`ImmersedSurfaceQuadratureCatalog` stores immutable, x-fast physical boundary
+rules bound to the exact Cartesian grid and canonical-surface hash.  It clips
+canonical oriented triangles to closed cells with constraint-provenance
+homogeneous dyadics (never recursive rational intersections),
+uses deterministic fan triangulation and a positive degree-six 12-point rule,
+and audits canonical triangle, boundary-label, and whole-surface emitted areas
+against compensated canonical source sums.  Diagnostics publish source,
+accumulated, signed residual, and absolute residual measures; tolerances scale
+with measure and operation count without a one-square-metre floor.  Internal
+coplanar faces have one normal-directed owner.  Cell construction is
+transactional through rule validation: any non-cap clipping, representation,
+mapping, normal, or weight failure discards the cell's retained rule and area
+state and globally latches the catalog unusable.  Candidate, fragment, and
+point attempt counters remain monotone across rejected cells, so the three
+caps cannot be evaded by rollback; cap exceptions still prevent publication.
+The clipping arithmetic has its own explicit per-catalog limb cap and observed
+peak diagnostic; general exact predicates retain their smaller independent
+capacity.  Predicate capacity or unrepresentable positive fragments make a
+cell unusable rather than silently changing its surface measure.  Focused evidence is
+`make -C solvers/cpu immersed_surface_quadrature_test`.
+
 ## PR 5.4: adaptive cut-cell volume quadrature
 
 `CutCellVolumeQuadratureCatalog` retains one immutable, cell-id-sorted result
