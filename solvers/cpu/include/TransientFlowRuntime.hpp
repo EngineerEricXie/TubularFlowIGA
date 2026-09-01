@@ -83,6 +83,8 @@ public:
 		if (labels_.size() != database_.header().nodes
 			|| boundary_velocity_.size() != database_.header().nodes)
 			throw std::runtime_error("flow boundary data do not match database nodes");
+		constraint_velocity_mask_ = boundaries_.velocity_constrained;
+		constraint_pressure_mask_ = boundaries_.pressure_constrained;
 		MPI_Comm_rank(communicator_, &rank_);
 		owned_elements_ = database_.LoadOwned(rank_);
 		BuildBoundaryLabelIndex();
@@ -211,9 +213,9 @@ public:
 		if (!configured_)
 			throw std::runtime_error(
 				"SetTrialBoundaryConfiguration requires a configured flow runtime");
+		UpdateConfiguredBoundaries(step_configuration);
 		trial_configuration_ = step_configuration;
 		has_trial_configuration_ = true;
-		UpdateConfiguredBoundaries(trial_configuration_);
 	}
 
 	void SetPortInput(const CouplingPort& port, const PortBoundaryData& input)
@@ -765,10 +767,19 @@ private:
 		const auto& system = FirstNavierStokesSystem(configuration);
 		auto pressure_tractions = ExtractPressureTractions(configuration, system);
 		auto boundaries = ResolveFlowBoundaries(configuration, system, labels_, boundary_velocity_);
+		ValidateConstraintTopology(boundaries);
 		for (const auto& override : trial_pressure_overrides_)
 			pressure_tractions[override.first] = override.second;
 		pressure_tractions_ = std::move(pressure_tractions);
 		boundaries_ = std::move(boundaries);
+	}
+
+	void ValidateConstraintTopology(const ResolvedBoundaryConditions& boundaries) const
+	{
+		if (boundaries.velocity_constrained != constraint_velocity_mask_
+			|| boundaries.pressure_constrained != constraint_pressure_mask_)
+			throw std::runtime_error(
+				"configured 3D flow boundary constraint topology changed; PETSc boundary rows are fixed");
 	}
 
 	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton,
@@ -930,6 +941,8 @@ private:
 	bool transient_ = false;
 	NavierStokesParameters parameters_;
 	ResolvedBoundaryConditions boundaries_;
+	std::vector<int> constraint_velocity_mask_;
+	std::vector<int> constraint_pressure_mask_;
 	std::vector<int> labels_;
 	std::vector<std::array<double, 3>> boundary_velocity_;
 	std::set<std::int32_t> wall_trace_basis_;

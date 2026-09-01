@@ -1,6 +1,7 @@
 # Phase 0 Progress Report
 
-Status: in progress
+Status: in progress — lifecycle corrections and base-versus-HEAD numerical
+parity are complete; final phase-gate review is pending.
 
 ## Objective
 
@@ -94,6 +95,9 @@ behavior changed in this slice.
   flow-vector and iteration-count equality, boundary-traction restoration,
   RC capacitor rollback/replay, single commit, invalid transitions, port-state
   timing, unsupported input rejection, and `Advance` adapter parity.
+- The constructor-time velocity/pressure constraint masks are invariant:
+  configured trial boundaries that add or remove a constrained row are rejected
+  before assignment because PETSc `boundary_rows_` is not rebuilt mid-step.
 
 This slice does not add 3D transport rollback or move the VCA circuit into the
 flow lifecycle. Those objects remain CLI-owned and advance only after a
@@ -126,6 +130,8 @@ successful flow commit.
   transport/configuration/dynamic-network/last-inlet rollback, time/step state,
   safe terminal pressure input, resistance-closure rejection, failed-solve
   rollback, and single commit.
+- It also covers a true RCR capacitor trial mutation, rollback restoration,
+  deterministic replay, exactly-once commit, and terminal-pressure rejection.
 
 ## Baseline evidence
 
@@ -150,6 +156,18 @@ On 2026-08-31, before Phase 0 implementation:
 | four documented `iga_1d --check` cases after PR 0.5 | pass | rigid, compliant, physiology, and VCA schema-v3 configuration compatibility |
 | direct three-step rigid run versus one-step checkpoint plus restart to step three | pass | final `profile_1d_000003.vtp` byte-identical, SHA-256 `3cbb0781eaefce6df3c39e9437401871797bd4a0729d7af153280fb6426b7472` |
 | two-step `vca_pfc_closed_loop` run after PR 0.5 | pass | external circuit path remains executable with advancement after runtime commit |
+| base `9aa28d3` versus Phase-0 HEAD configured transient 3D VCA fixture | pass | velocity, pressure, flow checkpoint, transport checkpoint, reservoir metadata, and coupling manifest are byte-identical |
+| base `9aa28d3` versus Phase-0 HEAD three-step compliant PETSc/multispecies 1D case | pass | time-series/profile outputs and final VTP are byte-identical |
+
+Base-versus-HEAD hashes for the final 3D velocity and pressure fields are
+`9c6394c7b66cf2af9105986fdff21c607cf9ded795679272c9074d1c972f2f51`
+and `407c77b51d739e08d9870c48fa1b82bcbd06c01e47150d7114e4efb59469e46e`.
+The 3D flow checkpoint hash is
+`ee488d0604880e36077bdbeb3c05ff1a16182eabcee18c24eac56a91e57cacbd`;
+the coupling manifest hash is
+`e8bf5f76dcff8500bce7a4ffd5843442924e2316ff025eb6b2afc6f48464f513`.
+The final 1D VTP hash is
+`55cf6a8efbab2d9a2d908f7265f4eba63824347543824c74a6bfebe7ea526d01`.
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
 runtime, multi-rank VCA, and numerical parity gates remain required when their
@@ -185,13 +203,17 @@ test and VCA smoke regression pass.
   already using a pressure closure; it does not silently replace R/RCR data.
 - Runtime snapshots do not include the external VCA circuit, writer/history
   objects, or disk checkpoint persistence; the CLI advances those after commit.
+- The current 1D checkpoint does not persist `last_inlet_`; immediately after
+  restart, root species port measurement reflects the initialized inlet until
+  the first post-restart solve. Flow state is unaffected. Coupled-transport
+  restart must extend the persistence contract before that later phase.
 - Full numerical regression cases can require PETSc, MPI, generated databases,
   or an allocated compute resource.
 
 ## Remaining Phase 0 work
 
-1. Perform the phase-level architecture and numerical review.
-2. Close the Phase 0 engineering, numerical, and architecture gates.
+1. Complete the final Sol-level phase review and close all Phase 0 gates.
+2. Commit the phase correction and final report.
 3. Extend lifecycle rollback to 3D transport when a later coupled-transport
    phase makes transport part of rejected trial iterations.
 

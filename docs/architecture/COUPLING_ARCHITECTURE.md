@@ -27,6 +27,12 @@ outlet state before every attempt. Trial linear iterations remain provisional;
 `RollbackTrial` discards them. The legacy `Advance` entry point is a
 compatibility adapter over begin, configure, solve, and commit.
 
+The PETSc boundary-row topology is fixed at construction. Every configured
+boundary resolution must retain the constructor velocity and pressure
+constraint masks; a trial that adds or removes either constraint is rejected
+before its values are assigned, rather than rebuilding `boundary_rows_` during
+a lifecycle step.
+
 `MeasurePorts` already performs distributed outward-normal flow integration,
 area-weighted pressure integration, and advective species-flux integration.
 It is coupled to `ThreeDVascularPortDefinition`, exposes only VCA outlet
@@ -214,6 +220,8 @@ uses the existing rigid/explicit/PETSc-implicit routine, transport advance, and
 vasodilation update. `RollbackTrial` restores configuration, network, flow,
 outlet/RCR, time/substep, and transport state. Output, checkpoints, histories,
 and external VCA circuit advancement remain CLI work after `CommitStep`.
+The focused runtime test includes an RCR capacitor mutation, rollback, exact
+replay, and single commit.
 
 The native 1D generic ports are `root` and `outlet:<node-id>`. They measure
 area, mean pressure, concentration, outward flow, and outward species flux in

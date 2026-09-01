@@ -289,6 +289,7 @@ void RequireSameReservoir(const fs::path& first, const fs::path& second)
 int main()
 {
 	const auto root = fs::temp_directory_path()/"tubularflowiga-vca-3d-smoke";
+	const bool keep_output = std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT") != nullptr;
 	std::error_code error;
 	fs::remove_all(root, error);
 	try {
@@ -365,12 +366,12 @@ int main()
 				<< ", source=" << oxygenator_source;
 			throw std::runtime_error(message.str());
 		}
-		fs::remove_all(root);
+		if (!keep_output) fs::remove_all(root);
 		std::cout << "VCA 3D flow, transport, checkpoint, and restart smoke test passed\n";
 		return 0;
 	} catch (const std::exception& exception) {
 		std::cerr << "VCA 3D smoke test failed: " << exception.what() << '\n';
-		fs::remove_all(root, error);
+		if (!keep_output) fs::remove_all(root, error);
 		return 1;
 	}
 }

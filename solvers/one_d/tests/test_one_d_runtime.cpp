@@ -166,6 +166,34 @@ int main()
 	RequireRejected([&resistance_runtime, &forbidden_pressure] {
 		resistance_runtime.SetPortInput("outlet:2", forbidden_pressure);
 	});
+
+	auto rcr_configuration = configuration;
+	auto& rcr = rcr_configuration.boundaries.back().conditions.front();
+	rcr.type = "windkessel_rcr";
+	rcr.proximal_resistance = 1.0e8;
+	rcr.distal_resistance = 1.0e9;
+	rcr.capacitance = 1.0e-10;
+	rcr.reference_pressure = 0.0;
+	rcr.initial_pressure = 3.0;
+	iga::OneDFlowRuntime rcr_runtime(rcr_configuration, flow, network,
+		iga::ResolveOneDInlet(rcr_configuration), directory);
+	rcr_runtime.InitializeOpenLoop(1.0e-9);
+	const double committed_capacitor = rcr_runtime.FlowState().outlets.front().capacitor_pressure;
+	rcr_runtime.BeginStep(0.0, configuration.time.dt);
+	rcr_runtime.SetOpenLoopInlet(rcr_runtime.OpenLoopInlet(configuration.time.dt, 1.0e-9));
+	RequireRejected([&rcr_runtime, &forbidden_pressure] {
+		rcr_runtime.SetPortInput("outlet:2", forbidden_pressure);
+	});
+	rcr_runtime.SolveTrial();
+	const double trial_capacitor = rcr_runtime.FlowState().outlets.front().capacitor_pressure;
+	assert(!Close(trial_capacitor, committed_capacitor));
+	rcr_runtime.RollbackTrial();
+	assert(rcr_runtime.FlowState().outlets.front().capacitor_pressure == committed_capacitor);
+	rcr_runtime.SolveTrial();
+	assert(rcr_runtime.FlowState().outlets.front().capacitor_pressure == trial_capacitor);
+	rcr_runtime.CommitStep();
+	assert(rcr_runtime.FlowState().outlets.front().capacitor_pressure == trial_capacitor);
+	RequireRejected([&rcr_runtime] { rcr_runtime.CommitStep(); });
 	fs::remove_all(directory);
 	std::cout << "one-dimensional runtime tests passed\n";
 }
