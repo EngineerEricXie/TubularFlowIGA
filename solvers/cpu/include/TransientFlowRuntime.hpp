@@ -497,23 +497,24 @@ public:
 				local_pressure[port] += pressure[0];
 				local_area[port] += pressure[1];
 			}
-			for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
-				const auto found = index.find(element.boundary_labels[face]);
-				if (found == index.end()) continue;
-				const auto port = found->second;
+			if (!species_fields.empty()) {
 				std::vector<std::vector<double>> species(element.connectivity.size(),
 					std::vector<double>(species_fields.size()));
 				for (std::size_t a = 0; a < element.connectivity.size(); ++a)
 					for (std::size_t field = 0; field < species_fields.size(); ++field)
 						species[a][field] = species_state[
 							ghost_position_.at(element.connectivity[a])*species_fields.size()+field];
-				for (std::size_t field = 0; field < species_fields.size(); ++field) {
-					const auto measured = IntegrateBoundaryTransportFlux(element, face,
-						nodal, species, field, advection[field], diffusion[field]);
-					local_concentration[port*species_fields.size()+field]
-						+= measured.concentration_integral;
-					local_species[port*species_fields.size()+field]
-						+= measured.total_outward_flux;
+				for (const auto& entry : index) {
+					const auto port = entry.second;
+					for (std::size_t field = 0; field < species_fields.size(); ++field) {
+						const auto measured = IntegrateBoundaryTransportFlux(element, nodal,
+							species, field, advection[field], diffusion[field], quadrature.Rule(),
+							entry.first);
+						local_concentration[port*species_fields.size()+field]
+							+= measured.concentration_integral;
+						local_species[port*species_fields.size()+field]
+							+= measured.total_outward_flux;
+					}
 				}
 			}
 		}

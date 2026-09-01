@@ -1,6 +1,7 @@
 #include "CaseInput.hpp"
 #include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
+#include "TransientTransportRuntime.hpp"
 
 #include <algorithm>
 #include <array>
@@ -81,6 +82,12 @@ int main()
 	RequireEqual(legacy.previous, Expand(generic.previous), "previous matrix");
 	assert(generic.left.pattern().pairs() == 4);
 	assert(generic.previous.pattern().pairs() == 2);
+	iga::FullCell4x4x4VolumeQuadratureProvider full_volume(element);
+	const auto explicit_generic = iga::BuildGenericTransportElement(element, velocity, system,
+		configuration, full_volume.Rule(), iga::SurfaceQuadratureRule{});
+	RequireEqual(Expand(generic.left), Expand(explicit_generic.left), "explicit generic left");
+	RequireEqual(Expand(generic.previous), Expand(explicit_generic.previous),
+		"explicit generic previous");
 	std::cout << "generic neuron transport regression passed\n";
 	iga::SimulationConfiguration custom;
 	custom.fields = {{"oxygen", iga::FieldKind::Scalar, 0.0},
@@ -157,6 +164,84 @@ int main()
 	assert(std::abs(oxygen_source - 0.02) < 2e-13);
 	assert(std::abs(drug_source - 0.12) < 2e-13);
 	assert(std::abs(drug_left - 0.04) < 2e-13);
+	auto skewed = element;
+	for (auto& point : skewed.bezier_points) {
+		point[0] = 2.0*point[0] + 0.2*point[1];
+		point[1] = 3.0*point[1] + 0.1*point[2];
+		point[2] = 4.0*point[2];
+	}
+	const std::array<double, 3> mass_coordinate{{0.31, 0.52, 0.73}};
+	const iga::VolumeQuadratureRule mass_rule(
+		std::vector<iga::VolumeQuadraturePoint>{{mass_coordinate, 0.41}});
+	const auto mass_basis = iga::EvaluateBasis(skewed, mass_coordinate[0],
+		mass_coordinate[1], mass_coordinate[2]);
+	assert(std::abs(mass_basis.raw_determinant-24.0) < 2e-13);
+	std::vector<double> field_mass(1, 0.0);
+	iga::IntegrateTransportFieldMass(skewed, 1,
+		[](std::int32_t, std::size_t) { return 2.5; }, mass_rule, field_mass);
+	assert(std::abs(field_mass[0]-2.5*0.41*24.0) < 2e-13);
+	assert(std::abs(iga::IntegrateTransportPhysicalVolume(skewed, mass_rule)-0.41*24.0)
+		< 2e-13);
+	iga::FullCell4x4x4VolumeQuadratureProvider skewed_full_volume(skewed);
+	assert(std::abs(iga::IntegrateTransportPhysicalVolume(skewed,
+		skewed_full_volume.Rule())-24.0) < 2e-12);
+	const std::array<double, 3> off_center{{0.23, 0.61, 0.37}};
+	const iga::VolumeQuadratureRule off_center_rule(
+		std::vector<iga::VolumeQuadraturePoint>{{off_center, 0.41}});
+	auto supg_source_configuration = configuration;
+	supg_source_configuration.equation_systems[0].terms.push_back(
+		{iga::TermKind::VolumeSource, system.fields[1], system.fields[1], 0.7, ""});
+	const auto supg_source_system = iga::CompileLinearSystem(supg_source_configuration,
+		"neuron_transport");
+	const auto off_center_matrices = iga::BuildGenericTransportElement(element, velocity,
+		supg_source_system, supg_source_configuration, off_center_rule,
+		iga::SurfaceQuadratureRule{});
+	const auto off_center_basis = iga::EvaluateBasis(element, off_center[0], off_center[1],
+		off_center[2]);
+	std::array<double, 3> off_center_velocity{};
+	for (std::size_t a = 0; a < 64; ++a)
+		for (int component = 0; component < 3; ++component)
+			off_center_velocity[component] += off_center_basis.value[a]*velocity[a][component];
+	double inverse_length = 0.0;
+	for (std::size_t a = 0; a < 64; ++a)
+		inverse_length += std::abs(off_center_velocity[0]*off_center_basis.gradient[a][0]
+			+off_center_velocity[1]*off_center_basis.gradient[a][1]
+			+off_center_velocity[2]*off_center_basis.gradient[a][2]);
+	const auto tau_space = 1.0/inverse_length;
+	const auto tau_time = supg_source_system.dt/2.0;
+	const auto tau = 1.0/std::sqrt(1.0/(tau_space*tau_space) + 1.0/(tau_time*tau_time));
+	for (std::size_t a = 0; a < 64; ++a) {
+		const auto streamline = off_center_velocity[0]*off_center_basis.gradient[a][0]
+			+off_center_velocity[1]*off_center_basis.gradient[a][1]
+			+off_center_velocity[2]*off_center_basis.gradient[a][2];
+		const auto expected = supg_source_system.dt*0.7
+			*(off_center_basis.value[a] + tau*streamline)*0.41
+			*off_center_basis.raw_determinant;
+		assert(std::abs(PetscRealPart(off_center_matrices.source[2*a+1])-expected) < 2e-13);
+	}
+	const auto surface_basis = iga::EvaluateBasis(element, off_center[0], off_center[1],
+		off_center[2]);
+	iga::SurfaceQuadraturePoint interior_surface_point;
+	interior_surface_point.parametric = off_center;
+	interior_surface_point.physical = iga::EvaluateElementGeometry(element, off_center).physical;
+	interior_surface_point.normal = {{0.6, 0.8, 0.0}};
+	interior_surface_point.weight = 0.37;
+	interior_surface_point.boundary_id = 0;
+	const iga::SurfaceQuadratureRule interior_surface({interior_surface_point});
+	const auto without_surface = iga::BuildGenericTransportElement(element, velocity, custom_system,
+		custom, full_volume.Rule(), iga::SurfaceQuadratureRule{});
+	const auto with_surface = iga::BuildGenericTransportElement(element, velocity, custom_system,
+		custom, full_volume.Rule(), interior_surface);
+	for (std::size_t a = 0; a < 64; ++a) {
+		assert(std::abs(PetscRealPart(with_surface.source[3*a]-without_surface.source[3*a])
+			-0.02*surface_basis.value[a]*0.37) < 2e-13);
+		assert(std::abs(PetscRealPart(with_surface.source[3*a+1]-without_surface.source[3*a+1])
+			-0.02*2.0*3.0*surface_basis.value[a]*0.37) < 2e-13);
+		for (std::size_t b = 0; b < 64; ++b)
+			assert(std::abs(PetscRealPart(with_surface.left.At(1, 1, a, b)
+				-without_surface.left.At(1, 1, a, b))
+				-0.02*2.0*surface_basis.value[a]*surface_basis.value[b]*0.37) < 2e-13);
+	}
 	const auto resolved = iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
 	assert(resolved.constrained_dofs == 0);
 	std::cout << "scalar flux and Robin surface assembly passed\n";

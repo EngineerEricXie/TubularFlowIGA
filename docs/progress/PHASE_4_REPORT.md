@@ -1,6 +1,9 @@
 # Phase 4 report
 
-Status: **in progress**.
+Status: **complete**. The CPU Navier--Stokes and transport kernels, their
+surface terms and diagnostics, and transport conservation accounting now
+consume explicit immutable quadrature rules. Existing body-fitted behavior is
+preserved by the full-cell and body-fitted providers.
 
 ## PR 4.1: immutable CPU quadrature rules
 
@@ -57,3 +60,55 @@ Evidence: `make -C solvers/cpu navier_stokes_test boundary_flow_test
 PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`, both focused
 binaries, `make -C solvers/cpu test`, and `vca_3d_runtime_test` all passed
 warning-clean on the local PETSc 3.15 build.
+
+## PR 4.3: transport-kernel migration to explicit rules
+
+The legacy and generic CPU transport volume assemblers now take an explicit
+`VolumeQuadratureRule` primary path and apply `weight * raw_detJ` once per
+supplied point.  Generic Flux and Robin assembly, along with species flux and
+advective--diffusive species diagnostics, have explicit surface-rule paths
+that use the point label, physical area weight, and supplied unit normal
+directly.  Legacy entry points remain available; runtime transport assembly
+and flow-runtime species diagnostics use the explicit paths.  SUPG remains the
+existing background-metric formula in this slice.
+
+Focused transport and boundary tests cover full-rule compatibility, curved
+geometry, non-tensor volume rules, immersed surface points, and permutation
+invariance.
+
+Transport mass and source accounting now uses the same runtime-owned,
+per-element volume-rule catalog as assembly.  The default catalog owns one
+validated full-cell rule per local element; an injectable catalog must cover
+the local element ids exactly and is validated once when the runtime is
+constructed.  Field mass and physical-volume helpers use
+`point.weight * raw_detJ` once.  Focused affine/skewed off-centre checks verify
+constant field mass and source volume against analytic raw-determinant values.
+
+## Phase closure
+
+The phase-closing Sol review accepted the reference/physical weight
+conventions, outward-normal and traction/flux signs, unchanged VMS/SUPG
+formulas, arbitrary-point kernel paths, legacy compatibility wrappers, and the
+shared assembly/accounting rule ownership. The review also confirmed that the
+remaining hard-coded tensor loops are limited to geometry preflight,
+reference-only diagnostics, compatibility wrappers, visualization, and the
+unchanged CUDA backend; they are not CPU physics-kernel integration paths.
+
+Final validation on the local PETSc 3.15 installation:
+
+```text
+make -C solvers/cpu test
+make -C solvers/cpu petsc PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+make -C solvers/cpu petsc-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+make -C solvers/coupling multidomain-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+All builds were warning-clean and all dependency-free, PETSc, restart, and
+one/two-rank MPI tests passed. The multidomain two-species closure retained
+maximum integrated residuals of `2.1684043449710089e-19` per edge,
+`1.2878566756861082e-14` per domain, and `1.2434504652065331e-14` globally.
+
+Phase 4 therefore meets its exit criterion: CPU physics assembly and
+conservation diagnostics integrate arbitrary supplied quadrature points
+without knowing whether they originated from a tensor full cell or a future
+cut/immersed geometry provider.

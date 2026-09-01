@@ -311,8 +311,11 @@ int main(int argc, char** argv)
 			MatZeroEntries(previous);
 			VecSet(forcing, 0.0);
 			for (const auto& element : assembler.elements()) {
+				iga::FullCell4x4x4VolumeQuadratureProvider volume_quadrature(element);
+				iga::BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
 				iga::BuildGenericTransportElement(
-					element, velocity, system, configuration, element_matrices);
+					element, velocity, system, configuration, element_matrices,
+					volume_quadrature.Rule(), surface_quadrature.Rule());
 				assembler.AddElementMatrix(left, element, element_matrices.left);
 				assembler.AddElementMatrix(previous, element, element_matrices.previous);
 				assembler.AddElementVector(forcing, element, element_matrices.source);

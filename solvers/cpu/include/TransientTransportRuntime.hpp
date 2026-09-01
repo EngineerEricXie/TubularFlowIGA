@@ -23,11 +23,43 @@ namespace iga {
 
 enum class TransportStepPhase { Committed, TrialOpen, TrialSolved, CommitPrepared };
 
+template <class FieldValueAt>
+inline void IntegrateTransportFieldMass(const Element& element, std::size_t fields,
+	FieldValueAt&& value_at, const VolumeQuadratureRule& quadrature,
+	std::vector<double>& result)
+{
+	if (result.size() != fields)
+		throw std::invalid_argument("transport field-mass result has the wrong field count");
+	ValidateVolumeQuadratureRule(element, quadrature);
+	for (const auto& point : quadrature.Points()) {
+		const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+			point.parametric[2]);
+		const auto measure = point.weight*basis.raw_determinant;
+		for (std::size_t field = 0; field < fields; ++field)
+			for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+				result[field] += measure*basis.value[a]*value_at(element.connectivity[a], field);
+	}
+}
+
+inline double IntegrateTransportPhysicalVolume(const Element& element,
+	const VolumeQuadratureRule& quadrature)
+{
+	ValidateVolumeQuadratureRule(element, quadrature);
+	double result = 0.0;
+	for (const auto& point : quadrature.Points()) {
+		const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+			point.parametric[2]);
+		result += point.weight*basis.raw_determinant;
+	}
+	return result;
+}
+
 class TransientTransportRuntime {
 public:
 	TransientTransportRuntime(Database& database, MPI_Comm communicator,
 		const SimulationConfiguration& configuration,
-		CompiledLinearSystem system, const std::vector<int>& labels)
+		CompiledLinearSystem system, const std::vector<int>& labels,
+		std::map<std::uint64_t, VolumeQuadratureRule> volume_rules = {})
 		: communicator_(communicator), configuration_(configuration),
 			system_(std::move(system)),
 			coupling_patterns_(BuildTransportCouplingPatterns(system_, configuration_)),
@@ -39,6 +71,7 @@ public:
 			throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
 		if (labels_.size() != database.header().nodes)
 			throw std::runtime_error("transport boundary labels do not match database nodes");
+		BindVolumeRules(std::move(volume_rules));
 		const auto boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
 		left_ = assembler_.CreateMatrix(coupling_patterns_.left);
 		previous_ = assembler_.CreateMatrix(coupling_patterns_.previous);
@@ -129,10 +162,12 @@ public:
 		MatZeroEntries(previous_);
 		VecSet(forcing_, 0.0);
 		for (const auto& element : assembler_.elements()) {
+			BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
 			BuildGenericTransportElementWithVelocity(element,
 				[&velocity, this](std::int32_t node) -> const std::array<double, 3>& {
 					return velocity.at(ghost_position_.at(node));
-				}, system_, step_configuration, element_matrices_);
+				}, system_, step_configuration, element_matrices_, VolumeRule(element),
+				surface_quadrature.Rule());
 			assembler_.AddElementMatrix(left_, element, element_matrices_.left);
 			assembler_.AddElementMatrix(previous_, element, element_matrices_.previous);
 			assembler_.AddElementVector(forcing_, element, element_matrices_.source);
@@ -269,23 +304,13 @@ public:
 	{
 		if (state.size() != labels_.size()*system_.fields.size())
 			throw std::runtime_error("VCA transport state size is invalid");
-		constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
-			0.6699905217924281, 0.9305681557970262}};
-		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
-			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& element : assembler_.elements()) {
 			if (!assembler_.OwnsElementByMinimumNode(element)) continue;
-			for (std::size_t qz = 0; qz < 4; ++qz)
-				for (std::size_t qy = 0; qy < 4; ++qy)
-					for (std::size_t qx = 0; qx < 4; ++qx) {
-						const auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
-						const double measure = weights[qx]*weights[qy]*weights[qz]*basis.determinant;
-						for (std::size_t field = 0; field < system_.fields.size(); ++field)
-							for (std::size_t a = 0; a < element.connectivity.size(); ++a)
-								local[field] += measure*basis.value[a]*state[
-									static_cast<std::size_t>(element.connectivity[a])*system_.fields.size()+field];
-					}
+			IntegrateTransportFieldMass(element, system_.fields.size(),
+				[&state, this](std::int32_t node, std::size_t field) {
+					return state[static_cast<std::size_t>(node)*system_.fields.size()+field];
+				}, VolumeRule(element), local);
 		}
 		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()), MPI_DOUBLE,
 			MPI_SUM, communicator_);
@@ -298,23 +323,13 @@ public:
 	std::map<std::string, double> TotalMass() const
 	{
 		const auto state = GatherRequiredState();
-		constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
-			0.6699905217924281, 0.9305681557970262}};
-		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
-			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& element : assembler_.elements()) {
 			if (!assembler_.OwnsElementByMinimumNode(element)) continue;
-			for (std::size_t qz = 0; qz < 4; ++qz)
-				for (std::size_t qy = 0; qy < 4; ++qy)
-					for (std::size_t qx = 0; qx < 4; ++qx) {
-						const auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
-						const double measure = weights[qx]*weights[qy]*weights[qz]*basis.determinant;
-						for (std::size_t field = 0; field < system_.fields.size(); ++field)
-							for (std::size_t a = 0; a < element.connectivity.size(); ++a)
-								local[field] += measure*basis.value[a]*state[
-									ghost_position_.at(element.connectivity[a])*system_.fields.size()+field];
-					}
+			IntegrateTransportFieldMass(element, system_.fields.size(),
+				[&state, this](std::int32_t node, std::size_t field) {
+					return state[ghost_position_.at(node)*system_.fields.size()+field];
+				}, VolumeRule(element), local);
 		}
 		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()), MPI_DOUBLE,
 			MPI_SUM, communicator_);
@@ -326,22 +341,13 @@ public:
 
 	std::map<std::string, double> SourceIntegrals() const
 	{
-		constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
-			0.6699905217924281, 0.9305681557970262}};
-		constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
-			0.6521451548625461, 0.3478548451374539}};
 		std::vector<double> local(system_.fields.size(), 0.0), global(system_.fields.size(), 0.0);
 		for (const auto& term : system_.terms)
 			if (term.kind == TermKind::VolumeSource)
 				for (const auto& element : assembler_.elements()) {
 					if (!assembler_.OwnsElementByMinimumNode(element)) continue;
-					for (std::size_t qz = 0; qz < 4; ++qz)
-						for (std::size_t qy = 0; qy < 4; ++qy)
-							for (std::size_t qx = 0; qx < 4; ++qx) {
-								const auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
-								local[term.equation] += term.coefficient*weights[qx]*weights[qy]
-									*weights[qz]*basis.determinant;
-							}
+					local[term.equation] += term.coefficient
+						*IntegrateTransportPhysicalVolume(element, VolumeRule(element));
 				}
 		MPI_Allreduce(local.data(), global.data(), static_cast<int>(global.size()), MPI_DOUBLE,
 			MPI_SUM, communicator_);
@@ -352,6 +358,29 @@ public:
 	}
 
 private:
+	void BindVolumeRules(std::map<std::uint64_t, VolumeQuadratureRule> volume_rules)
+	{
+		if (volume_rules.empty())
+			for (const auto& element : assembler_.elements()) {
+				FullCell4x4x4VolumeQuadratureProvider provider(element);
+				volume_rules.emplace(element.id, provider.Rule());
+			}
+		if (volume_rules.size() != assembler_.elements().size())
+			throw std::runtime_error("transport volume quadrature catalog does not cover each local element exactly once");
+		for (const auto& element : assembler_.elements()) {
+			const auto found = volume_rules.find(element.id);
+			if (found == volume_rules.end())
+				throw std::runtime_error("transport volume quadrature catalog is missing an element id");
+			ValidateVolumeQuadratureRule(element, found->second);
+		}
+		volume_rules_ = std::move(volume_rules);
+	}
+
+	const VolumeQuadratureRule& VolumeRule(const Element& element) const
+	{
+		return volume_rules_.at(element.id);
+	}
+
 	void RequirePhase(TransportStepPhase required, const char* operation) const
 	{
 		if (phase_ != required)
@@ -398,6 +427,7 @@ private:
 	TransportCouplingPatterns coupling_patterns_;
 	OwnedRowAssembler assembler_;
 	GenericTransportMatrices element_matrices_;
+	std::map<std::uint64_t, VolumeQuadratureRule> volume_rules_;
 	std::vector<int> labels_;
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;

@@ -151,6 +151,19 @@ int main()
 			+7.0*0.37*0.8*synthetic_basis.value[a]) < 2e-13);
 		assert(std::abs(interior_traction[4*a+2]) < 2e-13);
 	}
+	std::vector<double> interior_species(64);
+	std::vector<std::vector<double>> interior_species_fields(64, std::vector<double>(1));
+	for (std::size_t a = 0; a < 64; ++a) {
+		interior_species[a] = element.bezier_points[a][0];
+		interior_species_fields[a][0] = interior_species[a];
+	}
+	assert(std::abs(iga::IntegrateBoundarySpeciesFlux(element, state, interior_species,
+		interior_surface, 71)-0.37*2.0*0.6*0.27) < 2e-13);
+	const auto interior_transport = iga::IntegrateBoundaryTransportFlux(element, state,
+		interior_species_fields, 0, {1.0}, {0.5}, interior_surface, 71);
+	assert(std::abs(interior_transport.concentration_integral-0.37*0.27) < 2e-13);
+	assert(std::abs(interior_transport.total_outward_flux-0.37*0.6*(2.0*0.27-0.5))
+		< 2e-13);
 	auto repeated = element;
 	repeated.boundary_labels[4] = 2;
 	iga::BodyFittedSurface4x4QuadratureProvider repeated_quadrature(repeated);

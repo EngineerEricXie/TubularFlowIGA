@@ -47,7 +47,10 @@ int main(int argc, char** argv)
 		const auto assembly_start = std::chrono::steady_clock::now();
 		iga::GenericTransportMatrices element_matrices(coupling_patterns);
 		for (const auto& element : assembler.elements()) {
-			iga::BuildGenericTransportElement(element, velocity, system, converted, element_matrices);
+			iga::FullCell4x4x4VolumeQuadratureProvider volume_quadrature(element);
+			iga::BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
+			iga::BuildGenericTransportElement(element, velocity, system, converted,
+				element_matrices, volume_quadrature.Rule(), surface_quadrature.Rule());
 			assembler.AddElementMatrix(left, element, element_matrices.left);
 			assembler.AddElementMatrix(previous, element, element_matrices.previous);
 		}

@@ -237,6 +237,33 @@ inline std::array<double, 2> IntegrateBoundaryScalarAndArea(
 	return result;
 }
 
+inline double IntegrateBoundarySpeciesFlux(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_flow,
+	const std::vector<double>& nodal_species, const SurfaceQuadratureRule& quadrature,
+	int boundary_id)
+{
+	if (nodal_flow.size() != element.connectivity.size()
+		|| nodal_species.size() != element.connectivity.size())
+		throw std::runtime_error("boundary species state does not match element connectivity");
+	ValidateSurfaceQuadratureRule(element, quadrature);
+	double flux = 0.0;
+	for (const auto& point : quadrature.Points()) {
+		if (point.boundary_id != boundary_id) continue;
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		std::array<double, 3> velocity{};
+		double concentration = 0.0;
+		for (std::size_t a = 0; a < nodal_flow.size(); ++a) {
+			concentration += basis.value[a]*nodal_species[a];
+			for (int component = 0; component < 3; ++component)
+				velocity[component] += basis.value[a]*nodal_flow[a][component];
+		}
+		for (int component = 0; component < 3; ++component)
+			flux += point.weight*velocity[component]*point.normal[component]*concentration;
+	}
+	return flux;
+}
+
 inline double IntegrateBoundarySpeciesFlux(const Element& element, std::size_t face,
 	const std::vector<std::array<double, 4>>& nodal_flow,
 	const std::vector<double>& nodal_species)
@@ -283,6 +310,51 @@ struct BoundarySpeciesMeasurement {
 	double concentration_integral = 0.0;
 	double total_outward_flux = 0.0;
 };
+
+inline BoundarySpeciesMeasurement IntegrateBoundaryTransportFlux(
+	const Element& element, const std::vector<std::array<double, 4>>& nodal_flow,
+	const std::vector<std::vector<double>>& nodal_species, std::size_t equation,
+	const std::vector<double>& advection_coefficients,
+	const std::vector<double>& diffusion_coefficients, const SurfaceQuadratureRule& quadrature,
+	int boundary_id)
+{
+	if (nodal_flow.size() != element.connectivity.size()
+		|| nodal_species.size() != element.connectivity.size()
+		|| advection_coefficients.size() != diffusion_coefficients.size()
+		|| equation >= advection_coefficients.size())
+		throw std::runtime_error("boundary transport flux dimensions are inconsistent");
+	for (const auto& values : nodal_species)
+		if (values.size() != advection_coefficients.size())
+			throw std::runtime_error("boundary transport nodal field count is inconsistent");
+	ValidateSurfaceQuadratureRule(element, quadrature);
+	BoundarySpeciesMeasurement result;
+	for (const auto& point : quadrature.Points()) {
+		if (point.boundary_id != boundary_id) continue;
+		const auto basis = EvaluateBoundaryBasis(element, point.parametric[0],
+			point.parametric[1], point.parametric[2]);
+		std::array<double, 3> velocity{};
+		std::vector<double> concentration(advection_coefficients.size(), 0.0);
+		std::vector<std::array<double, 3>> gradient(advection_coefficients.size(),
+			{0.0, 0.0, 0.0});
+		for (std::size_t a = 0; a < nodal_flow.size(); ++a) {
+			for (int component = 0; component < 3; ++component)
+				velocity[component] += basis.value[a]*nodal_flow[a][component];
+			for (std::size_t field = 0; field < concentration.size(); ++field) {
+				concentration[field] += basis.value[a]*nodal_species[a][field];
+				for (int component = 0; component < 3; ++component)
+					gradient[field][component] += basis.gradient[a][component]
+						*nodal_species[a][field];
+			}
+		}
+		result.concentration_integral += point.weight*concentration[equation];
+		for (std::size_t field = 0; field < concentration.size(); ++field)
+			for (int component = 0; component < 3; ++component)
+				result.total_outward_flux += point.weight*point.normal[component]
+					*(advection_coefficients[field]*concentration[field]*velocity[component]
+						-diffusion_coefficients[field]*gradient[field][component]);
+	}
+	return result;
+}
 
 inline BoundarySpeciesMeasurement IntegrateBoundaryTransportFlux(
 	const Element& element, std::size_t face,

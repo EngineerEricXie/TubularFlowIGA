@@ -4,6 +4,7 @@
 #include "CaseInput.hpp"
 #include "ElementGeometry.hpp"
 #include "IgaDatabase.hpp"
+#include "Quadrature.hpp"
 
 #include <petscsys.h>
 
@@ -207,18 +208,17 @@ struct TransportMatrices {
 };
 
 inline TransportMatrices BuildTransportElement(const Element& element,
-	const std::vector<std::array<double, 3>>& nodal_velocity, const TransportParameters& p)
+	const std::vector<std::array<double, 3>>& nodal_velocity, const TransportParameters& p,
+	const VolumeQuadratureRule& quadrature)
 {
-	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
-	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461, 0.6521451548625461, 0.3478548451374539}};
+	ValidateVolumeQuadratureRule(element, quadrature);
 	const auto nen = element.connectivity.size();
 	const auto ndof = 2 * nen;
 	TransportMatrices matrices{std::vector<PetscScalar>(ndof * ndof, 0.0), std::vector<PetscScalar>(ndof * ndof, 0.0)};
-	for (std::size_t qz = 0; qz < 4; ++qz)
-		for (std::size_t qy = 0; qy < 4; ++qy)
-			for (std::size_t qx = 0; qx < 4; ++qx) {
-				auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
-				const auto measure = weights[qx] * weights[qy] * weights[qz] * basis.determinant;
+	for (const auto& point : quadrature.Points()) {
+				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+					point.parametric[2]);
+				const auto measure = point.weight*basis.raw_determinant;
 				std::array<double, 3> velocity{};
 				for (std::size_t a = 0; a < nen; ++a)
 					for (int d = 0; d < 3; ++d)
@@ -245,8 +245,15 @@ inline TransportMatrices BuildTransportElement(const Element& element,
 						matrices.previous[r0*ndof+c0] += basis.value[a]*basis.value[b]*measure;
 						matrices.previous[rp*ndof+cp] += test_plus[a]*basis.value[b]*measure;
 					}
-			}
+	}
 	return matrices;
+}
+
+inline TransportMatrices BuildTransportElement(const Element& element,
+	const std::vector<std::array<double, 3>>& nodal_velocity, const TransportParameters& p)
+{
+	FullCell4x4x4VolumeQuadratureProvider quadrature(element);
+	return BuildTransportElement(element, nodal_velocity, p, quadrature.Rule());
 }
 
 } // namespace iga

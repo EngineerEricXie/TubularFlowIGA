@@ -67,7 +67,9 @@ struct GenericTransportMatrices {
 template <class VelocityAt>
 inline void BuildGenericTransportElementWithVelocity(const Element& element,
 	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
-	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices)
+	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices,
+	const VolumeQuadratureRule& volume_quadrature,
+	const SurfaceQuadratureRule& surface_quadrature)
 {
 	if (system.fields.empty()) throw std::runtime_error("linear transport system has no fields");
 	if (!(system.dt > 0.0)) throw std::runtime_error("linear transport time step must be positive");
@@ -76,6 +78,8 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 	if (matrices.left.pattern().fields() != fields
 		|| matrices.previous.pattern().fields() != fields)
 		throw std::invalid_argument("transport scratch has the wrong field count");
+	ValidateVolumeQuadratureRule(element, volume_quadrature);
+	ValidateSurfaceQuadratureRule(element, surface_quadrature);
 	matrices.Reset(nen, fields);
 	for (const auto& definition : system.stabilization) {
 		const auto found = system.field_index.find(definition.equation);
@@ -88,13 +92,10 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 		if ((term.kind == TermKind::Advection) && term.velocity != system.velocity_source)
 			throw std::runtime_error("CPU linear transport received inconsistent velocity sources");
 
-	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
-	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461, 0.6521451548625461, 0.3478548451374539}};
-	for (std::size_t qz = 0; qz < 4; ++qz)
-		for (std::size_t qy = 0; qy < 4; ++qy)
-			for (std::size_t qx = 0; qx < 4; ++qx) {
-				auto basis = EvaluateBasis(element, points[qx], points[qy], points[qz]);
-				const auto measure = weights[qx] * weights[qy] * weights[qz] * basis.determinant;
+	for (const auto& point : volume_quadrature.Points()) {
+				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+					point.parametric[2]);
+				const auto measure = point.weight*basis.raw_determinant;
 				std::array<double, 3> velocity{};
 				for (std::size_t a = 0; a < nen; ++a)
 					for (int d = 0; d < 3; ++d)
@@ -144,30 +145,16 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 						}
 					}
 				}
-			}
-	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
-	constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
-	constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
-	for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
-		const auto label = element.boundary_labels[face];
-		if (label < 0) continue;
+	}
+	for (const auto& point : surface_quadrature.Points()) {
+		const auto label = point.boundary_id;
 		const auto boundary = std::find_if(configuration.boundaries.begin(), configuration.boundaries.end(),
 			[label](const NamedBoundaryDefinition& item) { return item.label == label; });
 		if (boundary == configuration.boundaries.end())
 			throw std::runtime_error("element boundary face has no simulation_config.json definition");
-		for (std::size_t qi = 0; qi < 4; ++qi)
-			for (std::size_t qj = 0; qj < 4; ++qj) {
-				std::array<double, 3> coordinate{};
-				coordinate[fixed_axis[face]] = fixed_value[face];
-				coordinate[varying_axes[face][0]] = points[qi];
-				coordinate[varying_axes[face][1]] = points[qj];
-				const auto basis = EvaluateBasis(element, coordinate[0], coordinate[1], coordinate[2]);
-				double inverse_normal = 0.0;
-				for (int physical = 0; physical < 3; ++physical)
-					inverse_normal += basis.inverse_jacobian[fixed_axis[face]][physical]
-						* basis.inverse_jacobian[fixed_axis[face]][physical];
-				const auto measure = weights[qi] * weights[qj] * 2.0 * basis.determinant
-					* std::sqrt(inverse_normal);
+				const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
+					point.parametric[2]);
+				const auto measure = point.weight;
 				for (const auto& condition : boundary->conditions) {
 					const auto field = system.field_index.find(condition.field);
 					if (field == system.field_index.end()) continue;
@@ -188,8 +175,30 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 						}
 					}
 				}
-			}
 	}
+}
+
+template <class VelocityAt>
+inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const Element& element,
+	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration, const VolumeQuadratureRule& volume_quadrature,
+	const SurfaceQuadratureRule& surface_quadrature)
+{
+	GenericTransportMatrices matrices(BuildTransportCouplingPatterns(system, configuration));
+	BuildGenericTransportElementWithVelocity(element, std::forward<VelocityAt>(velocity_at),
+		system, configuration, matrices, volume_quadrature, surface_quadrature);
+	return matrices;
+}
+
+template <class VelocityAt>
+inline void BuildGenericTransportElementWithVelocity(const Element& element,
+	VelocityAt&& velocity_at, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices)
+{
+	FullCell4x4x4VolumeQuadratureProvider volume_quadrature(element);
+	BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
+	BuildGenericTransportElementWithVelocity(element, std::forward<VelocityAt>(velocity_at),
+		system, configuration, matrices, volume_quadrature.Rule(), surface_quadrature.Rule());
 }
 
 template <class VelocityAt>
@@ -201,6 +210,29 @@ inline GenericTransportMatrices BuildGenericTransportElementWithVelocity(const E
 	BuildGenericTransportElementWithVelocity(element, std::forward<VelocityAt>(velocity_at),
 		system, configuration, matrices);
 	return matrices;
+}
+
+inline void BuildGenericTransportElement(const Element& element,
+	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration, GenericTransportMatrices& matrices,
+	const VolumeQuadratureRule& volume_quadrature,
+	const SurfaceQuadratureRule& surface_quadrature)
+{
+	BuildGenericTransportElementWithVelocity(element,
+		[&nodal_velocity](std::int32_t node) -> const std::array<double, 3>& {
+			return nodal_velocity.at(static_cast<std::size_t>(node));
+		}, system, configuration, matrices, volume_quadrature, surface_quadrature);
+}
+
+inline GenericTransportMatrices BuildGenericTransportElement(const Element& element,
+	const std::vector<std::array<double, 3>>& nodal_velocity, const CompiledLinearSystem& system,
+	const SimulationConfiguration& configuration, const VolumeQuadratureRule& volume_quadrature,
+	const SurfaceQuadratureRule& surface_quadrature)
+{
+	return BuildGenericTransportElementWithVelocity(element,
+		[&nodal_velocity](std::int32_t node) -> const std::array<double, 3>& {
+			return nodal_velocity.at(static_cast<std::size_t>(node));
+		}, system, configuration, volume_quadrature, surface_quadrature);
 }
 
 inline void BuildGenericTransportElement(const Element& element,
