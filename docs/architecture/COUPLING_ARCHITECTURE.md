@@ -350,13 +350,30 @@ reference: upstream 1D segment -> replacement 1D segment -> downstream 1D segmen
 coupled:   upstream 1D domain  -> body-fitted 3D straight tube -> downstream 1D domain
 ```
 
-Both cases use identical SI length, radius, density, viscosity, wall law,
-terminal model, inlet waveform, macro-step interval, and total axial length.
-The 3D interface planes use their geometric outward normals. The benchmark
-records P/Q waveforms at both interfaces, pressure drop, phase and pulse
-transit, per-step mass imbalance, coupling residual histories, iteration
-counts, and tolerance sensitivity. Phase 1 cannot start until Phase 0 proves
-rollback determinism and standalone/VCA parity.
+The executable smoke uses geometrically identical circular sections. The
+spatial-verification case uses a unit-square body-fitted 3D duct because it has
+an independent analytic resistance and velocity series on a regular
+tensor-product spline grid. Its all-1D replacement has the same area and a
+hydraulic-equivalent circular length, so the reference and coupled paths have
+the same exact steady resistance even though their cross-section shapes differ.
+This distinction is deliberate and is recorded by the test rather than hidden
+as an apparent geometric-equivalence claim.
+
+The spatial gate uses open-uniform cubic C2 bases and shape-regular refinements.
+At each transverse resolution it solves 3D lengths 1, 1.5, and 2 m with the
+same axial spacing, verifies that consecutive half-length pressure slopes
+converge to one length-independent bulk coefficient, and compares that
+coefficient with the analytic square-duct value. This cancels finite cap
+effects without assuming they are constant: the third length directly gates
+that assumption. The fine cases additionally compare the absolute external
+drop with the all-1D reference and bound both interface pressure jumps.
+
+All cases use identical SI density, viscosity, terminal model, inlet waveform,
+macro-step interval, and outward-normal port convention. The broader temporal
+benchmark records P/Q waveforms at both interfaces, pressure drop, phase and
+pulse transit, per-step mass imbalance, coupling residual histories, iteration
+counts, and tolerance sensitivity. Phase 1 cannot close until those temporal
+checks supplement the completed spatial gate.
 
 ## Compatibility matrix
 

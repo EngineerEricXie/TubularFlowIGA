@@ -1,8 +1,57 @@
 # Phase 1 report
 
-Status: PR 1.4 complete; Phase 1 remains in progress pending the full
-straight-vessel convergence benchmark. Restart and a
+Status: PR 1.4 and the straight-vessel steady spatial gate are complete.
+Phase 1 remains in progress pending temporal waveform/timestep verification
+and the final phase-level compatibility/architecture review. Restart and a
 general multidomain graph remain deferred.
+
+## Straight-vessel steady spatial verification
+
+The production opt-in target `make coupling-convergence-test` constructs its
+`.ntiga`, VTK control mesh, velocity profile, and 1D/3D cases at run time. The
+3D section is a unit-square straight duct with an independent analytic
+Poiseuille coefficient `28.45415376956191 Pa s/m3` for unit length and unit
+viscosity. The all-1D middle section uses the area-matched circular radius and
+a hydraulic-equivalent length, giving the independently evaluated total drop
+`0.07871963622699861 Pa` at `Q=1e-3 m3/s`; the native 1D runtime reproduced it
+to roundoff.
+
+The fixture uses open-uniform cubic C2 tensor-product splines. Dependency-free
+audits cover direct/extracted basis agreement, partition and linear precision,
+C2 derivative continuity, nonsymmetric tensor orientation, sparse serialized
+extraction, affine Bézier coordinates, positive Jacobians, boundary labels,
+wall traces, shared connectivity, one/two-rank ownership, profile symmetry and
+walls, L2 convergence, energy resistance, and a discrete Ritz weak residual.
+`-UNDEBUG` is explicit on the fixture target so these assertions remain active
+under caller-supplied release flags.
+
+Each refinement `n=2,4,8` solves lengths `L=1,1.5,2 m` with axial counts
+`nx=n*L`. Consecutive half-length slopes make the assumed length-independent
+end correction testable. The worst combined 3D/external slope disagreement
+decreased `5.8373% -> 0.21937% -> 0.028604%`; the outlet static/traction gap
+range decreased `3.9580e-4 -> 3.0233e-5 -> 3.2919e-7 Pa`. End-cancelled 3D
+bulk coefficients were `20.7369671`, `27.3152612`, and `28.3726195 Pa s/m3`,
+with relative errors `27.1215%`, `4.00255%`, and `0.286546%` and observed
+orders `2.76044`, `3.80408`. External-path bulk errors were `25.7305%`,
+`3.89630%`, and `0.285389%`, with orders `2.72330`, `3.77110`. The fine
+Richardson order was `2.63725`, extrapolated coefficient `28.5751226`, and
+fine GCI `0.892159%` (gate: at most 1%).
+
+All nine cases had zero final two-step resistance change, seven total Aitken
+sweeps across three physical steps, roundoff interface and 3D mass residuals,
+and zero wall flow. Fine direct all-1D pressure-drop errors were
+`1.7129%`, `1.4965%`, and `1.3339%` for increasing length (gate: 2%). The
+upstream fixed-point pressure jump was zero; the fine outlet static/traction
+jump was about `-3.42e-4 Pa` and remained within 0.5% of the absolute reference
+drop. The final production run passed in `54:54.62`, used `815288 kB` peak RSS,
+and exited zero on the local PETSc 3.15 installation.
+
+An earlier raw cap-to-cap ladder was rejected because its length-independent
+end pressure offset produced only first-order-looking convergence. A numerical
+review also rejected accepting two-length cancellation alone: the production
+gate now uses three lengths, enforces converging/fine length linearity, retains
+absolute external-drop and interface-jump bounds, and treats neither static
+cap pressure nor the natural traction parameter as interchangeable.
 
 The 3D nonlinear budget remains backward-compatible at 30 iterations and is
 now configurable in every coupling mode with `--three-d-max-newton N` (positive
