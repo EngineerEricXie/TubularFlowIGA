@@ -470,6 +470,17 @@ configured-open-loop inlet policy, the downstream coupled-root policy, and the
 observation ports needed by the established history contract. Native binding
 then confirms every declared locator and boundary label before the first step.
 
+PR 2.4 adds a separate acyclic pressure-flow plan for branch execution. Edge
+direction comes only from port requirements: a pressure receiver provides the
+flow transferred to its peer, while that flow receiver provides the measured
+pressure residual. The plan requires a unique declared source and uses
+topological domain order with lexical tie-breaking; its component residual
+vector is always ordered by edge ID. The executor installs every pressure input
+for a domain, solves it once, then transfers all of its outgoing flows. Fixed
+and Aitken relaxation therefore remain one component-wide operation across all
+interfaces. Cycles, disconnected components, and same-kind edges remain
+unsupported.
+
 ## Validation manifest
 
 Fast dependency-free baseline:

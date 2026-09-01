@@ -51,6 +51,14 @@ int main(int argc, char** argv)
 				std::cout << "sequential_pressure_flow_runner_compatible=no"
 					<< " reason=" << error.what() << '\n';
 			}
+			try {
+				(void)iga::MakeAcyclicPressureFlowPlan(configuration.graph,
+					configuration.start_domain_id);
+				std::cout << "acyclic_pressure_flow_component_compatible=yes\n";
+			} catch (const std::exception& error) {
+				std::cout << "acyclic_pressure_flow_component_compatible=no"
+					<< " reason=" << error.what() << '\n';
+			}
 			return 0;
 		}
 		if (version == 3) {

@@ -1,5 +1,6 @@
 #include "SimulationGraph.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <functional>
 #include <stdexcept>
@@ -56,6 +57,33 @@ iga::SimulationGraph StraightChain()
 		{std::move(right), std::move(left)});
 }
 
+iga::SimulationGraph Bifurcation(bool permuted = false)
+{
+	auto source = Domain("source", iga::DomainKind::OneDFlow,
+		{LogicalPort("source", "terminal", "outlet:2", iga::PortQuantity::MeanPressure)});
+	auto junction = Domain("junction", iga::DomainKind::ThreeDBodyFittedFlow,
+		{LogicalPort("junction", "inlet", "boundary:1", iga::PortQuantity::FlowRate),
+		 LogicalPort("junction", "right", "boundary:3", iga::PortQuantity::MeanPressure),
+		 LogicalPort("junction", "left", "boundary:2", iga::PortQuantity::MeanPressure)});
+	auto left = Domain("branch_a", iga::DomainKind::OneDFlow,
+		{LogicalPort("branch_a", "root", "root", iga::PortQuantity::FlowRate)});
+	auto right = Domain("branch_b", iga::DomainKind::OneDFlow,
+		{LogicalPort("branch_b", "root", "root", iga::PortQuantity::FlowRate)});
+	std::vector<iga::CouplingEdge> edges{
+		{"c_right", {"junction", "right"}, {"branch_b", "root"},
+			iga::CouplingLaw::PressureFlow},
+		{"a_source", {"source", "terminal"}, {"junction", "inlet"},
+			iga::CouplingLaw::PressureFlow},
+		{"b_left", {"junction", "left"}, {"branch_a", "root"},
+			iga::CouplingLaw::PressureFlow}};
+	if (permuted) {
+		std::reverse(edges.begin(), edges.end());
+		for (auto& edge : edges) std::swap(edge.first, edge.second);
+	}
+	return iga::SimulationGraph({std::move(right), std::move(source), std::move(left),
+		std::move(junction)}, std::move(edges));
+}
+
 } // namespace
 
 int main()
@@ -74,6 +102,8 @@ int main()
 	assert((reverse.domain_ids == std::vector<std::string>{"downstream", "roi", "upstream"}));
 	const auto pressure_flow_plan = iga::MakeSequentialPressureFlowPlan(graph, "upstream");
 	assert(pressure_flow_plan.domain_ids == plan.domain_ids);
+	const auto component_plan = iga::MakeAcyclicPressureFlowPlan(graph, "upstream");
+	assert(component_plan.domain_order == plan.domain_ids);
 	iga::ValidateConnectedGraph(graph, "upstream");
 	RequireRejected([&graph] {
 		(void)iga::MakeSequentialPressureFlowPlan(graph, "downstream");
@@ -189,6 +219,30 @@ int main()
 	});
 
 	{
+		const auto branch = Bifurcation();
+		const auto branch_plan = iga::MakeAcyclicPressureFlowPlan(branch, "source");
+		assert((branch_plan.domain_order == std::vector<std::string>{"source", "junction",
+			"branch_a", "branch_b"}));
+		assert(branch_plan.interfaces.size() == 3);
+		assert(branch_plan.interfaces[0].edge_id == "a_source");
+		assert(branch_plan.interfaces[1].edge_id == "b_left");
+		assert(branch_plan.interfaces[2].edge_id == "c_right");
+		assert(branch_plan.interfaces[1].flow_provider
+			== iga::PortRef({"junction", "left"}));
+		assert(branch_plan.interfaces[1].flow_receiver
+			== iga::PortRef({"branch_a", "root"}));
+		const auto permuted_plan = iga::MakeAcyclicPressureFlowPlan(Bifurcation(true), "source");
+		assert(permuted_plan.domain_order == branch_plan.domain_order);
+		for (std::size_t i = 0; i < branch_plan.interfaces.size(); ++i) {
+			assert(permuted_plan.interfaces[i].edge_id == branch_plan.interfaces[i].edge_id);
+			assert(permuted_plan.interfaces[i].flow_provider
+				== branch_plan.interfaces[i].flow_provider);
+		}
+		RequireRejected([&branch] {
+			(void)iga::MakeAcyclicPressureFlowPlan(branch, "branch_a");
+		});
+	}
+	{
 		auto center = Domain("center", iga::DomainKind::ThreeDBodyFittedFlow,
 			{LogicalPort("center", "a", "a", iga::PortQuantity::FlowRate),
 			 LogicalPort("center", "b", "b", iga::PortQuantity::FlowRate),
@@ -207,6 +261,9 @@ int main()
 		RequireRejected([&branch] { (void)iga::MakeSequentialPlan(branch, "a"); });
 		RequireRejected([&branch] {
 			(void)iga::MakeSequentialPressureFlowPlan(branch, "a");
+		});
+		RequireRejected([&branch] {
+			(void)iga::MakeAcyclicPressureFlowPlan(branch, "a");
 		});
 	}
 	{
@@ -230,6 +287,9 @@ int main()
 			Domain("right", iga::DomainKind::OneDFlow, {right})},
 			{{"same_kind", {"left", "a"}, {"right", "b"}, iga::CouplingLaw::PressureFlow}});
 		RequireRejected([&same_kind] { (void)iga::MakeSequentialPlan(same_kind, "left"); });
+		RequireRejected([&same_kind] {
+			(void)iga::MakeAcyclicPressureFlowPlan(same_kind, "left");
+		});
 	}
 	{
 		std::vector<iga::DomainNode> domains;
@@ -249,6 +309,9 @@ int main()
 			{"cycle_edge_2", {"cycle_2", "right"}, {"cycle_3", "left"}, iga::CouplingLaw::PressureFlow},
 			{"cycle_edge_3", {"cycle_3", "right"}, {"cycle_0", "left"}, iga::CouplingLaw::PressureFlow}});
 		RequireRejected([&cycle] { (void)iga::MakeSequentialPlan(cycle, "cycle_0"); });
+		RequireRejected([&cycle] {
+			(void)iga::MakeAcyclicPressureFlowPlan(cycle, "cycle_0");
+		});
 	}
 	return 0;
 }

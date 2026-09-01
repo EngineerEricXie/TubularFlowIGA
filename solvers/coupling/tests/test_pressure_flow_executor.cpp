@@ -50,6 +50,33 @@ iga::SimulationGraph Chain()
 		{"right", {"mid", "outlet"}, {"down", "root"}, iga::CouplingLaw::PressureFlow}});
 }
 
+iga::SimulationGraph Branch(bool permuted = false)
+{
+	auto source = iga::DomainNode{"up", iga::DomainKind::OneDFlow,
+		{Port("up", "terminal", {iga::PortQuantity::MeanPressure})}};
+	auto junction = iga::DomainNode{"junction", iga::DomainKind::ThreeDBodyFittedFlow,
+		{Port("junction", "inlet", {iga::PortQuantity::FlowRate}),
+		 Port("junction", "left", {iga::PortQuantity::MeanPressure}),
+		 Port("junction", "right", {iga::PortQuantity::MeanPressure})}};
+	auto left = iga::DomainNode{"branch_a", iga::DomainKind::OneDFlow,
+		{Port("branch_a", "root", {iga::PortQuantity::FlowRate})}};
+	auto right = iga::DomainNode{"branch_b", iga::DomainKind::OneDFlow,
+		{Port("branch_b", "root", {iga::PortQuantity::FlowRate})}};
+	std::vector<iga::CouplingEdge> edges{
+		{"c_right", {"junction", "right"}, {"branch_b", "root"},
+			iga::CouplingLaw::PressureFlow},
+		{"a_source", {"up", "terminal"}, {"junction", "inlet"},
+			iga::CouplingLaw::PressureFlow},
+		{"b_left", {"junction", "left"}, {"branch_a", "root"},
+			iga::CouplingLaw::PressureFlow}};
+	if (permuted) {
+		std::reverse(edges.begin(), edges.end());
+		for (auto& edge : edges) std::swap(edge.first, edge.second);
+	}
+	return iga::SimulationGraph({std::move(right), std::move(source), std::move(left),
+		std::move(junction)}, std::move(edges));
+}
+
 class FakeRuntime : public iga::CoupledDomainRuntime {
 public:
 	FakeRuntime(std::string id, iga::DomainKind kind, std::vector<iga::CouplingPort> ports)
@@ -95,9 +122,22 @@ public:
 			RequirePressure("outlet");
 			states_["inlet"] = State(*inputs_.at("inlet").outward_flow_m3_s, 10.0);
 			states_["outlet"] = State(3.0, *inputs_.at("outlet").mean_pressure_pa);
-		} else {
+		} else if (id_ == "down") {
 			RequireFlow("root");
 			states_["root"] = State(*inputs_.at("root").outward_flow_m3_s, 20.0);
+		} else if (id_ == "junction") {
+			RequireFlow("inlet");
+			RequirePressure("left");
+			RequirePressure("right");
+			states_["inlet"] = State(*inputs_.at("inlet").outward_flow_m3_s, 10.0);
+			states_["left"] = State(1.0, *inputs_.at("left").mean_pressure_pa);
+			states_["right"] = State(2.0, *inputs_.at("right").mean_pressure_pa);
+		} else if (id_ == "branch_a" || id_ == "branch_b") {
+			RequireFlow("root");
+			states_["root"] = State(*inputs_.at("root").outward_flow_m3_s,
+				id_ == "branch_a" ? 20.0 : 30.0);
+		} else {
+			throw std::runtime_error("unknown fake runtime domain");
 		}
 		phase_ = Phase::Solved;
 		++solves;
@@ -207,6 +247,23 @@ struct Fixture {
 	FakeRuntime* up = nullptr;
 	FakeRuntime* mid = nullptr;
 	FakeRuntime* down = nullptr;
+	std::unique_ptr<iga::DomainRuntimeRegistry> registry;
+};
+
+struct BranchFixture {
+	explicit BranchFixture(const iga::SimulationGraph& graph)
+	{
+		std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
+		for (const auto& id : {"branch_b", "junction", "up", "branch_a"}) {
+			auto runtime = std::make_unique<FakeRuntime>(id, graph.Domain(id).kind,
+				graph.Domain(id).ports);
+			by_id[id] = runtime.get();
+			runtimes.push_back(std::move(runtime));
+		}
+		registry = std::make_unique<iga::DomainRuntimeRegistry>(graph, std::move(runtimes));
+	}
+
+	std::map<std::string, FakeRuntime*> by_id;
 	std::unique_ptr<iga::DomainRuntimeRegistry> registry;
 };
 
@@ -334,6 +391,127 @@ int main()
 		RequireRejected([&] {
 			iga::PressureFlowComponentExecutor reverse(*fixture.registry, "down", controls);
 		});
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		const auto result = executor.Advance(step,
+			{{"c_right", 0.0}, {"a_source", 0.0}, {"b_left", 0.0}});
+		assert((executor.Plan().domain_order == std::vector<std::string>{"up", "junction",
+			"branch_a", "branch_b"}));
+		assert(result.iterations.size() == 1);
+		assert(result.iterations.front().edges.size() == 3);
+		assert(result.iterations.front().edges[0].edge_id == "a_source");
+		assert(result.iterations.front().edges[1].edge_id == "b_left");
+		assert(result.iterations.front().edges[2].edge_id == "c_right");
+		assert(*result.accepted_ports.at({"junction", "left"}).outward_flow_m3_s == 1.0);
+		assert(*result.accepted_ports.at({"branch_a", "root"}).outward_flow_m3_s == -1.0);
+		assert(*result.accepted_ports.at({"junction", "right"}).outward_flow_m3_s == 2.0);
+		assert(*result.accepted_ports.at({"branch_b", "root"}).outward_flow_m3_s == -2.0);
+		for (const auto& runtime : fixture.by_id) {
+			assert(runtime.second->solves == 1);
+			assert(runtime.second->commits == 1);
+		}
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		iga::PressureFlowExecutionControls controls;
+		controls.method = iga::PressureFlowIterationMethod::Fixed;
+		controls.maximum_iterations = 40;
+		controls.pressure_relative_tolerance = 1.0e-7;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		const auto result = executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}});
+		assert(result.iterations.back().converged);
+		for (const auto& runtime : fixture.by_id) {
+			assert(runtime.second->solves == static_cast<int>(result.iterations.size()));
+			assert(runtime.second->rollbacks+1 == runtime.second->solves);
+		}
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		iga::PressureFlowExecutionControls controls;
+		controls.method = iga::PressureFlowIterationMethod::Aitken;
+		controls.maximum_iterations = 8;
+		controls.pressure_relative_tolerance = 1.0e-12;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		const auto result = executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}});
+		assert(result.iterations.size() == 3 && result.iterations.back().converged);
+		assert(fixture.by_id.at("junction")->solves == 3);
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		fixture.by_id.at("branch_b")->fail_solve = true;
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		RequireRejected([&] { executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}}); });
+		for (const auto& runtime : fixture.by_id) {
+			assert(runtime.second->commits == 0);
+			assert(runtime.second->aborts == 1);
+		}
+	}
+	{
+		const auto branch = Branch(true);
+		BranchFixture fixture(branch);
+		fixture.by_id.at("branch_a")->fail_prepare = true;
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		RequireRejected([&] { executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}}); });
+		for (const auto& runtime : fixture.by_id) {
+			assert(runtime.second->commits == 0);
+			assert(runtime.second->aborts == 1);
+		}
+	}
+	{
+		const auto canonical_graph = Branch();
+		const auto permuted_graph = Branch(true);
+		BranchFixture canonical(canonical_graph);
+		BranchFixture permuted(permuted_graph);
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor canonical_executor(*canonical.registry, "up", controls);
+		iga::PressureFlowComponentExecutor permuted_executor(*permuted.registry, "up", controls);
+		const std::map<std::string, double> pressure{{"a_source", 4.0},
+			{"b_left", 5.0}, {"c_right", 6.0}};
+		const auto canonical_result = canonical_executor.Advance(step, pressure);
+		const auto permuted_result = permuted_executor.Advance(step, pressure);
+		for (const auto& state : canonical_result.accepted_ports) {
+			const auto& other = permuted_result.accepted_ports.at(state.first);
+			assert(state.second.outward_flow_m3_s == other.outward_flow_m3_s);
+			assert(state.second.mean_pressure_pa == other.mean_pressure_pa);
+		}
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		RequireRejected([&] { executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}}); });
+		for (const auto& runtime : fixture.by_id)
+			assert(runtime.second->begins == 0);
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture fixture(branch);
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
+		RequireRejected([&] { executor.Advance(step,
+			{{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}},
+			[](const iga::PressureFlowStepResult&) {
+				throw std::runtime_error("injected branch callback failure");
+			}); });
+		for (const auto& runtime : fixture.by_id) {
+			assert(runtime.second->commits == 0);
+			assert(runtime.second->aborts == 1);
+		}
 	}
 	{
 		auto runtimes = RuntimeSet(graph, iga::DomainKind::ThreeDBodyFittedFlow,

@@ -97,16 +97,14 @@ public:
 	PressureFlowComponentExecutor(DomainRuntimeRegistry& registry,
 		std::string start_domain_id, PressureFlowExecutionControls controls)
 		: registry_(registry),
-		  plan_(MakeSequentialPressureFlowPlan(registry.Graph(), start_domain_id)),
+		  plan_(MakeAcyclicPressureFlowPlan(registry.Graph(), start_domain_id)),
 		  controls_(controls)
 	{
 		ValidatePressureFlowExecutionControls(controls_);
-		for (std::size_t i = 0; i < plan_.edge_ids.size(); ++i)
-			interfaces_.push_back(ResolveInterface(plan_.edge_ids[i],
-				plan_.domain_ids[i], plan_.domain_ids[i+1]));
+		interfaces_ = plan_.interfaces;
 	}
 
-	const SequentialCouplingPlan& Plan() const noexcept { return plan_; }
+	const PressureFlowComponentPlan& Plan() const noexcept { return plan_; }
 
 	PressureFlowStepResult Advance(const DomainStepContext& step,
 		const std::map<std::string, double>& initial_pressure_pa,
@@ -124,25 +122,28 @@ public:
 		}
 		PressureFlowStepResult result;
 		try {
-			for (const auto& domain_id : plan_.domain_ids)
+			for (const auto& domain_id : plan_.domain_order)
 				registry_.Runtime(domain_id).BeginStep(step);
 			std::vector<double> previous_residual;
 			double aitken_relaxation = controls_.relaxation_factor;
 			for (int iteration = 1; iteration <= controls_.maximum_iterations; ++iteration) {
 				if (iteration > 1)
-					for (auto domain = plan_.domain_ids.rbegin(); domain != plan_.domain_ids.rend(); ++domain)
+					for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain)
 						registry_.Runtime(*domain).RollbackTrial();
-				for (std::size_t domain_index = 0; domain_index < plan_.domain_ids.size(); ++domain_index) {
-					auto& runtime = registry_.Runtime(plan_.domain_ids[domain_index]);
-					if (domain_index < interfaces_.size()) {
+				for (const auto& domain_id : plan_.domain_order) {
+					auto& runtime = registry_.Runtime(domain_id);
+					for (std::size_t edge_index = 0; edge_index < interfaces_.size(); ++edge_index) {
+						if (interfaces_[edge_index].pressure_receiver.domain_id != domain_id)
+							continue;
 						PortBoundaryData input;
 						input.time_s = step.EndTime();
-						input.mean_pressure_pa = pressure[domain_index];
-						runtime.SetPortInput(interfaces_[domain_index].pressure_receiver.port_id, input);
+						input.mean_pressure_pa = pressure[edge_index];
+						runtime.SetPortInput(
+							interfaces_[edge_index].pressure_receiver.port_id, input);
 					}
 					runtime.SolveTrial();
-					if (domain_index < interfaces_.size()) {
-						const auto& interface = interfaces_[domain_index];
+					for (const auto& interface : interfaces_) {
+						if (interface.flow_provider.domain_id != domain_id) continue;
 						const auto state = PortStateFor(interface.flow_provider);
 						if (!state.outward_flow_m3_s)
 							throw std::runtime_error("pressure-flow provider omitted outward flow on edge '"
@@ -162,8 +163,9 @@ public:
 				bool converged = controls_.method != PressureFlowIterationMethod::Explicit;
 				for (std::size_t edge_index = 0; edge_index < interfaces_.size(); ++edge_index) {
 					const auto& interface = interfaces_[edge_index];
-					const auto first = PortStateFor(interface.first);
-					const auto second = PortStateFor(interface.second);
+					const auto& edge = registry_.Graph().Edge(interface.edge_id);
+					const auto first = PortStateFor(edge.first);
+					const auto second = PortStateFor(edge.second);
 					const auto measured = PortStateFor(interface.pressure_provider);
 					if (!first.outward_flow_m3_s || !second.outward_flow_m3_s
 						|| !measured.mean_pressure_pa)
@@ -191,8 +193,8 @@ public:
 						|| edge_state.normalized_flow_residual > controls_.flow_relative_tolerance)
 						converged = false;
 					iteration_state.edges.push_back(edge_state);
-					result.accepted_ports[interface.first] = first;
-					result.accepted_ports[interface.second] = second;
+					result.accepted_ports[edge.first] = first;
+					result.accepted_ports[edge.second] = second;
 				}
 				iteration_state.converged = converged;
 				result.iterations.push_back(iteration_state);
@@ -227,14 +229,14 @@ public:
 					previous_residual = residual;
 				}
 			}
-			for (const auto& domain_id : plan_.domain_ids)
+			for (const auto& domain_id : plan_.domain_order)
 				for (const auto& port : registry_.Graph().Domain(domain_id).ports)
 					result.accepted_ports[{domain_id, port.id}]
 						= PortStateFor({domain_id, port.id});
 			if (before_commit) before_commit(result);
-			for (const auto& domain_id : plan_.domain_ids)
+			for (const auto& domain_id : plan_.domain_order)
 				registry_.Runtime(domain_id).PrepareCommitStep();
-			for (const auto& domain_id : plan_.domain_ids)
+			for (const auto& domain_id : plan_.domain_order)
 				registry_.Runtime(domain_id).FinalizeCommitStep();
 			return result;
 		} catch (...) {
@@ -248,32 +250,6 @@ public:
 	}
 
 private:
-	struct Interface {
-		std::string edge_id;
-		PortRef first;
-		PortRef second;
-		PortRef flow_provider;
-		PortRef flow_receiver;
-		PortRef pressure_provider;
-		PortRef pressure_receiver;
-	};
-
-	Interface ResolveInterface(const std::string& edge_id, const std::string& earlier,
-		const std::string& later) const
-	{
-		const auto& edge = registry_.Graph().Edge(edge_id);
-		const auto earlier_ref = edge.first.domain_id == earlier ? edge.first : edge.second;
-		const auto later_ref = edge.first.domain_id == later ? edge.first : edge.second;
-		if (earlier_ref.domain_id != earlier || later_ref.domain_id != later)
-			throw std::runtime_error("sequential edge does not join adjacent plan domains");
-		const auto& earlier_port = registry_.Graph().Port(earlier_ref);
-		const auto& later_port = registry_.Graph().Port(later_ref);
-		if (!earlier_port.requires.count(PortQuantity::MeanPressure)
-			|| !later_port.requires.count(PortQuantity::FlowRate))
-			throw std::runtime_error("sequential pressure-flow plan requires pressure receivers before flow receivers");
-		return {edge_id, edge.first, edge.second, earlier_ref, later_ref, later_ref, earlier_ref};
-	}
-
 	PortState PortStateFor(const PortRef& reference) const
 	{
 		auto state = registry_.Runtime(reference.domain_id).GetPortState(reference.port_id);
@@ -285,7 +261,7 @@ private:
 	{
 		std::ostringstream errors;
 		bool first = true;
-		for (auto domain = plan_.domain_ids.rbegin(); domain != plan_.domain_ids.rend(); ++domain) {
+		for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain) {
 			try { registry_.Runtime(*domain).AbortStep(); }
 			catch (...) {
 				if (!first) errors << "; ";
@@ -305,9 +281,9 @@ private:
 	}
 
 	DomainRuntimeRegistry& registry_;
-	SequentialCouplingPlan plan_;
+	PressureFlowComponentPlan plan_;
 	PressureFlowExecutionControls controls_;
-	std::vector<Interface> interfaces_;
+	std::vector<PressureFlowInterfacePlan> interfaces_;
 };
 
 } // namespace iga

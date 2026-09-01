@@ -17,5 +17,6 @@ v5='{"schema_version":5,"time":{"dt":0.01,"steps":2},"start_domain":"upstream","
 v5_output=$(printf '%s\n' "$v5" | "$checker" -)
 printf '%s\n' "$v5_output" | grep -q 'schema_version=5 mode=multidomain'
 printf '%s\n' "$v5_output" | grep -q 'sequential_pressure_flow_runner_compatible=yes'
+printf '%s\n' "$v5_output" | grep -q 'acyclic_pressure_flow_component_compatible=yes'
 
 printf '%s\n' 'iga_config_check dispatch tests passed'

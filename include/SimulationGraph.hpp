@@ -24,6 +24,19 @@ struct SequentialCouplingPlan {
 	std::vector<std::string> edge_ids;
 };
 
+struct PressureFlowInterfacePlan {
+	std::string edge_id;
+	PortRef flow_provider;
+	PortRef flow_receiver;
+	PortRef pressure_provider;
+	PortRef pressure_receiver;
+};
+
+struct PressureFlowComponentPlan {
+	std::vector<std::string> domain_order;
+	std::vector<PressureFlowInterfacePlan> interfaces;
+};
+
 class SimulationGraph {
 public:
 	SimulationGraph(std::vector<DomainNode> domains, std::vector<CouplingEdge> edges)
@@ -201,6 +214,62 @@ inline SequentialCouplingPlan MakeSequentialPressureFlowPlan(const SimulationGra
 			throw std::runtime_error(
 				"sequential pressure-flow plan requires pressure receivers before flow receivers");
 	}
+	return plan;
+}
+
+inline PressureFlowComponentPlan MakeAcyclicPressureFlowPlan(
+	const SimulationGraph& graph, const std::string& start_domain_id)
+{
+	ValidateConnectedGraph(graph, start_domain_id);
+	if (graph.Edges().empty())
+		throw std::runtime_error("pressure-flow component requires at least one interface");
+	PressureFlowComponentPlan plan;
+	std::map<std::string, int> indegree;
+	std::map<std::string, std::vector<std::string>> downstream;
+	for (const auto& domain : graph.Domains()) {
+		indegree.emplace(domain.first, 0);
+		downstream.emplace(domain.first, std::vector<std::string>{});
+	}
+	for (const auto& edge : graph.Edges()) {
+		if (graph.Domain(edge.first.domain_id).kind
+			== graph.Domain(edge.second.domain_id).kind)
+			throw std::runtime_error(
+				"pressure-flow component requires heterogeneous neighboring domains");
+		const auto& first = graph.Port(edge.first);
+		const bool first_receives_pressure
+			= first.requires.count(PortQuantity::MeanPressure) != 0;
+		const auto pressure_receiver = first_receives_pressure ? edge.first : edge.second;
+		const auto flow_receiver = first_receives_pressure ? edge.second : edge.first;
+		plan.interfaces.push_back({edge.id, pressure_receiver, flow_receiver,
+			flow_receiver, pressure_receiver});
+		downstream.at(pressure_receiver.domain_id).push_back(flow_receiver.domain_id);
+		++indegree.at(flow_receiver.domain_id);
+	}
+	std::sort(plan.interfaces.begin(), plan.interfaces.end(),
+		[](const PressureFlowInterfacePlan& first,
+			const PressureFlowInterfacePlan& second) {
+			return first.edge_id < second.edge_id;
+		});
+	std::set<std::string> ready;
+	for (const auto& domain : indegree)
+		if (domain.second == 0) ready.insert(domain.first);
+	if (ready.size() != 1 || *ready.begin() != start_domain_id)
+		throw std::runtime_error(
+			"pressure-flow component requires the declared start domain to be its unique source");
+	while (!ready.empty()) {
+		const auto domain = *ready.begin();
+		ready.erase(ready.begin());
+		plan.domain_order.push_back(domain);
+		auto children = downstream.at(domain);
+		std::sort(children.begin(), children.end());
+		for (const auto& child : children) {
+			auto& remaining = indegree.at(child);
+			--remaining;
+			if (remaining == 0) ready.insert(child);
+		}
+	}
+	if (plan.domain_order.size() != graph.Domains().size())
+		throw std::runtime_error("pressure-flow component does not support graph cycles");
 	return plan;
 }
 

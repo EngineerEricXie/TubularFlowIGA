@@ -200,3 +200,28 @@ manifest is published by same-filesystem rename after the other outputs and
 serves as the graph-run completion marker. Graph output directories must not
 preexist, preventing a failed rerun from leaving an older marker beside mixed
 outputs.
+
+## PR 2.4 foundation: acyclic branch execution
+
+`MakeAcyclicPressureFlowPlan` directs every interface from its pressure
+receiver/flow provider toward its flow receiver/pressure provider. It requires
+one declared source, rejects cycles, disconnected or same-kind coupling, and
+topologically orders ready domains by stable ID. Interfaces are ordered
+lexically by edge ID, defining the component-wide fixed/Aitken residual vector
+independently of manifest insertion or endpoint order.
+
+`PressureFlowComponentExecutor` now consumes this general plan. Before each
+domain solve it installs all pressure guesses owned by that domain; after the
+single solve it transfers every provided outward flow with the conservative
+peer sign. Thus a 3D junction with multiple pressure-controlled outlets is
+solved once per component iteration, not once per branch. Reverse rollback,
+prepare-all/finalize-all commit, and best-effort abort cover every domain in
+the topological component.
+
+Dependency-free branch tests cover deterministic planning under domain, edge,
+and endpoint permutation; explicit, fixed, and vector Aitken execution over
+three interfaces; distinct sibling flow routing; exactly one junction solve
+per iteration; missing initial pressure; nonfinite state; callback, sibling
+solve, and prepare failures; and all-domain abort without partial commit. The
+production graph resolver, Y-junction fixture, and long-form output remain the
+next PR 2.4 slices.
