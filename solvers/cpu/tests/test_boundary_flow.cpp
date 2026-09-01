@@ -41,6 +41,39 @@ int main()
 		std::vector<double>(64, 3.0))-6.0) < 2e-13);
 	assert(std::abs(iga::IntegrateBoundarySpeciesFlux(element, 4, state,
 		std::vector<double>(64, 3.0))+6.0) < 2e-13);
+	std::vector<std::vector<double>> linear_species(64, std::vector<double>(1));
+	for (std::size_t node = 0; node < linear_species.size(); ++node)
+		linear_species[node][0] = element.bezier_points[node][0];
+	const auto right_species = iga::IntegrateBoundaryTransportFlux(
+		element, 2, state, linear_species, 0, {1.0}, {0.5});
+	const auto left_species = iga::IntegrateBoundaryTransportFlux(
+		element, 4, state, linear_species, 0, {1.0}, {0.5});
+	assert(std::abs(right_species.concentration_integral-1.0) < 2e-13);
+	assert(std::abs(right_species.total_outward_flux-1.5) < 2e-13);
+	assert(std::abs(left_species.concentration_integral) < 2e-13);
+	assert(std::abs(left_species.total_outward_flux-0.5) < 2e-13);
+	auto scaled = element;
+	for (auto& point : scaled.bezier_points) {
+		point[0] *= 2.0;
+		point[1] *= 3.0;
+		point[2] *= 4.0;
+	}
+	std::vector<std::array<double, 4>> scaled_state(64, {2.0, 0.0, 0.0, 5.0});
+	const auto scaled_pressure_area = iga::IntegrateBoundaryScalarAndArea(
+		scaled, 2, scaled_state);
+	assert(std::abs(scaled_pressure_area[0]-60.0) < 2e-12);
+	assert(std::abs(scaled_pressure_area[1]-12.0) < 2e-12);
+	std::vector<std::vector<double>> scaled_species(64, std::vector<double>(1));
+	for (std::size_t node = 0; node < scaled_species.size(); ++node)
+		scaled_species[node][0] = scaled.bezier_points[node][0];
+	const auto scaled_right = iga::IntegrateBoundaryTransportFlux(
+		scaled, 2, scaled_state, scaled_species, 0, {1.0}, {0.5});
+	const auto scaled_left = iga::IntegrateBoundaryTransportFlux(
+		scaled, 4, scaled_state, scaled_species, 0, {1.0}, {0.5});
+	assert(std::abs(scaled_right.concentration_integral-24.0) < 2e-12);
+	assert(std::abs(scaled_right.total_outward_flux-42.0) < 2e-12);
+	assert(std::abs(scaled_left.concentration_integral) < 2e-12);
+	assert(std::abs(scaled_left.total_outward_flux-6.0) < 2e-12);
 	for (std::size_t node = 0; node < state.size(); ++node)
 		state[node] = {element.bezier_points[node][0], 0.0, 0.0, 0.0};
 	const auto linear_surface = iga::IntegrateBoundaryFlow(element, 2, state)

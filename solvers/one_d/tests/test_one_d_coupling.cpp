@@ -51,6 +51,11 @@ int main()
 	assert(Close(venous.flow_m3_s, 3.0));
 	assert(Close(venous.pressure_pa, 8.0));
 	assert(Close(venous.flux_weighted_concentration.at("glucose"), 3.0));
+	const auto measured_concentration = iga::AggregateVascularOutlets({
+		{2, 2.0, 10.0, {{"glucose", -8.0}}, {{"glucose", 5.0}}, {}, true},
+	});
+	assert(Close(measured_concentration.species_flux.at("glucose"), -8.0));
+	assert(Close(measured_concentration.flux_weighted_concentration.at("glucose"), 5.0));
 
 	{
 		iga::CouplingDefinition definition;

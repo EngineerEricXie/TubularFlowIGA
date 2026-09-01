@@ -306,7 +306,24 @@ int main(int argc, char** argv)
 		RequireNear(7.0, *generic_state.mean_pressure_pa, 1e-12, "generic port pressure");
 		RequireNear(-4.0, generic_state.outward_species_flux.at("oxygen"), 1e-12,
 			"generic port species flux");
+		RequireNear(2.0, generic_state.concentration.at("oxygen"), 1e-12,
+			"generic port species concentration");
 		RequireNear(1.25, generic_state.time_s, 1e-12, "generic port time");
+		iga::CompiledLinearSystem flux_system;
+		flux_system.fields = {"oxygen"};
+		flux_system.field_index = {{"oxygen", 0}};
+		flux_system.terms = {
+			{iga::TermKind::Advection, 0, 0, 1.0, "prescribed"},
+			{iga::TermKind::Diffusion, 0, 0, 0.5, ""}};
+		std::vector<double> linear_species(64);
+		for (std::size_t node = 0; node < linear_species.size(); ++node)
+			linear_species[node] = static_cast<double>(node/16)/3.0;
+		const auto total_flux = flow.MeasurePorts(generic_ports, 1.25,
+			species_fields, linear_species, &flux_system).at("outlet");
+		RequireNear(0.0, total_flux.concentration.at("oxygen"), 1e-12,
+			"linear boundary concentration");
+		RequireNear(0.5, total_flux.outward_species_flux.at("oxygen"), 1e-12,
+			"advective-diffusive total species flux");
 		auto reversed_port = MakeBoundaryPort("reversed_outlet", "1");
 		reversed_port.orientation.native_to_outward_sign = -1;
 		const auto reversed = flow.MeasurePorts({reversed_port}, 1.25,
@@ -325,6 +342,9 @@ int main(int argc, char** argv)
 		RequireNear(generic_state.outward_species_flux.at("oxygen"),
 			vca.species_fluxes.at(1).at("oxygen"), 1e-12,
 			"generic and VCA species flux parity");
+		RequireNear(generic_state.concentration.at("oxygen"),
+			vca.species_concentrations.at(1).at("oxygen"), 1e-12,
+			"generic and VCA species concentration parity");
 		RequireRejected([&flow, &species_fields, &species_state] {
 			auto invalid = MakeBoundaryPort("invalid_kind", "1");
 			invalid.locator_kind = "network_node";

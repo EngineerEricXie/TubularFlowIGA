@@ -178,7 +178,12 @@ inline std::array<double, 2> IntegrateBoundaryScalarAndArea(
 			double scalar = 0.0;
 			for (std::size_t a = 0; a < nodal_state.size(); ++a)
 				scalar += basis.value[a]*nodal_state[a][3];
-			const double weight = weights[qi]*weights[qj]*2.0*basis.determinant;
+			double inverse_normal = 0.0;
+			for (int component = 0; component < 3; ++component)
+				inverse_normal += basis.inverse_jacobian[fixed_axis[face]][component]
+					*basis.inverse_jacobian[fixed_axis[face]][component];
+			const double weight = weights[qi]*weights[qj]*2.0*basis.determinant
+				*std::sqrt(inverse_normal);
 			result[0] += weight*scalar;
 			result[1] += weight;
 		}
@@ -225,6 +230,78 @@ inline double IntegrateBoundarySpeciesFlux(const Element& element, std::size_t f
 				*basis.determinant*normal_velocity*concentration;
 		}
 	return flux;
+}
+
+struct BoundarySpeciesMeasurement {
+	double concentration_integral = 0.0;
+	double total_outward_flux = 0.0;
+};
+
+inline BoundarySpeciesMeasurement IntegrateBoundaryTransportFlux(
+	const Element& element, std::size_t face,
+	const std::vector<std::array<double, 4>>& nodal_flow,
+	const std::vector<std::vector<double>>& nodal_species,
+	std::size_t equation, const std::vector<double>& advection_coefficients,
+	const std::vector<double>& diffusion_coefficients)
+{
+	if (face >= 6) throw std::runtime_error("boundary face index must be below six");
+	if (nodal_flow.size() != element.connectivity.size()
+		|| nodal_species.size() != element.connectivity.size()
+		|| advection_coefficients.size() != diffusion_coefficients.size()
+		|| equation >= advection_coefficients.size())
+		throw std::runtime_error("boundary transport flux dimensions are inconsistent");
+	for (const auto& values : nodal_species)
+		if (values.size() != advection_coefficients.size())
+			throw std::runtime_error("boundary transport nodal field count is inconsistent");
+	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187,
+		0.6699905217924281, 0.9305681557970262}};
+	constexpr std::array<double, 4> weights{{0.3478548451374539, 0.6521451548625461,
+		0.6521451548625461, 0.3478548451374539}};
+	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+	constexpr int varying_axes[6][2] = {{0, 1}, {0, 2}, {1, 2}, {0, 2}, {1, 2}, {0, 1}};
+	constexpr double fixed_value[6] = {0.0, 0.0, 1.0, 1.0, 0.0, 1.0};
+	constexpr double outward_sign[6] = {-1.0, -1.0, 1.0, 1.0, -1.0, 1.0};
+	BoundarySpeciesMeasurement result;
+	for (std::size_t qi = 0; qi < 4; ++qi)
+		for (std::size_t qj = 0; qj < 4; ++qj) {
+			std::array<double, 3> coordinate{};
+			coordinate[fixed_axis[face]] = fixed_value[face];
+			coordinate[varying_axes[face][0]] = points[qi];
+			coordinate[varying_axes[face][1]] = points[qj];
+			const auto basis = EvaluateBoundaryBasis(
+				element, coordinate[0], coordinate[1], coordinate[2]);
+			std::array<double, 3> velocity{};
+			std::vector<double> concentration(advection_coefficients.size(), 0.0);
+			std::vector<std::array<double, 3>> gradient(
+				advection_coefficients.size(), {0.0, 0.0, 0.0});
+			for (std::size_t a = 0; a < nodal_flow.size(); ++a) {
+				for (int component = 0; component < 3; ++component)
+					velocity[component] += basis.value[a]*nodal_flow[a][component];
+				for (std::size_t field = 0; field < concentration.size(); ++field) {
+					concentration[field] += basis.value[a]*nodal_species[a][field];
+					for (int component = 0; component < 3; ++component)
+						gradient[field][component] += basis.gradient[a][component]
+							*nodal_species[a][field];
+				}
+			}
+			double normal_flux = 0.0;
+			for (std::size_t field = 0; field < concentration.size(); ++field)
+				for (int component = 0; component < 3; ++component)
+					normal_flux += (advection_coefficients[field]*concentration[field]
+						*velocity[component]-diffusion_coefficients[field]
+						*gradient[field][component])
+						*basis.inverse_jacobian[fixed_axis[face]][component];
+			double inverse_normal = 0.0;
+			for (int component = 0; component < 3; ++component)
+				inverse_normal += basis.inverse_jacobian[fixed_axis[face]][component]
+					*basis.inverse_jacobian[fixed_axis[face]][component];
+			const double cofactor_measure
+				= weights[qi]*weights[qj]*2.0*basis.determinant;
+			result.concentration_integral += cofactor_measure
+				*std::sqrt(inverse_normal)*concentration[equation];
+			result.total_outward_flux += outward_sign[face]*cofactor_measure*normal_flux;
+		}
+	return result;
 }
 
 inline std::vector<double> IntegrateBoundaryPressureTraction(

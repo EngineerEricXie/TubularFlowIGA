@@ -489,7 +489,7 @@ int main(int argc, char** argv)
 			if (vca_circuit) {
 				const auto ports = flow.MeasurePorts(configuration.coupling.three_d_ports,
 					vca_transport ? vca_transport->System().fields : std::vector<std::string>{},
-					vca_species_state);
+					vca_species_state, vca_transport ? &vca_transport->System() : nullptr);
 				auto result = iga::BuildThreeDFlowPortResult(physical_time, parameters.dt, inlet,
 					configuration.coupling.three_d_ports, ports.flows, ports.pressures);
 				for (auto& outlet : result.outlets) {
@@ -498,10 +498,11 @@ int main(int argc, char** argv)
 					outlet.species_flux = flux->second;
 					outlet.average_valid = std::abs(outlet.flow_m3_s)
 						> configuration.coupling.flow_epsilon_m3_s;
-					if (outlet.average_valid)
-						for (const auto& species : outlet.species_flux)
-							outlet.flux_weighted_concentration[species.first]
-								= species.second/outlet.flow_m3_s;
+					const auto concentration
+						= ports.species_concentrations.find(outlet.outlet_id);
+					if (outlet.average_valid
+						&& concentration != ports.species_concentrations.end())
+						outlet.flux_weighted_concentration = concentration->second;
 				}
 				if (vca_transport) {
 					result.total_mass = vca_transport->TotalMass();
@@ -509,16 +510,20 @@ int main(int argc, char** argv)
 					for (const auto& mass : result.total_mass) {
 						const auto old = vca_previous_mass.find(mass.first);
 						if (old == vca_previous_mass.end()) continue;
-						const auto inlet_flux = inlet.species.count(mass.first)
-							? inlet.flow_m3_s*inlet.species.at(mass.first) : 0.0;
-						double outlet_flux = 0.0;
+						double boundary_flux = 0.0;
+						const auto inlet_flux = ports.species_fluxes.find(
+							configuration.coupling.three_d_ports.inlet_label);
+						if (inlet_flux != ports.species_fluxes.end()) {
+							const auto species = inlet_flux->second.find(mass.first);
+							if (species != inlet_flux->second.end()) boundary_flux += species->second;
+						}
 						for (const auto& outlet : result.outlets) {
 							const auto flux = outlet.species_flux.find(mass.first);
-							if (flux != outlet.species_flux.end()) outlet_flux += flux->second;
+							if (flux != outlet.species_flux.end()) boundary_flux += flux->second;
 						}
 						const auto source = result.source_integrals.find(mass.first);
 						result.balance_residuals[mass.first]
-							= (mass.second-old->second)/parameters.dt-inlet_flux+outlet_flux
+							= (mass.second-old->second)/parameters.dt+boundary_flux
 							-(source == result.source_integrals.end() ? 0.0 : source->second);
 					}
 					vca_previous_mass = result.total_mass;

@@ -126,6 +126,7 @@ inline AggregatedVascularReturn AggregateVascularOutlets(
 		throw std::runtime_error("flow aggregation epsilon must be finite and nonnegative");
 	AggregatedVascularReturn result;
 	std::map<int, bool> ids;
+	std::map<std::string, double> concentration_numerator;
 	for (const auto& outlet : outlets) {
 		ValidateVascularOutletState(outlet);
 		if (!ids.emplace(outlet.outlet_id, true).second)
@@ -135,12 +136,18 @@ inline AggregatedVascularReturn AggregateVascularOutlets(
 		result.pressure_pa += outlet.flow_m3_s*outlet.pressure_pa;
 		for (const auto& item : outlet.species_flux)
 			result.species_flux[item.first] += item.second;
+		for (const auto& item : outlet.species_flux) {
+			const auto concentration = outlet.flux_weighted_concentration.find(item.first);
+			concentration_numerator[item.first] += concentration
+				== outlet.flux_weighted_concentration.end()
+				? item.second : outlet.flow_m3_s*concentration->second;
+		}
 	}
 	result.average_valid = std::abs(result.flow_m3_s) > flow_epsilon_m3_s;
 	result.pressure_valid = result.average_valid;
 	if (result.average_valid) {
 		result.pressure_pa /= result.flow_m3_s;
-		for (const auto& item : result.species_flux)
+		for (const auto& item : concentration_numerator)
 			result.flux_weighted_concentration[item.first]
 				= item.second/result.flow_m3_s;
 	} else result.pressure_pa = 0.0;

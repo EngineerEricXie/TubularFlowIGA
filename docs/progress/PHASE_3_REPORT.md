@@ -127,3 +127,23 @@ interior concentrations distinct and checks both pre-advance and solved-state
 reporting. Focused numerical re-review accepted the direction epsilon,
 outward weighting, mixed-flow rejection, fallback consistency, and reversal
 signs with no remaining blocker.
+
+The first 3D flux slice evaluates each transport equation's boundary flux from
+its compiled advection and diffusion terms, including cross-field terms:
+`sum_j(a_ij*c_j*u - D_ij*grad(c_j)) dot n`. The same face quadrature also
+reports area-mean concentration. The legacy fields-only measurement remains
+an advection-only compatibility path, while the VCA application passes its
+compiled transport system and therefore consumes total flux. Dependency-free
+unit-cube tests isolate advective and diffusive signs; the PETSc runtime test
+checks a linear concentration field with nonzero diffusion.
+
+Physical surface averages now use `2*det(J)*|row(J^-1)|`; flux keeps the
+oriented cofactor `sign*2*det(J)*row(J^-1)`. A scaled 2-by-3-by-4 element
+regression checks area, concentration integral, and both face-flux signs. VCA
+carries measured nonnegative concentration separately from total flux instead
+of dividing total flux by flow, and its species residual now sums measured
+total outward flux at the inlet and every outlet. SUPG remains excluded from
+the physical boundary flux; any discrete mismatch is reported as a residual.
+Focused numerical re-review accepted the surface metric, cofactor orientation,
+compiled cross-field mapping, independent concentration semantics, and the
+`dM/dt + sum(Phi_outward) - source` diagnostic with no remaining blocker.

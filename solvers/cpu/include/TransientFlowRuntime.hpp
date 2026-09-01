@@ -43,6 +43,7 @@ struct FlowPortMeasurements {
 	std::map<int, double> flows;
 	std::map<int, double> pressures;
 	std::map<int, std::map<std::string, double>> species_fluxes;
+	std::map<int, std::map<std::string, double>> species_concentrations;
 };
 
 struct FlowRuntimeSummary {
@@ -436,7 +437,8 @@ public:
 	IGA_FLOW_NOINLINE std::map<std::string, PortState> MeasurePorts(
 		const std::vector<CouplingPort>& ports, double physical_time,
 		const std::vector<std::string>& species_fields,
-		const std::vector<double>& species_state) const
+		const std::vector<double>& species_state,
+		const CompiledLinearSystem* transport_system = nullptr) const
 	{
 		RequireFinitePortValue("3D port measurement time_s", physical_time);
 		if (ports.empty()) throw std::runtime_error("3D port measurement requires at least one port");
@@ -444,6 +446,23 @@ public:
 		if (!species_fields.empty()
 			&& species_state.size() != ghost_nodes_.size()*species_fields.size())
 			throw std::runtime_error("3D port species state size does not match flow-required nodes");
+		if (transport_system && transport_system->fields != species_fields)
+			throw std::runtime_error(
+				"3D port transport system fields do not match the supplied species fields");
+		std::vector<std::vector<double>> advection(species_fields.size(),
+			std::vector<double>(species_fields.size(), 0.0));
+		std::vector<std::vector<double>> diffusion(species_fields.size(),
+			std::vector<double>(species_fields.size(), 0.0));
+		if (transport_system) {
+			for (const auto& term : transport_system->terms) {
+				if (term.kind == TermKind::Advection)
+					advection.at(term.equation).at(term.trial) += term.coefficient;
+				else if (term.kind == TermKind::Diffusion)
+					diffusion.at(term.equation).at(term.trial) += term.coefficient;
+			}
+		} else
+			for (std::size_t field = 0; field < species_fields.size(); ++field)
+				advection[field][field] = 1.0;
 		std::map<int, std::size_t> index;
 		std::set<std::string> ids;
 		for (std::size_t i = 0; i < ports.size(); ++i) {
@@ -458,6 +477,8 @@ public:
 		std::vector<double> local_area(index.size(), 0.0), global_area(index.size(), 0.0);
 		std::vector<double> local_species(index.size()*species_fields.size(), 0.0);
 		std::vector<double> global_species(index.size()*species_fields.size(), 0.0);
+		std::vector<double> local_concentration(index.size()*species_fields.size(), 0.0);
+		std::vector<double> global_concentration(index.size()*species_fields.size(), 0.0);
 		ScatterState();
 		const PetscScalar* values = nullptr;
 		VecGetArrayRead(ghost_state_, &values);
@@ -476,13 +497,19 @@ public:
 				const auto pressure = IntegrateBoundaryScalarAndArea(element, face, nodal);
 				local_pressure[port] += pressure[0];
 				local_area[port] += pressure[1];
+				std::vector<std::vector<double>> species(element.connectivity.size(),
+					std::vector<double>(species_fields.size()));
+				for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+					for (std::size_t field = 0; field < species_fields.size(); ++field)
+						species[a][field] = species_state[
+							ghost_position_.at(element.connectivity[a])*species_fields.size()+field];
 				for (std::size_t field = 0; field < species_fields.size(); ++field) {
-					std::vector<double> species(element.connectivity.size());
-					for (std::size_t a = 0; a < element.connectivity.size(); ++a)
-						species[a] = species_state[ghost_position_.at(element.connectivity[a])
-							*species_fields.size()+field];
+					const auto measured = IntegrateBoundaryTransportFlux(element, face,
+						nodal, species, field, advection[field], diffusion[field]);
+					local_concentration[port*species_fields.size()+field]
+						+= measured.concentration_integral;
 					local_species[port*species_fields.size()+field]
-						+= IntegrateBoundarySpeciesFlux(element, face, nodal, species);
+						+= measured.total_outward_flux;
 				}
 			}
 		}
@@ -496,6 +523,9 @@ public:
 		if (!species_fields.empty())
 			MPI_Allreduce(local_species.data(), global_species.data(),
 				static_cast<int>(global_species.size()), MPI_DOUBLE, MPI_SUM, communicator_);
+		if (!species_fields.empty())
+			MPI_Allreduce(local_concentration.data(), global_concentration.data(),
+				static_cast<int>(global_concentration.size()), MPI_DOUBLE, MPI_SUM, communicator_);
 		std::map<std::string, PortState> result;
 		for (std::size_t i = 0; i < ports.size(); ++i) {
 			if (!(global_area[i] > 0.0))
@@ -505,9 +535,12 @@ public:
 			state.area_m2 = global_area[i];
 			state.outward_flow_m3_s = ports[i].orientation.ToOutward(global_flow[i]);
 			state.mean_pressure_pa = global_pressure[i]/global_area[i];
-			for (std::size_t field = 0; field < species_fields.size(); ++field)
+			for (std::size_t field = 0; field < species_fields.size(); ++field) {
+				state.concentration.emplace(species_fields[field],
+					global_concentration[i*species_fields.size()+field]/global_area[i]);
 				state.outward_species_flux.emplace(species_fields[field],
 					ports[i].orientation.ToOutward(global_species[i*species_fields.size()+field]));
+			}
 			ValidatePortState(state);
 			result.emplace(ports[i].id, std::move(state));
 		}
@@ -516,11 +549,15 @@ public:
 
 	IGA_FLOW_NOINLINE FlowPortMeasurements MeasurePorts(const ThreeDVascularPortDefinition& ports,
 		const std::vector<std::string>& species_fields,
-		const std::vector<double>& species_state) const
+		const std::vector<double>& species_state,
+		const CompiledLinearSystem* transport_system = nullptr) const
 	{
 		std::vector<CouplingPort> generic_ports;
-		generic_ports.reserve(ports.outlet_labels.size());
-		for (const auto label : ports.outlet_labels) {
+		std::vector<int> labels;
+		if (ports.inlet_label >= 0) labels.push_back(ports.inlet_label);
+		labels.insert(labels.end(), ports.outlet_labels.begin(), ports.outlet_labels.end());
+		generic_ports.reserve(labels.size());
+		for (const auto label : labels) {
 			CouplingPort port;
 			port.id = VcaPortId(label);
 			port.subsystem_id = "three_d_vca";
@@ -531,9 +568,10 @@ public:
 			if (!species_fields.empty()) port.provides.insert(PortQuantity::SpeciesFlux);
 			generic_ports.push_back(std::move(port));
 		}
-		const auto measured = MeasurePorts(generic_ports, 0.0, species_fields, species_state);
+		const auto measured = MeasurePorts(generic_ports, 0.0, species_fields,
+			species_state, transport_system);
 		FlowPortMeasurements result;
-		for (const auto label : ports.outlet_labels) {
+		for (const auto label : labels) {
 			const auto found = measured.find(VcaPortId(label));
 			if (found == measured.end() || !found->second.outward_flow_m3_s
 				|| !found->second.mean_pressure_pa)
@@ -542,6 +580,8 @@ public:
 			result.pressures.emplace(label, *found->second.mean_pressure_pa);
 			if (!species_fields.empty())
 				result.species_fluxes.emplace(label, found->second.outward_species_flux);
+			if (!species_fields.empty())
+				result.species_concentrations.emplace(label, found->second.concentration);
 		}
 		return result;
 	}
