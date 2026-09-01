@@ -99,6 +99,34 @@ This slice does not add 3D transport rollback or move the VCA circuit into the
 flow lifecycle. Those objects remain CLI-owned and advance only after a
 successful flow commit.
 
+### PR 0.5 reusable rollback-safe native 1D runtime
+
+- Added header-only C++17 `OneDFlowRuntime`, which owns configuration, network,
+  `OneDFlowState` (including time, completed/internal substeps, and outlet/RCR
+  state), and every transport/inlet mutable state.
+- The runtime exposes `BeginStep`, `SetPortInput`, `SetCoupledInlet`,
+  `SetOpenLoopInlet`, `SolveTrial`, `GetPortState`, `RollbackTrial`, and
+  `CommitStep`, with legal-transition checks and exactly-once commit.
+- Every trial snapshots and restores configuration/perfusate mutations,
+  dynamic radius/area/resistance, flow/outlet state, and transport state. It
+  calls the existing rigid, explicit, or injected PETSc implicit advance then
+  the existing transport and vasodilation routines; no solver was copied.
+- The CLI now drives this lifecycle. Writers, checkpoints, coupling history,
+  prior mass, replay provider, and external circuit remain outside the runtime
+  and execute only after commit. Checkpoint format and schema-v3 handling are
+  unchanged.
+- Generic 1D measurements use root and `outlet:<node-id>` ports. Flow and
+  species flux are outward-positive SI: root uses explicit `-1` orientation,
+  distal leaves use `+1`. Trial boundaries support root flow with optional
+  concentration and static pressure at a terminal already configured with a
+  pressure closure. Resistance/RCR replacement and unsupported traction inputs
+  are rejected.
+- Added `one_d_runtime_test` to the dependency-free `core-test` target. It
+  checks invalid transitions, root/distal signs, exact rollback/re-solve,
+  transport/configuration/dynamic-network/last-inlet rollback, time/step state,
+  safe terminal pressure input, resistance-closure rejection, failed-solve
+  rollback, and single commit.
+
 ## Baseline evidence
 
 On 2026-08-31, before Phase 0 implementation:
@@ -117,6 +145,11 @@ On 2026-08-31, before Phase 0 implementation:
 | `./solvers/cpu/vca_3d_runtime_test` after PR 0.4 | pass | deterministic flow replay, boundary/outlet rollback, transition guards, single commit, and adapter parity |
 | `make -C solvers/cpu petsc-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` after PR 0.4 | pass | PETSc kernels, two-rank boundary preflight, lifecycle runtime, and one-/two-rank VCA checkpoint/restart smoke |
 | `make cpu-test && make -C solvers/one_d core-test` after PR 0.4 | pass | unchanged dependency-free CPU and native 1D fast baselines |
+| `make -C solvers/one_d core-test` after PR 0.5 | pass | core, coupling, and dependency-free runtime lifecycle tests |
+| `make one-d-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` after PR 0.5 | pass | one- and two-rank PETSc native 1D baselines plus runtime lifecycle test |
+| four documented `iga_1d --check` cases after PR 0.5 | pass | rigid, compliant, physiology, and VCA schema-v3 configuration compatibility |
+| direct three-step rigid run versus one-step checkpoint plus restart to step three | pass | final `profile_1d_000003.vtp` byte-identical, SHA-256 `3cbb0781eaefce6df3c39e9437401871797bd4a0729d7af153280fb6426b7472` |
+| two-step `vca_pfc_closed_loop` run after PR 0.5 | pass | external circuit path remains executable with advancement after runtime commit |
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
 runtime, multi-rank VCA, and numerical parity gates remain required when their
@@ -148,18 +181,19 @@ test and VCA smoke regression pass.
   input remains unsupported until a scientifically explicit profile model is
   designed.
 - 3D transport and VCA circuit state have no rollback lifecycle yet.
-- The 1D CLI still owns runtime orchestration and mutable dynamic geometry.
-- `ApplyOneDCoupledInlet` mutates configuration and transport inlet state.
-- Native 1D boundary support does not yet expose generic terminal overrides.
+- Native 1D accepts root flow-controlled input and static pressure at terminals
+  already using a pressure closure; it does not silently replace R/RCR data.
+- Runtime snapshots do not include the external VCA circuit, writer/history
+  objects, or disk checkpoint persistence; the CLI advances those after commit.
 - Full numerical regression cases can require PETSc, MPI, generated databases,
   or an allocated compute resource.
 
 ## Remaining Phase 0 work
 
-1. Extract a reusable 1D runtime with equivalent standalone behavior.
-2. Include transport, dynamic-radius, circuit, time, and output state in the
-   correct lifecycle boundary.
-3. Run engineering, numerical, and architecture gates.
+1. Perform the phase-level architecture and numerical review.
+2. Close the Phase 0 engineering, numerical, and architecture gates.
+3. Extend lifecycle rollback to 3D transport when a later coupled-transport
+   phase makes transport part of rejected trial iterations.
 
 ## Phase 0 exit condition
 

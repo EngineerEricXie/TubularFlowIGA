@@ -1,6 +1,7 @@
 # Coupling Architecture
 
-Status: Phase 0 design baseline. No solver behavior is changed by this document.
+Status: Phase 0 implementation record. The documented 3D and native 1D flow
+lifecycle boundaries are implemented; direct 1D--3D coupling remains deferred.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
@@ -35,11 +36,13 @@ must not be duplicated.
 
 ### One-dimensional flow and transport
 
-`solvers/one_d/src/iga_1d.cpp` is both CLI and runtime orchestrator. It owns the
-network, flow state, transport state, VCA/replay providers, dynamic-radius
-updates, physical time and steps, checkpoints, histories, and output.
-Numerical routines are already reusable header functions, but their mutable
-objects are not collected behind a lifecycle boundary.
+`solvers/one_d/include/OneDRuntime.hpp` owns configuration, network, flow
+state, transport state, dynamic-radius updates, physical time, completed step,
+internal substeps, and outlet/RCR state. `iga_1d` is the thin CLI driver for
+initialization, replay/circuit input selection, checkpoint persistence,
+history, and output. Existing numerical routines remain the implementation;
+the runtime does not duplicate a solver. Its implicit advance is injected by
+the PETSc CLI, preserving a dependency-free common lifecycle header/test.
 
 The native 1D inlet is flow-controlled. Outlet leaves use pressure,
 resistance, or RCR closures. Direct 1D--3D coupling will eventually require
@@ -72,7 +75,7 @@ configuration are rebuildable or reusable scratch and are not physical state.
 | 1D flow runtime | physical time, completed step, internal substep count | Advance in the trial copy; publish only on commit. |
 | 1D network | dynamic `radius0`, `area0`, and resistance from vasodilation | Snapshot when dynamic geometry is enabled. |
 | 1D transport | every species concentration and mutable inlet value/waveform | Snapshot with the trial state. |
-| 1D configuration | hematocrit/hemoglobin fields currently changed by `ApplyOneDCoupledInlet` | Move future trial boundary values into runtime-owned data or include the mutated fields in the snapshot. |
+| 1D configuration | hematocrit/hemoglobin fields changed by `ApplyOneDCoupledInlet` | `OneDFlowRuntime` snapshots its complete configuration with transport and network state. |
 | CLI output | writers, coupling history, prior mass, checkpoints | Side effects occur after `CommitStep`, never during `SolveTrial`. |
 
 Disk checkpoint/restart remains a persistence interface. It is not the
@@ -202,6 +205,25 @@ committed `t_n` snapshot, including internal 1D subcycling and terminal-model
 state. `CommitStep` succeeds exactly once. A failed solve leaves a rollback
 path and cannot emit output or advance external circuit state.
 
+`OneDFlowRuntime` implements the same state machine after either
+`InitializeOpenLoop` or `InitializeCoupled`. `BeginStep(time_s, dt_s)` requires
+the committed time; trial input is supplied through `SetPortInput` (common
+ports), `SetCoupledInlet` (existing VCA/replay state), or `SetOpenLoopInlet`.
+`SolveTrial` restores its complete in-memory image before every solve, then
+uses the existing rigid/explicit/PETSc-implicit routine, transport advance, and
+vasodilation update. `RollbackTrial` restores configuration, network, flow,
+outlet/RCR, time/substep, and transport state. Output, checkpoints, histories,
+and external VCA circuit advancement remain CLI work after `CommitStep`.
+
+The native 1D generic ports are `root` and `outlet:<node-id>`. They measure
+area, mean pressure, concentration, outward flow, and outward species flux in
+SI units. Root native root-to-leaf flow is converted with orientation `-1`;
+terminal native flow uses `+1`. A root flow-controlled trial boundary accepts
+optional species concentration. A distal port may override mean static pressure
+only when its configured closure is already a pressure boundary; resistance
+and RCR closures cannot be replaced. Traction, total-pressure, and imposed
+species-flux inputs remain unsupported.
+
 `TransientFlowRuntime::BeginStep` additionally receives the existing CLI step
 index and nonlinear tolerances because those controls belong to the 3D solve,
 not to a generic port value. Existing materialized 3D boundary conditions are
@@ -244,11 +266,13 @@ an explicit set of boundary-label locators and return area as well as flow and
 pressure. The VCA adapter calls that implementation so its output remains
 unchanged. Transport rollback follows only when flow lifecycle parity passes.
 
-The 1D refactor will collect existing orchestration into a runtime object
-without duplicating numerical routines. The CLI becomes a thin driver only
-after parity tests cover rigid, compliant, transport, checkpoint/restart, and
-VCA paths. Dynamic network and configuration mutations are included in the
-snapshot or moved into runtime-owned trial data.
+The 1D runtime collects numerical orchestration without duplicating routines.
+The CLI drives its lifecycle and keeps persistence/circuit/history side effects
+post-commit. The focused dependency-free runtime test covers legal transitions,
+root/outlet signs, coupled configuration mutation, transport, dynamic network
+mutation, and exact rollback/re-solve equality. PETSc checkpoint and broader
+VCA numerical regression remain the compatibility gate for changes beyond this
+runtime extraction.
 
 ## Straight-vessel benchmark definition
 
