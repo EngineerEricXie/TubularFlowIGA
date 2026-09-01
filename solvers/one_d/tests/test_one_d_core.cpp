@@ -208,6 +208,7 @@ int main()
 
 	auto transport = iga::InitializeOneDTransport(configuration,
 		configuration.transport_systems.front(), network);
+	iga::ResetOneDSpeciesStepAccounting(network, flow_state, transport.species.front());
 	iga::AdvanceOneDTransport(configuration, network, flow_state, transport, ".", 0.0,
 		configuration.time.dt);
 	assert(transport.species.size() == 1);
@@ -217,6 +218,74 @@ int main()
 		< 1.0e-14);
 	assert(std::abs(iga::OneDSpeciesFaceFlux(-2.0, 3.0, 1.0, 4.0, 0.5, 2.0))
 		< 1.0e-14);
+	auto sourced_species = transport.species.front();
+	sourced_species.definition.diffusivity = 0.0;
+	sourced_species.definition.volume_source = 3.0;
+	sourced_species.definition.reaction_rate = 0.0;
+	sourced_species.wall_kind = iga::OneDWallBoundaryKind::NoFlux;
+	iga::ResetOneDSpeciesStepAccounting(network, flow_state, sourced_species);
+	iga::AdvanceOneDSpecies(configuration, network, flow_state, sourced_species,
+		".", 0.0, configuration.time.dt);
+	double expected_source_amount = 0.0;
+	for (const auto& source_segment : network.segments) {
+		const double dx = source_segment.length/source_segment.cells;
+		for (int cell = 0; cell < source_segment.cells; ++cell)
+			expected_source_amount += configuration.time.dt*dx*3.0
+				*flow_state.area.at(static_cast<std::size_t>(source_segment.cell_offset+cell));
+	}
+	assert(std::abs(sourced_species.step_source_amount-expected_source_amount) < 1.0e-24);
+
+	iga::OneDNetwork fv_network;
+	fv_network.root = 0;
+	fv_network.outlet_nodes = {1};
+	fv_network.cells = 1;
+	fv_network.segments.push_back(
+		{0, 0, 1, 0.01, 1.0, 1.0, 1.0, 0.0, {}, 0, 1});
+	iga::OneDFlowState fv_flow;
+	fv_flow.area = {1.0};
+	fv_flow.flow = {0.0};
+	iga::OneDSpeciesState fv_species;
+	fv_species.definition.field = "subcycled";
+	fv_species.definition.diffusivity = 0.1;
+	fv_species.definition.volume_source = 2.0;
+	fv_species.concentration = {1.0};
+	fv_species.inlet_value = 1.0;
+	iga::ResetOneDSpeciesStepAccounting(fv_network, fv_flow, fv_species);
+	double expected_scalar = 1.0;
+	double expected_root_amount = 0.0;
+	double expected_outlet_amount = 0.0;
+	double expected_fv_source_amount = 0.0;
+	double remaining = 0.001;
+	int fv_substeps = 0;
+	while (remaining > 0.0) {
+		const double dt = std::min(remaining,
+			iga::OneDTransportStableDt(fv_network, fv_flow, fv_species));
+		const double concentration = expected_scalar;
+		const double root_flux = iga::OneDSpeciesFaceFlux(0.0, 1.0,
+			concentration, 1.0, 0.1, 0.01);
+		const double outlet_flux = iga::OneDSpeciesFaceFlux(0.0, concentration,
+			concentration, 1.0, 0.1, 0.01);
+		expected_root_amount += dt*root_flux;
+		expected_outlet_amount += dt*outlet_flux;
+		expected_fv_source_amount += dt*0.01*2.0;
+		expected_scalar += -dt/0.01*(outlet_flux-root_flux)+dt*2.0;
+		remaining -= dt;
+		++fv_substeps;
+	}
+	iga::AdvanceOneDSpecies(configuration, fv_network, fv_flow, fv_species,
+		".", 0.0, 0.001);
+	assert(fv_substeps == 3);
+	assert(std::abs(fv_species.step_root_native_amount-expected_root_amount) < 1.0e-18);
+	assert(std::abs(fv_species.step_outlet_native_amount.at(1)-expected_outlet_amount)
+		< 1.0e-18);
+	assert(std::abs(fv_species.step_source_amount-expected_fv_source_amount) < 1.0e-18);
+	fv_species.step_accounting_valid = true;
+	const auto fv_accounting = iga::GetOneDSpeciesStepAccounting(
+		fv_network, fv_flow, fv_species);
+	const double fv_scale = std::max({std::abs(fv_accounting.final_mass
+		-fv_accounting.initial_mass), std::abs(fv_accounting.root_outward_amount),
+		std::abs(fv_accounting.source_amount), 1.0e-30});
+	assert(std::abs(fv_accounting.balance_residual) <= 1.0e-12*fv_scale);
 
 	const auto explicit_configuration = iga::ParseOneDConfiguration(
 		Configuration("compliant", "explicit_rusanov"));

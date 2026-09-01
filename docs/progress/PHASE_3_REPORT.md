@@ -88,3 +88,22 @@ core and runtime regressions pass, and focused numerical re-review accepted
 the aggregation, publication timing, and orientation. Time integration of
 those face transfers and reversal-safe outlet boundary inputs remain part of
 the PR 3.2 gate.
+
+The next 1D conservation slice accumulates root, terminal, and volumetric/wall
+source transfers over every internal finite-volume and configured runtime
+substep. Per-species accounting reports initial and final mass, outward
+boundary amounts, source amount, and the discrete residual
+`M1-M0+sum(outward)-source`. Trial reset, failure invalidation, rollback, and
+deterministic replay use the existing runtime snapshot. When flow or
+vasodilation changes cross-sectional area, the transport update now preserves
+the pre-flow `A*C` storage state instead of creating mass by rebuilding it with
+the new area. The legacy VCA step result uses the exact accumulated residual
+and time-averaged outlet/source rates when available.
+
+Focused numerical review found no formulation or ownership defect and asked
+for three additional acceptance checks. They now pass: a high-diffusivity,
+nonzero-source case forces three internal finite-volume substeps and compares
+independently accumulated root/outlet/source amounts; the macro test confirms
+that vasodilation actually changes area while balance remains conserved; and
+a partially failed trial rejects accounting before rollback. The affected
+PETSc `iga_1d` application also compiles warning-free.

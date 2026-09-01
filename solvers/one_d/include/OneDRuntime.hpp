@@ -215,6 +215,9 @@ public:
 			double coupled_inlet_flow = 0.0;
 			if (trial_inlet_mode_ == TrialInletMode::Coupled)
 				coupled_inlet_flow = ApplyOneDCoupledInlet(configuration_, transports_, *trial_inlet_);
+			for (auto& transport : transports_)
+				for (auto& species : transport.species)
+					ResetOneDSpeciesStepAccounting(network_, flow_state_, species);
 			for (int substep = 0; substep < trial_diagnostics_.planned_configured_substeps; ++substep) {
 				++trial_diagnostics_.attempted_configured_substeps;
 				const double sub_start = trial_time_s_+substep*configuration_.time.dt;
@@ -235,6 +238,7 @@ public:
 				}
 				const double inlet_flow = trial_inlet_mode_ == TrialInletMode::Coupled ? coupled_inlet_flow : inlet.flow_m3_s;
 				trial_diagnostics_.substep_endpoint_flows_m3_s.push_back(inlet_flow);
+				const auto transport_initial_area = flow_state_.area;
 				if (flow_.scheme == OneDFlowScheme::SteadyPoiseuille)
 					SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				else if (flow_.scheme == OneDFlowScheme::RigidInertance)
@@ -246,7 +250,9 @@ public:
 					implicit_advance_(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				}
 				for (auto& transport : transports_)
-					AdvanceOneDTransport(configuration_, network_, flow_state_, transport, case_directory_, sub_start, configuration_.time.dt);
+					AdvanceOneDTransport(configuration_, network_, flow_state_, transport,
+						case_directory_, sub_start, configuration_.time.dt,
+						&transport_initial_area);
 				ApplyOneDVasodilation(configuration_, network_, transports_, configuration_.time.dt, flow_.dynamic_viscosity);
 				++flow_state_.completed_step;
 				flow_state_.physical_time = sub_end;
@@ -254,6 +260,9 @@ public:
 				++trial_diagnostics_.completed_configured_substeps;
 			}
 			trial_diagnostics_.explicit_cfl_substep_delta = flow_state_.internal_substeps-cfl_before;
+			for (auto& transport : transports_)
+				for (auto& species : transport.species)
+					species.step_accounting_valid = true;
 			trial_solve_succeeded_ = true;
 			phase_ = Phase::TrialSolved;
 		} catch (...) {
@@ -366,6 +375,19 @@ public:
 			}
 		ValidatePortState(state);
 		return state;
+	}
+
+	std::map<std::string, OneDSpeciesStepAccounting> GetSpeciesStepAccounting() const
+	{
+		if (phase_ != Phase::TrialSolved && phase_ != Phase::CommitPrepared
+			&& phase_ != Phase::Ready)
+			throw std::runtime_error("1d species step accounting requires a solved or committed state");
+		std::map<std::string, OneDSpeciesStepAccounting> result;
+		for (const auto& transport : transports_)
+			for (const auto& species : transport.species)
+				result.emplace(species.definition.field,
+					GetOneDSpeciesStepAccounting(network_, flow_state_, species));
+		return result;
 	}
 
 	void RestoreCommittedState(OneDFlowState flow, std::vector<OneDTransportState> transports,

@@ -17,6 +17,16 @@ bool Close(double first, double second)
 	return std::abs(first-second) <= 1.0e-12*std::max({1.0, std::abs(first), std::abs(second)});
 }
 
+bool Conserved(const iga::OneDSpeciesStepAccounting& accounting)
+{
+	double scale = std::max(std::abs(accounting.final_mass-accounting.initial_mass),
+		std::abs(accounting.root_outward_amount));
+	for (const auto& outlet : accounting.outlet_outward_amount)
+		scale = std::max(scale, std::abs(outlet.second));
+	scale = std::max({scale, std::abs(accounting.source_amount), 1.0e-30});
+	return std::abs(accounting.balance_residual) <= 1.0e-12*scale;
+}
+
 template <class Function>
 void RequireRejected(Function&& function)
 {
@@ -105,12 +115,17 @@ int main()
 			iga::ResolveOneDInlet(macro_configuration), directory);
 		subcycled.InitializeOpenLoop(1.0e-9);
 		sequential.InitializeOpenLoop(1.0e-9);
+		const auto initial_macro_area = subcycled.FlowState().area;
 		subcycled.BeginStep(0.0, 4.0*macro_configuration.time.dt);
 		subcycled.SetOpenLoopInlet(subcycled.OpenLoopInlet(4.0*macro_configuration.time.dt, 1.0e-9));
 		subcycled.SolveTrial();
 		assert(subcycled.Diagnostics().planned_configured_substeps == 4);
 		assert(subcycled.Diagnostics().attempted_configured_substeps == 4);
 		assert(subcycled.Diagnostics().completed_configured_substeps == 4);
+		assert(subcycled.FlowState().area != initial_macro_area);
+		const auto macro_accounting = subcycled.GetSpeciesStepAccounting().at("signal");
+		assert(std::abs(macro_accounting.root_outward_amount+4.0e-12) < 1.0e-24);
+		assert(Conserved(macro_accounting));
 		for (int step = 0; step < 4; ++step) {
 			sequential.BeginStep(sequential.FlowState().physical_time, macro_configuration.time.dt);
 			sequential.SetOpenLoopInlet(sequential.OpenLoopInlet((step+1)*macro_configuration.time.dt, 1.0e-9));
@@ -154,6 +169,10 @@ int main()
 		RequireRejected([&sequential] { sequential.BeginStep(sequential.FlowState().physical_time, sequential.Configuration().time.dt); });
 		subcycled.RollbackTrial();
 		subcycled.SolveTrial();
+		const auto replayed_accounting = subcycled.GetSpeciesStepAccounting().at("signal");
+		assert(std::abs(replayed_accounting.root_outward_amount
+			-macro_accounting.root_outward_amount) < 1.0e-24);
+		assert(replayed_accounting.balance_residual == macro_accounting.balance_residual);
 		assert(subcycled.FlowState().area == sequential.FlowState().area);
 		assert(subcycled.FlowState().flow == sequential.FlowState().flow);
 		assert(subcycled.Transports().front().species.front().concentration
@@ -283,6 +302,9 @@ int main()
 		RequireRejected([&failing_explicit] { failing_explicit.SolveTrial(); });
 		const auto partial = failing_explicit.Diagnostics();
 		assert(failing_explicit.CurrentPhase() == iga::OneDFlowRuntime::Phase::TrialSolved);
+		RequireRejected([&failing_explicit] {
+			failing_explicit.GetSpeciesStepAccounting();
+		});
 		assert(partial.attempted_configured_substeps == 2 && partial.completed_configured_substeps == 1
 			&& partial.explicit_cfl_substep_delta > 0
 			&& failing_explicit.FlowState().internal_substeps-explicit_committed.internal_substeps
@@ -322,6 +344,10 @@ int main()
 	runtime.SolveTrial();
 	const auto first_root = runtime.GetPortState("root");
 	const auto first_outlet = runtime.GetPortState("outlet:2");
+	const auto first_accounting = runtime.GetSpeciesStepAccounting().at("signal");
+	const auto first_result = iga::BuildOneDStepResult(runtime.Configuration(),
+		runtime.Network(), runtime.FlowState(), runtime.Transports(), inlet,
+		configuration.time.dt, {{"signal", first_accounting.initial_mass}});
 	assert(*first_root.outward_flow_m3_s < 0.0);
 	assert(*first_outlet.outward_flow_m3_s > 0.0);
 	assert(Close(first_root.concentration.at("signal"), 2.0));
@@ -329,6 +355,13 @@ int main()
 	assert(runtime.Transports().front().species.front().boundary_flux_valid);
 	assert(Close(first_root.outward_species_flux.at("signal"),
 		-runtime.Transports().front().species.front().root_native_flux));
+	assert(std::abs(first_accounting.root_outward_amount+4.0e-12) < 1.0e-24);
+	assert(Conserved(first_accounting));
+	assert(std::abs(first_result.balance_residuals.at("signal")
+		-first_accounting.balance_residual/configuration.time.dt) < 1.0e-24);
+	assert(std::abs(first_result.outlets.front().species_flux.at("signal")
+		*configuration.time.dt-first_accounting.outlet_outward_amount.begin()->second)
+		< 1.0e-24);
 	assert(runtime.FlowState().completed_step == 1);
 	assert(runtime.FlowState().internal_substeps == 0);
 	assert(!Close(runtime.Network().segments.front().radius0, initial_radius));
@@ -338,6 +371,7 @@ int main()
 	const auto first_pressure = runtime.FlowState().pressure;
 	assert(Close(runtime.Configuration().physiology.hematocrit_percent, 20.0));
 	runtime.RollbackTrial();
+	RequireRejected([&runtime] { runtime.GetSpeciesStepAccounting(); });
 	assert(runtime.FlowState().completed_step == 0);
 	assert(Close(runtime.Network().segments.front().radius0, initial_radius));
 	assert(Close(runtime.Configuration().physiology.hematocrit_percent, 40.0));
@@ -347,6 +381,10 @@ int main()
 		initial_transport_inlet));
 	assert(Close(runtime.LastInlet().flow_m3_s, 1.0e-9));
 	runtime.SolveTrial();
+	const auto repeated_accounting = runtime.GetSpeciesStepAccounting().at("signal");
+	assert(std::abs(repeated_accounting.root_outward_amount
+		-first_accounting.root_outward_amount) < 1.0e-24);
+	assert(repeated_accounting.balance_residual == first_accounting.balance_residual);
 	const auto repeated_root = runtime.GetPortState("root");
 	const auto repeated_outlet = runtime.GetPortState("outlet:2");
 	assert(Close(*first_root.outward_flow_m3_s, *repeated_root.outward_flow_m3_s));

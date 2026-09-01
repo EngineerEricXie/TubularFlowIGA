@@ -25,11 +25,25 @@ struct OneDSpeciesState {
 	double root_native_flux = 0.0;
 	std::map<int, double> outlet_native_flux;
 	bool boundary_flux_valid = false;
+	double step_initial_mass = 0.0;
+	double step_root_native_amount = 0.0;
+	std::map<int, double> step_outlet_native_amount;
+	double step_source_amount = 0.0;
+	bool step_accounting_valid = false;
 };
 
 struct OneDTransportState {
 	std::string name;
 	std::vector<OneDSpeciesState> species;
+};
+
+struct OneDSpeciesStepAccounting {
+	double initial_mass = 0.0;
+	double final_mass = 0.0;
+	double root_outward_amount = 0.0;
+	std::map<int, double> outlet_outward_amount;
+	double source_amount = 0.0;
+	double balance_residual = 0.0;
 };
 
 inline double OneDSpeciesFaceFlux(double flow_m3_s, double left_concentration,
@@ -74,6 +88,53 @@ inline double OneDSpeciesSourceIntegral(const OneDConfiguration& configuration,
 			result += dx*(flow.area[index]*volume_source-perimeter*wall_flux);
 		}
 	}
+	return result;
+}
+
+inline double OneDSpeciesMass(const OneDNetwork& network,
+	const OneDFlowState& flow, const OneDSpeciesState& species)
+{
+	double mass = 0.0;
+	for (const auto& segment : network.segments) {
+		const double dx = segment.length/segment.cells;
+		for (int cell = 0; cell < segment.cells; ++cell) {
+			const auto index = static_cast<std::size_t>(segment.cell_offset+cell);
+			mass += flow.area.at(index)*species.concentration.at(index)*dx;
+		}
+	}
+	return mass;
+}
+
+inline void ResetOneDSpeciesStepAccounting(const OneDNetwork& network,
+	const OneDFlowState& flow, OneDSpeciesState& species)
+{
+	species.root_native_flux = 0.0;
+	species.outlet_native_flux.clear();
+	species.boundary_flux_valid = false;
+	species.step_initial_mass = OneDSpeciesMass(network, flow, species);
+	species.step_root_native_amount = 0.0;
+	species.step_outlet_native_amount.clear();
+	species.step_source_amount = 0.0;
+	species.step_accounting_valid = false;
+}
+
+inline OneDSpeciesStepAccounting GetOneDSpeciesStepAccounting(
+	const OneDNetwork& network, const OneDFlowState& flow,
+	const OneDSpeciesState& species)
+{
+	if (!species.step_accounting_valid)
+		throw std::runtime_error("1d species step accounting requires a successful trial");
+	OneDSpeciesStepAccounting result;
+	result.initial_mass = species.step_initial_mass;
+	result.final_mass = OneDSpeciesMass(network, flow, species);
+	result.root_outward_amount = -species.step_root_native_amount;
+	result.outlet_outward_amount = species.step_outlet_native_amount;
+	result.source_amount = species.step_source_amount;
+	double outward_amount = result.root_outward_amount;
+	for (const auto& outlet : result.outlet_outward_amount)
+		outward_amount += outlet.second;
+	result.balance_residual = result.final_mass-result.initial_mass
+		+outward_amount-result.source_amount;
 	return result;
 }
 
@@ -145,12 +206,20 @@ inline double OneDTransportStableDt(const OneDNetwork& network,
 
 inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDSpeciesState& species,
-	const std::filesystem::path& case_directory, double start_time, double requested_dt)
+	const std::filesystem::path& case_directory, double start_time, double requested_dt,
+	const std::vector<double>* initial_area = nullptr)
 {
 	double remaining = requested_dt;
 	std::vector<double> scalar(species.concentration.size());
 	std::vector<double> next(species.concentration.size());
-	for (std::size_t i = 0; i < scalar.size(); ++i) scalar[i] = flow.area[i]*species.concentration[i];
+	if (initial_area && initial_area->size() != scalar.size())
+		throw std::runtime_error("1d transport initial area size mismatch");
+	for (std::size_t i = 0; i < scalar.size(); ++i) {
+		const double storage_area = initial_area ? initial_area->at(i) : flow.area.at(i);
+		if (!(storage_area > 0.0) || !std::isfinite(storage_area))
+			throw std::runtime_error("1d transport initial area must be finite and positive");
+		scalar[i] = storage_area*species.concentration[i];
+	}
 	while (remaining > 0.0) {
 		const double stable = OneDTransportStableDt(network, flow, species);
 		const double dt = std::min(remaining,
@@ -160,6 +229,7 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 			species, case_directory, start_time+elapsed+dt);
 		double root_native_flux = 0.0;
 		std::map<int, double> outlet_native_flux;
+		double source_amount = 0.0;
 		for (const auto& segment : network.segments) {
 			const double dx = segment.length/segment.cells;
 			std::vector<double> concentration(static_cast<std::size_t>(segment.cells+2));
@@ -207,14 +277,20 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 				if (species.wall_kind == OneDWallBoundaryKind::ConstantFlux) wall_flux = species.wall_value;
 				else if (species.wall_kind == OneDWallBoundaryKind::Robin)
 					wall_flux = species.wall_coefficient*(c-species.exterior_value);
+				const double source_rate = flow.area[index]*source-perimeter*wall_flux;
 				next[index] = scalar[index]-dt/dx*(q[static_cast<std::size_t>(cell+1)]-q[static_cast<std::size_t>(cell)])
-					+dt*flow.area[index]*source-dt*perimeter*wall_flux;
+					+dt*source_rate;
 				if (!std::isfinite(next[index])) throw std::runtime_error("1d species update produced a non-finite state");
+				source_amount += dt*dx*source_rate;
 			}
 		}
 		species.root_native_flux = root_native_flux;
 		species.outlet_native_flux = std::move(outlet_native_flux);
 		species.boundary_flux_valid = true;
+		species.step_root_native_amount += dt*root_native_flux;
+		for (const auto& outlet : species.outlet_native_flux)
+			species.step_outlet_native_amount[outlet.first] += dt*outlet.second;
+		species.step_source_amount += source_amount;
 		scalar.swap(next);
 		remaining -= dt;
 	}
@@ -224,14 +300,16 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 
 inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDTransportState& transport,
-	const std::filesystem::path& case_directory, double start_time, double dt)
+	const std::filesystem::path& case_directory, double start_time, double dt,
+	const std::vector<double>* initial_area = nullptr)
 {
 	#ifdef _OPENMP
 	#pragma omp parallel for schedule(static) if(transport.species.size() >= 4)
 	#endif
 	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i)
 		AdvanceOneDSpecies(configuration, network, flow,
-			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt);
+			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt,
+			initial_area);
 }
 
 inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportState>& transports,

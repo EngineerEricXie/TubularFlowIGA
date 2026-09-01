@@ -49,15 +49,8 @@ inline std::map<std::string, double> OneDTotalSpeciesMass(
 	std::map<std::string, double> result;
 	for (const auto& transport : transports)
 		for (const auto& species : transport.species) {
-			double mass = 0.0;
-			for (const auto& segment : network.segments) {
-				const double dx = segment.length/segment.cells;
-				for (int cell = 0; cell < segment.cells; ++cell) {
-					const auto index = static_cast<std::size_t>(segment.cell_offset+cell);
-					mass += flow.area[index]*species.concentration[index]*dx;
-				}
-			}
-			result.emplace(species.definition.field, mass);
+			result.emplace(species.definition.field,
+				OneDSpeciesMass(network, flow, species));
 		}
 	return result;
 }
@@ -76,7 +69,9 @@ inline VascularStepResult BuildOneDStepResult(const OneDConfiguration& configura
 	for (const auto& transport : transports)
 		for (const auto& species : transport.species)
 			result.source_integrals.emplace(species.definition.field,
-				OneDSpeciesSourceIntegral(configuration, network, flow, species));
+				species.step_accounting_valid && dt_s > 0.0
+					? species.step_source_amount/dt_s
+					: OneDSpeciesSourceIntegral(configuration, network, flow, species));
 	for (const auto& outlet : flow.outlets) {
 		const int incoming = OneDSegmentIntoNode(network, outlet.node);
 		if (incoming < 0) throw std::runtime_error("1d outlet does not have an incoming segment");
@@ -91,8 +86,12 @@ inline VascularStepResult BuildOneDStepResult(const OneDConfiguration& configura
 		for (const auto& transport : transports)
 			for (const auto& species : transport.species) {
 				const double concentration = species.concentration[cell];
-				port.species_flux[species.definition.field]
-					= port.flow_m3_s*concentration;
+				if (species.step_accounting_valid && dt_s > 0.0)
+					port.species_flux[species.definition.field]
+						= species.step_outlet_native_amount.at(outlet.node)/dt_s;
+				else port.species_flux[species.definition.field] = species.boundary_flux_valid
+					? species.outlet_native_flux.at(outlet.node)
+					: port.flow_m3_s*concentration;
 				if (port.average_valid)
 					port.flux_weighted_concentration[species.definition.field]
 						= concentration;
@@ -123,17 +122,22 @@ inline VascularStepResult BuildOneDStepResult(const OneDConfiguration& configura
 			const auto old = previous_mass.find(mass.first);
 			if (old == previous_mass.end()) continue;
 			const auto* species = FindOneDSpecies(transports, mass.first);
-			const double inlet_flux = species ? flow.inlet_flow*species->inlet_value : 0.0;
-			double outlet_flux = 0.0;
-			for (const auto& outlet : result.outlets) {
-				const auto flux = outlet.species_flux.find(mass.first);
-				if (flux != outlet.species_flux.end()) outlet_flux += flux->second;
+			if (species && species->step_accounting_valid) {
+				const auto accounting = GetOneDSpeciesStepAccounting(network, flow, *species);
+				result.balance_residuals[mass.first] = accounting.balance_residual/dt_s;
+			} else {
+				const double inlet_flux = species ? flow.inlet_flow*species->inlet_value : 0.0;
+				double outlet_flux = 0.0;
+				for (const auto& outlet : result.outlets) {
+					const auto flux = outlet.species_flux.find(mass.first);
+					if (flux != outlet.species_flux.end()) outlet_flux += flux->second;
+				}
+				const auto source = result.source_integrals.find(mass.first);
+				const double source_integral = source == result.source_integrals.end()
+					? 0.0 : source->second;
+				result.balance_residuals[mass.first]
+					= (mass.second-old->second)/dt_s-inlet_flux+outlet_flux-source_integral;
 			}
-			const auto source = result.source_integrals.find(mass.first);
-			const double source_integral = source == result.source_integrals.end()
-				? 0.0 : source->second;
-			result.balance_residuals[mass.first]
-				= (mass.second-old->second)/dt_s-inlet_flux+outlet_flux-source_integral;
 		}
 	}
 	return result;
