@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -264,6 +265,114 @@ int main()
 	iga::ApplyThreeDVascularInlet(vca_step_configuration,
 		iga::FirstNavierStokesSystem(vca_step_configuration), vca_inlet, -2.0);
 	assert(std::abs(vca_step_configuration.boundaries[0].conditions[0].scale-1.5) < 1e-14);
+	iga::CouplingPort reference_profile_port;
+	reference_profile_port.id = "inlet";
+	reference_profile_port.subsystem_id = "three_d";
+	reference_profile_port.locator_kind = "boundary_label";
+	reference_profile_port.locator = "1";
+	reference_profile_port.requires = {iga::PortQuantity::FlowRate};
+	iga::PortBoundaryData reference_profile_input;
+	reference_profile_input.time_s = 0.1;
+	reference_profile_input.outward_flow_m3_s = -3.0;
+	auto reference_profile_configuration = vca_configuration;
+	iga::ApplyThreeDReferenceProfileInput(reference_profile_configuration,
+		iga::FirstNavierStokesSystem(reference_profile_configuration), reference_profile_port,
+		reference_profile_input, -2.0);
+	assert(std::abs(reference_profile_configuration.boundaries[0].conditions[0].scale-1.5) < 1e-14);
+	assert(reference_profile_configuration.boundaries[0].conditions[0].scale
+		== vca_step_configuration.boundaries[0].conditions[0].scale);
+	reference_profile_input.outward_flow_m3_s = 6.0;
+	iga::ApplyThreeDReferenceProfileInput(reference_profile_configuration,
+		iga::FirstNavierStokesSystem(reference_profile_configuration), reference_profile_port,
+		reference_profile_input, -2.0);
+	assert(std::abs(reference_profile_configuration.boundaries[0].conditions[0].scale+3.0) < 1e-14);
+	auto RequireReferenceProfileRejected = [&](const iga::CouplingPort& port,
+		const iga::PortBoundaryData& input, double reference_flow) {
+		bool rejected_input = false;
+		try {
+			auto candidate = vca_configuration;
+			iga::ApplyThreeDReferenceProfileInput(candidate,
+				iga::FirstNavierStokesSystem(candidate), port, input, reference_flow);
+		} catch (const std::runtime_error&) {
+			rejected_input = true;
+		}
+		assert(rejected_input);
+	};
+	RequireReferenceProfileRejected(reference_profile_port, reference_profile_input, 0.0);
+	RequireReferenceProfileRejected(reference_profile_port, reference_profile_input,
+		std::numeric_limits<double>::quiet_NaN());
+	{
+		auto overflow_input = reference_profile_input;
+		overflow_input.outward_flow_m3_s = std::numeric_limits<double>::max();
+		auto candidate = vca_configuration;
+		bool rejected_input = false;
+		try {
+			iga::ApplyThreeDReferenceProfileInput(candidate,
+				iga::FirstNavierStokesSystem(candidate), reference_profile_port,
+				overflow_input, std::numeric_limits<double>::denorm_min());
+		} catch (const std::runtime_error&) {
+			rejected_input = true;
+		}
+		assert(rejected_input);
+		assert(candidate.boundaries[0].conditions[0].scale == 1.0);
+	}
+	{
+		auto underflow_input = reference_profile_input;
+		underflow_input.outward_flow_m3_s = std::numeric_limits<double>::denorm_min();
+		auto candidate = vca_configuration;
+		bool rejected_input = false;
+		try {
+			iga::ApplyThreeDReferenceProfileInput(candidate,
+				iga::FirstNavierStokesSystem(candidate), reference_profile_port,
+				underflow_input, std::numeric_limits<double>::max());
+		} catch (const std::runtime_error&) {
+			rejected_input = true;
+		}
+		assert(rejected_input);
+		assert(candidate.boundaries[0].conditions[0].scale == 1.0);
+	}
+	auto nonfinite_input = reference_profile_input;
+	nonfinite_input.outward_flow_m3_s = std::numeric_limits<double>::quiet_NaN();
+	RequireReferenceProfileRejected(reference_profile_port, nonfinite_input, -2.0);
+	auto conflicting_input = reference_profile_input;
+	conflicting_input.mean_pressure_pa = 0.0;
+	RequireReferenceProfileRejected(reference_profile_port, conflicting_input, -2.0);
+	auto malformed_port = reference_profile_port;
+	malformed_port.locator = "1x";
+	RequireReferenceProfileRejected(malformed_port, reference_profile_input, -2.0);
+	auto unsupported_port = reference_profile_port;
+	unsupported_port.locator_kind = "network_node";
+	RequireReferenceProfileRejected(unsupported_port, reference_profile_input, -2.0);
+	auto nonflow_port = reference_profile_port;
+	nonflow_port.requires = {iga::PortQuantity::MeanPressure};
+	RequireReferenceProfileRejected(nonflow_port, reference_profile_input, -2.0);
+	{
+		auto ambiguous = vca_configuration;
+		ambiguous.boundaries[0].conditions.push_back(
+			ambiguous.boundaries[0].conditions.front());
+		bool rejected_input = false;
+		try {
+			iga::ApplyThreeDReferenceProfileInput(ambiguous,
+				iga::FirstNavierStokesSystem(ambiguous), reference_profile_port,
+				reference_profile_input, -2.0);
+		} catch (const std::runtime_error&) {
+			rejected_input = true;
+		}
+		assert(rejected_input);
+	}
+	{
+		auto waveform = vca_configuration;
+		waveform.boundaries[0].conditions[0].waveform = "unmaterialized";
+		bool rejected_input = false;
+		try {
+			iga::ApplyThreeDReferenceProfileInput(waveform,
+				iga::FirstNavierStokesSystem(waveform), reference_profile_port,
+				reference_profile_input, -2.0);
+		} catch (const std::runtime_error&) {
+			rejected_input = true;
+		}
+		assert(rejected_input);
+	}
 	const auto vca_result = iga::BuildThreeDFlowPortResult(0.1, 0.1, vca_inlet,
 		vca_configuration.coupling.three_d_ports, {{2, 1.0}, {3, 2.0}},
 		{{2, 4.0}, {3, 5.0}});

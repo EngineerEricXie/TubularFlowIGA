@@ -1,7 +1,7 @@
 #ifndef IGA_THREE_D_VCA_COUPLING_HPP
 #define IGA_THREE_D_VCA_COUPLING_HPP
 
-#include "SimulationConfig.hpp"
+#include "ThreeDFlowCoupling.hpp"
 #include "VascularCoupling.hpp"
 
 #include <cmath>
@@ -92,24 +92,17 @@ inline void ApplyThreeDVascularInlet(SimulationConfiguration& configuration,
 		|| !(std::abs(reference_inlet_flow_m3_s)
 			> configuration.coupling.flow_epsilon_m3_s))
 		throw std::runtime_error("CPU 3D VCA bridge reference inlet profile has zero flow");
-	if (system.kind != EquationKind::NavierStokes || system.unknowns.empty())
-		throw std::runtime_error("CPU 3D VCA bridge requires a Navier-Stokes system");
-	const auto& velocity = system.unknowns.front();
-	bool applied = false;
-	for (auto& boundary : configuration.boundaries) {
-		if (boundary.label != configuration.coupling.three_d_ports.inlet_label)
-			continue;
-		for (auto& condition : boundary.conditions) {
-			if (condition.field != velocity) continue;
-			if (condition.kind != FieldBoundaryKind::Dirichlet
-				|| condition.profile != "initial_velocityfield.txt")
-				throw std::runtime_error("CPU 3D VCA inlet requires an initial_velocityfield.txt velocity Dirichlet profile");
-			condition.scale = -inlet.flow_m3_s/reference_inlet_flow_m3_s;
-			applied = true;
-		}
-	}
-	if (!applied)
-		throw std::runtime_error("CPU 3D VCA inlet label has no velocity profile boundary");
+	CouplingPort port;
+	port.id = "vca_inlet";
+	port.subsystem_id = "three_d";
+	port.locator_kind = "boundary_label";
+	port.locator = std::to_string(configuration.coupling.three_d_ports.inlet_label);
+	port.requires = {PortQuantity::FlowRate};
+	PortBoundaryData input;
+	input.time_s = inlet.time_s;
+	input.outward_flow_m3_s = -inlet.flow_m3_s;
+	ApplyThreeDReferenceProfileInput(configuration, system, port, input,
+		reference_inlet_flow_m3_s);
 }
 
 inline VascularStepResult BuildThreeDFlowPortResult(double time_s, double dt_s,
