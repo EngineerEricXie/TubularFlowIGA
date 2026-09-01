@@ -1,10 +1,10 @@
 # Phase 2 report
 
-Status: **in progress**. PR 2.1 provides validated in-memory topology, PR 2.3
+Status: **complete**. PR 2.1 provides validated in-memory topology, PR 2.3
 provides atomic domain transactions, backend adapters, and deterministic
-component execution, and PR 2.2 binds schema-v5 manifests to native runtimes.
-PR 2.4 now runs one body-fitted 3D junction with multiple 1D branches. Multiple
-3D islands remain open for PR 2.5.
+component execution, PR 2.2 binds schema-v5 manifests to native runtimes,
+PR 2.4 runs one body-fitted 3D junction with multiple 1D branches, and PR 2.5
+runs connected acyclic graphs containing multiple native 3D regions.
 
 ## Objective
 
@@ -266,3 +266,66 @@ make -C solvers/coupling bifurcation-test \
 PR 2.4 intentionally continues to reject multiple 3D domains, cycles,
 disconnected components, multiple sources or 3D inlets, native 1D branching,
 deeper alternating trees, transport, moving domains, and FSI.
+
+## PR 2.5: multiple body-fitted 3D regions
+
+`iga_multidomain_flow` generalizes native construction to every node in the
+acyclic pressure-flow plan. A first preflight resolves the graph, canonical
+assets, 1D configurations, subcycling, and independent time-zero inlet seeds.
+A second rank-local preflight parses every 3D configuration, mesh, velocity
+profile, required and owned database record, boundary condition, and physical
+boundary audit port before collective agreement. Only then are PETSc runtimes
+instantiated in plan order. Each 3D runtime and database are independently
+owned, with adapter, runtime, and database destruction ordered safely.
+
+Construction is capability-driven rather than based on a sequential or
+bifurcation resolver. Each coupled 1D terminal is checked against its native
+closure, each 3D flow receiver has a separately oriented reference profile,
+and each 3D pressure receiver has an overridable native traction condition.
+Every physical 3D database boundary must have a logical flow-providing port so
+domain mass auditing cannot silently omit a face. All 1D domains, including
+bridges and leaves, retain their own native initial inlet seed.
+
+The acceptance graph is a seven-domain DAG with two independent 3D regions:
+the source feeds a first two-outlet 3D island; one branch terminates and the
+other crosses a coupled-root 1D bridge into a second two-outlet 3D island and
+two leaves. The native gate covers explicit and vector-Aitken execution,
+injected graph-wide rollback, domain/edge/endpoint permutations, independent
+per-domain 3D mass balances, six conservative interfaces, five distinct 1D
+initialization records, and one-/two-rank numerical parity:
+
+```text
+make -C solvers/coupling multidomain-test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+Long-form output is branch- and island-count independent. It includes accepted
+steps, edges, iteration edges, all logical ports, 1D seeds, and per-3D boundary
+balances. The final manifest records canonical graph assets and sorted logical
+endpoints and is renamed into place only after all data streams close.
+
+Phase 2's supported production envelope is now one connected, acyclic,
+heterogeneous pressure-flow component containing arbitrary alternating native
+1D and body-fitted 3D nodes, with one declared 1D source. The phase continues
+to reject cycles, disconnected components or multiple execution policies,
+multiple sources, same-kind edges, transport/species, moving or immersed
+domains, FSI, 0D models, restart, per-edge relaxation, and active outlet models
+on graph-controlled 3D pressure ports.
+
+## Phase exit gate
+
+The complete dependency-free, CPU/PETSc, legacy sequential, native
+bifurcation, and multi-island regression gates passed. The final focused gate
+used the matching local PETSc/MPI toolchain:
+
+```text
+make -C solvers/coupling bifurcation-test multidomain-test \
+  PETSC_DIR=/home/tsungyeh/petsc PETSC_ARCH=arch-linux-c-opt
+```
+
+The two-rank smoke paths use PETSc's built-in GMRES/block-Jacobi solver and
+compare accepted edge pressure and flow histories with the one-rank LU paths.
+The phase-closing Sol review accepted conservation, native state ownership and
+destruction order, collective preflight, graph-wide rollback/commit, atomic
+publication, deterministic graph binding, and the legacy bifurcation entry
+contract.

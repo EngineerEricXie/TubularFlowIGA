@@ -17,7 +17,7 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all test petsc petsc-test bifurcation-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
+.PHONY: all test petsc petsc-test bifurcation-test multidomain-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test multidomain_config_test
 
@@ -39,13 +39,16 @@ test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test m
 	./pressure_flow_executor_test
 	./multidomain_config_test
 
-petsc: iga_1d_3d_explicit iga_1d_3d_bifurcation
+petsc: iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
 
 petsc-test: iga_1d_3d_explicit explicit_coupling_smoke_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./explicit_coupling_smoke_test
 
 bifurcation-test: iga_1d_3d_bifurcation bifurcation_coupling_smoke_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./bifurcation_coupling_smoke_test
+
+multidomain-test: iga_multidomain_flow multidomain_flow_smoke_test
+	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./multidomain_flow_smoke_test
 
 # Opt-in fixture/convergence prerequisite.  The full numerical ladder is kept
 # out of the default smoke target because it is intentionally multi-minute.
@@ -79,12 +82,18 @@ iga_1d_3d_explicit: src/iga_1d_3d_explicit.cpp ../../include/ExplicitOneDThreeDC
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 iga_1d_3d_bifurcation: src/iga_1d_3d_bifurcation.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransportElement.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_BIFURCATION_ENTRY=1 $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+iga_multidomain_flow: src/iga_1d_3d_bifurcation.cpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransportElement.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 explicit_coupling_smoke_test: tests/test_explicit_coupling_smoke.cpp iga_1d_3d_explicit ../cpu/include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
 bifurcation_coupling_smoke_test: tests/test_bifurcation_coupling_smoke.cpp iga_1d_3d_bifurcation ../cpu/include/IgaDatabase.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+multidomain_flow_smoke_test: tests/test_multidomain_flow_smoke.cpp tests/test_bifurcation_coupling_smoke.cpp iga_multidomain_flow iga_1d_3d_bifurcation ../cpu/include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
 straight_vessel_convergence_test: tests/test_straight_vessel_convergence.cpp tests/CouplingFixture.hpp ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../one_d/include/OneDRuntime.hpp
@@ -94,4 +103,4 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
-	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test multidomain_config_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation
+	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test multidomain_config_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow

@@ -233,8 +233,11 @@ int Run(const fs::path& root, const fs::path& output, const std::string& launche
 	const std::string& prefix = {})
 {
 	const auto log = root/(output.filename().string()+".log");
+	const std::string linear_solver = launcher.empty()
+		? " -ksp_type preonly -pc_type lu"
+		: " -ksp_type gmres -pc_type bjacobi -sub_pc_type lu -ksp_rtol 1e-12";
 	return std::system((prefix+launcher+"./iga_1d_3d_bifurcation --graph-case "+Quote(root)
-		+" --output-dir "+Quote(output)+" -ksp_type preonly -pc_type lu >"
+		+" --output-dir "+Quote(output)+linear_solver+">"
 		+Quote(log)+" 2>&1").c_str());
 }
 
@@ -274,6 +277,15 @@ void Validate(const fs::path& output)
 {
 	if (!fs::is_regular_file(output/"graph_binding_manifest.json"))
 		throw std::runtime_error("bifurcation completion marker is missing");
+	std::ifstream marker_input(output/"graph_binding_manifest.json");
+	const std::string marker((std::istreambuf_iterator<char>(marker_input)),
+		std::istreambuf_iterator<char>());
+	if (marker.find("\"benchmark\": \"one_d_three_d_bifurcation\"")
+		== std::string::npos
+		|| marker.find("\"three_d_domain\": \"junction\"") == std::string::npos
+		|| marker.find("\"branch_count\": 2") == std::string::npos
+		|| marker.find("\"domains\"") != std::string::npos)
+		throw std::runtime_error("legacy bifurcation completion marker changed");
 	const auto steps = ReadCsv(output/"pressure_flow_steps.csv");
 	const auto edges = ReadCsv(output/"pressure_flow_edges.csv");
 	const auto iterations = ReadCsv(output/"pressure_flow_iterations.csv");

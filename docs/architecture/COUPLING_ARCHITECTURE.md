@@ -122,6 +122,26 @@ count does not change the schema. A renamed `graph_binding_manifest.json` is
 the final success marker; failure before commit or output completion cannot
 publish it.
 
+`iga_multidomain_flow` uses the same construction core without the
+bifurcation topology restriction. Preflight parses every native domain,
+validates rank-specific database records and all physical 3D boundary audit
+ports, and collectively agrees on errors before constructing PETSc objects.
+Instantiation follows deterministic component order and preserves ownership:
+adapters are destroyed before native runtimes, and each 3D runtime is destroyed
+before its database. Flow-receiving 3D ports each retain their own oriented
+reference profile; graph-controlled pressure ports each override a native
+pressure-traction boundary.
+
+The generic runner supports one connected acyclic heterogeneous pressure-flow
+component with one 1D source, including arbitrary alternating chain and branch
+composition and multiple independently owned body-fitted 3D regions. Output
+adds per-3D-domain boundary-flow balances to the edge, iteration, port, and
+initialization records. Its final manifest records canonical assets and sorted
+edge endpoints and is published only after every CSV closes successfully.
+Cycles, disconnected components, same-kind edges, transport, moving/immersed
+domains, FSI, 0D models, restart, per-edge relaxation, and active graph-driven
+3D outlet models remain outside this phase.
+
 `--coupling-mode strong-fixed` adds the equally narrow fixed-relaxation
 alternative without changing the explicit default or its output names.  For a
 single physical step all three runtimes enter `BeginStep` once.  Each trial

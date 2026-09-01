@@ -153,11 +153,42 @@ double RequireValue(const std::optional<double>& value, const std::string& conte
 std::string JsonEscape(const std::string& value)
 {
 	std::ostringstream output;
-	for (const char character : value) {
-		if (character == '"' || character == '\\') output << '\\';
-		output << character;
+	for (const unsigned char character : value) {
+		switch (character) {
+		case '"': output << "\\\""; break;
+		case '\\': output << "\\\\"; break;
+		case '\b': output << "\\b"; break;
+		case '\f': output << "\\f"; break;
+		case '\n': output << "\\n"; break;
+		case '\r': output << "\\r"; break;
+		case '\t': output << "\\t"; break;
+		default:
+			if (character < 0x20)
+				output << "\\u" << std::hex << std::setw(4) << std::setfill('0')
+					<< static_cast<unsigned int>(character) << std::dec << std::setfill(' ');
+			else output << character;
+		}
 	}
 	return output.str();
+}
+
+std::string CsvEscape(const std::string& value)
+{
+	if (value.find_first_of(",\"\r\n") == std::string::npos) return value;
+	std::string result = "\"";
+	for (const char character : value) {
+		if (character == '"') result.push_back('"');
+		result.push_back(character);
+	}
+	return result+'"';
+}
+
+const char* ExecutionName(iga::GraphExecutionKind kind)
+{
+	if (kind == iga::GraphExecutionKind::Explicit) return "explicit";
+	if (kind == iga::GraphExecutionKind::Fixed) return "fixed";
+	if (kind == iga::GraphExecutionKind::Aitken) return "aitken";
+	throw std::runtime_error("unknown graph execution kind");
 }
 
 struct NativeOneD {
@@ -166,6 +197,21 @@ struct NativeOneD {
 	iga::OneDInletPolicy inlet_policy = iga::OneDInletPolicy::ConfiguredOpenLoop;
 	double initial_native_inlet_flow_m3_s = 0.0;
 	std::unique_ptr<iga::OneDFlowRuntime> runtime;
+};
+
+struct NativeThreeD {
+	std::string domain_id;
+	fs::path case_directory;
+	std::unique_ptr<iga::Database> database;
+	iga::SimulationConfiguration configuration;
+	iga::LabeledHexMesh mesh;
+	std::vector<std::array<double, 3>> boundary_velocity;
+	std::set<std::int32_t> wall_trace_basis;
+	iga::SimulationConfiguration initial_configuration;
+	iga::ResolvedBoundaryConditions initial_boundaries;
+	std::vector<iga::OutletModelState> outlet_models;
+	std::map<std::string, double> reference_outward_flow_m3_s;
+	std::unique_ptr<iga::TransientFlowRuntime> runtime;
 };
 
 NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
@@ -194,10 +240,6 @@ NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 			iga::OneDFlowState& state, double inlet_flow, double dt) {
 			iga::AdvanceImplicitOneD(network_definition, flow_definition, state, inlet_flow, dt);
 		});
-	if (runtime->FlowState().outlets.size() != 1
-		|| runtime->FlowState().outlets.front().kind != iga::OneDOutletKind::Pressure)
-		throw std::runtime_error(
-			"bifurcation benchmark supports one pressure-closed terminal per 1D domain");
 	(void)iga::MakeOneDSubcyclingPlan(configuration.time.dt, configuration.time.steps,
 		graph.time.dt_s, graph.time.steps);
 	const double seed = iga::EvaluateOneDInlet(runtime->Configuration(),
@@ -215,9 +257,109 @@ void ValidateOneDPort(const NativeOneD& native, const iga::CouplingPort& port)
 	if (port.locator == "root") return;
 	const int node_id = iga::ParseOneDOutletNodeLocator(port);
 	const auto found = native.runtime->Network().node_index.find(node_id);
-	if (found == native.runtime->Network().node_index.end()
-		|| native.runtime->FlowState().outlets.front().node != found->second)
+	if (found == native.runtime->Network().node_index.end())
 		throw std::runtime_error("schema-v5 1D terminal locator does not match its native case");
+	const auto outlet = std::find_if(native.runtime->FlowState().outlets.begin(),
+		native.runtime->FlowState().outlets.end(), [&](const iga::OneDOutletState& candidate) {
+			return candidate.node == found->second;
+		});
+	if (outlet == native.runtime->FlowState().outlets.end())
+		throw std::runtime_error("schema-v5 1D terminal locator does not match its native case");
+	if (port.requires.count(iga::PortQuantity::MeanPressure)
+		&& outlet->kind != iga::OneDOutletKind::Pressure)
+		throw std::runtime_error("graph-controlled 1D outlet requires a native pressure closure");
+}
+
+std::unique_ptr<NativeThreeD> BuildThreeDPreflight(
+	const iga::MultidomainConfiguration& graph,
+	const iga::PressureFlowComponentPlan& plan,
+	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
+	const std::string& domain_id, int rank)
+{
+	auto native = std::make_unique<NativeThreeD>();
+	native->domain_id = domain_id;
+	native->case_directory = assets.at(domain_id).case_directory;
+	native->database = std::make_unique<iga::Database>(assets.at(domain_id).database.string());
+	const auto required_elements = native->database->LoadRequired(rank);
+	const auto owned_elements = native->database->LoadOwned(rank);
+	native->configuration = iga::ReadSimulationConfiguration(
+		iga::ResolveContainedCaseFile(native->case_directory, "simulation_config.json",
+			domain_id+" 3D configuration").string());
+	CanonicalizePeriodicTableAssets(native->configuration.temporal_functions,
+		native->case_directory, domain_id);
+	if (native->configuration.equation_systems.size() != 1
+		|| native->configuration.equation_systems.front().kind
+			!= iga::EquationKind::NavierStokes
+		|| native->configuration.equation_systems.front().unknowns.size() != 2
+		|| native->configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly
+		|| native->configuration.physiology.enabled
+		|| native->configuration.equation_systems.front().time_integration
+			!= "backward_euler")
+		throw std::runtime_error(
+			"multidomain flow requires one flow_only backward_euler 3D Navier-Stokes system");
+	for (const auto& field : native->configuration.fields)
+		if (field.kind == iga::FieldKind::Scalar)
+			throw std::runtime_error("multidomain flow rejects 3D transport fields");
+	if (graph.time.dt_s != native->configuration.time.dt
+		|| graph.time.steps != native->configuration.time.steps)
+		throw std::runtime_error("schema-v5 and every 3D time grid must match");
+	native->mesh = iga::ReadLabeledHexMesh(
+		iga::ResolveContainedCaseFile(native->case_directory, "controlmesh.vtk",
+			domain_id+" 3D control mesh").string(), native->database->header().nodes,
+		native->database->header().elements);
+	native->boundary_velocity = iga::ReadVelocity(
+		iga::ResolveContainedCaseFile(native->case_directory,
+			"initial_velocityfield.txt", domain_id+" 3D initial velocity").string(),
+		native->database->header().nodes);
+	native->wall_trace_basis = iga::WallTraceBasis(*native->database, native->mesh, 0);
+	native->initial_configuration = iga::MaterializeBoundaryWaveforms(
+		native->configuration, native->case_directory.string(), 0.0);
+	native->outlet_models = iga::InitializeOutletModels(native->configuration,
+		native->configuration.equation_systems.front());
+	if (!native->outlet_models.empty())
+		throw std::runtime_error(
+			"multidomain graph-controlled 3D domains require static-pressure boundaries");
+	std::set<int> declared_labels;
+	for (const auto& port : graph.graph.Domain(domain_id).ports) {
+		const int label = iga::ParseThreeDFlowBoundaryLabel(port);
+		declared_labels.insert(label);
+		if (!port.provides.count(iga::PortQuantity::FlowRate))
+			throw std::runtime_error(
+				"every multidomain 3D boundary port must provide flow for balance auditing");
+		if (port.requires.count(iga::PortQuantity::MeanPressure))
+		{
+			const auto interface = std::find_if(plan.interfaces.begin(), plan.interfaces.end(),
+				[&](const iga::PressureFlowInterfacePlan& candidate) {
+					return candidate.pressure_receiver == iga::PortRef{domain_id, port.id};
+				});
+			if (interface == plan.interfaces.end())
+				throw std::runtime_error("3D pressure receiver is not bound to a graph edge");
+			ApplyInitialPressure(native->initial_configuration,
+				native->configuration.equation_systems.front().unknowns.at(1), label,
+				graph.initial_pressure_pa.at(interface->edge_id));
+		}
+		if (port.requires.count(iga::PortQuantity::FlowRate)) {
+			auto check = native->initial_configuration;
+			iga::PortBoundaryData input;
+			input.time_s = 0.0;
+			input.outward_flow_m3_s = 1.0;
+			iga::ApplyThreeDReferenceProfileInput(check,
+				check.equation_systems.front(), port, input, 1.0);
+		}
+	}
+	for (const auto& element : required_elements)
+		for (const int label : element.boundary_labels)
+			if (label >= 0 && !declared_labels.count(label))
+				throw std::runtime_error("3D database boundary label lacks a logical audit port");
+	for (const auto& element : owned_elements)
+		for (const int label : element.boundary_labels)
+			if (label >= 0 && !declared_labels.count(label))
+				throw std::runtime_error("owned 3D boundary label lacks a logical audit port");
+	native->initial_boundaries = iga::ResolveFlowBoundaries(
+		native->initial_configuration,
+		native->initial_configuration.equation_systems.front(), native->mesh.labels,
+		native->boundary_velocity);
+	return native;
 }
 
 struct AcceptedStep {
@@ -226,13 +368,17 @@ struct AcceptedStep {
 	int iterations = 0;
 	double three_d_mass_m3_s = 0.0;
 	double external_outward_flow_m3_s = 0.0;
+	std::map<std::string, std::pair<double, double>> three_d_balance;
 	iga::PressureFlowStepResult result;
 };
 
 void WriteOutputs(const fs::path& directory,
 	const iga::MultidomainConfiguration& configuration,
-	const iga::OneDThreeDBifurcationDefinition& definition,
+	const fs::path& graph_root,
+	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
+	const std::optional<iga::OneDThreeDBifurcationDefinition>& bifurcation,
 	const std::map<std::string, NativeOneD>& one_d,
+	const std::map<std::string, std::unique_ptr<NativeThreeD>>& three_d,
 	const std::vector<AcceptedStep>& steps)
 {
 	if (!fs::create_directories(directory))
@@ -242,7 +388,8 @@ void WriteOutputs(const fs::path& directory,
 	std::ofstream iterations(directory/"pressure_flow_iterations.csv");
 	std::ofstream ports(directory/"pressure_flow_ports.csv");
 	std::ofstream initialization(directory/"one_d_initialization.csv");
-	if (!summary || !edges || !iterations || !ports || !initialization)
+	std::ofstream balances(directory/"pressure_flow_domain_balances.csv");
+	if (!summary || !edges || !iterations || !ports || !initialization || !balances)
 		throw std::runtime_error("cannot create bifurcation long-form output");
 	summary << "step,time_s,iterations,three_d_mass_imbalance_m3_s,external_outward_flow_m3_s\n";
 	edges << "step,time_s,edge_id,applied_pressure_pa,measured_pressure_pa,pressure_residual_pa,"
@@ -254,8 +401,10 @@ void WriteOutputs(const fs::path& directory,
 		"flow_residual_m3_s,normalized_flow_residual\n";
 	ports << "step,time_s,domain_id,port_id,area_m2,outward_flow_m3_s,mean_pressure_pa\n";
 	initialization << "domain_id,inlet_policy,native_inlet_flow_m3_s\n";
+	balances << "step,time_s,domain_id,boundary_flow_sum_m3_s,"
+		"boundary_flow_absolute_sum_m3_s,normalized_mass_imbalance\n";
 	for (const auto& item : one_d)
-		initialization << std::setprecision(17) << item.first << ','
+		initialization << std::setprecision(17) << CsvEscape(item.first) << ','
 			<< (item.second.inlet_policy == iga::OneDInletPolicy::ConfiguredOpenLoop
 				? "configured_open_loop" : "coupled_root") << ','
 			<< item.second.initial_native_inlet_flow_m3_s << '\n';
@@ -265,7 +414,7 @@ void WriteOutputs(const fs::path& directory,
 			<< step.external_outward_flow_m3_s << '\n';
 		for (const auto& edge : step.result.iterations.back().edges)
 			edges << std::setprecision(17) << step.step << ',' << step.time_s << ','
-				<< edge.edge_id << ',' << edge.applied_pressure_pa << ','
+				<< CsvEscape(edge.edge_id) << ',' << edge.applied_pressure_pa << ','
 				<< edge.measured_pressure_pa << ',' << edge.pressure_residual_pa << ','
 				<< edge.normalized_pressure_residual << ',' << edge.first_outward_flow_m3_s
 				<< ',' << edge.second_outward_flow_m3_s << ',' << edge.flow_residual_m3_s
@@ -274,7 +423,7 @@ void WriteOutputs(const fs::path& directory,
 			for (const auto& edge : iteration.edges)
 				iterations << std::setprecision(17) << step.step << ',' << step.time_s << ','
 					<< iteration.iteration << ',' << iteration.applied_relaxation << ','
-					<< (iteration.converged ? 1 : 0) << ',' << edge.edge_id << ','
+					<< (iteration.converged ? 1 : 0) << ',' << CsvEscape(edge.edge_id) << ','
 					<< edge.applied_pressure_pa << ',' << edge.measured_pressure_pa << ','
 					<< edge.pressure_residual_pa << ',' << edge.normalized_pressure_residual
 					<< ',' << edge.first_outward_flow_m3_s << ','
@@ -282,27 +431,79 @@ void WriteOutputs(const fs::path& directory,
 					<< edge.normalized_flow_residual << '\n';
 		for (const auto& port : step.result.accepted_ports) {
 			ports << std::setprecision(17) << step.step << ',' << step.time_s << ','
-				<< port.first.domain_id << ',' << port.first.port_id << ','
+				<< CsvEscape(port.first.domain_id) << ',' << CsvEscape(port.first.port_id) << ','
 				<< RequireValue(port.second.area_m2, "port area") << ','
 				<< RequireValue(port.second.outward_flow_m3_s, "port flow") << ',';
 			if (port.second.mean_pressure_pa) ports << *port.second.mean_pressure_pa;
 			ports << '\n';
 		}
+		for (const auto& balance : step.three_d_balance)
+			balances << std::setprecision(17) << step.step << ',' << step.time_s << ','
+				<< CsvEscape(balance.first) << ',' << balance.second.first << ','
+				<< balance.second.second << ','
+				<< (balance.second.second == 0.0 ? 0.0
+					: 2.0*std::abs(balance.second.first)/balance.second.second) << '\n';
 	}
 	summary.close();
 	edges.close();
 	iterations.close();
 	ports.close();
 	initialization.close();
-	if (!summary || !edges || !iterations || !ports || !initialization)
+	balances.close();
+	if (!summary || !edges || !iterations || !ports || !initialization || !balances)
 		throw std::runtime_error("cannot finalize bifurcation long-form output");
 	std::ofstream marker(directory/"graph_binding_manifest.json.tmp");
 	if (!marker) throw std::runtime_error("cannot create bifurcation completion marker");
-	marker << "{\n  \"schema_version\": 5,\n  \"benchmark\": \"one_d_three_d_bifurcation\",\n"
-		<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id) << "\",\n"
-		<< "  \"three_d_domain\": \"" << JsonEscape(definition.three_d_domain_id) << "\",\n"
-		<< "  \"branch_count\": " << definition.branches.size() << ",\n"
-		<< "  \"completed_steps\": " << steps.size() << "\n}\n";
+	if (bifurcation) {
+		marker << "{\n  \"schema_version\": 5,\n  \"benchmark\": \"one_d_three_d_bifurcation\",\n"
+			<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id) << "\",\n"
+			<< "  \"three_d_domain\": \"" << JsonEscape(bifurcation->three_d_domain_id)
+			<< "\",\n  \"branch_count\": " << bifurcation->branches.size() << ",\n"
+			<< "  \"completed_steps\": " << steps.size() << "\n}\n";
+	} else {
+		marker << "{\n  \"schema_version\": 5,\n  \"benchmark\": \"acyclic_multidomain_flow\",\n"
+			<< "  \"graph_root\": \"" << JsonEscape(graph_root.generic_string()) << "\",\n"
+			<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id) << "\",\n"
+			<< "  \"execution\": \"" << ExecutionName(configuration.execution.kind) << "\",\n"
+			<< "  \"domain_count\": " << configuration.graph.Domains().size() << ",\n"
+			<< "  \"three_d_domain_count\": " << three_d.size() << ",\n"
+			<< "  \"completed_steps\": " << steps.size() << ",\n  \"domains\": [\n";
+		std::size_t domain_index = 0;
+		for (const auto& domain : configuration.graph.Domains()) {
+			const auto& resolved = assets.at(domain.first);
+			marker << "    {\"id\":\"" << JsonEscape(domain.first) << "\",\"kind\":\""
+				<< (domain.second.kind == iga::DomainKind::OneDFlow
+					? "network_flow" : "body_fitted_iga_flow") << "\",\"case\":\""
+				<< JsonEscape(resolved.case_directory.generic_string()) << "\"";
+			if (domain.second.kind == iga::DomainKind::ThreeDBodyFittedFlow)
+				marker << ",\"database\":\""
+					<< JsonEscape(resolved.database.generic_string()) << "\"";
+			marker << '}'
+				<< (++domain_index == configuration.graph.Domains().size() ? "\n" : ",\n");
+		}
+		marker << "  ],\n  \"couplings\": [\n";
+		std::vector<const iga::CouplingEdge*> sorted_edges;
+		for (const auto& edge : configuration.graph.Edges()) sorted_edges.push_back(&edge);
+		std::sort(sorted_edges.begin(), sorted_edges.end(),
+			[](const iga::CouplingEdge* first, const iga::CouplingEdge* second) {
+				return first->id < second->id;
+			});
+		for (std::size_t index = 0; index < sorted_edges.size(); ++index) {
+			const auto& edge = *sorted_edges[index];
+			const iga::PortRef* first = &edge.first;
+			const iga::PortRef* second = &edge.second;
+			if (*second < *first) std::swap(first, second);
+			marker << "    {\"id\":\"" << JsonEscape(edge.id)
+				<< "\",\"first\":{\"domain\":\""
+				<< JsonEscape(first->domain_id) << "\",\"port\":\""
+				<< JsonEscape(first->port_id) << "\"},\"second\":{\"domain\":\""
+				<< JsonEscape(second->domain_id) << "\",\"port\":\""
+				<< JsonEscape(second->port_id) << "\"},\"initial_pressure_pa\":"
+				<< std::setprecision(17) << configuration.initial_pressure_pa.at(edge.id) << '}'
+				<< (index+1 == sorted_edges.size() ? "\n" : ",\n");
+		}
+		marker << "  ]\n}\n";
+	}
 	marker.close();
 	if (!marker) throw std::runtime_error("cannot write bifurcation completion marker");
 	fs::rename(directory/"graph_binding_manifest.json.tmp",
@@ -338,189 +539,143 @@ int main(int argc, char** argv)
 	try {
 		const auto options = ParseOptions(argc, argv);
 		std::optional<iga::MultidomainConfiguration> configuration_holder;
-		std::optional<iga::OneDThreeDBifurcationDefinition> definition_holder;
+		std::optional<iga::PressureFlowComponentPlan> plan_holder;
+		std::optional<iga::OneDThreeDBifurcationDefinition> bifurcation_holder;
 		std::map<std::string, iga::ResolvedGraphDomainAssets> assets;
 		std::map<std::string, NativeOneD> one_d;
+		std::map<std::string, std::unique_ptr<NativeThreeD>> three_d;
+		fs::path graph_root;
 		std::string local_error;
 		try {
 			if (fs::exists(options.output_directory))
 				throw std::runtime_error("bifurcation output directory must not already exist");
-			const auto root = iga::CanonicalGraphCaseRoot(options.graph_case);
+			graph_root = iga::CanonicalGraphCaseRoot(options.graph_case);
 			configuration_holder.emplace(iga::ReadMultidomainConfiguration(
-				iga::ResolveContainedCaseFile(root, "simulation_config.json",
+				iga::ResolveContainedCaseFile(graph_root, "simulation_config.json",
 					"schema-v5 manifest").string()));
-			definition_holder.emplace(
+			plan_holder.emplace(iga::MakeAcyclicPressureFlowPlan(
+				configuration_holder->graph, configuration_holder->start_domain_id));
+#ifdef IGA_BIFURCATION_ENTRY
+			bifurcation_holder.emplace(
 				iga::ResolveOneDThreeDBifurcation(*configuration_holder));
-			assets = iga::ResolveGraphDomainAssets(*configuration_holder, root);
-			one_d.emplace(definition_holder->upstream_domain_id,
-				BuildOneD(*configuration_holder, assets,
-					definition_holder->upstream_domain_id));
-			for (const auto& branch : definition_holder->branches)
-				one_d.emplace(branch.downstream_domain_id,
-					BuildOneD(*configuration_holder, assets,
-						branch.downstream_domain_id));
+#endif
+			assets = iga::ResolveGraphDomainAssets(*configuration_holder, graph_root);
+			if (configuration_holder->graph.Domain(configuration_holder->start_domain_id).kind
+				!= iga::DomainKind::OneDFlow)
+				throw std::runtime_error("multidomain flow requires a 1D start domain");
+			for (const auto& domain_id : plan_holder->domain_order) {
+				if (configuration_holder->graph.Domain(domain_id).kind
+					!= iga::DomainKind::OneDFlow) continue;
+				const auto& domain = iga::GraphDomainDefinitionFor(*configuration_holder,
+					domain_id);
+				const bool has_incoming = std::any_of(plan_holder->interfaces.begin(),
+					plan_holder->interfaces.end(), [&](const iga::PressureFlowInterfacePlan& edge) {
+						return edge.flow_receiver.domain_id == domain_id;
+					});
+				if ((!has_incoming
+					&& domain.one_d_inlet_policy != iga::OneDInletPolicy::ConfiguredOpenLoop)
+					|| (has_incoming
+						&& domain.one_d_inlet_policy != iga::OneDInletPolicy::CoupledRoot))
+					throw std::runtime_error(
+						"1D inlet policy does not match its directed graph role");
+				one_d.emplace(domain_id,
+					BuildOneD(*configuration_holder, assets, domain_id));
+			}
 		} catch (const std::exception& error) {
 			local_error = error.what();
 		}
 		RequireCollectivePreflight(local_error);
 		auto& configuration = *configuration_holder;
-		const auto& definition = *definition_holder;
-		const auto three_d_case = assets.at(definition.three_d_domain_id).case_directory;
-		std::unique_ptr<iga::Database> database_holder;
-		std::optional<iga::SimulationConfiguration> three_d_configuration_holder;
-		std::optional<iga::LabeledHexMesh> mesh_holder;
-		std::vector<std::array<double, 3>> boundary_velocity;
-		std::set<std::int32_t> wall_trace_basis;
-		std::optional<iga::SimulationConfiguration> initial_three_d_holder;
-		std::vector<iga::OutletModelState> outlet_models;
-		std::optional<iga::ResolvedBoundaryConditions> initial_boundaries_holder;
-		std::set<int> graph_outlet_labels;
+		const auto& plan = *plan_holder;
 		local_error.clear();
 		try {
 			for (const auto& item : one_d)
 				for (const auto& port : configuration.graph.Domain(item.first).ports)
 					if (port.locator_kind == "runtime_port")
 						ValidateOneDPort(item.second, port);
-			database_holder = std::make_unique<iga::Database>(
-				assets.at(definition.three_d_domain_id).database.string());
-			(void)database_holder->LoadRequired(rank);
-			(void)database_holder->LoadOwned(rank);
-			three_d_configuration_holder.emplace(iga::ReadSimulationConfiguration(
-				iga::ResolveContainedCaseFile(three_d_case, "simulation_config.json",
-					"3D configuration").string()));
-			auto& candidate = *three_d_configuration_holder;
-			CanonicalizePeriodicTableAssets(candidate.temporal_functions,
-				three_d_case, definition.three_d_domain_id);
-			if (candidate.equation_systems.size() != 1
-				|| candidate.equation_systems.front().kind != iga::EquationKind::NavierStokes
-				|| candidate.equation_systems.front().unknowns.size() != 2
-				|| candidate.coupling.mode != iga::SimulationScopeMode::FlowOnly
-				|| candidate.physiology.enabled
-				|| candidate.equation_systems.front().time_integration != "backward_euler")
-				throw std::runtime_error(
-					"bifurcation coupling requires one flow_only backward_euler 3D Navier-Stokes system");
-			for (const auto& field : candidate.fields)
-				if (field.kind == iga::FieldKind::Scalar)
-					throw std::runtime_error("bifurcation coupling rejects 3D transport fields");
-			iga::RequireThreeDVascularPorts(candidate.coupling, "bifurcation coupling");
-			const auto& candidate_ports = candidate.coupling.three_d_ports;
-			const auto& candidate_inlet = configuration.graph.Port(definition.three_d_inlet);
-			if (iga::ParseThreeDFlowBoundaryLabel(candidate_inlet)
-				!= candidate_ports.inlet_label)
-				throw std::runtime_error("schema-v5 3D inlet label does not match the native case");
-			for (const auto& branch : definition.branches)
-				graph_outlet_labels.insert(iga::ParseThreeDFlowBoundaryLabel(
-					configuration.graph.Port(branch.three_d_outlet)));
-			const std::set<int> native_outlet_labels(candidate_ports.outlet_labels.begin(),
-				candidate_ports.outlet_labels.end());
-			if (graph_outlet_labels != native_outlet_labels
-				|| iga::ParseThreeDFlowBoundaryLabel(configuration.graph.Port(
-					definition.three_d_wall_observation)) != 0)
-				throw std::runtime_error(
-					"schema-v5 3D outlet/wall labels do not match the native case");
-			const auto& candidate_flow = candidate.equation_systems.front();
-			for (const auto& item : one_d)
-				if (item.second.runtime->FlowSystem().density != candidate_flow.density
-					|| item.second.runtime->FlowSystem().dynamic_viscosity
-						!= candidate_flow.viscosity)
-					throw std::runtime_error(
-						"bifurcation coupling requires identical density and viscosity");
-			if (configuration.time.dt_s != candidate.time.dt
-				|| configuration.time.steps != candidate.time.steps)
-				throw std::runtime_error("schema-v5 and 3D time grids must match");
-			mesh_holder.emplace(iga::ReadLabeledHexMesh(
-				iga::ResolveContainedCaseFile(three_d_case, "controlmesh.vtk",
-					"3D control mesh").string(), database_holder->header().nodes,
-				database_holder->header().elements));
-			boundary_velocity = iga::ReadVelocity(
-				iga::ResolveContainedCaseFile(three_d_case, "initial_velocityfield.txt",
-					"3D initial velocity").string(), database_holder->header().nodes);
-			wall_trace_basis = iga::WallTraceBasis(*database_holder, *mesh_holder, 0);
-			initial_three_d_holder.emplace(iga::MaterializeBoundaryWaveforms(candidate,
-				three_d_case.string(), 0.0));
-			outlet_models = iga::InitializeOutletModels(candidate, candidate_flow);
-			if (!outlet_models.empty())
-				throw std::runtime_error(
-					"bifurcation benchmark requires static-pressure 3D outlets");
-			initial_boundaries_holder.emplace(iga::ResolveFlowBoundaries(
-				*initial_three_d_holder,
-				initial_three_d_holder->equation_systems.front(), mesh_holder->labels,
-				boundary_velocity));
+			for (const auto& domain_id : plan.domain_order)
+				if (configuration.graph.Domain(domain_id).kind
+					== iga::DomainKind::ThreeDBodyFittedFlow)
+					three_d.emplace(domain_id, BuildThreeDPreflight(
+						configuration, plan, assets, domain_id, rank));
+			for (const auto& volume : three_d)
+				for (const auto& line : one_d)
+					if (line.second.runtime->FlowSystem().density
+							!= volume.second->configuration.equation_systems.front().density
+						|| line.second.runtime->FlowSystem().dynamic_viscosity
+							!= volume.second->configuration.equation_systems.front().viscosity)
+						throw std::runtime_error(
+							"multidomain flow requires identical density and viscosity");
 		} catch (const std::exception& error) {
 			local_error = error.what();
 		}
 		RequireCollectivePreflight(local_error);
-		auto& database = *database_holder;
-		auto& three_d_configuration = *three_d_configuration_holder;
-		auto& mesh = *mesh_holder;
-		auto& initial_three_d = *initial_three_d_holder;
-		const auto& flow = three_d_configuration.equation_systems.front();
-		const auto& native_ports = three_d_configuration.coupling.three_d_ports;
-		const auto& graph_inlet = configuration.graph.Port(definition.three_d_inlet);
-		iga::TransientFlowRuntime three_d(database, PETSC_COMM_WORLD, true, true,
-			{flow.density, flow.viscosity, three_d_configuration.time.dt},
-			*initial_boundaries_holder, mesh.labels, boundary_velocity, wall_trace_basis,
-			std::move(outlet_models));
-		iga::RequireValidGeometry(three_d.Elements(), rank, PETSC_COMM_WORLD);
-
-		std::set<int> required_labels = graph_outlet_labels;
-		required_labels.insert(0);
-		required_labels.insert(native_ports.inlet_label);
-		std::map<int, long long> local_faces;
-		int local_unknown_label = 0;
-		for (const auto& element : three_d.OwnedElements())
-			for (const int label : element.boundary_labels) {
-				if (label < 0) continue;
-				if (!required_labels.count(label)) local_unknown_label = 1;
-				else ++local_faces[label];
+		for (const auto& domain_id : plan.domain_order) {
+			if (!three_d.count(domain_id)) continue;
+			auto& native = *three_d.at(domain_id);
+			const auto& flow = native.configuration.equation_systems.front();
+			native.runtime = std::make_unique<iga::TransientFlowRuntime>(*native.database,
+				PETSC_COMM_WORLD, true, true,
+				iga::NavierStokesParameters{flow.density, flow.viscosity,
+					native.configuration.time.dt}, native.initial_boundaries,
+				native.mesh.labels, native.boundary_velocity, native.wall_trace_basis,
+				std::move(native.outlet_models));
+			iga::RequireValidGeometry(native.runtime->Elements(), rank, PETSC_COMM_WORLD);
+			for (const auto& port : configuration.graph.Domain(domain_id).ports) {
+				const int label = iga::ParseThreeDFlowBoundaryLabel(port);
+				long long local_faces = 0;
+				for (const auto& element : native.runtime->OwnedElements())
+					local_faces += static_cast<long long>(std::count(
+						element.boundary_labels.begin(), element.boundary_labels.end(), label));
+				long long global_faces = 0;
+				MPI_Allreduce(&local_faces, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
+					PETSC_COMM_WORLD);
+				if (global_faces == 0)
+					throw std::runtime_error("3D logical port has no database boundary face");
+				if (!port.requires.count(iga::PortQuantity::FlowRate)) continue;
+				const double reference = port.orientation.ToOutward(
+					native.runtime->ReferenceBoundaryFlow(label));
+				native.reference_outward_flow_m3_s.emplace(port.id, reference);
+				const auto interface = std::find_if(plan.interfaces.begin(), plan.interfaces.end(),
+					[&](const iga::PressureFlowInterfacePlan& edge) {
+						return edge.flow_receiver == iga::PortRef{domain_id, port.id};
+					});
+				if (interface == plan.interfaces.end())
+					throw std::runtime_error("3D flow receiver is not bound to a graph edge");
+				const auto& provider = one_d.at(interface->flow_provider.domain_id);
+				const auto provider_state = provider.runtime->GetPortState(
+					configuration.graph.Port(interface->flow_provider).locator);
+				iga::PortBoundaryData input;
+				input.time_s = 0.0;
+				input.outward_flow_m3_s = -RequireValue(
+					provider_state.outward_flow_m3_s, "initial upstream provider flow");
+				iga::ApplyThreeDReferenceProfileInput(native.initial_configuration,
+					native.initial_configuration.equation_systems.front(), port, input,
+					reference);
 			}
-		int unknown_label = 0;
-		MPI_Allreduce(&local_unknown_label, &unknown_label, 1, MPI_INT, MPI_MAX,
-			PETSC_COMM_WORLD);
-		if (unknown_label)
-			throw std::runtime_error("bifurcation 3D database has an undeclared boundary label");
-		for (const int label : required_labels) {
-			long long local = local_faces[label];
-			long long global = 0;
-			MPI_Allreduce(&local, &global, 1, MPI_LONG_LONG, MPI_SUM, PETSC_COMM_WORLD);
-			if (global == 0)
-				throw std::runtime_error("bifurcation 3D database omits a declared boundary face");
+			native.runtime->InitializeState(native.initial_configuration);
 		}
 
-		const auto& source = one_d.at(definition.upstream_domain_id);
-		const auto source_terminal = source.runtime->GetPortState(
-			configuration.graph.Port(definition.upstream_terminal).locator);
-		iga::PortBoundaryData initial_inlet;
-		initial_inlet.time_s = 0.0;
-		initial_inlet.outward_flow_m3_s = -RequireValue(
-			source_terminal.outward_flow_m3_s, "source terminal flow");
-		const double native_reference = three_d.ReferenceBoundaryFlow(native_ports.inlet_label);
-		const double graph_reference = graph_inlet.orientation.ToOutward(native_reference);
-		iga::ApplyThreeDReferenceProfileInput(initial_three_d,
-			initial_three_d.equation_systems.front(), graph_inlet, initial_inlet,
-			graph_reference);
-		const auto& pressure_field = flow.unknowns.at(1);
-		for (const auto& branch : definition.branches)
-			ApplyInitialPressure(initial_three_d, pressure_field,
-				iga::ParseThreeDFlowBoundaryLabel(configuration.graph.Port(branch.three_d_outlet)),
-				configuration.initial_pressure_pa.at(branch.edge_id));
-		three_d.InitializeState(initial_three_d);
-
 		std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
-		for (auto& item : one_d)
-			runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(item.first,
-				*item.second.runtime, configuration.graph.Domain(item.first).ports,
-				item.second.inlet_policy));
 		iga::ThreeDFlowDomainControls controls;
 		controls.maximum_newton = options.maximum_newton;
 		controls.nonlinear_relative_tolerance = kNonlinearRelativeTolerance;
 		controls.nonlinear_absolute_tolerance = kNonlinearAbsoluteTolerance;
 		controls.mass_relative_tolerance = kMassRelativeTolerance;
-		runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
-			definition.three_d_domain_id, three_d,
-			configuration.graph.Domain(definition.three_d_domain_id).ports,
-			three_d_configuration, three_d_case,
-			std::map<std::string, double>{{graph_inlet.id, graph_reference}}, controls));
+		for (const auto& domain_id : plan.domain_order) {
+			if (one_d.count(domain_id)) {
+				auto& native = one_d.at(domain_id);
+				runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(domain_id,
+					*native.runtime, configuration.graph.Domain(domain_id).ports,
+					native.inlet_policy));
+			} else {
+				auto& native = *three_d.at(domain_id);
+				runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
+					domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
+					native.configuration, native.case_directory,
+					native.reference_outward_flow_m3_s, controls));
+			}
+		}
 		iga::DomainRuntimeRegistry registry(configuration.graph, std::move(runtimes));
 		iga::PressureFlowComponentExecutor executor(registry,
 			configuration.start_domain_id, iga::PressureFlowControlsFor(configuration.execution));
@@ -531,30 +686,49 @@ int main(int argc, char** argv)
 			throw std::runtime_error("--stop-after-step exceeds configured steps");
 		const int injected_failure_step = FailureInjectionStep();
 		auto pressure = configuration.initial_pressure_pa;
+		std::set<iga::PortRef> coupled_ports;
+		for (const auto& edge : configuration.graph.Edges()) {
+			coupled_ports.insert(edge.first);
+			coupled_ports.insert(edge.second);
+		}
 		std::vector<AcceptedStep> accepted;
 		for (int step = 1; step <= final_step; ++step) {
 			const double time = step*configuration.time.dt_s;
+			std::map<std::string, std::pair<double, double>> pending_balance;
+			double pending_mass = 0.0;
+			double pending_external = 0.0;
 			auto result = executor.Advance({step-1, (step-1)*configuration.time.dt_s,
 				configuration.time.dt_s}, pressure,
-				[&](const iga::PressureFlowStepResult&) {
+				[&](const iga::PressureFlowStepResult& trial) {
+					for (const auto& volume : three_d) {
+						double sum = 0.0;
+						double absolute_sum = 0.0;
+						for (const auto& port : configuration.graph.Domain(volume.first).ports) {
+							const double flow = RequireValue(trial.accepted_ports.at(
+								{volume.first, port.id}).outward_flow_m3_s, "3D boundary flow");
+							sum += flow;
+							absolute_sum += std::abs(flow);
+						}
+						if (absolute_sum > 0.0
+							&& 2.0*std::abs(sum)/absolute_sum > kMassRelativeTolerance)
+							throw std::runtime_error("3D domain balance exceeds coupling tolerance");
+						pending_balance.emplace(volume.first,
+							std::make_pair(sum, absolute_sum));
+						pending_mass += sum;
+					}
+					for (const auto& domain : configuration.graph.Domains())
+						for (const auto& port : domain.second.ports) {
+							const iga::PortRef reference{domain.first, port.id};
+							if (coupled_ports.count(reference)
+								|| !port.provides.count(iga::PortQuantity::FlowRate)) continue;
+							pending_external += RequireValue(trial.accepted_ports.at(reference)
+								.outward_flow_m3_s, "external boundary flow");
+						}
 					if (step == injected_failure_step)
 						throw std::runtime_error("injected bifurcation failure before commit");
 				});
-			double mass = RequireValue(result.accepted_ports.at(
-				definition.three_d_inlet).outward_flow_m3_s, "3D inlet flow")
-				+RequireValue(result.accepted_ports.at(
-					definition.three_d_wall_observation).outward_flow_m3_s, "3D wall flow");
-			for (const auto& branch : definition.branches)
-				mass += RequireValue(result.accepted_ports.at(
-					branch.three_d_outlet).outward_flow_m3_s, "3D outlet flow");
-			double external = RequireValue(result.accepted_ports.at(
-				definition.upstream_root_observation).outward_flow_m3_s, "source root flow");
-			for (const auto& branch : definition.branches)
-				external += RequireValue(result.accepted_ports.at(
-					branch.downstream_terminal_observation).outward_flow_m3_s,
-					"branch terminal flow");
 			accepted.push_back({step, time, static_cast<int>(result.iterations.size()),
-				mass, external, std::move(result)});
+				pending_mass, pending_external, std::move(pending_balance), std::move(result)});
 			for (const auto& edge : accepted.back().result.iterations.back().edges)
 				pressure[edge.edge_id] = edge.measured_pressure_pa;
 		}
@@ -562,7 +736,8 @@ int main(int argc, char** argv)
 		int output_failed = 0;
 		std::string output_error;
 		if (rank == 0) try {
-			WriteOutputs(options.output_directory, configuration, definition, one_d, accepted);
+			WriteOutputs(options.output_directory, configuration, graph_root, assets,
+				bifurcation_holder, one_d, three_d, accepted);
 		} catch (const std::exception& error) {
 			output_failed = 1;
 			output_error = error.what();
@@ -572,10 +747,17 @@ int main(int argc, char** argv)
 			if (rank == 0) throw std::runtime_error(output_error);
 			throw std::runtime_error("bifurcation output failed on rank 0");
 		}
-		if (rank == 0)
+		if (rank == 0) {
+#ifdef IGA_BIFURCATION_ENTRY
 			std::cout << "completed schema-v5 1D--3D bifurcation steps="
-				<< accepted.size() << " branches=" << definition.branches.size()
+				<< accepted.size() << " branches=" << bifurcation_holder->branches.size()
 				<< " output=" << options.output_directory << '\n';
+#else
+			std::cout << "completed schema-v5 multidomain flow steps="
+				<< accepted.size() << " domains=" << configuration.graph.Domains().size()
+				<< " output=" << options.output_directory << '\n';
+#endif
+		}
 	} catch (const std::exception& error) {
 		if (rank == 0) std::cerr << error.what() << '\n';
 		status = 1;
