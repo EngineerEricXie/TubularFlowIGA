@@ -2,18 +2,24 @@
 
 Status: **in progress**.
 
-## PR 5.2b1: strict ASCII VTP PolyData ingestion
+## PR 5.2b2: strict VTP PolyData ingestion complete
 
-The dependency-free CPU layer now reads bounded ASCII-only VTP PolyData
-buffers, text, and paths into the canonical closed-surface validator.  Its
-small XML tokenizer accepts a leading declaration and comments while rejecting
-DTDs, entities, later processing instructions, malformed nesting/attributes,
-and oversized input/tokens.  It accepts exactly one PolyData Piece with points
-and triangular polygons in strict ASCII arrays, rejects compression and binary
-or appended formats, and optionally maps one integral CellData boundary array
-(default `boundary_id`); an empty `CellData` is treated as absent and uses the
-configured default label.  Counts, offsets, indices, labels, and finite numeric
-tokens are checked before the existing builder applies physical scale once.
+The dependency-free CPU layer now reads bounded VTP PolyData buffers, text,
+and paths into the canonical closed-surface validator.  It supports strict
+ASCII arrays plus uncompressed VTK length-prefixed inline `binary` base64 and
+`appended` base64 blocks, using only little-endian UInt32/UInt64 headers.
+Appended base64 blocks use VTK encoded-character offsets and must cover that
+encoded stream exactly without overlaps, gaps, or trailing bytes.  Raw appended
+data and compression remain unsupported.
+Its small XML tokenizer accepts a leading declaration and comments while
+rejecting DTDs, entities, later processing instructions, malformed
+nesting/attributes, and oversized input/tokens.  It accepts exactly one
+PolyData Piece with points and triangular polygons, and optionally maps one
+integral CellData boundary array (default `boundary_id`); an empty `CellData`
+is treated as absent and uses the configured default label.  Counts, offsets,
+indices, labels, finite numeric tokens, base64 padding, typed payload sizes,
+and IEEE binary values are checked before the existing builder applies physical
+scale once.  VTP reader work is complete for this Phase 5 scope.
 Focused coverage is `make -C solvers/cpu surface_vtp_test`; it is included in
 the dependency-free aggregate test target.
 
@@ -63,7 +69,8 @@ minima, topology counts, flip state, label histogram, and hash.
 Focused coverage is `make -C solvers/cpu surface_geometry_test`; it is also
 included in the dependency-free aggregate `make -C solvers/cpu test`.
 
-STL/VTP readers remain pending work.
+Strict STL and bounded VTP readers are complete; classification and cut
+quadrature remain pending work.
 
 ## PR 5.1: cubic Cartesian background
 
