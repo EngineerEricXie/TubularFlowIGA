@@ -1,11 +1,10 @@
 # Phase 2 report
 
-Status: **in progress**. PR 2.1 provides validated in-memory topology, the
-first PR 2.3 slices provide atomic domain transactions, backend adapters, exact
-runtime binding, and a runnable sequential 1D--3D--1D graph executor. PR 2.2
-defines the schema-v5 graph manifest, and that manifest is now bound to the
-production coupling driver. Branching execution and multiple 3D islands remain
-open.
+Status: **in progress**. PR 2.1 provides validated in-memory topology, PR 2.3
+provides atomic domain transactions, backend adapters, and deterministic
+component execution, and PR 2.2 binds schema-v5 manifests to native runtimes.
+PR 2.4 now runs one body-fitted 3D junction with multiple 1D branches. Multiple
+3D islands remain open for PR 2.5.
 
 ## Objective
 
@@ -222,9 +221,7 @@ Dependency-free branch tests cover deterministic planning under domain, edge,
 and endpoint permutation; explicit, fixed, and vector Aitken execution over
 three interfaces; distinct sibling flow routing; exactly one junction solve
 per iteration; missing initial pressure; nonfinite state; callback, sibling
-solve, and prepare failures; and all-domain abort without partial commit. The
-production runtime builder, Y-junction fixture, and long-form output remain the
-next PR 2.4 slices.
+solve, and prepare failures; and all-domain abort without partial commit.
 
 `ResolveOneDThreeDBifurcation` now supplies the topology-to-runtime boundary
 for that production work. It accepts exactly one configured-open-loop 1D
@@ -234,3 +231,38 @@ roles from the directed plan, inlet policies, port capabilities, and physical
 locators, sorts branch records by edge ID, and requires the root, wall, and
 terminal observations needed by the benchmark. Multiple 3D domains, deeper
 trees, missing observations, and incorrect inlet policies remain rejected.
+
+## PR 2.4: native bifurcation benchmark
+
+`iga_1d_3d_bifurcation --graph-case ROOT --output-dir DIR` constructs the
+resolved source, junction, and every downstream branch from schema-v5 assets.
+It validates native 1D terminal closures, native 3D inlet/outlet/wall labels,
+the common time horizon, subcycling, density, viscosity, and flow-only scope.
+Each downstream 1D state is initialized from that branch's own configured
+native inlet at `t=0`; neither the full source flow nor an equal split is used
+as its seed. The 3D junction receives all outlet pressures before its one solve
+per component iteration, after which distinct outlet flows are routed to the
+corresponding branch roots.
+
+Explicit, fixed, and vector-Aitken controls come directly from schema v5.
+Pressure components and output rows use lexical edge-ID order. Failed trials
+abort the full component and cannot publish the final marker. Successful runs
+write deterministic long-form step, accepted-edge, iteration-edge, port, and
+1D-initialization CSV files; `graph_binding_manifest.json` is renamed into
+place last. The output directory must be new.
+
+The native coarse-junction gate covers one inlet and two independently
+pressure-controlled outlets, distinct branch seeds, explicit and Aitken
+execution, every edge's outward-flow conservation, independently recomputed
+long-form balances, normalized junction mass imbalance at most `1e-3`,
+normalized rigid-network external imbalance at most `1e-10`, injected
+precommit failure without a marker, and one-/two-rank numerical parity:
+
+```text
+make -C solvers/coupling bifurcation-test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+PR 2.4 intentionally continues to reject multiple 3D domains, cycles,
+disconnected components, multiple sources or 3D inlets, native 1D branching,
+deeper alternating trees, transport, moving domains, and FSI.

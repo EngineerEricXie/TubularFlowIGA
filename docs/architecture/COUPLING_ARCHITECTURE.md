@@ -104,6 +104,24 @@ used. A graph output directory must not preexist, so a failed rerun cannot
 retain an older success marker. The positional Phase 1 CLI remains supported
 for compatibility.
 
+## Phase 2 bifurcation runner
+
+`iga_1d_3d_bifurcation` is the schema-v5 production path for one native 1D
+source, one body-fitted 3D junction, and two or more coupled-root 1D leaves.
+Semantic roles come from pressure/flow capabilities and the acyclic component
+plan, not domain names or manifest insertion order. Every pressure input is
+installed before the junction's single trial solve; its outlet flows are then
+routed independently to branch roots. All interface pressures form one
+lexically edge-ordered fixed/Aitken vector.
+
+The runtime registry owns one adapter per graph node, and the component uses
+prepare-all/finalize-all commit with reverse abort. Each native 1D domain is
+initialized from its own configured inlet waveform at time zero, preserving
+independent branch state. Accepted data is serialized in long form so branch
+count does not change the schema. A renamed `graph_binding_manifest.json` is
+the final success marker; failure before commit or output completion cannot
+publish it.
+
 `--coupling-mode strong-fixed` adds the equally narrow fixed-relaxation
 alternative without changing the explicit default or its output names.  For a
 single physical step all three runtimes enter `BeginStep` once.  Each trial
