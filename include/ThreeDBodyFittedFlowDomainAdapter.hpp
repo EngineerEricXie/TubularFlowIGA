@@ -47,16 +47,12 @@ public:
 		  reference_outward_flow_m3_s_(std::move(reference_outward_flow_m3_s)),
 		  controls_(controls)
 	{
-		if (domain_id_.empty()) throw std::runtime_error("3D domain adapter id must be nonempty");
-		ValidateCouplingPorts(ports_);
+		ValidateThreeDBodyFittedFlowDomainMetadata(domain_id_, ports_);
 		controls_.Validate();
 		if (base_configuration_.equation_systems.size() != 1
 			|| base_configuration_.equation_systems.front().kind != EquationKind::NavierStokes)
 			throw std::runtime_error("3D domain adapter requires one Navier-Stokes equation system");
 		for (const auto& port : ports_) {
-			if (port.subsystem_id != domain_id_ || port.locator_kind != "boundary_label")
-				throw std::runtime_error("3D domain adapter requires matching boundary_label metadata");
-			(void)ParseThreeDFlowBoundaryLabel(port);
 			if (port.requires.count(PortQuantity::FlowRate)) {
 				const auto reference = reference_outward_flow_m3_s_.find(port.id);
 				if (reference == reference_outward_flow_m3_s_.end()

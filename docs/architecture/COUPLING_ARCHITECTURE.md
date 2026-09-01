@@ -2,8 +2,9 @@
 
 Status: Phase 1 complete; Phase 2 in progress. The verified 1D--3D--1D
 lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
-topology. Generic runtime-owned graph execution and schema v5 remain deferred
-to the subsequent Phase 2 PRs.
+topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
+provides the strict schema-v5 graph manifest. Branch execution and multiple 3D
+islands remain subsequent Phase 2 work.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
@@ -81,8 +82,10 @@ This is explicit staggered coupling: `iteration_count=1` and
 one-step lagged throughout; they are not an interface pressure solve and
 should not be interpreted as continuity of instantaneous pressure. Constant
 inlet flow can still exhibit the documented first-step lag. The prototype has
-no restart/checkpoint option, no graph routing, and no iterative interface
-correction. A test-only environment variable,
+no restart/checkpoint option. Its explicit path now routes through the generic
+sequential graph executor; the established strong modes retain their richer
+driver-owned per-attempt diagnostics while the generic executor independently
+supports fixed and Aitken iteration. A test-only environment variable,
 `TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=<positive-step>`, throws
 after all trial solves and history validation but before a commit; it exists to
 prove that rejected steps emit neither coupling history nor manifest output.
@@ -405,8 +408,9 @@ claiming compliant-wave behavior.
 | VCA replay/closed loop | Same signs, SI values, histories, and reservoir advancement. |
 | CUDA | No Phase 0 behavior change; common interfaces remain backend-neutral. |
 
-Schema v5 is deferred until a runnable multidomain graph exists. No file
-format version is introduced for runtime-only coupling data.
+Schema v5 now describes connected multidomain graphs and produces the same
+validated topology consumed by the runtime registry. It does not alter the
+standalone schema-v3/schema-v4 dispatch paths or the `.ntiga` format.
 
 ## Phase 2 PR 2.1 topology boundary
 
@@ -428,18 +432,22 @@ heterogeneous, acyclic chain. The core graph itself permits branches and
 disconnected components so PR 2.4 and PR 2.5 do not require a topology rewrite;
 their executors will add the corresponding execution plans.
 
-Runtime ownership is deliberately deferred to PR 2.3. The native 1D and 3D
-APIs are not yet substitutable: the 3D lifecycle needs solver controls and a
-materialized boundary configuration, while scalar inlet flow is converted to
-a profile outside `SetPortInput`. Moving those details behind domain adapters
-must occur together with multi-interface transaction design, including how an
-opened trial is aborted and how partial graph commits are prevented. Coupling
-algorithm state also belongs to a connected-component integrator rather than
-individual edges because the current two interface pressures form one Aitken
-residual vector.
+PR 2.3 now owns each native backend behind a typed domain adapter and binds one
+runtime per graph domain. The adapters share dependency-free metadata
+validators with the v5 parser, so a manifest accepted by `iga_config_check`
+cannot defer locator, orientation, or 1D inlet-policy errors until runtime
+binding. The component executor performs reverse rollback and prepare-all /
+nonthrowing-finalize-all commit across the full sequential chain. Coupling
+algorithm state belongs to that connected-component integrator rather than
+individual edges because all current interface pressures form one fixed-point
+or Aitken residual vector.
 
-No schema parser or file format changes in PR 2.1. Schema v5 remains deferred
-until the graph has runtime adapters and a runnable graph-authored case.
+Schema v5 requires one connected multidomain graph but permits branch topology
+needed by PR 2.4. `MakeSequentialPressureFlowPlan` is the separate current
+runner-compatibility check: it additionally requires a heterogeneous,
+nonbranching, acyclic chain ordered from pressure receivers to flow receivers.
+The configuration checker reports this compatibility without conflating a
+future-valid branched manifest with a malformed schema.
 
 ## Validation manifest
 

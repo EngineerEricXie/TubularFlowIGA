@@ -72,6 +72,12 @@ int main()
 	assert((plan.edge_ids == std::vector<std::string>{"upstream_to_roi", "roi_to_downstream"}));
 	const auto reverse = iga::MakeSequentialPlan(graph, "downstream");
 	assert((reverse.domain_ids == std::vector<std::string>{"downstream", "roi", "upstream"}));
+	const auto pressure_flow_plan = iga::MakeSequentialPressureFlowPlan(graph, "upstream");
+	assert(pressure_flow_plan.domain_ids == plan.domain_ids);
+	iga::ValidateConnectedGraph(graph, "upstream");
+	RequireRejected([&graph] {
+		(void)iga::MakeSequentialPressureFlowPlan(graph, "downstream");
+	});
 	{
 		std::vector<iga::DomainNode> copied_domains;
 		for (const auto& domain : graph.Domains()) copied_domains.push_back(domain.second);
@@ -197,7 +203,11 @@ int main()
 		}
 		const iga::SimulationGraph branch(std::move(domains), std::move(edges));
 		assert(branch.Domains().size() == 4);
+		iga::ValidateConnectedGraph(branch, "a");
 		RequireRejected([&branch] { (void)iga::MakeSequentialPlan(branch, "a"); });
+		RequireRejected([&branch] {
+			(void)iga::MakeSequentialPressureFlowPlan(branch, "a");
+		});
 	}
 	{
 		auto graph_with_island = StraightChain();
@@ -206,6 +216,9 @@ int main()
 		domains.push_back(Domain("island", iga::DomainKind::ThreeDBodyFittedFlow,
 			{LogicalPort("island", "unused", "unused", iga::PortQuantity::FlowRate)}));
 		iga::SimulationGraph disconnected(std::move(domains), graph_with_island.Edges());
+		RequireRejected([&disconnected] {
+			iga::ValidateConnectedGraph(disconnected, "upstream");
+		});
 		RequireRejected([&disconnected] {
 			(void)iga::MakeSequentialPlan(disconnected, "upstream");
 		});

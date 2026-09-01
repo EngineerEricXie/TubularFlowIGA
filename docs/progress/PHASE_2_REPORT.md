@@ -1,9 +1,10 @@
 # Phase 2 report
 
-Status: **in progress**. PR 2.1 provides validated in-memory topology, and the
+Status: **in progress**. PR 2.1 provides validated in-memory topology, the
 first PR 2.3 slices provide atomic domain transactions, backend adapters, exact
-runtime binding, and a runnable sequential 1D--3D--1D graph executor. Schema
-v5, branching execution, and multiple 3D islands remain open.
+runtime binding, and a runnable sequential 1D--3D--1D graph executor, and PR
+2.2 now defines the schema-v5 graph manifest. Branching execution and multiple
+3D islands remain open.
 
 ## Objective
 
@@ -136,11 +137,42 @@ modes with
 injected precommit failure suppression, work accounting, and rank-parity
 checks.
 
-## Entry condition for PR 2.2
+## PR 2.2: schema-v5 multidomain manifest
 
-PR 2.2 may define schema-v5 domain and edge records only after PR 2.1 passes
-the dependency-free and one-/two-rank MPI smoke gates. The parser must produce
-the same validated `SimulationGraph` metadata and must not force existing v3/v4
-standalone cases through graph dispatch. A graph-authored case is not considered
-runnable until PR 2.3 supplies backend adapters and a multi-interface executor.
-That runtime gate is now satisfied; schema-v5 parsing is the next active slice.
+`MultidomainConfig.hpp` parses schema v5 independently from the standalone
+schema-v3 and schema-v4 parsers and constructs the same validated
+`SimulationGraph` used by the runtime registry and executor. `iga_config_check`
+dispatches v5 to this parser while retaining the existing direct v3/v4 paths.
+The `.ntiga` database format is unchanged.
+
+The root record contains `time`, an explicit `start_domain`, one graph-wide
+`execution` policy, `domains`, and `couplings`. Each domain declares its stable
+ID, dimension/kind, case directory, backend-specific assets, and complete
+logical-port metadata: physical locator, optional native-to-outward sign, and
+provided/required quantities. A 1D domain declares whether its root uses the
+configured open-loop waveform or receives coupled flow. A body-fitted 3D
+domain declares its database. All asset paths are relative to the graph-case
+root and lexical `..` traversal is rejected. The future runner must additionally
+canonicalize resolved assets against that root so symlinks cannot escape it.
+
+Each coupling names two logical endpoints, the `pressure_flow` law, and a
+finite initial interface pressure. Fixed and Aitken controls live at the
+component execution level because all interface pressures are iterated as one
+vector; putting an independent algorithm on each edge would conflict with the
+validated executor semantics. Strict key validation rejects misspellings,
+backend-inconsistent fields, invalid controls, duplicate IDs, reused ports,
+unknown endpoints, unattached required inputs, multiple scalar inputs on one
+3D flow port, and pressure/flow capability mismatches.
+
+Schema v5 requires a single connected multidomain graph because its execution
+policy applies to one component. Branches remain schema-valid for PR 2.4.
+`MakeSequentialPressureFlowPlan` separately checks the narrower executor
+contract: one heterogeneous, acyclic, nonbranching chain whose pressure
+receivers precede its flow receivers. `iga_config_check` reports that runner
+compatibility independently of schema validity.
+
+This slice deliberately establishes parsing and inspection separately from
+driver construction. The current production driver still accepts its legacy
+positional three-domain inputs and builds an equivalent graph. The next runner
+slice will resolve v5 assets relative to a graph-case root and bind the declared
+domains to the existing adapters without changing standalone dispatch.

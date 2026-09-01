@@ -1,5 +1,6 @@
 #include "SimulationConfig.hpp"
 #include "OneDConfig.hpp"
+#include "MultidomainConfig.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -9,17 +10,49 @@
 int main(int argc, char** argv)
 {
 	try {
-		if (argc != 2) throw std::runtime_error("usage: iga_config_check SIMULATION_CONFIG.json");
-		std::ifstream input(argv[1]);
-		if (!input) throw std::runtime_error("cannot open simulation configuration");
+		if (argc != 2)
+			throw std::runtime_error("usage: iga_config_check SIMULATION_CONFIG.json|-");
 		std::ostringstream contents;
-		contents << input.rdbuf();
+		if (std::string(argv[1]) == "-") contents << std::cin.rdbuf();
+		else {
+			std::ifstream input(argv[1]);
+			if (!input) throw std::runtime_error("cannot open simulation configuration");
+			contents << input.rdbuf();
+		}
 		const auto text = contents.str();
 		const auto root = iga::config_detail::RequireObject(
 			iga::config_detail::JsonParser(text).Parse(), "root");
 		const auto* version_value = iga::config_detail::Find(root, "schema_version");
 		if (!version_value) throw std::runtime_error("simulation_config.json requires schema_version");
 		const int version = iga::config_detail::RequireInteger(*version_value, "schema_version");
+		if (version == 5) {
+			const auto configuration = iga::ParseMultidomainConfiguration(text);
+			std::cout << "schema_version=5 mode=multidomain"
+				<< " domains=" << configuration.graph.Domains().size()
+				<< " couplings=" << configuration.graph.Edges().size()
+				<< " start_domain=" << configuration.start_domain_id
+				<< " dt=" << configuration.time.dt_s
+				<< " steps=" << configuration.time.steps << '\n';
+			for (const auto& domain : configuration.domains)
+				std::cout << "domain=" << domain.id
+					<< " kind=" << iga::DomainKindName(domain.kind)
+					<< " ports=" << domain.ports.size()
+					<< " case=" << domain.case_directory.string() << '\n';
+			for (const auto& edge : configuration.graph.Edges())
+				std::cout << "coupling=" << edge.id
+					<< " mode=" << iga::CouplingLawName(edge.law)
+					<< " a=" << edge.first.domain_id << '.' << edge.first.port_id
+					<< " b=" << edge.second.domain_id << '.' << edge.second.port_id << '\n';
+			try {
+				(void)iga::MakeSequentialPressureFlowPlan(configuration.graph,
+					configuration.start_domain_id);
+				std::cout << "sequential_pressure_flow_runner_compatible=yes\n";
+			} catch (const std::exception& error) {
+				std::cout << "sequential_pressure_flow_runner_compatible=no"
+					<< " reason=" << error.what() << '\n';
+			}
+			return 0;
+		}
 		if (version == 3) {
 			const auto* dimension_value = iga::config_detail::Find(root, "dimension");
 			if (!dimension_value) throw std::runtime_error("schema_version 3 requires dimension");

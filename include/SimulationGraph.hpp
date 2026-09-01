@@ -159,6 +159,51 @@ inline SequentialCouplingPlan MakeSequentialPlan(const SimulationGraph& graph,
 	return plan;
 }
 
+inline void ValidateConnectedGraph(const SimulationGraph& graph,
+	const std::string& start_domain_id)
+{
+	(void)graph.Domain(start_domain_id);
+	std::map<std::string, std::vector<std::string>> adjacency;
+	for (const auto& domain : graph.Domains()) adjacency.emplace(domain.first,
+		std::vector<std::string>{});
+	for (const auto& edge : graph.Edges()) {
+		adjacency.at(edge.first.domain_id).push_back(edge.second.domain_id);
+		adjacency.at(edge.second.domain_id).push_back(edge.first.domain_id);
+	}
+	std::vector<std::string> pending{start_domain_id};
+	std::set<std::string> visited;
+	while (!pending.empty()) {
+		const auto domain = pending.back();
+		pending.pop_back();
+		if (!visited.insert(domain).second) continue;
+		for (const auto& neighbor : adjacency.at(domain)) pending.push_back(neighbor);
+	}
+	if (visited.size() != graph.Domains().size())
+		throw std::runtime_error("simulation graph must contain one connected component");
+}
+
+inline SequentialCouplingPlan MakeSequentialPressureFlowPlan(const SimulationGraph& graph,
+	const std::string& start_domain_id)
+{
+	auto plan = MakeSequentialPlan(graph, start_domain_id);
+	for (std::size_t i = 0; i < plan.edge_ids.size(); ++i) {
+		const auto& edge = graph.Edge(plan.edge_ids[i]);
+		const auto& earlier = plan.domain_ids[i];
+		const auto& later = plan.domain_ids[i+1];
+		const auto earlier_ref = edge.first.domain_id == earlier ? edge.first : edge.second;
+		const auto later_ref = edge.first.domain_id == later ? edge.first : edge.second;
+		if (earlier_ref.domain_id != earlier || later_ref.domain_id != later)
+			throw std::runtime_error("sequential edge does not join adjacent plan domains");
+		const auto& earlier_port = graph.Port(earlier_ref);
+		const auto& later_port = graph.Port(later_ref);
+		if (!earlier_port.requires.count(PortQuantity::MeanPressure)
+			|| !later_port.requires.count(PortQuantity::FlowRate))
+			throw std::runtime_error(
+				"sequential pressure-flow plan requires pressure receivers before flow receivers");
+	}
+	return plan;
+}
+
 } // namespace iga
 
 #endif

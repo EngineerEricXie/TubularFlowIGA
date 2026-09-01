@@ -96,7 +96,8 @@ class PressureFlowComponentExecutor {
 public:
 	PressureFlowComponentExecutor(DomainRuntimeRegistry& registry,
 		std::string start_domain_id, PressureFlowExecutionControls controls)
-		: registry_(registry), plan_(MakeSequentialPlan(registry.Graph(), start_domain_id)),
+		: registry_(registry),
+		  plan_(MakeSequentialPressureFlowPlan(registry.Graph(), start_domain_id)),
 		  controls_(controls)
 	{
 		ValidatePressureFlowExecutionControls(controls_);

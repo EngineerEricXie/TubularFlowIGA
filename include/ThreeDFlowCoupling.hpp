@@ -1,29 +1,14 @@
 #ifndef IGA_THREE_D_FLOW_COUPLING_HPP
 #define IGA_THREE_D_FLOW_COUPLING_HPP
 
-#include "CouplingPort.hpp"
+#include "FlowDomainPortMetadata.hpp"
 #include "SimulationConfig.hpp"
 
-#include <charconv>
 #include <cmath>
 #include <stdexcept>
 #include <string>
 
 namespace iga {
-
-inline int ParseThreeDFlowBoundaryLabel(const CouplingPort& port)
-{
-	ValidateCouplingPort(port);
-	if (port.locator_kind != "boundary_label")
-		throw std::runtime_error("3D reference profile input requires a boundary_label locator");
-	int label = -1;
-	const auto first = port.locator.data();
-	const auto parsed = std::from_chars(first, first+port.locator.size(), label);
-	if (first == first+port.locator.size() || parsed.ec != std::errc{}
-		|| parsed.ptr != first+port.locator.size() || label < 0)
-		throw std::runtime_error("3D reference profile boundary_label locator must be a nonnegative integer");
-	return label;
-}
 
 // Applies a scalar outward-positive flow to an explicitly configured velocity
 // reference profile. The caller supplies the reference profile's outward flow.

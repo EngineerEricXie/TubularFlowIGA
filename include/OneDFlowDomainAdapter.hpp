@@ -2,6 +2,7 @@
 #define IGA_ONE_D_FLOW_DOMAIN_ADAPTER_HPP
 
 #include "CoupledDomainRuntime.hpp"
+#include "FlowDomainPortMetadata.hpp"
 #include "OneDRuntime.hpp"
 
 #include <algorithm>
@@ -12,8 +13,6 @@
 
 namespace iga {
 
-enum class OneDInletPolicy { ConfiguredOpenLoop, CoupledRoot };
-
 class OneDFlowDomainAdapter : public CoupledDomainRuntime {
 public:
 	OneDFlowDomainAdapter(std::string domain_id, OneDFlowRuntime& runtime,
@@ -21,32 +20,7 @@ public:
 		: domain_id_(std::move(domain_id)), runtime_(runtime), ports_(std::move(ports)),
 		  inlet_policy_(inlet_policy)
 	{
-		if (domain_id_.empty()) throw std::runtime_error("1D domain adapter id must be nonempty");
-		ValidateCouplingPorts(ports_);
-		int root_flow_receivers = 0;
-		for (const auto& port : ports_) {
-			if (port.subsystem_id != domain_id_ || port.locator_kind != "runtime_port")
-				throw std::runtime_error("1D domain adapter requires matching runtime_port metadata");
-			if (port.orientation.native_to_outward_sign != 1)
-				throw std::runtime_error(
-					"1D runtime_port metadata must use canonical outward orientation +1");
-			if (port.locator == "root") {
-				if (!port.requires.empty()
-					&& port.requires != std::set<PortQuantity>{PortQuantity::FlowRate})
-					throw std::runtime_error("1D root adapter port must receive flow_rate");
-				if (port.requires.count(PortQuantity::FlowRate)) ++root_flow_receivers;
-			} else if (port.locator.compare(0, 7, "outlet:") == 0) {
-				if (!port.requires.empty()
-					&& port.requires != std::set<PortQuantity>{PortQuantity::MeanPressure})
-					throw std::runtime_error("1D outlet adapter port must receive mean_pressure");
-			} else {
-				throw std::runtime_error("1D domain adapter runtime port must be root or outlet:<node-id>");
-			}
-		}
-		if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop && root_flow_receivers != 0)
-			throw std::runtime_error("configured-open-loop 1D domain cannot expose a coupled root flow receiver");
-		if (inlet_policy_ == OneDInletPolicy::CoupledRoot && root_flow_receivers != 1)
-			throw std::runtime_error("coupled-root 1D domain requires exactly one root flow receiver");
+		ValidateOneDFlowDomainMetadata(domain_id_, ports_, inlet_policy_);
 	}
 
 	const std::string& DomainId() const noexcept override { return domain_id_; }
