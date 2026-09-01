@@ -244,8 +244,35 @@ change rejection, exact replay and abort restoration, core transport, and the
 PETSc 1D build. Focused Sol re-review accepted the replay formulation, ownership,
 and transaction semantics.
 
-The remaining PR 3.2 gate is the species-aware graph executor. It must reject
-transport cycles, route complete donor concentrations in deterministic
-topological order after hydraulic convergence, enforce two-sided edge amounts
-and global balances before prepare, and commit donor hysteresis only after all
-domain finalizations.
+### Species-aware graph transaction
+
+`SpeciesPressureFlowComponentExecutor` now drives the staged runtimes without
+changing the flow-only executor. It converges hydraulics through the existing
+explicit/fixed/Aitken pressure-flow formulation, resolves each edge's donor
+from accepted outward flows and committed near-zero hysteresis, rejects cyclic
+transport dependencies, and advances transport once per domain in deterministic
+donor-to-receiver topological order. Receivers obtain complete logical species
+maps from already-solved donor ports; there is no predictor or fallback solve.
+
+Conservation gates use native time-integrated physical amounts. For every
+edge/species the executor checks the sum of the two outward amounts. It also
+independently recomputes every domain residual from initial/final mass, all
+outward port amounts, and sources, checks agreement with the native diagnostic,
+and reports a component-global balance using a gross-activity normalization
+scale. Per-species controls combine an absolute amount tolerance, reference
+amount, and relative tolerance.
+
+No domain prepares until routing, transport, accounting, all conservation
+gates, and the optional callback succeed. All domains prepare before their
+nonthrowing finalizations, and candidate donor ownership becomes committed only
+after every finalization. Failure aborts domains in reverse deterministic order,
+preserves the primary error, and leaves donor history unchanged. Dependency-free
+tests cover forward, reversed, and near-zero routing; two-species complete-map
+transfer; deterministic order; hydraulic replay; cycle rejection; independent
+edge/domain/global gates; callback, transport, and partial-prepare failure; and
+cleanup error aggregation. Focused Sol review and re-review accepted the
+formulation, conservation scales, ownership, and transaction semantics.
+
+The remaining PR 3.2 work is schema-v6 execution-control plumbing and native
+runner integration. PR 3.3 then closes the phase with a two-species
+1D-to-3D-to-1D production regression and verified per-species global balances.
