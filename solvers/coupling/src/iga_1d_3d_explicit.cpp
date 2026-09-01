@@ -9,7 +9,10 @@
 
 #include <petscsys.h>
 
+#include <algorithm>
 #include <cmath>
+#include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -24,7 +27,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kThreeDMaximumNewtonIterations = 12;
+constexpr int kThreeDMaximumNewtonIterations = 30;
 constexpr double kThreeDNonlinearRelativeTolerance = 1.0e-5;
 constexpr double kThreeDNonlinearAbsoluteTolerance = 1.0e-10;
 constexpr double kThreeDMassRelativeTolerance = 1.0e-3;
@@ -47,6 +50,14 @@ int PositiveInteger(const std::string& text, const std::string& option)
 	catch (const std::exception&) { throw std::runtime_error(option+" requires a positive integer"); }
 	if (used != text.size() || value < 1) throw std::runtime_error(option+" requires a positive integer");
 	return value;
+}
+
+// Test-only failure injection.  It is deliberately read once before any
+// runtime lifecycle transition and has no effect unless the environment is set.
+int ExplicitCouplingFailureInjectionStep()
+{
+	const char* value = std::getenv("TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP");
+	return value ? PositiveInteger(value, "TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP") : 0;
 }
 
 Options ParseOptions(int argc, char** argv)
@@ -228,6 +239,7 @@ int main(int argc, char** argv)
 	int status = 0;
 	try {
 		const auto options = ParseOptions(argc, argv);
+		const int injected_failure_step = ExplicitCouplingFailureInjectionStep();
 		auto upstream_configuration = iga::ParseOneDConfiguration(
 			ReadText(options.upstream_case/"simulation_config.json"));
 		auto downstream_configuration = iga::ParseOneDConfiguration(
@@ -293,11 +305,14 @@ int main(int argc, char** argv)
 		const auto& ports = three_d_configuration.coupling.three_d_ports;
 		if (ports.outlet_labels.size() != 1)
 			throw std::runtime_error("explicit 1D--3D coupling requires exactly one declared 3D outlet");
+		if (ports.inlet_label == 0 || ports.outlet_labels.front() == 0)
+			throw std::runtime_error(
+				"explicit 1D--3D coupling reserves boundary label 0 for the no-slip wall");
 		const auto mesh = iga::ReadLabeledHexMesh((options.three_d_case/"controlmesh.vtk").string(),
 			database.header().nodes, database.header().elements);
 		const auto boundary_velocity = iga::ReadVelocity(
 			(options.three_d_case/"initial_velocityfield.txt").string(), database.header().nodes);
-		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh);
+		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh, 0);
 		auto initial_three_d = iga::MaterializeBoundaryWaveforms(three_d_configuration,
 			options.three_d_case.string(), 0.0);
 		auto outlet_models = iga::InitializeOutletModels(three_d_configuration, three_d_flow);
@@ -308,16 +323,30 @@ int main(int argc, char** argv)
 			{three_d_flow.density, three_d_flow.viscosity, three_d_configuration.time.dt},
 			initial_boundaries, mesh.labels, boundary_velocity, wall_trace_basis, std::move(outlet_models));
 		iga::RequireValidGeometry(three_d.Elements(), rank, PETSC_COMM_WORLD);
-		for (const int label : {ports.inlet_label, ports.outlet_labels.front()}) {
-			long long local_faces = 0;
-			for (const auto& element : three_d.OwnedElements())
-				for (const int face_label : element.boundary_labels)
-					if (face_label == label) ++local_faces;
-			long long global_faces = 0;
-			MPI_Allreduce(&local_faces, &global_faces, 1, MPI_LONG_LONG, MPI_SUM, PETSC_COMM_WORLD);
-			if (global_faces == 0)
-				throw std::runtime_error("explicit coupling 3D port label has no .ntiga boundary faces");
-		}
+		const std::array<int, 3> required_three_d_labels{{0, ports.inlet_label,
+			ports.outlet_labels.front()}};
+		std::array<long long, 3> local_face_counts{{0, 0, 0}};
+		int local_unknown_label = 0;
+		for (const auto& element : three_d.OwnedElements())
+			for (const int face_label : element.boundary_labels) {
+				if (face_label < 0) continue;
+				auto found = std::find(required_three_d_labels.begin(), required_three_d_labels.end(), face_label);
+				if (found == required_three_d_labels.end()) {
+					local_unknown_label = 1;
+					continue;
+				}
+				++local_face_counts[static_cast<std::size_t>(found-required_three_d_labels.begin())];
+			}
+		int global_unknown_label = 0;
+		MPI_Allreduce(&local_unknown_label, &global_unknown_label, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);
+		if (global_unknown_label)
+			throw std::runtime_error("explicit coupling 3D database has a non-port non-wall boundary label");
+		std::array<long long, 3> global_face_counts{{0, 0, 0}};
+		MPI_Allreduce(local_face_counts.data(), global_face_counts.data(), 3, MPI_LONG_LONG, MPI_SUM,
+			PETSC_COMM_WORLD);
+		for (const auto count : global_face_counts)
+			if (count == 0)
+				throw std::runtime_error("explicit coupling 3D requires wall, inlet, and outlet .ntiga boundary faces");
 		const double normalized_length = database.header().version == iga::kVersion
 			? database.header().geometry_transform.source_units_per_normalized_unit
 				*database.header().geometry_transform.source_length_scale_to_m : 0.0;
@@ -343,6 +372,8 @@ int main(int argc, char** argv)
 			{iga::PortQuantity::Area, iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure}, {});
 		const auto three_d_outlet_measure = MakeThreeDPort("three_d_outlet", ports.outlet_labels.front(),
 			{iga::PortQuantity::Area, iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure}, {});
+		const auto three_d_wall_measure = MakeThreeDPort("three_d_wall", 0,
+			{iga::PortQuantity::FlowRate}, {});
 		const auto three_d_outlet_pressure = MakeThreeDPort("three_d_outlet_pressure", ports.outlet_labels.front(), {},
 			{iga::PortQuantity::MeanPressure});
 
@@ -408,6 +439,7 @@ int main(int argc, char** argv)
 				three_d.SolveTrial();
 				const auto three_d_inlet = three_d.GetPortState(three_d_inlet_measure);
 				const auto three_d_outlet = three_d.GetPortState(three_d_outlet_measure);
+				const auto three_d_wall = three_d.GetPortState(three_d_wall_measure);
 				const double three_d_outlet_q = RequirePortValue(three_d_outlet.outward_flow_m3_s, "3D outlet flow");
 
 				downstream.BeginStep(downstream.FlowState().physical_time, scalar.dt_s);
@@ -422,6 +454,9 @@ int main(int argc, char** argv)
 
 				iga::ExplicitCouplingHistoryRow row;
 				row.time_s = time;
+				row.upstream_root_pressure_pa = RequirePortValue(upstream_root.mean_pressure_pa, "upstream root pressure");
+				row.upstream_root_outward_flow_m3_s = RequirePortValue(upstream_root.outward_flow_m3_s, "upstream root flow");
+				row.upstream_root_area_m2 = RequirePortValue(upstream_root.area_m2, "upstream root area");
 				row.upstream_terminal_pressure_pa = RequirePortValue(upstream_port.mean_pressure_pa, "upstream terminal pressure");
 				row.upstream_terminal_outward_flow_m3_s = upstream_q;
 				row.upstream_terminal_area_m2 = RequirePortValue(upstream_port.area_m2, "upstream terminal area");
@@ -434,18 +469,26 @@ int main(int argc, char** argv)
 				row.downstream_root_pressure_pa = RequirePortValue(downstream_root.mean_pressure_pa, "downstream root pressure");
 				row.downstream_root_outward_flow_m3_s = RequirePortValue(downstream_root.outward_flow_m3_s, "downstream root flow");
 				row.downstream_root_area_m2 = RequirePortValue(downstream_root.area_m2, "downstream root area");
+				row.downstream_terminal_pressure_pa = RequirePortValue(downstream_terminal_port.mean_pressure_pa, "downstream terminal pressure");
+				row.downstream_terminal_outward_flow_m3_s = RequirePortValue(downstream_terminal_port.outward_flow_m3_s, "downstream terminal flow");
+				row.downstream_terminal_area_m2 = RequirePortValue(downstream_terminal_port.area_m2, "downstream terminal area");
 				row.upstream_three_d_flow_residual_m3_s = row.upstream_terminal_outward_flow_m3_s+row.three_d_inlet_outward_flow_m3_s;
 				row.three_d_downstream_flow_residual_m3_s = row.three_d_outlet_outward_flow_m3_s+row.downstream_root_outward_flow_m3_s;
 				row.upstream_three_d_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.upstream_terminal_outward_flow_m3_s, row.three_d_inlet_outward_flow_m3_s);
 				row.three_d_downstream_normalized_residual = iga::ExplicitCouplingNormalizedResidual(row.three_d_outlet_outward_flow_m3_s, row.downstream_root_outward_flow_m3_s);
-				row.three_d_mass_imbalance_m3_s = row.three_d_inlet_outward_flow_m3_s+row.three_d_outlet_outward_flow_m3_s;
-				row.net_external_outward_flow_m3_s = RequirePortValue(upstream_root.outward_flow_m3_s,
-					"upstream root flow")+RequirePortValue(downstream_terminal_port.outward_flow_m3_s,
-					"downstream terminal flow");
+				row.three_d_wall_outward_flow_m3_s = RequirePortValue(
+					three_d_wall.outward_flow_m3_s, "3D wall flow");
+				row.three_d_mass_imbalance_m3_s = row.three_d_inlet_outward_flow_m3_s
+					+row.three_d_outlet_outward_flow_m3_s+row.three_d_wall_outward_flow_m3_s;
+				row.net_external_outward_flow_m3_s = row.upstream_root_outward_flow_m3_s
+					+row.downstream_terminal_outward_flow_m3_s;
+				row.external_pressure_drop_pa = row.upstream_root_pressure_pa-row.downstream_terminal_pressure_pa;
 				row.upstream_three_d_pressure_jump_pa = row.upstream_terminal_pressure_pa-row.three_d_inlet_pressure_pa;
 				row.three_d_downstream_pressure_jump_pa = row.three_d_outlet_pressure_pa-row.downstream_root_pressure_pa;
 				row.three_d_trial_linear_iterations = three_d.TrialLinearIterations();
 				iga::ValidateExplicitCouplingHistoryRow(row);
+				if (injected_failure_step == step)
+					throw std::runtime_error("injected explicit coupling failure before commit");
 				upstream.CommitStep();
 				three_d.CommitStep();
 				downstream.CommitStep();

@@ -1,7 +1,8 @@
 # Coupling Architecture
 
-Status: Phase 0 implementation record. The documented 3D and native 1D flow
-lifecycle boundaries are implemented; direct 1D--3D coupling remains deferred.
+Status: Phase 1 in progress. The documented 3D and native 1D flow lifecycle
+boundaries are implemented, along with a narrow explicit straight-chain
+prototype; general multidomain coupling remains deferred.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
@@ -61,6 +62,29 @@ VCA is an explicit vascular-to-circuit bridge, not direct 1D--3D coupling.
 The common implementation should reuse its SI validation and measurement
 logic while keeping the generic port layer independent of reservoir-specific
 types and the fixed inlet/outlet layout.
+
+## Phase 1 explicit straight-chain prototype
+
+`iga_1d_3d_explicit` is a deliberately narrow flow-only prototype for one
+upstream native 1D terminal, one body-fitted 3D inlet/outlet pair, and one
+downstream native 1D root. At each `t_n -> t_n+1` it solves upstream 1D with
+the lagged 3D-inlet static pressure, scales the 3D reference inlet profile to
+the negative measured upstream-terminal outward flow, solves 3D with the
+lagged downstream-root static pressure, and supplies the negative measured 3D
+outlet flow to the downstream root. It validates the complete provisional
+history row before committing all three runtimes exactly once. CSV and
+manifest output are written only after the complete run succeeds.
+
+This is explicit staggered coupling: `iteration_count=1` and
+`relaxation_factor=1`. The pressures exchanged across both interfaces remain
+one-step lagged throughout; they are not an interface pressure solve and
+should not be interpreted as continuity of instantaneous pressure. Constant
+inlet flow can still exhibit the documented first-step lag. The prototype has
+no restart/checkpoint option, no graph routing, and no iterative interface
+correction. A test-only environment variable,
+`TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=<positive-step>`, throws
+after all trial solves and history validation but before a commit; it exists to
+prove that rejected steps emit neither coupling history nor manifest output.
 
 ## State ownership and rollback inventory
 

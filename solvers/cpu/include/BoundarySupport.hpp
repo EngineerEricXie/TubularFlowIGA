@@ -149,6 +149,31 @@ inline std::set<std::int32_t> WallTraceBasis(Database& database, const LabeledHe
 	return result;
 }
 
+// In a body-fitted flow case, the VTK control-cell corners can all be tagged
+// as wall while cap-interior control nodes carry inlet/outlet data.  Consult
+// the authoritative .ntiga face label before turning that whole trace into a
+// no-slip basis.
+inline std::set<std::int32_t> WallTraceBasis(Database& database, const LabeledHexMesh& mesh,
+	int wall_boundary_label)
+{
+	std::set<std::int32_t> result;
+	for (const auto& face : ExternalFaces(mesh)) {
+		const auto element = database.Load(face.element);
+		if (element.id != face.element)
+			throw std::runtime_error("database element IDs do not match VTK cell order");
+		if (element.boundary_labels.at(static_cast<std::size_t>(face.local_face)) != wall_boundary_label
+			|| !IsWallFace(face, mesh.labels))
+			continue;
+		for (std::size_t row = 0; row < element.extraction.size(); ++row)
+			for (int column : FaceBezierColumns(face.local_face))
+				if (element.extraction[row][static_cast<std::size_t>(column)] != 0.0) {
+					result.insert(element.connectivity[row]);
+					break;
+				}
+	}
+	return result;
+}
+
 } // namespace iga
 
 #endif

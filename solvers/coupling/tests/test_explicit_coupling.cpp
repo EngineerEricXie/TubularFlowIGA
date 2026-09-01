@@ -41,16 +41,19 @@ int main()
 	assert(!iga::ExplicitCouplingPetscOptionConsumesNextValue("-ksp_monitor", "-snes_monitor"));
 
 	iga::ExplicitCouplingHistoryRow row;
+	row.upstream_root_area_m2 = 1.0;
 	row.upstream_terminal_area_m2 = 1.0;
 	row.three_d_inlet_area_m2 = 1.0;
 	row.three_d_outlet_area_m2 = 1.0;
 	row.downstream_root_area_m2 = 1.0;
+	row.downstream_terminal_area_m2 = 1.0;
 	iga::ValidateExplicitCouplingHistoryRow(row);
 	std::ostringstream output;
 	iga::WriteExplicitCouplingHistoryHeader(output);
 	iga::WriteExplicitCouplingHistoryRow(output, row);
 	assert(output.str().find("three_d_mass_imbalance_m3_s") != std::string::npos);
 	assert(output.str().find("net_external_outward_flow_m3_s") != std::string::npos);
+	assert(output.str().find("external_pressure_drop_pa") != std::string::npos);
 	row.iteration_count = 2;
 	RequireRejected([&row] { iga::ValidateExplicitCouplingHistoryRow(row); });
 	row.iteration_count = 1;

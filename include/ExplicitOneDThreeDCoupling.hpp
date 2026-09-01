@@ -66,6 +66,9 @@ inline double ExplicitCouplingNormalizedResidual(double first_outward_flow_m3_s,
 
 struct ExplicitCouplingHistoryRow {
 	double time_s = 0.0;
+	double upstream_root_pressure_pa = 0.0;
+	double upstream_root_outward_flow_m3_s = 0.0;
+	double upstream_root_area_m2 = 0.0;
 	double upstream_terminal_pressure_pa = 0.0;
 	double upstream_terminal_outward_flow_m3_s = 0.0;
 	double upstream_terminal_area_m2 = 0.0;
@@ -78,12 +81,17 @@ struct ExplicitCouplingHistoryRow {
 	double downstream_root_pressure_pa = 0.0;
 	double downstream_root_outward_flow_m3_s = 0.0;
 	double downstream_root_area_m2 = 0.0;
+	double downstream_terminal_pressure_pa = 0.0;
+	double downstream_terminal_outward_flow_m3_s = 0.0;
+	double downstream_terminal_area_m2 = 0.0;
 	double upstream_three_d_flow_residual_m3_s = 0.0;
 	double three_d_downstream_flow_residual_m3_s = 0.0;
 	double upstream_three_d_normalized_residual = 0.0;
 	double three_d_downstream_normalized_residual = 0.0;
 	double three_d_mass_imbalance_m3_s = 0.0;
+	double three_d_wall_outward_flow_m3_s = 0.0;
 	double net_external_outward_flow_m3_s = 0.0;
+	double external_pressure_drop_pa = 0.0;
 	double upstream_three_d_pressure_jump_pa = 0.0;
 	double three_d_downstream_pressure_jump_pa = 0.0;
 	int iteration_count = 1;
@@ -93,22 +101,31 @@ struct ExplicitCouplingHistoryRow {
 
 inline void ValidateExplicitCouplingHistoryRow(const ExplicitCouplingHistoryRow& row)
 {
-	const double* values[] = {&row.time_s, &row.upstream_terminal_pressure_pa,
+	const double* values[] = {&row.time_s, &row.upstream_root_pressure_pa,
+		&row.upstream_root_outward_flow_m3_s, &row.upstream_root_area_m2,
+		&row.upstream_terminal_pressure_pa,
 		&row.upstream_terminal_outward_flow_m3_s, &row.upstream_terminal_area_m2,
 		&row.three_d_inlet_pressure_pa, &row.three_d_inlet_outward_flow_m3_s,
 		&row.three_d_inlet_area_m2, &row.three_d_outlet_pressure_pa,
 		&row.three_d_outlet_outward_flow_m3_s, &row.three_d_outlet_area_m2,
 		&row.downstream_root_pressure_pa, &row.downstream_root_outward_flow_m3_s,
-		&row.downstream_root_area_m2, &row.upstream_three_d_flow_residual_m3_s,
+		&row.downstream_root_area_m2, &row.downstream_terminal_pressure_pa,
+		&row.downstream_terminal_outward_flow_m3_s, &row.downstream_terminal_area_m2,
+		&row.upstream_three_d_flow_residual_m3_s,
 		&row.three_d_downstream_flow_residual_m3_s,
 		&row.upstream_three_d_normalized_residual,
 		&row.three_d_downstream_normalized_residual, &row.three_d_mass_imbalance_m3_s,
-		&row.net_external_outward_flow_m3_s, &row.upstream_three_d_pressure_jump_pa,
+		&row.three_d_wall_outward_flow_m3_s,
+		&row.net_external_outward_flow_m3_s, &row.external_pressure_drop_pa,
+		&row.upstream_three_d_pressure_jump_pa,
 		&row.three_d_downstream_pressure_jump_pa, &row.relaxation_factor};
 	for (const auto* value : values) RequireFinitePortValue("explicit coupling history value", *value);
-	if (!(row.upstream_terminal_area_m2 > 0.0) || !(row.three_d_inlet_area_m2 > 0.0)
+	if (!(row.upstream_root_area_m2 > 0.0) || !(row.upstream_terminal_area_m2 > 0.0)
+		|| !(row.three_d_inlet_area_m2 > 0.0)
 		|| !(row.three_d_outlet_area_m2 > 0.0) || !(row.downstream_root_area_m2 > 0.0))
 		throw std::runtime_error("explicit coupling history requires positive port areas");
+	if (!(row.downstream_terminal_area_m2 > 0.0))
+		throw std::runtime_error("explicit coupling history requires positive external terminal area");
 	if (row.iteration_count != 1 || row.relaxation_factor != 1.0
 		|| row.three_d_trial_linear_iterations < 0)
 		throw std::runtime_error("explicit coupling history requires one unrelaxed staggered iteration");
@@ -116,13 +133,15 @@ inline void ValidateExplicitCouplingHistoryRow(const ExplicitCouplingHistoryRow&
 
 inline void WriteExplicitCouplingHistoryHeader(std::ostream& output)
 {
-	output << "time_s,upstream_terminal_pressure_pa,upstream_terminal_outward_flow_m3_s,upstream_terminal_area_m2,"
+	output << "time_s,upstream_root_pressure_pa,upstream_root_outward_flow_m3_s,upstream_root_area_m2,"
+		"upstream_terminal_pressure_pa,upstream_terminal_outward_flow_m3_s,upstream_terminal_area_m2,"
 		"three_d_inlet_pressure_pa,three_d_inlet_outward_flow_m3_s,three_d_inlet_area_m2,"
 		"three_d_outlet_pressure_pa,three_d_outlet_outward_flow_m3_s,three_d_outlet_area_m2,"
 		"downstream_root_pressure_pa,downstream_root_outward_flow_m3_s,downstream_root_area_m2,"
+		"downstream_terminal_pressure_pa,downstream_terminal_outward_flow_m3_s,downstream_terminal_area_m2,"
 		"upstream_three_d_flow_residual_m3_s,three_d_downstream_flow_residual_m3_s,"
 		"upstream_three_d_normalized_residual,three_d_downstream_normalized_residual,"
-		"three_d_mass_imbalance_m3_s,net_external_outward_flow_m3_s,"
+		"three_d_mass_imbalance_m3_s,three_d_wall_outward_flow_m3_s,net_external_outward_flow_m3_s,external_pressure_drop_pa,"
 		"upstream_three_d_pressure_jump_pa,three_d_downstream_pressure_jump_pa,"
 		"iteration_count,relaxation_factor,three_d_trial_linear_iterations\n";
 }
@@ -131,17 +150,23 @@ inline void WriteExplicitCouplingHistoryRow(std::ostream& output,
 	const ExplicitCouplingHistoryRow& row)
 {
 	ValidateExplicitCouplingHistoryRow(row);
-	output << std::setprecision(17) << row.time_s << ',' << row.upstream_terminal_pressure_pa << ','
+	output << std::setprecision(17) << row.time_s << ',' << row.upstream_root_pressure_pa << ','
+		<< row.upstream_root_outward_flow_m3_s << ',' << row.upstream_root_area_m2 << ','
+		<< row.upstream_terminal_pressure_pa << ','
 		<< row.upstream_terminal_outward_flow_m3_s << ',' << row.upstream_terminal_area_m2 << ','
 		<< row.three_d_inlet_pressure_pa << ',' << row.three_d_inlet_outward_flow_m3_s << ','
 		<< row.three_d_inlet_area_m2 << ',' << row.three_d_outlet_pressure_pa << ','
 		<< row.three_d_outlet_outward_flow_m3_s << ',' << row.three_d_outlet_area_m2 << ','
 		<< row.downstream_root_pressure_pa << ',' << row.downstream_root_outward_flow_m3_s << ','
-		<< row.downstream_root_area_m2 << ',' << row.upstream_three_d_flow_residual_m3_s << ','
+		<< row.downstream_root_area_m2 << ',' << row.downstream_terminal_pressure_pa << ','
+		<< row.downstream_terminal_outward_flow_m3_s << ',' << row.downstream_terminal_area_m2 << ','
+		<< row.upstream_three_d_flow_residual_m3_s << ','
 		<< row.three_d_downstream_flow_residual_m3_s << ','
 		<< row.upstream_three_d_normalized_residual << ','
 		<< row.three_d_downstream_normalized_residual << ',' << row.three_d_mass_imbalance_m3_s << ','
-		<< row.net_external_outward_flow_m3_s << ',' << row.upstream_three_d_pressure_jump_pa << ','
+		<< row.three_d_wall_outward_flow_m3_s << ',' << row.net_external_outward_flow_m3_s << ','
+		<< row.external_pressure_drop_pa << ','
+		<< row.upstream_three_d_pressure_jump_pa << ','
 		<< row.three_d_downstream_pressure_jump_pa << ',' << row.iteration_count << ','
 		<< row.relaxation_factor << ',' << row.three_d_trial_linear_iterations << '\n';
 }
