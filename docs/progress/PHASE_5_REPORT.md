@@ -2,6 +2,12 @@
 
 Status: **in progress**.
 
+## PR 5.2 prerequisite: canonical hashing
+
+The dependency-free CPU layer includes a self-contained incremental SHA-256
+utility with FIPS known-answer and chunk-boundary coverage.  Surface parsing
+and topology validation remain pending.
+
 ## PR 5.1: cubic Cartesian background
 
 The CPU backend now has a dependency-light immutable cubic Cartesian background
