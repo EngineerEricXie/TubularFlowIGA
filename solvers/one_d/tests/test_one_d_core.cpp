@@ -144,6 +144,25 @@ int main()
 	assert(std::abs(flow_state.segment_flow[2]-0.5e-9) < 1.0e-20);
 	assert(flow_state.node_pressure[0] > flow_state.node_pressure[1]);
 
+	const auto inertance_configuration = iga::ParseOneDConfiguration(
+		Configuration("rigid", "rigid_inertance"));
+	auto inertance_state = flow_state;
+	const double pulse_flow = 1.2e-9;
+	iga::SolveRigidInertanceOneD(network, inertance_configuration.flow_systems.front(),
+		inertance_state, pulse_flow, configuration.time.dt);
+	assert(std::abs(inertance_state.segment_flow[0]-pulse_flow) < 1.0e-20);
+	assert(std::abs(inertance_state.segment_flow[1]-0.5*pulse_flow) < 1.0e-20);
+	assert(std::abs(inertance_state.segment_flow[2]-0.5*pulse_flow) < 1.0e-20);
+	const double parent_inertance = inertance_configuration.flow_systems.front().density
+		*network.segments[0].length/network.segments[0].area0;
+	const double child_inertance = inertance_configuration.flow_systems.front().density
+		*network.segments[1].length/network.segments[1].area0;
+	const double expected_inertance_pressure = network.segments[0].resistance*pulse_flow
+		+parent_inertance*(pulse_flow-1.0e-9)/configuration.time.dt
+		+network.segments[1].resistance*0.5*pulse_flow
+		+child_inertance*(0.5*pulse_flow-0.5e-9)/configuration.time.dt;
+	assert(std::abs(inertance_state.node_pressure[0]/expected_inertance_pressure-1.0) < 1.0e-13);
+
 	const auto& wall = configuration.flow_systems.front().wall;
 	const double expanded = segment.area0*1.1;
 	const double pressure = iga::OneDPressureFromArea(expanded, segment.area0, segment.radius0, wall);

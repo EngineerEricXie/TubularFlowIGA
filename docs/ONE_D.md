@@ -115,6 +115,7 @@ the equation and boundary kinds below are specific to a topological network.
 | Model and scheme | Formulation | Purpose |
 |---|---|---|
 | `rigid` + `steady_poiseuille` | no `formulation` key | Segment Poiseuille resistance, downstream reduction, pressure, and flow split; a time-varying inlet is solved quasi-statically |
+| `rigid` + `rigid_inertance` | no `formulation` key | Backward-Euler segment resistance--inertance network with fixed area and incompressible nodal flow balance |
 | `compliant` + `explicit_rusanov` | no `formulation` key | Conservative finite-volume A/Q equations, Rusanov flux, friction, internal CFL substeps, and linear or Olufsen wall law |
 | `compliant` + `implicit_petsc` | `pressure_network` | Lumped compliant pressure network |
 | `compliant` + `implicit_petsc` | `linearized_aq` | Linearized nodal-pressure/branch-flow system |
@@ -127,6 +128,18 @@ only for `implicit_petsc`. Wall laws are `linear` and `olufsen`.
 `min_area_fraction` live in `discretization`. The explicit solver terminates on
 a non-finite state or an area below the configured physical bound; it does not
 silently clamp the solution.
+
+The rigid inertance scheme advances each oriented segment with
+
+```text
+Delta p^(n+1) = R Q^(n+1) + (rho L/A) (Q^(n+1)-Q^n)/dt
+```
+
+and solves the resulting network pressure system with incompressible nodal flow
+balance. Initialization remains the steady Poiseuille state. Fixed area means
+this model captures fluid inertance and pressure phase but has no compliance or
+finite-speed pulse propagation; use a compliant A/Q scheme when wave transit is
+part of the model. `steady_poiseuille` remains the default rigid behavior.
 
 ### Inlets, outlets, and junctions
 

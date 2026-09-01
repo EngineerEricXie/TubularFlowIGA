@@ -375,12 +375,17 @@ measures the final period on nested macro grids.
 It records P/Q waveforms at both interfaces, pressure drop, first-harmonic
 amplitude and phase, per-step mass imbalance, coupling residual histories,
 iteration counts, and tolerance sensitivity. Fieldwise pressure and flow
-self-convergence supplements the completed spatial gate; an independently
-advanced, hydraulically equivalent rigid all-1D path supplies a quasi-steady
-external-flow and pressure baseline without asserting geometric equivalence to
-the square 3D duct. Because that 1D formulation contains neither fluid inertia
-nor compliance, it is not the transient wave reference needed for final Phase
-1 closure.
+self-convergence supplements the completed spatial gate. An independently
+advanced rigid resistance--inertance network uses the same outer segments and
+a unit-area, unit-length middle element with exact square-duct drag. It thereby
+matches both steady resistance and fluid inertance of the 3D replacement while
+remaining independent of the coupling driver. Both paths use one 1D step per
+3D macro step for this comparison, so their backward-Euler inertance increments
+use the same consecutive endpoint flows; subcycling remains covered by the
+separate N=4 MPI gate. The fixed-area incompressible
+model has pressure phase but no finite-speed pulse propagation; the benchmark
+therefore gates the physically expected zero flow-transit delay rather than
+claiming compliant-wave behavior.
 
 ## Compatibility matrix
 

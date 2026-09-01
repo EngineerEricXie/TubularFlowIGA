@@ -235,6 +235,8 @@ public:
 				trial_diagnostics_.substep_endpoint_flows_m3_s.push_back(inlet_flow);
 				if (flow_.scheme == OneDFlowScheme::SteadyPoiseuille)
 					SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else if (flow_.scheme == OneDFlowScheme::RigidInertance)
+					SolveRigidInertanceOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				else if (flow_.scheme == OneDFlowScheme::ExplicitRusanov)
 					AdvanceExplicitOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				else {

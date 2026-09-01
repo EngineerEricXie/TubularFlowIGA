@@ -19,7 +19,7 @@
 namespace iga {
 
 enum class OneDFlowModel { Rigid, Compliant };
-enum class OneDFlowScheme { SteadyPoiseuille, ExplicitRusanov, ImplicitPetsc };
+enum class OneDFlowScheme { SteadyPoiseuille, RigidInertance, ExplicitRusanov, ImplicitPetsc };
 enum class OneDImplicitFormulation { PressureNetwork, LinearizedAQ, NonlinearAQ, ImplicitPde };
 enum class OneDOutletKind { Pressure, Resistance, WindkesselRcr };
 enum class OneDWallModel { Linear, Olufsen };
@@ -440,11 +440,14 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			else if (model == "compliant") flow.model = OneDFlowModel::Compliant;
 			else throw std::runtime_error("simulation_config.json: 1d flow model must be rigid or compliant");
 			if (scheme == "steady_poiseuille") flow.scheme = OneDFlowScheme::SteadyPoiseuille;
+			else if (scheme == "rigid_inertance") flow.scheme = OneDFlowScheme::RigidInertance;
 			else if (scheme == "explicit_rusanov") flow.scheme = OneDFlowScheme::ExplicitRusanov;
 			else if (scheme == "implicit_petsc") flow.scheme = OneDFlowScheme::ImplicitPetsc;
 			else throw std::runtime_error("simulation_config.json: unsupported 1d flow scheme '" + scheme + "'");
-			if ((flow.model == OneDFlowModel::Rigid) != (flow.scheme == OneDFlowScheme::SteadyPoiseuille))
-				throw std::runtime_error("simulation_config.json: rigid requires steady_poiseuille and compliant requires explicit_rusanov or implicit_petsc");
+			const bool rigid_scheme = flow.scheme == OneDFlowScheme::SteadyPoiseuille
+				|| flow.scheme == OneDFlowScheme::RigidInertance;
+			if ((flow.model == OneDFlowModel::Rigid) != rigid_scheme)
+				throw std::runtime_error("simulation_config.json: rigid requires steady_poiseuille or rigid_inertance and compliant requires explicit_rusanov or implicit_petsc");
 			const auto formulation = OptionalString(object, "formulation", "pressure_network", context);
 			if (formulation == "pressure_network") flow.formulation = OneDImplicitFormulation::PressureNetwork;
 			else if (formulation == "linearized_aq") flow.formulation = OneDImplicitFormulation::LinearizedAQ;

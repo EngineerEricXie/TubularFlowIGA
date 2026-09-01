@@ -273,19 +273,27 @@ inline void AdvanceOutletState(OneDOutletState& outlet, double flow, double dt)
 	outlet.pressure = outlet.proximal_resistance*flow+outlet.capacitor_pressure;
 }
 
-inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
-	OneDFlowState& state, double inlet_flow, double dt)
+inline void SolveRigidOneDSystem(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
+	OneDFlowState& state, double inlet_flow, double dt, bool include_inertance)
 {
 	state.inlet_flow = inlet_flow;
 	const int n = static_cast<int>(network.nodes.size());
 	std::vector<double> matrix(static_cast<std::size_t>(n*n), 0.0);
 	std::vector<double> rhs(static_cast<std::size_t>(n), 0.0);
+	const auto previous_segment_flow = state.segment_flow;
+	if (include_inertance && previous_segment_flow.size() != network.segments.size())
+		throw std::runtime_error("rigid inertance solve requires an initialized segment-flow state");
 	auto add_conductance = [&](const OneDSegment& segment) {
-		const double conductance = 1.0/segment.resistance;
+		const double inertance = include_inertance ? flow.density*segment.length/segment.area0 : 0.0;
+		const double conductance = 1.0/(segment.resistance+inertance/dt);
+		const double history_flow = include_inertance
+			? conductance*inertance*previous_segment_flow.at(static_cast<std::size_t>(segment.index))/dt : 0.0;
 		matrix[static_cast<std::size_t>(segment.parent*n+segment.parent)] += conductance;
 		matrix[static_cast<std::size_t>(segment.parent*n+segment.child)] -= conductance;
 		matrix[static_cast<std::size_t>(segment.child*n+segment.child)] += conductance;
 		matrix[static_cast<std::size_t>(segment.child*n+segment.parent)] -= conductance;
+		rhs[static_cast<std::size_t>(segment.parent)] -= history_flow;
+		rhs[static_cast<std::size_t>(segment.child)] += history_flow;
 	};
 	for (const auto& segment : network.segments) add_conductance(segment);
 	rhs[static_cast<std::size_t>(network.root)] += inlet_flow;
@@ -305,10 +313,15 @@ inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefin
 	}
 	state.node_pressure = SolveDenseSystem(std::move(matrix), std::move(rhs));
 	state.segment_flow.resize(network.segments.size());
-	for (const auto& segment : network.segments)
-		state.segment_flow[static_cast<std::size_t>(segment.index)] =
-			(state.node_pressure[static_cast<std::size_t>(segment.parent)]
-			-state.node_pressure[static_cast<std::size_t>(segment.child)])/segment.resistance;
+	for (const auto& segment : network.segments) {
+		const double inertance = include_inertance ? flow.density*segment.length/segment.area0 : 0.0;
+		const double conductance = 1.0/(segment.resistance+inertance/dt);
+		const double history_flow = include_inertance
+			? conductance*inertance*previous_segment_flow.at(static_cast<std::size_t>(segment.index))/dt : 0.0;
+		state.segment_flow[static_cast<std::size_t>(segment.index)] = conductance
+			*(state.node_pressure[static_cast<std::size_t>(segment.parent)]
+			-state.node_pressure[static_cast<std::size_t>(segment.child)])+history_flow;
+	}
 	for (auto& outlet : state.outlets) {
 		const int incoming = OneDSegmentIntoNode(network, outlet.node);
 		AdvanceOutletState(outlet, state.segment_flow[static_cast<std::size_t>(incoming)], dt);
@@ -325,7 +338,18 @@ inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefin
 			state.pressure[index] = (1.0-fraction)*state.node_pressure[static_cast<std::size_t>(segment.parent)]
 				+fraction*state.node_pressure[static_cast<std::size_t>(segment.child)];
 		}
-	(void)flow;
+}
+
+inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
+	OneDFlowState& state, double inlet_flow, double dt)
+{
+	SolveRigidOneDSystem(network, flow, state, inlet_flow, dt, false);
+}
+
+inline void SolveRigidInertanceOneD(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
+	OneDFlowState& state, double inlet_flow, double dt)
+{
+	SolveRigidOneDSystem(network, flow, state, inlet_flow, dt, true);
 }
 
 struct OneDConservativeState { double area = 0.0; double flow = 0.0; };

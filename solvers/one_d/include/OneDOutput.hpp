@@ -23,6 +23,7 @@ inline const char* OneDModelName(OneDFlowModel value)
 inline const char* OneDSchemeName(OneDFlowScheme value)
 {
 	if (value == OneDFlowScheme::SteadyPoiseuille) return "steady_poiseuille";
+	if (value == OneDFlowScheme::RigidInertance) return "rigid_inertance";
 	if (value == OneDFlowScheme::ExplicitRusanov) return "explicit_rusanov";
 	return "implicit_petsc";
 }

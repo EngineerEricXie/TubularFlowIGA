@@ -904,10 +904,11 @@ inline void WriteSquareDuctThreeDCase(const std::filesystem::path& directory, in
 inline void WriteRigidOneDStraightCase(const std::filesystem::path& directory, double length_m,
 	double radius_m, double dt_s, int steps, double density_kg_m3, double dynamic_viscosity_pa_s,
 	double inlet_flow_m3_s, const std::string& temporal_kind = "constant", double period_s = 1.0,
-	int outlet_node_id = 2)
+	int outlet_node_id = 2, const std::string& scheme = "steady_poiseuille")
 {
 	if (!(length_m > 0.0) || !(radius_m > 0.0) || !(dt_s > 0.0) || steps < 1 || !(period_s > 0.0)
-		|| outlet_node_id < 2 || (temporal_kind != "constant" && temporal_kind != "sinusoid"))
+		|| outlet_node_id < 2 || (temporal_kind != "constant" && temporal_kind != "sinusoid")
+		|| (scheme != "steady_poiseuille" && scheme != "rigid_inertance"))
 		throw std::runtime_error("rigid 1D fixture requires positive geometry and time controls");
 	std::filesystem::create_directories(directory);
 	std::ofstream network(directory/"tree.swc");
@@ -923,7 +924,7 @@ inline void WriteRigidOneDStraightCase(const std::filesystem::path& directory, d
 		<< "\"temporal_functions\":[{\"name\":\"inlet_flow\",\"kind\":\"" << temporal_kind << "\",\"units\":\"m3/s\"";
 	if (temporal_kind == "constant") output << ",\"value\":" << inlet_flow_m3_s;
 	else output << ",\"mean\":" << inlet_flow_m3_s << ",\"amplitude\":" << 0.2*inlet_flow_m3_s << ",\"period\":" << period_s << ",\"phase\":0";
-	output << "}],\n\"equation_systems\":[{\"name\":\"flow\",\"kind\":\"network_flow_1d\",\"unknowns\":[\"area\",\"flow_rate\",\"pressure\"],\"model\":\"rigid\",\"scheme\":\"steady_poiseuille\",\"dynamic_viscosity\":" << dynamic_viscosity_pa_s << ",\"density\":" << density_kg_m3 << ",\"discretization\":{\"cells_per_segment\":1}}],\n"
+	output << "}],\n\"equation_systems\":[{\"name\":\"flow\",\"kind\":\"network_flow_1d\",\"unknowns\":[\"area\",\"flow_rate\",\"pressure\"],\"model\":\"rigid\",\"scheme\":\"" << scheme << "\",\"dynamic_viscosity\":" << dynamic_viscosity_pa_s << ",\"density\":" << density_kg_m3 << ",\"discretization\":{\"cells_per_segment\":1}}],\n"
 		<< "\"boundaries\":[{\"name\":\"inlet\",\"role\":\"inlet\",\"node_ids\":[1],\"conditions\":[{\"field\":\"flow_rate\",\"type\":\"dirichlet\",\"quantity\":\"flow_rate\",\"waveform\":\"inlet_flow\"}]},{\"name\":\"outlet\",\"role\":\"outlet\",\"node_ids\":[" << outlet_node_id << "],\"conditions\":[{\"field\":\"pressure\",\"type\":\"pressure\",\"value\":0}]}]}\n";
 }
 

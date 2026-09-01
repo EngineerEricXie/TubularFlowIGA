@@ -35,8 +35,12 @@ constexpr double kDensityKgM3 = 1.0;
 constexpr double kDynamicViscosityPaS = 1.0;
 constexpr int kTransverseElements = 2;
 constexpr int kAxialElements = 2;
-constexpr int kOneDSubstepsPerMacro = 2;
+constexpr int kOneDSubstepsPerMacro = 1;
 constexpr double kTightPressureTolerance = 1.0e-10;
+constexpr double kMaximumReferenceWaveformL2 = 0.15;
+constexpr double kMaximumReferenceMeanError = 0.15;
+constexpr double kMaximumReferenceAmplitudeError = 0.25;
+constexpr double kMaximumReferencePhaseErrorRad = 0.25;
 
 struct TemporaryDirectory {
 	fs::path path;
@@ -71,8 +75,16 @@ struct RunResult {
 struct WaveformMetrics {
 	double linf_relative = 0.0;
 	double l2_relative = 0.0;
+	double mean = 0.0;
 	double amplitude = 0.0;
 	double phase_rad = 0.0;
+};
+
+struct ReferenceAgreementMetrics {
+	double waveform_l2 = 0.0;
+	double mean_relative_error = 0.0;
+	double amplitude_relative_error = 0.0;
+	double phase_difference_rad = 0.0;
 };
 
 std::string ReadText(const fs::path& path)
@@ -139,16 +151,15 @@ long long IntegerValue(const std::map<std::string, double>& row, const std::stri
 	return integer;
 }
 
-void WriteHydraulicEquivalentNetwork(const fs::path& directory, double radius_m)
+void WriteReducedReferenceNetwork(const fs::path& directory, double radius_m)
 {
 	std::ofstream output(directory/"tree.swc", std::ios::trunc);
-	if (!output) throw std::runtime_error("cannot create all-1D hydraulic-equivalent network");
-	const double middle_end = 1.0+iga::test::kEquivalentSquareDuctHydraulicLengthM;
+	if (!output) throw std::runtime_error("cannot create all-1D reduced reference network");
 	output << std::setprecision(17)
 		<< "1 2 0 0 0 " << radius_m << " -1\n"
 		<< "2 2 1 0 0 " << radius_m << " 1\n"
-		<< "3 2 " << middle_end << " 0 0 " << radius_m << " 2\n"
-		<< "4 2 " << middle_end+1.0 << " 0 0 " << radius_m << " 3\n";
+		<< "3 2 2 0 0 " << radius_m << " 2\n"
+		<< "4 2 3 0 0 " << radius_m << " 3\n";
 }
 
 std::vector<ReferenceSample> AdvanceAllOneDReference(const fs::path& directory, double dt_s, int steps)
@@ -156,7 +167,13 @@ std::vector<ReferenceSample> AdvanceAllOneDReference(const fs::path& directory, 
 	const auto configuration = iga::ParseOneDConfiguration(ReadText(directory/"simulation_config.json"));
 	if (configuration.flow_systems.size() != 1) throw std::runtime_error("all-1D reference requires one flow system");
 	const auto& flow = configuration.flow_systems.front();
-	const auto network = iga::ReadOneDNetwork(directory/"tree.swc", 1.0, 1, flow.dynamic_viscosity);
+	auto network = iga::ReadOneDNetwork(directory/"tree.swc", 1.0, 1, flow.dynamic_viscosity);
+	if (network.segments.size() != 3 || std::abs(network.segments[1].length-1.0) > 1.0e-14
+		|| std::abs(network.segments[1].area0-1.0) > 1.0e-14)
+		throw std::runtime_error("all-1D reference middle segment is not the unit square-duct reduction");
+	// Preserve the physical unit length and area (hence rho*L/A inertance), but
+	// replace circular Poiseuille drag by the exact unit-square coefficient.
+	network.segments[1].resistance = iga::test::kSquareDuctResistanceCoefficient*flow.dynamic_viscosity;
 	iga::OneDFlowRuntime runtime(configuration, flow, network, iga::ResolveOneDInlet(configuration), directory);
 	runtime.InitializeOpenLoop(kMeanFlowM3S);
 	std::vector<ReferenceSample> history;
@@ -214,6 +231,7 @@ WaveformMetrics MeasureWaveform(const std::vector<double>& values, double dt_s, 
 	}
 	harmonic *= 2.0/static_cast<double>(values.size());
 	WaveformMetrics metric;
+	metric.mean = mean;
 	metric.amplitude = std::abs(harmonic);
 	metric.phase_rad = std::atan2(harmonic.imag(), harmonic.real());
 	metric.linf_relative = 0.0;
@@ -286,7 +304,7 @@ void CheckStrongArtifacts(const RunResult& result, int macro_steps, const fs::pa
 	if (result.iterations.rows.empty()) throw std::runtime_error("strong iteration history is empty");
 	const std::string manifest = ReadText(output_directory/"strong_coupling_manifest.json");
 	if (manifest.find("\"scheme\": \"strong_aitken\"") == std::string::npos
-		|| manifest.find("\"N\": 2") == std::string::npos
+		|| manifest.find("\"N\": 1") == std::string::npos
 		|| manifest.find("endpoint residuals") == std::string::npos)
 		throw std::runtime_error("strong manifest does not record Aitken/subcycling semantics");
 	std::map<int, long long> iteration_rows;
@@ -356,12 +374,15 @@ RunResult RunPulsatileCase(const fs::path& root, double macro_dt_s, double press
 		macro_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, kAxialElements, 1.0);
 	const double radius_m = std::sqrt(1.0/iga::test::kPi);
 	iga::test::WriteRigidOneDStraightCase(case_directory/"upstream", 1.0, radius_m, one_d_dt_s,
-		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS);
+		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS,
+		2, "rigid_inertance");
 	iga::test::WriteRigidOneDStraightCase(case_directory/"downstream", 1.0, radius_m, one_d_dt_s,
-		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S);
+		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "constant", 1.0,
+		2, "rigid_inertance");
 	iga::test::WriteRigidOneDStraightCase(case_directory/"all_one_d", 1.0, radius_m, one_d_dt_s,
-		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS, 4);
-	WriteHydraulicEquivalentNetwork(case_directory/"all_one_d", radius_m);
+		one_d_steps, kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS,
+		4, "rigid_inertance");
+	WriteReducedReferenceNetwork(case_directory/"all_one_d", radius_m);
 	const double pressure_reference = (16.0*iga::test::kPi+iga::test::kSquareDuctResistanceCoefficient)*kMeanFlowM3S;
 	const auto log = case_directory/"driver.log";
 	const std::string command = "mpiexec -np 1 ./iga_1d_3d_explicit "+Quote(case_directory/"case.ntiga")+" "
@@ -394,7 +415,7 @@ std::vector<double> ReferenceAtMacroEndpoints(const std::vector<ReferenceSample>
 	return values;
 }
 
-void CheckReferenceAgreement(const RunResult& result)
+ReferenceAgreementMetrics CheckReferenceAgreement(const RunResult& result)
 {
 	const int macro_steps = static_cast<int>(result.history.rows.size());
 	const auto coupled_root_q = Extract(result.history, "upstream_root_outward_flow_m3_s");
@@ -405,6 +426,22 @@ void CheckReferenceAgreement(const RunResult& result)
 	const auto terminal_q_difference = CompareWaveforms(coupled_terminal_q, reference_terminal_q, result.macro_dt_s, kMeanFlowM3S);
 	if (root_q_difference.linf_relative > 1.0e-10 || terminal_q_difference.linf_relative > 1.0e-10)
 		throw std::runtime_error("pulsatile external flow differs from independently advanced all-1D reference");
+	const auto throughflow = [](std::vector<double> values, double sign) {
+		for (double& value : values) value *= sign;
+		return values;
+	};
+	const auto source_q = throughflow(coupled_root_q, -1.0);
+	double pulse_transit_q_linf = 0.0;
+	for (const auto& candidate : {
+		throughflow(Extract(result.history, "upstream_terminal_outward_flow_m3_s"), 1.0),
+		throughflow(Extract(result.history, "three_d_inlet_outward_flow_m3_s"), -1.0),
+		throughflow(Extract(result.history, "three_d_outlet_outward_flow_m3_s"), 1.0),
+		throughflow(Extract(result.history, "downstream_root_outward_flow_m3_s"), -1.0),
+		throughflow(coupled_terminal_q, 1.0)})
+		pulse_transit_q_linf = std::max(pulse_transit_q_linf,
+			CompareWaveforms(source_q, candidate, result.macro_dt_s, kMeanFlowM3S).linf_relative);
+	if (pulse_transit_q_linf > 1.0e-10)
+		throw std::runtime_error("rigid incompressible benchmark introduced a spurious flow pulse delay");
 	const auto coupled_drop = Extract(result.history, "external_pressure_drop_pa");
 	const auto reference_root = ReferenceAtMacroEndpoints(result.reference, macro_steps, &ReferenceSample::root_pressure_pa);
 	const auto reference_terminal = ReferenceAtMacroEndpoints(result.reference, macro_steps, &ReferenceSample::terminal_pressure_pa);
@@ -417,12 +454,42 @@ void CheckReferenceAgreement(const RunResult& result)
 	const auto pressure_difference = CompareWaveforms(coupled_period, reference_period, result.macro_dt_s, pressure_scale);
 	const auto coupled_metric = MeasureWaveform(coupled_period, result.macro_dt_s, pressure_scale);
 	const auto reference_metric = MeasureWaveform(reference_period, result.macro_dt_s, pressure_scale);
+	const double mean_relative_error = std::abs(coupled_metric.mean-reference_metric.mean)/pressure_scale;
+	const double amplitude_relative_error = std::abs(coupled_metric.amplitude-reference_metric.amplitude)
+		/reference_metric.amplitude;
+	const double phase_difference = std::abs(iga::test::HarmonicPhaseDifferenceRadians(
+		coupled_metric.phase_rad, reference_metric.phase_rad));
+	if (mean_relative_error > kMaximumReferenceMeanError
+		|| amplitude_relative_error > kMaximumReferenceAmplitudeError
+		|| phase_difference > kMaximumReferencePhaseErrorRad
+		|| pressure_difference.l2_relative > kMaximumReferenceWaveformL2)
+		throw std::runtime_error("coupled pulsatile pressure response is outside its reduced 1D reference gate");
 	std::cout << std::setprecision(17) << "temporal_reference dt_s=" << result.macro_dt_s
 		<< " q_linf=" << root_q_difference.linf_relative
+		<< " pulse_transit_q_linf=" << pulse_transit_q_linf
 		<< " pressure_drop_l2=" << pressure_difference.l2_relative
+		<< " mean_relative_error=" << mean_relative_error
 		<< " coupled_drop_amplitude_pa=" << coupled_metric.amplitude
 		<< " reference_drop_amplitude_pa=" << reference_metric.amplitude
-		<< " phase_difference_rad=" << iga::test::HarmonicPhaseDifferenceRadians(coupled_metric.phase_rad, reference_metric.phase_rad) << '\n';
+		<< " amplitude_relative_error=" << amplitude_relative_error
+		<< " phase_difference_rad=" << phase_difference << '\n';
+	return {pressure_difference.l2_relative, mean_relative_error,
+		amplitude_relative_error, phase_difference};
+}
+
+void CheckReferenceContraction(const ReferenceAgreementMetrics& coarse,
+	const ReferenceAgreementMetrics& medium, const ReferenceAgreementMetrics& fine)
+{
+	const double roundoff = 128.0*std::numeric_limits<double>::epsilon();
+	if (medium.waveform_l2 > coarse.waveform_l2+roundoff
+		|| fine.waveform_l2 > medium.waveform_l2+roundoff
+		|| medium.mean_relative_error > coarse.mean_relative_error+roundoff
+		|| fine.mean_relative_error > medium.mean_relative_error+roundoff)
+		throw std::runtime_error("dynamic 1D reference waveform or mean error did not contract");
+	std::cout << std::setprecision(17) << "reference_contraction waveform_l2="
+		<< coarse.waveform_l2 << ',' << medium.waveform_l2 << ',' << fine.waveform_l2
+		<< " mean_relative_error=" << coarse.mean_relative_error << ','
+		<< medium.mean_relative_error << ',' << fine.mean_relative_error << '\n';
 }
 
 void CheckPeriodicSettling(const RunResult& result)
@@ -576,11 +643,13 @@ int Run()
 	TemporaryDirectory fixture_cleanup{fixture_root};
 	iga::test::WriteC2SquareDuctThreeDCase(fixture_root/"three_d", kTransverseElements, 0.0025, 256,
 		kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, kAxialElements, 1.0);
-	iga::test::WriteRigidOneDStraightCase(fixture_root/"upstream", 1.0, radius_m, 0.00125, 512,
-		kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS);
+	iga::test::WriteRigidOneDStraightCase(fixture_root/"upstream", 1.0, radius_m, 0.0025, 256,
+		kDensityKgM3, kDynamicViscosityPaS, kMeanFlowM3S, "sinusoid", kPeriodS,
+		2, "rigid_inertance");
 	const std::string upstream_configuration = ReadText(fixture_root/"upstream/simulation_config.json");
 	assert(upstream_configuration.find("\"kind\":\"sinusoid\"") != std::string::npos);
 	assert(upstream_configuration.find("\"period\":") != std::string::npos);
+	assert(upstream_configuration.find("\"scheme\":\"rigid_inertance\"") != std::string::npos);
 	if (std::getenv("TUBULARFLOWIGA_TEMPORAL_FIXTURE_ONLY")) return 0;
 	const auto root = fs::temp_directory_path()/(
 		"tubularflowiga-pulsatile-temporal-"+std::to_string(static_cast<long long>(getpid())));
@@ -588,29 +657,30 @@ int Run()
 	if (std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT")) std::cout << "retained_test_output=" << root << '\n';
 	const auto coarse = RunPulsatileCase(root, 0.01, kTightPressureTolerance);
 	if (std::getenv("TUBULARFLOWIGA_TEMPORAL_SINGLE_CASE")) {
-		CheckReferenceAgreement(coarse);
+		(void)CheckReferenceAgreement(coarse);
 		CheckPeriodicSettling(coarse);
 		return 0;
 	}
 	const auto medium = RunPulsatileCase(root, 0.005, kTightPressureTolerance);
 	const auto tight = RunPulsatileCase(root, 0.0025, kTightPressureTolerance);
-	CheckReferenceAgreement(coarse);
-	CheckReferenceAgreement(medium);
-	CheckReferenceAgreement(tight);
+	const auto coarse_reference = CheckReferenceAgreement(coarse);
+	const auto medium_reference = CheckReferenceAgreement(medium);
+	const auto fine_reference = CheckReferenceAgreement(tight);
+	CheckReferenceContraction(coarse_reference, medium_reference, fine_reference);
 	CheckPeriodicSettling(coarse);
 	CheckPeriodicSettling(medium);
 	CheckPeriodicSettling(tight);
 	CheckTemporalSelfConvergence(coarse, medium, tight);
-	const auto loose = RunPulsatileCase(root, 0.0025, 1.0e-4);
-	const auto intermediate = RunPulsatileCase(root, 0.0025, 1.0e-6);
+	const auto loose = RunPulsatileCase(root, 0.0025, 1.0e-2);
+	const auto intermediate = RunPulsatileCase(root, 0.0025, 1.0e-4);
 	const double loose_error = ToleranceDifference(loose, tight);
 	const double intermediate_error = ToleranceDifference(intermediate, tight);
 	const double roundoff = 128.0*std::numeric_limits<double>::epsilon();
-	if (intermediate_error > loose_error+roundoff)
+	if (loose_error <= roundoff || intermediate_error > loose_error+roundoff)
 		throw std::runtime_error("tighter coupling tolerance did not move the waveform toward the tight reference");
 	std::cout << std::setprecision(17) << "coupling_tolerance_sensitivity loose_to_tight=" << loose_error
 		<< " intermediate_to_tight=" << intermediate_error << " tight_to_tight=0"
-		<< " tolerances=0.0001,9.9999999999999995e-07,1e-10\n";
+		<< " tolerances=0.01,0.0001,1e-10\n";
 	return 0;
 }
 

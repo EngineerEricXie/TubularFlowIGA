@@ -175,6 +175,30 @@ int main()
 			assert(Close(inlet_flow, 2.0e-9));
 	}
 	{
+		auto inertance_configuration = configuration;
+		auto inertance_flow = flow;
+		inertance_flow.scheme = iga::OneDFlowScheme::RigidInertance;
+		iga::OneDFlowRuntime inertance_runtime(inertance_configuration, inertance_flow, network,
+			iga::ResolveOneDInlet(inertance_configuration), directory);
+		inertance_runtime.InitializeOpenLoop(1.0e-9);
+		const auto committed = inertance_runtime.FlowState();
+		inertance_runtime.BeginStep(0.0, inertance_configuration.time.dt);
+		inertance_runtime.SetOpenLoopInlet(inertance_runtime.OpenLoopInlet(
+			inertance_configuration.time.dt, 1.2e-9));
+		inertance_runtime.SolveTrial();
+		const auto trial = inertance_runtime.FlowState();
+		assert(trial.segment_flow.front() > committed.segment_flow.front());
+		assert(trial.node_pressure.front() > committed.node_pressure.front());
+		inertance_runtime.RollbackTrial();
+		assert(inertance_runtime.FlowState().segment_flow == committed.segment_flow);
+		assert(inertance_runtime.FlowState().node_pressure == committed.node_pressure);
+		inertance_runtime.SolveTrial();
+		assert(inertance_runtime.FlowState().segment_flow == trial.segment_flow);
+		assert(inertance_runtime.FlowState().node_pressure == trial.node_pressure);
+		inertance_runtime.CommitStep();
+		assert(inertance_runtime.FlowState().completed_step == 1);
+	}
+	{
 		auto explicit_configuration = configuration;
 		explicit_configuration.time.dt = 0.0025;
 		explicit_configuration.time.steps = 4;
