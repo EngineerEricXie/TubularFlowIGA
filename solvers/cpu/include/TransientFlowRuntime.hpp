@@ -2,6 +2,7 @@
 #define IGA_TRANSIENT_FLOW_RUNTIME_HPP
 
 #include "BoundaryFlow.hpp"
+#include "CouplingPort.hpp"
 #include "GenericCaseInput.hpp"
 #include "IgaDatabase.hpp"
 #include "NavierStokesElement.hpp"
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +25,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -238,16 +241,26 @@ public:
 		return global;
 	}
 
-	IGA_FLOW_NOINLINE FlowPortMeasurements MeasurePorts(const ThreeDVascularPortDefinition& ports,
+	IGA_FLOW_NOINLINE std::map<std::string, PortState> MeasurePorts(
+		const std::vector<CouplingPort>& ports, double physical_time,
 		const std::vector<std::string>& species_fields,
 		const std::vector<double>& species_state) const
 	{
+		RequireFinitePortValue("3D port measurement time_s", physical_time);
+		if (ports.empty()) throw std::runtime_error("3D port measurement requires at least one port");
+		ValidateCouplingPorts(ports);
 		if (!species_fields.empty()
 			&& species_state.size() != ghost_nodes_.size()*species_fields.size())
-			throw std::runtime_error("VCA species state size does not match flow-required nodes");
+			throw std::runtime_error("3D port species state size does not match flow-required nodes");
 		std::map<int, std::size_t> index;
-		for (std::size_t i = 0; i < ports.outlet_labels.size(); ++i)
-			index.emplace(ports.outlet_labels[i], i);
+		std::set<std::string> ids;
+		for (std::size_t i = 0; i < ports.size(); ++i) {
+			if (!ids.insert(ports[i].id).second)
+				throw std::runtime_error("3D port measurement ids must be unique");
+			const int label = ParseBoundaryLabelLocator(ports[i]);
+			if (!index.emplace(label, i).second)
+				throw std::runtime_error("3D port measurement boundary_label locators must be unique");
+		}
 		std::vector<double> local_flow(index.size(), 0.0), global_flow(index.size(), 0.0);
 		std::vector<double> local_pressure(index.size(), 0.0), global_pressure(index.size(), 0.0);
 		std::vector<double> local_area(index.size(), 0.0), global_area(index.size(), 0.0);
@@ -291,14 +304,52 @@ public:
 		if (!species_fields.empty())
 			MPI_Allreduce(local_species.data(), global_species.data(),
 				static_cast<int>(global_species.size()), MPI_DOUBLE, MPI_SUM, communicator_);
-		FlowPortMeasurements result;
-		for (std::size_t i = 0; i < ports.outlet_labels.size(); ++i) {
-			if (!(global_area[i] > 0.0)) throw std::runtime_error("VCA outlet has zero boundary area");
-			result.flows.emplace(ports.outlet_labels[i], global_flow[i]);
-			result.pressures.emplace(ports.outlet_labels[i], global_pressure[i]/global_area[i]);
+		std::map<std::string, PortState> result;
+		for (std::size_t i = 0; i < ports.size(); ++i) {
+			if (!(global_area[i] > 0.0))
+				throw std::runtime_error("3D port measurement has zero boundary area");
+			PortState state;
+			state.time_s = physical_time;
+			state.area_m2 = global_area[i];
+			state.outward_flow_m3_s = ports[i].orientation.ToOutward(global_flow[i]);
+			state.mean_pressure_pa = global_pressure[i]/global_area[i];
 			for (std::size_t field = 0; field < species_fields.size(); ++field)
-				result.species_fluxes[ports.outlet_labels[i]].emplace(species_fields[field],
-					global_species[i*species_fields.size()+field]);
+				state.outward_species_flux.emplace(species_fields[field],
+					ports[i].orientation.ToOutward(global_species[i*species_fields.size()+field]));
+			ValidatePortState(state);
+			result.emplace(ports[i].id, std::move(state));
+		}
+		return result;
+	}
+
+	IGA_FLOW_NOINLINE FlowPortMeasurements MeasurePorts(const ThreeDVascularPortDefinition& ports,
+		const std::vector<std::string>& species_fields,
+		const std::vector<double>& species_state) const
+	{
+		std::vector<CouplingPort> generic_ports;
+		generic_ports.reserve(ports.outlet_labels.size());
+		for (const auto label : ports.outlet_labels) {
+			CouplingPort port;
+			port.id = VcaPortId(label);
+			port.subsystem_id = "three_d_vca";
+			port.locator_kind = "boundary_label";
+			port.locator = std::to_string(label);
+			port.provides = {PortQuantity::Area, PortQuantity::FlowRate,
+				PortQuantity::MeanPressure};
+			if (!species_fields.empty()) port.provides.insert(PortQuantity::SpeciesFlux);
+			generic_ports.push_back(std::move(port));
+		}
+		const auto measured = MeasurePorts(generic_ports, 0.0, species_fields, species_state);
+		FlowPortMeasurements result;
+		for (const auto label : ports.outlet_labels) {
+			const auto found = measured.find(VcaPortId(label));
+			if (found == measured.end() || !found->second.outward_flow_m3_s
+				|| !found->second.mean_pressure_pa)
+				throw std::runtime_error("VCA port measurement is incomplete");
+			result.flows.emplace(label, *found->second.outward_flow_m3_s);
+			result.pressures.emplace(label, *found->second.mean_pressure_pa);
+			if (!species_fields.empty())
+				result.species_fluxes.emplace(label, found->second.outward_species_flux);
 		}
 		return result;
 	}
@@ -354,6 +405,24 @@ public:
 
 private:
 	static constexpr std::uint64_t kScalablePreconditionerNodeThreshold = 1000;
+
+	static int ParseBoundaryLabelLocator(const CouplingPort& port)
+	{
+		if (port.locator_kind != "boundary_label")
+			throw std::runtime_error("3D port measurement supports only boundary_label locators");
+		int label = -1;
+		const auto parsed = std::from_chars(port.locator.data(),
+			port.locator.data()+port.locator.size(), label);
+		if (parsed.ec != std::errc{} || parsed.ptr != port.locator.data()+port.locator.size()
+			|| label < 0)
+			throw std::runtime_error("3D boundary_label locator must be a nonnegative integer");
+		return label;
+	}
+
+	static std::string VcaPortId(int label)
+	{
+		return "vca_boundary_label_"+std::to_string(label);
+	}
 
 	static void SetDefaultPetscOption(const char* name, const char* value)
 	{

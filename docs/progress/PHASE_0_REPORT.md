@@ -46,6 +46,30 @@ slice.
 This slice does not alter solver runtimes, VCA adapters, CLIs, schemas, or
 `.ntiga` handling.
 
+### PR 0.3 generic 3D port measurement
+
+- Added `TransientFlowRuntime::MeasurePorts` overload accepting explicit
+  `CouplingPort` values and a physical time. It returns `PortState` values with
+  area, outward flow, mean pressure, and optional outward species flux.
+- The generic 3D adapter accepts only strict nonnegative `boundary_label`
+  locators. Unsupported locator kinds, malformed labels, duplicate boundary
+  locators, missing ports, and invalid port declarations fail before assembly.
+- The implementation retains the existing owned-element traversal, ghost-state
+  access, quadrature calls, and MPI reductions. It applies the declared local
+  orientation only when converting the resulting flow and species flux to the
+  common outward-positive contract.
+- The existing VCA `MeasurePorts(ThreeDVascularPortDefinition, ...)` overload
+  now creates `boundary_label` ports with the native outward orientation and
+  adapts generic states back to the legacy maps. It does not duplicate surface
+  integration or MPI reduction logic.
+- Extended the focused PETSc VCA runtime test with a unit-cube flow state. It
+  checks area, flow, mean pressure, species flux, physical time, strict locator
+  validation, orientation conversion, and parity between generic and legacy VCA
+  measurements.
+
+No CLI, schema, database, 1D, CUDA, time-integration, history, or rollback
+behavior changed in this slice.
+
 ## Baseline evidence
 
 On 2026-08-31, before Phase 0 implementation:
@@ -56,6 +80,10 @@ On 2026-08-31, before Phase 0 implementation:
 | `make -C solvers/one_d core-test` | pass | native 1D flow/transport and coupling unit tests |
 | `make cpu-test` after PR 0.2 | pass | baseline CPU tests plus dependency-free common coupling-port tests |
 | `make -C solvers/one_d core-test` after PR 0.2 | pass | unchanged native 1D fast test target |
+| `make -C solvers/cpu vca_3d_runtime_test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` | pass | focused generic 3D-port and VCA-adapter PETSc test build |
+| `./solvers/cpu/vca_3d_runtime_test` | pass | generic measurement values, locator rejection, and VCA parity |
+| `make -C solvers/cpu vca_3d_smoke_test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` | pass | VCA flow/transport executable and smoke-test build |
+| `./solvers/cpu/vca_3d_smoke_test` | pass | one-/two-rank VCA flow, transport, checkpoint, and restart regression |
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
 runtime, multi-rank VCA, and numerical parity gates remain required when their
@@ -75,9 +103,11 @@ corresponding implementation slices begin.
 
 ## Backward compatibility
 
-The baseline slice is documentation-only. Existing schema-v3 1D cases,
-schema-v4 3D cases, older accepted configurations, `.ntiga` databases,
-standalone executables, VCA workflows, and CUDA sources are unchanged.
+The Phase 0 slices preserve existing schema-v3 1D cases, schema-v4 3D cases,
+older accepted configurations, `.ntiga` databases, standalone executables, VCA
+workflows, and CUDA sources. PR 0.3 changes only the internal implementation
+behind the existing VCA port-measurement overload; the focused adapter parity
+test and VCA smoke regression pass.
 
 ## Known limitations and risks
 
@@ -92,13 +122,11 @@ standalone executables, VCA workflows, and CUDA sources are unchanged.
 
 ## Remaining Phase 0 work
 
-1. Add common coupling data types and unit tests.
-2. Generalize 3D port measurements while preserving VCA values.
-3. Add 3D trial/rollback/commit and deterministic replay tests.
-4. Extract a reusable 1D runtime with equivalent standalone behavior.
-5. Include transport, dynamic-radius, circuit, time, and output state in the
+1. Add 3D trial/rollback/commit and deterministic replay tests.
+2. Extract a reusable 1D runtime with equivalent standalone behavior.
+3. Include transport, dynamic-radius, circuit, time, and output state in the
    correct lifecycle boundary.
-6. Run engineering, numerical, and architecture gates.
+4. Run engineering, numerical, and architecture gates.
 
 ## Phase 0 exit condition
 

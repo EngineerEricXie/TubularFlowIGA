@@ -1,4 +1,6 @@
+#include "CouplingPort.hpp"
 #include "IgaDatabase.hpp"
+#include "TransientFlowRuntime.hpp"
 #include "TransientTransportRuntime.hpp"
 
 #include <petscksp.h>
@@ -102,6 +104,43 @@ void RequireNear(double expected, double actual, double tolerance, const char* m
 	}
 }
 
+template <class Function>
+void RequireRejected(Function&& function, const char* message)
+{
+	bool rejected = false;
+	try {
+		function();
+	} catch (const std::runtime_error&) {
+		rejected = true;
+	}
+	if (!rejected) throw std::runtime_error(std::string("expected rejection: ")+message);
+}
+
+iga::ResolvedBoundaryConditions MakeFlowBoundaries(std::size_t nodes)
+{
+	iga::ResolvedBoundaryConditions result;
+	result.velocity_constrained.assign(nodes, 0);
+	result.pressure_constrained.assign(nodes, 0);
+	result.transport_constrained.assign(nodes, 0);
+	result.velocity.assign(nodes, {0.0, 0.0, 0.0});
+	result.pressure.assign(nodes, 0.0);
+	result.n0.assign(nodes, 0.0);
+	result.nplus.assign(nodes, 0.0);
+	return result;
+}
+
+iga::CouplingPort MakeBoundaryPort(const std::string& id, const std::string& locator)
+{
+	iga::CouplingPort result;
+	result.id = id;
+	result.subsystem_id = "three_d";
+	result.locator_kind = "boundary_label";
+	result.locator = locator;
+	result.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+		iga::PortQuantity::MeanPressure, iga::PortQuantity::SpeciesFlux};
+	return result;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -139,6 +178,69 @@ int main(int argc, char** argv)
 		assert(sparse_info.nz_used == 6.0*64.0*64.0);
 		assert(sparse_info.nz_allocated == sparse_info.nz_used);
 		MatDestroy(&sparse_matrix);
+		iga::TransientFlowRuntime flow(database, PETSC_COMM_WORLD, false, false,
+			{1.0, 1.0, 0.0}, MakeFlowBoundaries(64), std::vector<int>(64, 1),
+			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}), {}, {});
+		std::vector<PetscInt> flow_rows;
+		std::vector<PetscScalar> flow_values;
+		flow_rows.reserve(4*64);
+		flow_values.reserve(4*64);
+		for (PetscInt node = 0; node < 64; ++node) {
+			for (PetscInt field = 0; field < 4; ++field) {
+				flow_rows.push_back(4*node+field);
+				flow_values.push_back(field == 2 ? 2.0 : (field == 3 ? 7.0 : 0.0));
+			}
+		}
+		VecSetValues(flow.State(), static_cast<PetscInt>(flow_rows.size()), flow_rows.data(),
+			flow_values.data(), INSERT_VALUES);
+		iga::OwnedRowAssembler::Assemble(flow.State());
+		const std::vector<std::string> species_fields{"oxygen"};
+		const std::vector<double> species_state(64, 2.0);
+		const auto generic_ports = std::vector<iga::CouplingPort>{
+			MakeBoundaryPort("outlet", "1")};
+		const auto generic = flow.MeasurePorts(generic_ports, 1.25, species_fields, species_state);
+		const auto& generic_state = generic.at("outlet");
+		assert(generic_state.area_m2.has_value());
+		assert(generic_state.outward_flow_m3_s.has_value());
+		assert(generic_state.mean_pressure_pa.has_value());
+		RequireNear(1.0, *generic_state.area_m2, 1e-12, "generic port area");
+		RequireNear(-2.0, *generic_state.outward_flow_m3_s, 1e-12, "generic port flow");
+		RequireNear(7.0, *generic_state.mean_pressure_pa, 1e-12, "generic port pressure");
+		RequireNear(-4.0, generic_state.outward_species_flux.at("oxygen"), 1e-12,
+			"generic port species flux");
+		RequireNear(1.25, generic_state.time_s, 1e-12, "generic port time");
+		auto reversed_port = MakeBoundaryPort("reversed_outlet", "1");
+		reversed_port.orientation.native_to_outward_sign = -1;
+		const auto reversed = flow.MeasurePorts({reversed_port}, 1.25,
+			species_fields, species_state);
+		RequireNear(2.0, *reversed.at("reversed_outlet").outward_flow_m3_s, 1e-12,
+			"generic port orientation flow conversion");
+		RequireNear(4.0, reversed.at("reversed_outlet").outward_species_flux.at("oxygen"),
+			1e-12, "generic port orientation species flux conversion");
+		iga::ThreeDVascularPortDefinition vca_ports;
+		vca_ports.outlet_labels = {1};
+		const auto vca = flow.MeasurePorts(vca_ports, species_fields, species_state);
+		RequireNear(*generic_state.outward_flow_m3_s, vca.flows.at(1), 1e-12,
+			"generic and VCA flow parity");
+		RequireNear(*generic_state.mean_pressure_pa, vca.pressures.at(1), 1e-12,
+			"generic and VCA pressure parity");
+		RequireNear(generic_state.outward_species_flux.at("oxygen"),
+			vca.species_fluxes.at(1).at("oxygen"), 1e-12,
+			"generic and VCA species flux parity");
+		RequireRejected([&flow, &species_fields, &species_state] {
+			auto invalid = MakeBoundaryPort("invalid_kind", "1");
+			invalid.locator_kind = "network_node";
+			flow.MeasurePorts({invalid}, 0.0, species_fields, species_state);
+		}, "unsupported generic port locator kind");
+		RequireRejected([&flow, &species_fields, &species_state] {
+			auto invalid = MakeBoundaryPort("invalid_label", "1x");
+			flow.MeasurePorts({invalid}, 0.0, species_fields, species_state);
+		}, "invalid generic boundary label locator");
+		RequireRejected([&flow, &generic_ports, &species_fields, &species_state] {
+			auto duplicate = MakeBoundaryPort("duplicate_label", "1");
+			flow.MeasurePorts({generic_ports.front(), duplicate}, 0.0, species_fields,
+				species_state);
+		}, "duplicate generic boundary label locator");
 		auto initial_configuration = MakeConfiguration(0.0);
 		auto system = iga::CompileLinearSystem(initial_configuration, "oxygen_transport");
 		system.velocity_source = "prescribed";
