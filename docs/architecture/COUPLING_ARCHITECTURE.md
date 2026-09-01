@@ -114,8 +114,9 @@ struct PortBoundaryData {
 	std::optional<double> outward_flow_m3_s;
 	std::optional<double> mean_pressure_pa;
 	std::optional<double> mean_normal_traction_pa;
+	std::optional<double> total_pressure_pa;
 	std::map<std::string, double> concentration;
-	std::map<std::string, double> inward_species_flux;
+	std::map<std::string, double> outward_species_flux;
 };
 
 struct CouplingPort {

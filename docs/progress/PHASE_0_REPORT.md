@@ -23,6 +23,29 @@ coupling without changing validated standalone or VCA numerical behavior.
 No solver source, schema, database format, or runtime behavior changed in this
 slice.
 
+### PR 0.2 common coupling port values
+
+- Added dependency-free C++17 port data in `include/CouplingPort.hpp`:
+  `PortQuantity`, `PortOrientation`, `PortState`, `PortBoundaryData`,
+  `CouplingPort`, and `CouplingResidual`.
+- The fields state SI units in their names. Flow and species flux are explicitly
+  positive outward from their subsystem; `PortOrientation` converts only a
+  backend-native sign to that convention.
+- Optional boundary values preserve the distinction between absent data and a
+  supplied zero. Optional port-state measurements use the same representation,
+  so a port that does not provide an area or pressure does not report a fake
+  zero value.
+- Added validation for finite values, positive supplied area, nonempty port
+  identifiers and locators, orientation signs of exactly `+1` or `-1`, duplicate
+  raw quantity declarations, contradictory provide/require declarations, and
+  port IDs unique within each subsystem.
+- Added the dependency-free `coupling_port_test` to `make cpu-test`. It covers
+  validation, orientation conversion, zero-versus-missing boundary data, and
+  conservative flow/species edge residual signs.
+
+This slice does not alter solver runtimes, VCA adapters, CLIs, schemas, or
+`.ntiga` handling.
+
 ## Baseline evidence
 
 On 2026-08-31, before Phase 0 implementation:
@@ -31,6 +54,8 @@ On 2026-08-31, before Phase 0 implementation:
 |---|---|---|
 | `make cpu-test` | pass | dependency-free CPU configuration, boundary, checkpoint, outlet, VCA, and visualization unit tests |
 | `make -C solvers/one_d core-test` | pass | native 1D flow/transport and coupling unit tests |
+| `make cpu-test` after PR 0.2 | pass | baseline CPU tests plus dependency-free common coupling-port tests |
+| `make -C solvers/one_d core-test` after PR 0.2 | pass | unchanged native 1D fast test target |
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
 runtime, multi-rank VCA, and numerical parity gates remain required when their
