@@ -412,7 +412,17 @@ public:
     // Throw away the current trial result and return to the state at BeginStep().
     virtual void RollbackTrial() = 0;
 
-    // Accept the current trial result as the new physical state.
+    // Close an opened physical step without accepting it.  Unlike rollback,
+    // this returns to the idle committed phase and is idempotent there.
+    virtual void AbortStep() = 0;
+
+    // Validate that the trial is commit-ready without publishing it.
+    virtual void PrepareCommitStep() = 0;
+
+    // Publish a prepared commit.  This operation must not throw.
+    virtual void FinalizeCommitStep() noexcept = 0;
+
+    // Compatibility shorthand for prepare followed by finalize.
     virtual void CommitStep() = 0;
 };
 ```
@@ -444,6 +454,11 @@ state at t_n
 ```
 
 A subsystem must not advance its internal physical history multiple times during coupling iterations.
+For a graph of subsystems, committing sequentially is also insufficient: a
+late validation failure would otherwise leave earlier domains committed and
+later domains uncommitted. The graph executor must prepare every domain before
+it invokes any nonthrowing finalizer. On failure it must attempt to abort every
+opened domain, preserving the primary error and reporting cleanup failures.
 
 The implementation should distinguish:
 

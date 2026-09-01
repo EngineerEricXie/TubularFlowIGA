@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <exception>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -15,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -27,7 +29,7 @@ public:
 	using ImplicitAdvance = std::function<void(const OneDNetwork&,
 		const OneDFlowSystemDefinition&, OneDFlowState&, double, double)>;
 
-	enum class Phase { Uninitialized, Ready, TrialOpen, TrialSolved };
+	enum class Phase { Uninitialized, Ready, TrialOpen, TrialSolved, CommitPrepared };
 	enum class TrialInletMode { None, HeldOpenLoop, Coupled, ConfiguredOpenLoop };
 
 	struct TrialDiagnostics {
@@ -269,16 +271,40 @@ public:
 		phase_ = Phase::TrialOpen;
 	}
 
+	void AbortStep()
+	{
+		if (phase_ == Phase::Ready) return;
+		if (phase_ != Phase::TrialOpen && phase_ != Phase::TrialSolved
+			&& phase_ != Phase::CommitPrepared)
+			throw std::runtime_error("illegal 1d runtime transition: AbortStep");
+		RestoreCommitted();
+		CloseTrialState();
+		trial_inlet_mode_ = TrialInletMode::None;
+		trial_diagnostics_ = {};
+		trial_time_s_ = 0.0;
+		trial_dt_s_ = 0.0;
+		phase_ = Phase::Ready;
+	}
+
+	void PrepareCommitStep()
+	{
+		RequirePhase(Phase::TrialSolved, "PrepareCommitStep");
+		if (!trial_solve_succeeded_)
+			throw std::runtime_error("1d PrepareCommitStep requires a successful trial solve");
+		phase_ = Phase::CommitPrepared;
+	}
+
+	void FinalizeCommitStep() noexcept
+	{
+		if (phase_ != Phase::CommitPrepared) std::terminate();
+		CloseTrialState();
+		phase_ = Phase::Ready;
+	}
+
 	void CommitStep()
 	{
-		RequirePhase(Phase::TrialSolved, "CommitStep");
-		if (!trial_solve_succeeded_)
-			throw std::runtime_error("1d CommitStep requires a successful trial solve");
-		committed_ = Snapshot{};
-		trial_outlet_pressure_overrides_.clear();
-		trial_configured_open_loop_schedule_.clear();
-		trial_solve_succeeded_ = false;
-		phase_ = Phase::Ready;
+		PrepareCommitStep();
+		FinalizeCommitStep();
 	}
 
 	PortState GetPortState(const std::string& port_id) const
@@ -349,6 +375,8 @@ private:
 		std::vector<OneDTransportState> transports;
 		VascularInletState last_inlet;
 	};
+	static_assert(std::is_nothrow_move_assignable<Snapshot>::value,
+		"1D trial snapshot cleanup must remain noexcept");
 
 	static bool Close(double first, double second)
 	{
@@ -374,6 +402,15 @@ private:
 		flow_state_ = committed_.flow;
 		transports_ = committed_.transports;
 		last_inlet_ = committed_.last_inlet;
+	}
+
+	void CloseTrialState() noexcept
+	{
+		committed_ = Snapshot{};
+		trial_inlet_.reset();
+		trial_outlet_pressure_overrides_.clear();
+		trial_configured_open_loop_schedule_.clear();
+		trial_solve_succeeded_ = false;
 	}
 
 	int ConfiguredSubsteps(double macro_dt_s) const

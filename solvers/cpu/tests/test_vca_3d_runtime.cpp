@@ -421,7 +421,9 @@ int main(int argc, char** argv)
 		const auto second_trial = CopyVector(lifecycle.State());
 		assert(second_trial == first_trial);
 		assert(lifecycle.TrialLinearIterations() == first_trial_iterations);
-		lifecycle.CommitStep();
+		lifecycle.PrepareCommitStep();
+		assert(lifecycle.Phase() == iga::FlowStepPhase::CommitPrepared);
+		lifecycle.FinalizeCommitStep();
 		assert(lifecycle.Phase() == iga::FlowStepPhase::Committed);
 		assert(CopyVector(lifecycle.State()) == first_trial);
 		assert(lifecycle.Summary().linear_iterations == first_trial_iterations);
@@ -444,9 +446,39 @@ int main(int argc, char** argv)
 		unsupported_flow_input.outward_flow_m3_s = 1.0;
 		lifecycle.BeginStep(1, 0.2, 12, 1e-8, 1e-8, 3.0);
 		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		auto abort_pressure = pressure_input;
+		abort_pressure.time_s = 0.2;
+		abort_pressure.mean_pressure_pa = 9.0;
+		lifecycle.SetPortInput(pressure_port, abort_pressure);
 		RequireRejected([&lifecycle, &pressure_port, &unsupported_flow_input] {
 			lifecycle.SetPortInput(pressure_port, unsupported_flow_input);
 		}, "unsupported flow-profile trial input");
+		lifecycle.AbortStep();
+		assert(lifecycle.Phase() == iga::FlowStepPhase::Committed);
+		assert(CopyVector(lifecycle.State()) == first_trial);
+		RequireNear(4.0, *lifecycle.PressureTractionValue(1), 0.0,
+			"committed pressure traction abort");
+		lifecycle.BeginStep(1, 0.2, 12, 1e-8, 1e-8, 3.0);
+		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		auto second_step_pressure = pressure_input;
+		second_step_pressure.time_s = 0.2;
+		lifecycle.SetPortInput(pressure_port, second_step_pressure);
+		lifecycle.SolveTrial();
+		lifecycle.AbortStep();
+		assert(lifecycle.Phase() == iga::FlowStepPhase::Committed);
+		assert(CopyVector(lifecycle.State()) == first_trial);
+		assert(lifecycle.TrialLinearIterations() == 0);
+		lifecycle.BeginStep(1, 0.2, 12, 1e-8, 1e-8, 3.0);
+		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		lifecycle.SetPortInput(pressure_port, second_step_pressure);
+		lifecycle.SolveTrial();
+		lifecycle.PrepareCommitStep();
+		lifecycle.AbortStep();
+		assert(lifecycle.Phase() == iga::FlowStepPhase::Committed);
+		assert(CopyVector(lifecycle.State()) == first_trial);
+		assert(lifecycle.Summary().linear_iterations == first_trial_iterations);
+		assert(lifecycle.TrialLinearIterations() == 0);
+		lifecycle.AbortStep();
 
 		auto outlet_model = iga::OutletModelState{};
 		outlet_model.label = 1;

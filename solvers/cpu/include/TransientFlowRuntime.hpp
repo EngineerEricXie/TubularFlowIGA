@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -62,7 +63,8 @@ struct FlowConvergenceMetrics {
 enum class FlowStepPhase {
 	Committed,
 	TrialReady,
-	TrialSolved
+	TrialSolved,
+	CommitPrepared
 };
 
 class TransientFlowRuntime {
@@ -288,17 +290,46 @@ public:
 		phase_ = FlowStepPhase::TrialReady;
 	}
 
-	void CommitStep()
+	void AbortStep()
 	{
-		RequirePhase(FlowStepPhase::TrialSolved, "CommitStep");
+		if (phase_ == FlowStepPhase::Committed) return;
+		if (phase_ != FlowStepPhase::TrialReady && phase_ != FlowStepPhase::TrialSolved
+			&& phase_ != FlowStepPhase::CommitPrepared)
+			throw std::runtime_error("AbortStep is invalid in the current 3D flow lifecycle phase");
+		RestoreCommittedSnapshot();
+		trial_configuration_ = {};
+		trial_step_ = -1;
+		trial_time_ = 0.0;
+		trial_maximum_newton_ = 0;
+		trial_nonlinear_relative_tolerance_ = 0.0;
+		trial_nonlinear_absolute_tolerance_ = 0.0;
+		trial_mass_relative_tolerance_ = 0.0;
+		phase_ = FlowStepPhase::Committed;
+	}
+
+	void PrepareCommitStep()
+	{
+		RequirePhase(FlowStepPhase::TrialSolved, "PrepareCommitStep");
 		if (!trial_solve_succeeded_)
-			throw std::runtime_error("CommitStep requires a successful 3D flow trial solve");
+			throw std::runtime_error("PrepareCommitStep requires a successful 3D flow trial solve");
+		phase_ = FlowStepPhase::CommitPrepared;
+	}
+
+	void FinalizeCommitStep() noexcept
+	{
+		if (phase_ != FlowStepPhase::CommitPrepared) std::terminate();
 		total_linear_iterations_ += trial_linear_iterations_;
 		trial_linear_iterations_ = 0;
 		trial_solve_succeeded_ = false;
 		has_trial_configuration_ = false;
 		trial_pressure_overrides_.clear();
 		phase_ = FlowStepPhase::Committed;
+	}
+
+	void CommitStep()
+	{
+		PrepareCommitStep();
+		FinalizeCommitStep();
 	}
 
 	IGA_FLOW_NOINLINE void Advance(const SimulationConfiguration& step_configuration, int step,

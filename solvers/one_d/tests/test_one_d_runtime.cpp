@@ -316,7 +316,9 @@ int main()
 	assert(runtime.FlowState().flow == first_flow);
 	assert(runtime.FlowState().pressure == first_pressure);
 	assert(runtime.Network().segments.front().radius0 == first_radius);
-	runtime.CommitStep();
+	runtime.PrepareCommitStep();
+	assert(runtime.CurrentPhase() == iga::OneDFlowRuntime::Phase::CommitPrepared);
+	runtime.FinalizeCommitStep();
 	assert(runtime.FlowState().completed_step == 1);
 	runtime.BeginStep(configuration.time.dt, configuration.time.dt);
 	iga::PortBoundaryData generic_input;
@@ -350,9 +352,39 @@ int main()
 	RequireRejected([&failing] { failing.SolveTrial(); });
 	assert(failing.CurrentPhase() == iga::OneDFlowRuntime::Phase::TrialSolved);
 	RequireRejected([&failing] { failing.CommitStep(); });
-	failing.RollbackTrial();
+	failing.AbortStep();
 	assert(failing.FlowState().completed_step == 0);
-	assert(failing.CurrentPhase() == iga::OneDFlowRuntime::Phase::TrialOpen);
+	assert(failing.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+	assert(failing.Diagnostics().attempted_configured_substeps == 0);
+	failing.BeginStep(0.0, configuration.time.dt);
+	failing.AbortStep();
+	assert(failing.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+	failing.AbortStep();
+	{
+		iga::OneDFlowRuntime prepared_abort(configuration, flow, network,
+			iga::ResolveOneDInlet(configuration), directory);
+		prepared_abort.InitializeOpenLoop(1.0e-9);
+		const auto committed = prepared_abort.FlowState();
+		prepared_abort.BeginStep(0.0, configuration.time.dt);
+		prepared_abort.SetOpenLoopInlet(
+			prepared_abort.OpenLoopInlet(configuration.time.dt, 2.0e-9));
+		prepared_abort.SolveTrial();
+		prepared_abort.AbortStep();
+		assert(prepared_abort.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		assert(prepared_abort.FlowState().area == committed.area);
+		assert(prepared_abort.Diagnostics().attempted_configured_substeps == 0);
+		prepared_abort.BeginStep(0.0, configuration.time.dt);
+		prepared_abort.SetOpenLoopInlet(
+			prepared_abort.OpenLoopInlet(configuration.time.dt, 2.0e-9));
+		prepared_abort.SolveTrial();
+		prepared_abort.PrepareCommitStep();
+		prepared_abort.AbortStep();
+		assert(prepared_abort.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		assert(prepared_abort.FlowState().area == committed.area);
+		assert(prepared_abort.FlowState().flow == committed.flow);
+		assert(prepared_abort.FlowState().node_pressure == committed.node_pressure);
+		assert(prepared_abort.Diagnostics().attempted_configured_substeps == 0);
+	}
 
 	auto sub_configuration = configuration;
 	sub_configuration.time.dt = 0.0025;

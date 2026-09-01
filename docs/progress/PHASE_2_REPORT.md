@@ -54,6 +54,22 @@ algorithm state was incorrectly moved onto individual edges.
   same-kind neighbors. The underlying graph representation accepts the
   topology required by later Phase 2 executors.
 
+## PR 2.3 foundation: atomic domain lifecycle
+
+The native 1D and body-fitted 3D runtimes now expose a graph-safe close path.
+`AbortStep` restores the complete committed snapshot and closes an open,
+solved, failed-solved, or commit-prepared step; it is idempotent in the idle
+committed phase. `PrepareCommitStep` validates a successful trial without
+publishing it, and `FinalizeCommitStep` performs only nonthrowing publication.
+The existing `CommitStep` API remains as a compatibility wrapper.
+
+This two-stage commit prevents a future multidomain executor from partially
+committing a graph when a later domain rejects its trial. Native tests cover
+open, solved, failed-solved, and prepared aborts, committed-state restoration,
+trial-work reset, boundary-traction restoration, idempotence, and legacy
+commit behavior. Runtime adapters, registry binding, and the sequential
+multi-interface executor remain the next PR 2.3 slice.
+
 ## Verification
 
 The dependency-free graph suite covers a valid chain in both directions,
