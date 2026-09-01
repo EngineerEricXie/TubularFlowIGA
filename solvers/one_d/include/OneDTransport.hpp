@@ -204,12 +204,21 @@ inline double OneDTransportStableDt(const OneDNetwork& network,
 	return dt;
 }
 
+// Staged graph coupling resolves root ownership before native transport replay.
+// Legacy keeps the historical native-epsilon inference for flow-only callers.
+enum class OneDStagedRootTransportOwnership {
+	Legacy,
+	BoundaryConcentration,
+	InteriorDonor
+};
+
 inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDSpeciesState& species,
 	const std::filesystem::path& case_directory, double start_time, double requested_dt,
 	const std::vector<double>* initial_area = nullptr,
 	const std::map<std::string, double>* root_concentrations = nullptr,
-	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr)
+	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr,
+	OneDStagedRootTransportOwnership root_ownership = OneDStagedRootTransportOwnership::Legacy)
 {
 	double remaining = requested_dt;
 	std::vector<double> scalar(species.concentration.size());
@@ -253,8 +262,12 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 			if (segment.parent == network.root) {
 				const double root_flow = flow.flow.at(
 					static_cast<std::size_t>(segment.cell_offset));
-				concentration[0] = root_concentrations && !root_concentration_supplied
-					&& root_flow < -configuration.coupling.flow_epsilon_m3_s
+				const bool interior_donor = root_ownership
+					== OneDStagedRootTransportOwnership::InteriorDonor
+					|| (root_ownership == OneDStagedRootTransportOwnership::Legacy
+						&& root_concentrations && !root_concentration_supplied
+						&& root_flow < -configuration.coupling.flow_epsilon_m3_s);
+				concentration[0] = interior_donor
 					? concentration[1] : inlet_concentration;
 			}
 			else {
@@ -334,7 +347,8 @@ inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 	const std::filesystem::path& case_directory, double start_time, double dt,
 	const std::vector<double>* initial_area = nullptr,
 	const std::map<std::string, double>* root_concentrations = nullptr,
-	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr)
+	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr,
+	OneDStagedRootTransportOwnership root_ownership = OneDStagedRootTransportOwnership::Legacy)
 {
 	if (outlet_concentrations)
 		for (const auto& segment : network.segments) {
@@ -357,7 +371,7 @@ inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i)
 		AdvanceOneDSpecies(configuration, network, flow,
 			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt,
-			initial_area, root_concentrations, outlet_concentrations);
+			initial_area, root_concentrations, outlet_concentrations, root_ownership);
 }
 
 inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportState>& transports,

@@ -3,6 +3,7 @@
 
 #include "PressureFlowComponentExecutor.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <functional>
 #include <map>
@@ -35,6 +36,8 @@ struct SpeciesPressureFlowExecutionControls {
 struct SpeciesEdgeAmountDiagnostic {
 	std::string edge_id;
 	std::string species_id;
+	PortRef first;
+	PortRef second;
 	SpeciesDonor donor = SpeciesDonor::First;
 	double first_outward_amount = 0.0;
 	double second_outward_amount = 0.0;
@@ -369,18 +372,36 @@ private:
 		for (const auto& domain_id : plan_.domain_order)
 			accounting.emplace(domain_id, staged_.at(domain_id)->GetSpeciesStepAccounting());
 		for (const auto& edge : registry_.Graph().Edges()) for (const auto& species : edge.species) {
-			const auto& first = AccountingFor(accounting, edge.first.domain_id, species);
-			const auto& second = AccountingFor(accounting, edge.second.domain_id, species);
-			const double first_amount = PortAmount(first, edge.first.port_id, species);
-			const double second_amount = PortAmount(second, edge.second.port_id, species);
+			const PortRef* first_port = &edge.first;
+			const PortRef* second_port = &edge.second;
+			bool swapped = false;
+			if (*second_port < *first_port) {
+				std::swap(first_port, second_port);
+				swapped = true;
+			}
+			const auto& first = AccountingFor(accounting, first_port->domain_id, species);
+			const auto& second = AccountingFor(accounting, second_port->domain_id, species);
+			const double first_amount = PortAmount(first, first_port->port_id, species);
+			const double second_amount = PortAmount(second, second_port->port_id, species);
 			const double residual = first_amount+second_amount;
 			const auto& tolerance = controls_.amount_tolerances.at(species);
 			const double scale = std::max({tolerance.reference_amount, std::abs(first_amount), std::abs(second_amount)});
 			Gate(species, residual, scale, "edge '"+edge.id+"'");
-			result.edge_amounts.push_back({edge.id, species,
-				result.donor_ownership.at({edge.id, species}), first_amount, second_amount,
+			auto donor = result.donor_ownership.at({edge.id, species});
+			if (swapped)
+				donor = donor == SpeciesDonor::First
+					? SpeciesDonor::Second : SpeciesDonor::First;
+			result.edge_amounts.push_back({edge.id, species, *first_port, *second_port,
+				donor, first_amount, second_amount,
 				residual, Normalized(residual, scale)});
 		}
+		std::sort(result.edge_amounts.begin(), result.edge_amounts.end(),
+			[](const SpeciesEdgeAmountDiagnostic& first,
+				const SpeciesEdgeAmountDiagnostic& second) {
+				return first.edge_id == second.edge_id
+					? first.species_id < second.species_id
+					: first.edge_id < second.edge_id;
+			});
 		for (const auto& item : accounting) for (const auto& species : UsedSpecies(item.first)) {
 			const auto& value = AccountingFor(accounting, item.first, species);
 			ValidateAccounting(value, item.first, species);

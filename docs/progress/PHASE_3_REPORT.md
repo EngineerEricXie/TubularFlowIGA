@@ -1,8 +1,8 @@
 # Phase 3 report
 
-Status: **in progress**. PR 3.1 provides the schema and dependency-free
-species contract. Native conservative transfer remains open for PR 3.2, and
-the two-species production gate remains open for PR 3.3.
+Status: **complete**. PR 3.1 defines the general species contract, PR 3.2
+implements conservative staged 1D/3D transfer, and PR 3.3 closes the phase with
+a native two-species MPI regression and verified per-species global balances.
 
 ## Objective
 
@@ -281,6 +281,55 @@ missing or extra species fail parsing. Schema v5 rejects these keys and retains
 its prior defaults and conversion path. A validated conversion produces the
 executor controls without changing their numerical formulas.
 
-The remaining PR 3.2 work is native runner integration. PR 3.3 then closes the
-phase with a two-species 1D-to-3D-to-1D production regression and verified
-per-species global balances.
+### Native integration and PR 3.3 gate
+
+The general `iga_multidomain_flow` runner now dispatches schema v5 to the
+unchanged flow-only executor and schema v6 to composite staged runtimes and the
+species executor. The specialized bifurcation entry remains schema-v5-only.
+Collective preflight requires one supported 1D flow/transport pair or one 3D
+backward-Euler Navier--Stokes/linear-transport pair, flow-only native ownership,
+prescribed accepted 3D velocity, valid logical/native bindings, compatible time
+grids, and identical 3D flow/transport node order. The graph flow-switch value
+is passed to both native adapter kinds so executor routing selects one explicit
+staged boundary/interior ownership contract. Native 1D scalar replay and trial
+reporting consume that ownership directly rather than re-inferring it from a
+separate flow epsilon.
+
+Only accepted committed steps are published. Schema-v6 outputs separate
+integrated edge/domain/global amounts from end-step port rates, identify
+canonical edge endpoints and donor ownership, and record each logical species'
+concentration, integrated-amount, and outward-rate units. External 1D source and
+sink boundaries and the 3D no-flux wall are explicit observation ports, so the
+reported domain and component balances include every physical boundary.
+
+The production smoke transports two independent logical species with distinct
+native field names and units through a 1D source, a body-fitted 3D junction, and
+downstream 1D domains. It exercises one and two MPI ranks, endpoint/edge
+permutation, a graph ownership threshold different from the native 1D epsilon,
+callback rollback with no published output, schema-v6 rejection by the legacy
+bifurcation entry, and collective binding, native-scope, and velocity-source
+failures. The configured amount gate is
+`1e-10 + 1e-6*max(1e-5, scale)`, materially below the smallest nonzero transfer.
+Observed closure maxima were:
+
+```text
+edge integrated-amount residual   1.8973538018496328e-19
+domain recomputed residual        1.2878563368729293e-14
+component-global residual         1.2434511428328909e-14
+```
+
+Phase-closing validation:
+
+```text
+make -C solvers/one_d core-test one_d_runtime_test
+./solvers/one_d/one_d_runtime_test
+make -C solvers/one_d iga_1d PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+make -C solvers/coupling test
+./solvers/cpu/vca_3d_runtime_test
+make -C solvers/coupling multidomain-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+All commands passed with warning-free affected builds. Focused Sol review and
+re-review accepted flux signs and units, exact integrated accounting, staged
+state ownership, reversal and hysteresis, deterministic routing, rollback and
+two-stage commit, MPI parity, and the native two-species exit gate.

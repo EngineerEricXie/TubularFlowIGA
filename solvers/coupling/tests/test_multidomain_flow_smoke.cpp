@@ -12,6 +12,25 @@ std::string ReadFile(const fs::path& path)
 		std::istreambuf_iterator<char>());
 }
 
+void RequireLogContains(const fs::path& path, const std::string& text)
+{
+	if (ReadFile(path).find(text) == std::string::npos)
+		throw std::runtime_error("expected diagnostic is missing from "+path.string());
+}
+
+double DeclaredSpeciesAmountBound(double scale)
+{
+	return 1.0e-10+1.0e-6*std::max(1.0e-5, scale);
+}
+
+struct SpeciesResidualMaxima {
+	double edge = 0.0;
+	double domain = 0.0;
+	double global = 0.0;
+};
+
+SpeciesResidualMaxima species_residual_maxima;
+
 void WriteOneDDomain(std::ostream& output, const std::string& id,
 	const std::string& case_directory, bool coupled_root, bool coupled_terminal,
 	bool trailing_comma)
@@ -113,13 +132,224 @@ void WriteMultiIslandGraph(const fs::path& root, const std::string& execution,
 	if (!output) throw std::runtime_error("cannot write multi-island graph");
 }
 
+void WriteOneDTransportCase(const fs::path& directory, double inlet_flow,
+	const std::string& first_field, const std::string& second_field)
+{
+	std::ofstream network(directory/"tree.swc");
+	network << std::setprecision(17) << "1 2 0 0 0 " << kRadius << " -1\n"
+		<< "2 2 1 0 0 " << kRadius << " 1\n";
+	std::ofstream config(directory/"simulation_config.json");
+	config << "{\n  \"schema_version\":3,\"dimension\":\"1d\","
+		"\"simulation_scope\":{\"mode\":\"flow_only\"},\n"
+		<< "  \"coupling\":{\"scheme\":\"explicit_staggered\","
+			"\"flow_epsilon_m3_s\":0.01},\n"
+		<< "  \"geometry\":{\"kind\":\"swc_network\",\"file\":\"tree.swc\","
+			"\"length_scale_to_m\":1},\n"
+		<< "  \"fields\":[{\"name\":\"area\",\"kind\":\"scalar\"},"
+			"{\"name\":\"flow_rate\",\"kind\":\"scalar\"},"
+			"{\"name\":\"pressure\",\"kind\":\"pressure\"},"
+			"{\"name\":\"" << first_field << "\",\"kind\":\"scalar\",\"initial_value\":1.25},"
+			"{\"name\":\"" << second_field << "\",\"kind\":\"scalar\",\"initial_value\":3.5}],\n"
+		<< "  \"time\":{\"dt\":" << Number(kDt) << ",\"steps\":" << kSteps
+		<< ",\"output_every\":1},\n"
+		<< "  \"temporal_functions\":[{\"name\":\"inlet_flow\",\"kind\":\"constant\","
+			"\"units\":\"m3/s\",\"value\":" << Number(inlet_flow) << "}],\n"
+		<< "  \"equation_systems\":["
+			"{\"name\":\"flow\",\"kind\":\"network_flow_1d\","
+			"\"unknowns\":[\"area\",\"flow_rate\",\"pressure\"],\"model\":\"rigid\","
+			"\"scheme\":\"steady_poiseuille\",\"dynamic_viscosity\":" << Number(kViscosity)
+		<< ",\"density\":" << Number(kDensity)
+		<< ",\"discretization\":{\"cells_per_segment\":1}},"
+			"{\"name\":\"transport\",\"kind\":\"network_transport_1d\","
+			"\"unknowns\":[\"" << first_field << "\",\"" << second_field
+		<< "\"],\"flow_system\":\"flow\",\"species\":["
+			"{\"field\":\"" << first_field << "\",\"diffusivity\":0},"
+			"{\"field\":\"" << second_field << "\",\"diffusivity\":0}]}],\n"
+		<< "  \"boundaries\":["
+			"{\"name\":\"inlet\",\"role\":\"inlet\",\"node_ids\":[1],\"conditions\":["
+			"{\"field\":\"flow_rate\",\"type\":\"dirichlet\",\"quantity\":\"flow_rate\","
+			"\"waveform\":\"inlet_flow\"},"
+			"{\"field\":\"" << first_field << "\",\"type\":\"dirichlet\",\"value\":1.25},"
+			"{\"field\":\"" << second_field << "\",\"type\":\"dirichlet\",\"value\":3.5}]},"
+			"{\"name\":\"outlet\",\"role\":\"outlet\",\"node_ids\":[2],\"conditions\":["
+			"{\"field\":\"pressure\",\"type\":\"pressure\",\"value\":0}]}]\n}\n";
+	if (!network || !config) throw std::runtime_error("cannot write schema-v6 1D case");
+}
+
+void WriteThreeDTransportCase(const fs::path& directory, bool prescribed = true)
+{
+	WriteThreeDCase(directory);
+	std::ofstream config(directory/"simulation_config.json", std::ios::trunc);
+	config << "{\n  \"schema_version\":3,\"dimension\":\"3d\",\n"
+		<< "  \"simulation_scope\":{\"mode\":\"flow_only\"},\n"
+		<< "  \"coupling\":{\"scheme\":\"explicit_staggered\",\"flow_epsilon_m3_s\":1e-14,"
+			"\"three_d_ports\":{\"inlet_label\":1,\"outlet_labels\":[2,3]}},\n"
+		<< (prescribed ? "" : "  \"velocity_sources\":[{\"name\":\"velocity\","
+			"\"kind\":\"snapshot_series\",\"manifest\":\"velocity_series.json\","
+			"\"interpolation\":\"linear\",\"out_of_range\":\"hold\"}],\n")
+		<< "  \"fields\":[{\"name\":\"velocity\",\"kind\":\"vector3\"},"
+			"{\"name\":\"pressure\",\"kind\":\"pressure\"},"
+			"{\"name\":\"three_red\",\"kind\":\"scalar\",\"initial_value\":1.25},"
+			"{\"name\":\"three_blue\",\"kind\":\"scalar\",\"initial_value\":3.5}],\n"
+		<< "  \"time\":{\"dt\":" << Number(kDt) << ",\"steps\":" << kSteps << "},\n"
+		<< "  \"equation_systems\":["
+			"{\"name\":\"flow\",\"kind\":\"navier_stokes\","
+			"\"unknowns\":[\"velocity\",\"pressure\"],\"viscosity\":" << Number(kViscosity)
+		<< ",\"density\":" << Number(kDensity)
+		<< ",\"time_integration\":\"backward_euler\"},"
+			"{\"name\":\"transport\",\"kind\":\"linear_transport\","
+			"\"unknowns\":[\"three_red\",\"three_blue\"],\"terms\":["
+			"{\"operator\":\"time_derivative\",\"equation\":\"three_red\"},"
+			"{\"operator\":\"advection\",\"equation\":\"three_red\",\"velocity\":\""
+		<< (prescribed ? "prescribed" : "velocity") << "\"},"
+			"{\"operator\":\"time_derivative\",\"equation\":\"three_blue\"},"
+			"{\"operator\":\"advection\",\"equation\":\"three_blue\",\"velocity\":\""
+		<< (prescribed ? "prescribed" : "velocity") << "\"}]}],\n"
+		<< "  \"boundaries\":[\n"
+			"    {\"label\":0,\"name\":\"wall\",\"conditions\":["
+			"{\"field\":\"velocity\",\"type\":\"dirichlet\",\"value\":[0,0,0]},"
+			"{\"field\":\"three_red\",\"type\":\"no_flux\"},"
+			"{\"field\":\"three_blue\",\"type\":\"no_flux\"}]},\n"
+			"    {\"label\":1,\"name\":\"inlet\",\"conditions\":["
+			"{\"field\":\"velocity\",\"type\":\"dirichlet\","
+			"\"profile\":\"initial_velocityfield.txt\",\"scale\":1},"
+			"{\"field\":\"three_red\",\"type\":\"dirichlet\",\"value\":1.25},"
+			"{\"field\":\"three_blue\",\"type\":\"dirichlet\",\"value\":3.5}]},\n"
+			"    {\"label\":2,\"name\":\"outlet_a\",\"conditions\":["
+			"{\"field\":\"pressure\",\"type\":\"pressure_traction\",\"value\":0},"
+			"{\"field\":\"three_red\",\"type\":\"advective_outflow\"},"
+			"{\"field\":\"three_blue\",\"type\":\"advective_outflow\"}]},\n"
+			"    {\"label\":3,\"name\":\"outlet_b\",\"conditions\":["
+			"{\"field\":\"pressure\",\"type\":\"pressure_traction\",\"value\":0},"
+			"{\"field\":\"three_red\",\"type\":\"advective_outflow\"},"
+			"{\"field\":\"three_blue\",\"type\":\"advective_outflow\"}]}\n"
+			"  ]\n}\n";
+	if (!config) throw std::runtime_error("cannot write schema-v6 3D case");
+}
+
+void WriteSpeciesPort(std::ostream& output, const std::string& id,
+	const std::string& locator_kind, const std::string& locator,
+	const std::string& hydraulic_requirement)
+{
+	output << "{\"id\":\"" << id << "\",\"locator_kind\":\"" << locator_kind
+		<< "\",\"locator\":\"" << locator << "\","
+			"\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\","
+			"\"species_concentration\",\"species_flux\"],\"requires\":["
+		<< hydraulic_requirement
+		<< (hydraulic_requirement.empty() ? "" : ",")
+		<< "\"species_concentration\",\"species_flux\"],"
+			"\"species\":[\"red_logical\",\"blue_logical\"]}";
+}
+
+void WriteSpeciesObservationPort(std::ostream& output, const std::string& id,
+	const std::string& locator_kind, const std::string& locator,
+	bool hydraulic_state = true)
+{
+	output << "{\"id\":\"" << id << "\",\"locator_kind\":\"" << locator_kind
+		<< "\",\"locator\":\"" << locator << "\",\"provides\":[";
+	if (hydraulic_state)
+		output << "\"area\",\"flow_rate\",\"mean_pressure\",";
+	else output << "\"flow_rate\",";
+	output << "\"species_concentration\",\"species_flux\"],\"requires\":[],"
+		"\"species\":[\"red_logical\",\"blue_logical\"]}";
+}
+
+void WriteSpeciesGraph(const fs::path& root, const std::string& database,
+	bool permuted = false)
+{
+	std::ofstream output(root/"simulation_config.json", std::ios::trunc);
+	output << "{\n  \"schema_version\":6,"
+		"\"species\":[{\"id\":\"red_logical\",\"concentration_unit\":\"kg/m^3\"},"
+		"{\"id\":\"blue_logical\",\"concentration_unit\":\"mol/m^3\"}],"
+		"\"time\":{\"dt\":" << Number(kDt) << ",\"steps\":" << kSteps
+		<< "},\"start_domain\":\"source\",\n"
+			"  \"execution\":{\"kind\":\"explicit\","
+			"\"species_routing\":{\"flow_switch_m3_s\":1e-6,"
+			"\"flow_absolute_tolerance_m3_s\":1e-12,\"flow_relative_tolerance\":1e-8},"
+			"\"species_amount_tolerances\":{"
+			"\"red_logical\":{\"absolute_tolerance\":1e-10,\"reference_amount\":1e-5,"
+			"\"relative_tolerance\":1e-6},"
+			"\"blue_logical\":{\"absolute_tolerance\":1e-10,\"reference_amount\":1e-5,"
+			"\"relative_tolerance\":1e-6}}},\n  \"domains\":[\n";
+	const auto one_d = [&](const std::string& id, const std::string& case_directory,
+		bool coupled, bool comma) {
+		output << "    {\"id\":\"" << id << "\",\"dimension\":\"1d\","
+			"\"kind\":\"network_flow\",\"case\":\"" << case_directory << "\","
+			"\"inlet_policy\":\"" << (coupled ? "coupled_root" : "configured_open_loop")
+			<< "\",\"species_bindings\":{\"red_logical\":\"" << id << "_red\","
+			"\"blue_logical\":\"" << id << "_blue\"},\"ports\":[";
+		if (coupled)
+			WriteSpeciesPort(output, "root", "runtime_port", "root", "\"flow_rate\"");
+		else WriteSpeciesObservationPort(output, "root", "runtime_port", "root");
+		output << ',';
+		if (!coupled)
+			WriteSpeciesPort(output, "terminal", "runtime_port", "outlet:2",
+				"\"mean_pressure\"");
+		else WriteSpeciesObservationPort(output, "terminal", "runtime_port", "outlet:2");
+		output << "]}" << (comma ? ",\n" : "\n");
+	};
+	const auto three_d = [&](bool comma) {
+		output << "    {\"id\":\"junction\",\"dimension\":\"3d\","
+			"\"kind\":\"body_fitted_iga_flow\",\"case\":\"junction\",\"database\":\""
+			<< database << "\",\"species_bindings\":{\"red_logical\":\"three_red\","
+			"\"blue_logical\":\"three_blue\"},\"ports\":[";
+		WriteSpeciesPort(output, "inlet", "boundary_label", "1", "\"flow_rate\"");
+		output << ',';
+		WriteSpeciesPort(output, "outlet_a", "boundary_label", "2", "\"mean_pressure\"");
+		output << ',';
+		WriteSpeciesPort(output, "outlet_b", "boundary_label", "3", "\"mean_pressure\"");
+		output << ',';
+		WriteSpeciesObservationPort(output, "wall", "boundary_label", "0", false);
+		output << "]}";
+		output << (comma ? ",\n" : "\n");
+	};
+	if (!permuted) {
+		one_d("source", "species_source", false, true);
+		three_d(true);
+		one_d("leaf_a", "species_leaf_a", true, true);
+		one_d("leaf_b", "species_leaf_b", true, false);
+	} else {
+		one_d("leaf_b", "species_leaf_b", true, true);
+		one_d("leaf_a", "species_leaf_a", true, true);
+		three_d(true);
+		one_d("source", "species_source", false, false);
+	}
+	output << "  ],\n  \"couplings\":[\n";
+	const auto edge = [&](const std::string& id, const std::string& first_domain,
+		const std::string& first_port, const std::string& second_domain,
+		const std::string& second_port, double pressure, bool comma) {
+		output << "    {\"id\":\"" << id << "\",\"a\":{\"domain\":\""
+			<< first_domain << "\",\"port\":\"" << first_port << "\"},"
+			"\"b\":{\"domain\":\"" << second_domain << "\",\"port\":\""
+			<< second_port << "\"},\"mode\":\"pressure_flow\","
+			"\"initial_pressure_pa\":" << Number(pressure)
+			<< ",\"species\":[\"blue_logical\",\"red_logical\"]}"
+			<< (comma ? ",\n" : "\n");
+	};
+	if (!permuted) {
+		edge("edge_in", "source", "terminal", "junction", "inlet", 0.0, true);
+		edge("edge_a", "junction", "outlet_a", "leaf_a", "root", 0.02, true);
+		edge("edge_b", "junction", "outlet_b", "leaf_b", "root", 0.01, false);
+	} else {
+		edge("edge_b", "leaf_b", "root", "junction", "outlet_b", 0.01, true);
+		edge("edge_a", "leaf_a", "root", "junction", "outlet_a", 0.02, true);
+		edge("edge_in", "junction", "inlet", "source", "terminal", 0.0, false);
+	}
+	output << "  ]\n}\n";
+	if (!output) throw std::runtime_error("cannot write schema-v6 graph");
+}
+
 int RunMultidomain(const fs::path& root, const fs::path& output,
-	const std::string& launcher = {}, const std::string& prefix = {})
+	const std::string& launcher = {}, const std::string& prefix = {},
+	bool transport = false)
 {
 	const auto log = root/(output.filename().string()+".log");
-	const std::string linear_solver = launcher.empty()
+	const std::string linear_solver = transport
+		? (launcher.empty() ? " -ksp_type gmres -pc_type lu -ksp_rtol 1e-12"
+			: " -ksp_type gmres -pc_type bjacobi -sub_pc_type lu -ksp_rtol 1e-12")
+		: (launcher.empty()
 		? " -ksp_type preonly -pc_type lu"
-		: " -ksp_type gmres -pc_type bjacobi -sub_pc_type lu -ksp_rtol 1e-12";
+		: " -ksp_type gmres -pc_type bjacobi -sub_pc_type lu -ksp_rtol 1e-12");
 	return std::system((prefix+launcher+"./iga_multidomain_flow --graph-case "+Quote(root)
 		+" --output-dir "+Quote(output)+linear_solver+">"
 		+Quote(log)+" 2>&1").c_str());
@@ -184,6 +414,147 @@ void ValidateMultidomain(const fs::path& output, const std::string& execution)
 	}
 }
 
+void ValidateSpeciesMultidomain(const fs::path& output)
+{
+	if (!fs::is_regular_file(output/"graph_binding_manifest.json"))
+		throw std::runtime_error("schema-v6 completion marker is missing");
+	const std::string marker = ReadFile(output/"graph_binding_manifest.json");
+	for (const auto& text : {"\"schema_version\": 6", "\"species_mode\": true",
+		"\"red_logical\"", "\"blue_logical\"", "\"concentration\":\"kg/m^3\"",
+		"\"integrated_amount\":\"(kg/m^3)*m^3\"",
+		"\"outward_rate\":\"(mol/m^3)*m^3/s\""})
+		if (marker.find(text) == std::string::npos)
+			throw std::runtime_error("schema-v6 species units/marker are incomplete");
+	const auto hydraulic = ReadCsv(output/"species_hydraulic_steps.csv");
+	const auto edges = ReadCsv(output/"species_edge_amounts.csv");
+	const auto domains = ReadCsv(output/"species_domain_accounting.csv");
+	const auto global = ReadCsv(output/"species_global_balance.csv");
+	const auto ports = ReadCsv(output/"species_logical_ports.csv");
+	if (hydraulic.size() != kSteps || edges.size() != 6*kSteps
+		|| domains.size() != 8*kSteps || global.size() != 2*kSteps
+		|| ports.size() != 20*kSteps)
+		throw std::runtime_error("schema-v6 long-form row coverage is invalid");
+	struct ExpectedEdge {
+		const char* edge_id;
+		const char* species_id;
+		const char* first_domain;
+		const char* first_port;
+		const char* second_domain;
+		const char* second_port;
+	};
+	const std::vector<ExpectedEdge> expected_edges{
+		{"edge_a", "blue_logical", "junction", "outlet_a", "leaf_a", "root"},
+		{"edge_a", "red_logical", "junction", "outlet_a", "leaf_a", "root"},
+		{"edge_b", "blue_logical", "junction", "outlet_b", "leaf_b", "root"},
+		{"edge_b", "red_logical", "junction", "outlet_b", "leaf_b", "root"},
+		{"edge_in", "blue_logical", "junction", "inlet", "source", "terminal"},
+		{"edge_in", "red_logical", "junction", "inlet", "source", "terminal"}};
+	for (int step = 0; step < kSteps; ++step)
+		for (std::size_t index = 0; index < expected_edges.size(); ++index) {
+			const auto& row = edges.at(static_cast<std::size_t>(step)*expected_edges.size()+index);
+			const auto& expected = expected_edges[index];
+			if (row.at("edge_id") != expected.edge_id
+				|| row.at("species_id") != expected.species_id
+				|| row.at("first_domain_id") != expected.first_domain
+				|| row.at("first_port_id") != expected.first_port
+				|| row.at("second_domain_id") != expected.second_domain
+				|| row.at("second_port_id") != expected.second_port)
+				throw std::runtime_error("schema-v6 edge/species diagnostics are not canonical");
+			const double amount_scale = std::max(std::abs(Value(row, "first_outward_amount")),
+				std::abs(Value(row, "second_outward_amount")));
+			species_residual_maxima.edge = std::max(species_residual_maxima.edge,
+				std::abs(Value(row, "amount_residual")));
+			if (std::abs(Value(row, "amount_residual")) > DeclaredSpeciesAmountBound(amount_scale))
+				throw std::runtime_error("schema-v6 edge integrated amount gate failed");
+		}
+	for (const auto& row : domains) {
+		const double m0 = Value(row, "M0_amount");
+		const double m1 = Value(row, "M1_amount");
+		const double source = Value(row, "source_amount");
+		const double outward = Value(row, "total_outward_amount");
+		const double recomputed = m1-m0+outward-source;
+		species_residual_maxima.domain = std::max(species_residual_maxima.domain,
+			std::abs(recomputed));
+		if (std::abs(recomputed-Value(row, "recomputed_residual")) > 1.0e-18
+			|| std::abs(recomputed) > DeclaredSpeciesAmountBound(
+				std::max({std::abs(m1-m0), std::abs(source), std::abs(outward)})))
+			throw std::runtime_error("schema-v6 domain integrated amount gate failed");
+	}
+	for (const auto& row : global) {
+		const double residual = Value(row, "M1_amount")-Value(row, "M0_amount")
+			+Value(row, "outward_amount")-Value(row, "source_amount");
+		species_residual_maxima.global = std::max(species_residual_maxima.global,
+			std::abs(residual));
+		if (std::abs(residual-Value(row, "global_residual")) > 1.0e-18
+			|| std::abs(residual) > DeclaredSpeciesAmountBound(
+				Value(row, "gross_activity")))
+			throw std::runtime_error("schema-v6 global integrated amount gate failed");
+		if (!(Value(row, "gross_activity") > 0.0))
+			throw std::runtime_error("schema-v6 global gross activity is not positive");
+	}
+	const auto concentration = [&](const std::string& domain, const std::string& port,
+		const std::string& species, int step) {
+		for (const auto& row : ports)
+			if (row.at("domain_id") == domain && row.at("port_id") == port
+				&& row.at("species_id") == species
+				&& static_cast<int>(Value(row, "step")) == step)
+				return Value(row, "concentration");
+		throw std::runtime_error("schema-v6 logical transport port is missing");
+	};
+	for (int step = 1; step <= kSteps; ++step)
+		for (const auto& species : {std::make_pair("red_logical", 1.25),
+			std::make_pair("blue_logical", 3.5)}) {
+			const double source = concentration("source", "terminal", species.first, step);
+			for (const auto& receiver : {std::make_pair("junction", "inlet"),
+				std::make_pair("leaf_a", "root"), std::make_pair("leaf_b", "root")})
+				if (std::abs(concentration(receiver.first, receiver.second, species.first, step)
+					-source) > 1.0e-10)
+					throw std::runtime_error("schema-v6 receiver concentration differs from donor");
+		}
+	for (const auto& domain : domains) {
+		double end_step_rate = 0.0;
+		for (const auto& port : ports)
+			if (port.at("domain_id") == domain.at("domain_id")
+				&& port.at("species_id") == domain.at("species_id")
+				&& Value(port, "step") == Value(domain, "step"))
+				end_step_rate += Value(port, "end_step_outward_species_flux");
+		if (std::abs(kDt*end_step_rate-Value(domain, "total_outward_amount")) > 1.0e-10)
+			throw std::runtime_error(
+				"schema-v6 constant-state rate/amount diagnostic is inconsistent");
+	}
+	for (const auto& species : {"red_logical", "blue_logical"})
+		for (int step = 1; step <= kSteps; ++step) {
+			double source_root_rate = 0.0;
+			double leaf_terminal_rate = 0.0;
+			double wall_rate = 0.0;
+			bool source_root_seen = false;
+			bool wall_seen = false;
+			int leaf_terminal_count = 0;
+			for (const auto& row : ports) {
+				if (row.at("species_id") != species
+					|| static_cast<int>(Value(row, "step")) != step) continue;
+				if (row.at("domain_id") == "source" && row.at("port_id") == "root") {
+					source_root_seen = true;
+					source_root_rate = Value(row, "end_step_outward_species_flux");
+				}
+				if ((row.at("domain_id") == "leaf_a" || row.at("domain_id") == "leaf_b")
+					&& row.at("port_id") == "terminal") {
+					++leaf_terminal_count;
+					leaf_terminal_rate += Value(row, "end_step_outward_species_flux");
+				}
+				if (row.at("domain_id") == "junction" && row.at("port_id") == "wall") {
+					wall_seen = true;
+					wall_rate = Value(row, "end_step_outward_species_flux");
+				}
+			}
+			if (!source_root_seen || leaf_terminal_count != 2
+				|| !wall_seen || !(source_root_rate < 0.0) || !(leaf_terminal_rate > 0.0)
+				|| std::abs(wall_rate) > 1.0e-10)
+				throw std::runtime_error(
+					"schema-v6 external species observation ports are incomplete or unsigned");
+		}
+}
+
 } // namespace
 
 int main()
@@ -192,7 +563,8 @@ int main()
 		const auto root = fs::temp_directory_path()
 			/("tubularflowiga_multidomain_"+std::to_string(static_cast<long long>(getpid())));
 		for (const auto& directory : {"three_a", "three_b", "source", "bridge",
-			"leaf_a", "leaf_b", "leaf_c"})
+			"leaf_a", "leaf_b", "leaf_c", "junction", "species_source",
+			"species_leaf_a", "species_leaf_b"})
 			fs::create_directories(root/directory);
 		WriteThreeDCase(root/"three_a");
 		WriteThreeDCase(root/"three_b");
@@ -262,8 +634,129 @@ int main()
 						std::abs(Value(two[row], name))}))
 					throw std::runtime_error("multi-island MPI numerical mismatch");
 		}
+		WriteOneDTransportCase(root/"species_source", 1.0e-3,
+			"source_red", "source_blue");
+		WriteOneDTransportCase(root/"species_leaf_a", 6.0e-4,
+			"leaf_a_red", "leaf_a_blue");
+		WriteOneDTransportCase(root/"species_leaf_b", 4.0e-4,
+			"leaf_b_red", "leaf_b_blue");
+		WriteThreeDTransportCase(root/"junction");
+		WriteDatabase(root/"junction.ntiga", 1);
+		WriteSpeciesGraph(root, "junction.ntiga");
+		if (RunBifurcation(root, root/"species_bifurcation_rejected") == 0
+			|| fs::exists(root/"species_bifurcation_rejected/graph_binding_manifest.json"))
+			throw std::runtime_error("legacy bifurcation entry accepted schema-v6 graph");
+		if (RunMultidomain(root, root/"species_one", {}, {}, true) != 0)
+			throw std::runtime_error("one-rank schema-v6 multidomain run failed");
+		ValidateSpeciesMultidomain(root/"species_one");
+		WriteSpeciesGraph(root, "junction.ntiga", true);
+		if (RunMultidomain(root, root/"species_permuted", {}, {}, true) != 0)
+			throw std::runtime_error("permuted schema-v6 multidomain run failed");
+		ValidateSpeciesMultidomain(root/"species_permuted");
+		const auto species_one = ReadCsv(root/"species_one/species_edge_amounts.csv");
+		const auto species_permuted = ReadCsv(root/"species_permuted/species_edge_amounts.csv");
+		if (species_one.size() != species_permuted.size())
+			throw std::runtime_error("permuted schema-v6 edge/species row count changed");
+		for (std::size_t row = 0; row < species_one.size(); ++row) {
+			if (species_one[row].at("edge_id") != species_permuted[row].at("edge_id")
+				|| species_one[row].at("species_id") != species_permuted[row].at("species_id")
+				|| species_one[row].at("first_domain_id")
+					!= species_permuted[row].at("first_domain_id")
+				|| species_one[row].at("first_port_id")
+					!= species_permuted[row].at("first_port_id")
+				|| species_one[row].at("second_domain_id")
+					!= species_permuted[row].at("second_domain_id")
+				|| species_one[row].at("second_port_id")
+					!= species_permuted[row].at("second_port_id")
+				|| species_one[row].at("donor") != species_permuted[row].at("donor"))
+				throw std::runtime_error("permuted schema-v6 edge/species ordering changed");
+			for (const auto& name : {"first_outward_amount", "second_outward_amount",
+				"amount_residual"})
+				if (std::abs(Value(species_one[row], name)-Value(species_permuted[row], name))
+					> 1.0e-10)
+					throw std::runtime_error("permuted schema-v6 amounts changed");
+		}
+		WriteDatabase(root/"junction_two.ntiga", 2);
+		WriteSpeciesGraph(root, "junction_two.ntiga");
+		if (RunMultidomain(root, root/"species_failed", "mpiexec -np 2 ",
+			"TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP=1 ", true) == 0
+			|| fs::exists(root/"species_failed")
+			|| fs::exists(root/"species_failed/graph_binding_manifest.json"))
+			throw std::runtime_error("schema-v6 failure published accepted output");
+		RequireLogContains(root/"species_failed.log",
+			"injected bifurcation failure before commit");
+		{
+			std::string invalid = ReadFile(root/"simulation_config.json");
+			const auto binding = invalid.find("\"source_red\"");
+			if (binding == std::string::npos)
+				throw std::runtime_error("schema-v6 source binding is missing from fixture");
+			invalid.replace(binding, std::string("\"source_red\"").size(),
+				"\"missing_native\"");
+			std::ofstream rewritten(root/"simulation_config.json", std::ios::trunc);
+			rewritten << invalid;
+		}
+		if (RunMultidomain(root, root/"species_wrong_binding", "mpiexec -np 2 ", {}, true) == 0
+			|| fs::exists(root/"species_wrong_binding/graph_binding_manifest.json"))
+			throw std::runtime_error("schema-v6 wrong species binding was accepted");
+		RequireLogContains(root/"species_wrong_binding.log",
+			"schema-v6 1D species binding names no transported native field");
+		WriteOneDTransportCase(root/"species_source", 1.0e-3,
+			"source_red", "source_blue");
+		{
+			std::string invalid = ReadFile(root/"species_source/simulation_config.json");
+			const auto mode = invalid.find("\"mode\":\"flow_only\"");
+			if (mode == std::string::npos)
+				throw std::runtime_error("schema-v6 1D coupling fixture cannot be rewritten");
+			invalid.replace(mode, std::string("\"mode\":\"flow_only\"").size(),
+				"\"mode\":\"vca_replay\"");
+			const auto scheme = invalid.find("\"scheme\":\"explicit_staggered\",");
+			if (scheme == std::string::npos)
+				throw std::runtime_error("schema-v6 1D coupling fixture cannot be rewritten");
+			invalid.replace(scheme, std::string("\"scheme\":\"explicit_staggered\",").size(),
+				"\"scheme\":\"explicit_staggered\",\"replay_file\":\"replay.json\",");
+			std::ofstream rewritten(root/"species_source/simulation_config.json",
+				std::ios::trunc);
+			rewritten << invalid;
+		}
+		WriteSpeciesGraph(root, "junction_two.ntiga");
+		if (RunMultidomain(root, root/"species_nonflow_one_d", "mpiexec -np 2 ", {}, true)
+			== 0 || fs::exists(root/"species_nonflow_one_d/graph_binding_manifest.json"))
+			throw std::runtime_error("schema-v6 non-flow-only 1D coupling was accepted");
+		RequireLogContains(root/"species_nonflow_one_d.log",
+			"schema-v6 multidomain transport requires one 1D flow system, one transport system, flow_only coupling");
+		WriteOneDTransportCase(root/"species_source", 1.0e-3,
+			"source_red", "source_blue");
+		WriteSpeciesGraph(root, "junction_two.ntiga");
+		WriteThreeDTransportCase(root/"junction", false);
+		if (RunMultidomain(root, root/"species_bad_velocity", "mpiexec -np 2 ", {}, true) == 0
+			|| fs::exists(root/"species_bad_velocity/graph_binding_manifest.json"))
+			throw std::runtime_error("schema-v6 non-prescribed transport velocity was accepted");
+		RequireLogContains(root/"species_bad_velocity.log",
+			"schema-v6 multidomain transport requires prescribed 3D transport velocity");
+		WriteThreeDTransportCase(root/"junction");
+		WriteSpeciesGraph(root, "junction_two.ntiga");
+		if (RunMultidomain(root, root/"species_two", "mpiexec -np 2 ", {}, true) != 0)
+			throw std::runtime_error("two-rank schema-v6 multidomain run failed");
+		ValidateSpeciesMultidomain(root/"species_two");
+		const auto species_two = ReadCsv(root/"species_two/species_edge_amounts.csv");
+		if (species_one.size() != species_two.size())
+			throw std::runtime_error("schema-v6 MPI edge/species row count changed");
+		for (std::size_t row = 0; row < species_one.size(); ++row) {
+			if (species_one[row].at("edge_id") != species_two[row].at("edge_id")
+				|| species_one[row].at("species_id") != species_two[row].at("species_id"))
+				throw std::runtime_error("schema-v6 MPI edge/species ordering changed");
+			for (const auto& name : {"first_outward_amount", "second_outward_amount",
+				"amount_residual"})
+				if (std::abs(Value(species_one[row], name)-Value(species_two[row], name))
+					> 1.0e-9)
+					throw std::runtime_error("schema-v6 MPI amounts changed");
+		}
 		fs::remove_all(root);
-		std::cout << "multidomain flow smoke test passed\n";
+		std::cout << std::setprecision(17)
+			<< "multidomain flow smoke test passed species_max_edge_residual="
+			<< species_residual_maxima.edge << " species_max_domain_residual="
+			<< species_residual_maxima.domain << " species_max_global_residual="
+			<< species_residual_maxima.global << '\n';
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -75,16 +76,32 @@ private:
 // The species-aware adapter owns the staged coupling contract.  The original
 // OneDFlowDomainAdapter remains flow-only so established callers continue to
 // use OneDFlowRuntime::SolveTrial without an altered numerical route.
+struct OneDFlowTransportDomainControls {
+	std::optional<double> species_flow_epsilon_m3_s;
+
+	void Validate() const
+	{
+		if (species_flow_epsilon_m3_s
+			&& (*species_flow_epsilon_m3_s < 0.0
+				|| !std::isfinite(*species_flow_epsilon_m3_s)))
+			throw std::runtime_error(
+				"1D staged species flow epsilon must be finite and nonnegative");
+	}
+};
+
 class OneDFlowTransportDomainAdapter : public CoupledDomainRuntime,
 	public StagedFlowTransportDomainRuntime {
 public:
 	OneDFlowTransportDomainAdapter(std::string domain_id, OneDFlowRuntime& runtime,
 		std::vector<CouplingPort> ports, OneDInletPolicy inlet_policy,
-		std::map<std::string, std::string> species_bindings)
+		std::map<std::string, std::string> species_bindings,
+		OneDFlowTransportDomainControls controls = {})
 		: domain_id_(std::move(domain_id)), runtime_(runtime), ports_(std::move(ports)),
-		  inlet_policy_(inlet_policy), species_bindings_(std::move(species_bindings))
+		  inlet_policy_(inlet_policy), species_bindings_(std::move(species_bindings)),
+		  controls_(std::move(controls))
 	{
 		ValidateOneDFlowDomainMetadata(domain_id_, ports_, inlet_policy_);
+		controls_.Validate();
 		std::set<std::string> native_species;
 		for (const auto& binding : species_bindings_) {
 			if (binding.first.empty() || binding.second.empty()
@@ -250,13 +267,16 @@ public:
 		try {
 			std::map<std::string, double> root;
 			std::map<int, std::map<std::string, double>> outlets;
+			OneDStagedRootTransportOwnership root_ownership
+				= OneDStagedRootTransportOwnership::Legacy;
 			for (const auto& port : ports_) {
-				if (port.species.empty()) continue;
+				if (port.species.empty()
+					|| !port.requires.count(PortQuantity::SpeciesConcentration)) continue;
 				const auto found = concentration_inputs_.find(port.id);
 				const bool supplied = found != concentration_inputs_.end();
 				const auto flow = GetHydraulicPortState(port.id).outward_flow_m3_s;
 				if (!flow) throw std::runtime_error("1D staged species port omitted outward flow");
-				const double epsilon = runtime_.Configuration().coupling.flow_epsilon_m3_s;
+				const double epsilon = SpeciesFlowEpsilon();
 				const bool configured_root = inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop
 					&& port.locator == "root";
 				if (configured_root && supplied)
@@ -269,6 +289,11 @@ public:
 				if (*flow > epsilon && supplied)
 					throw std::runtime_error("1D outward species port must not impose concentration");
 				ValidateFrameOwnership(port, receiver, epsilon);
+				if (port.locator == "root") {
+					root_ownership = receiver
+						? OneDStagedRootTransportOwnership::BoundaryConcentration
+						: OneDStagedRootTransportOwnership::InteriorDonor;
+				}
 				if (!supplied) continue;
 				std::map<std::string, double> native;
 				for (const auto& logical : port.species)
@@ -277,7 +302,7 @@ public:
 				else outlets.emplace(NativeOutletNode(port), std::move(native));
 			}
 			transport_trial_succeeded_ = false;
-			runtime_.SolveStagedTransportTrial(root, outlets);
+			runtime_.SolveStagedTransportTrial(root, outlets, root_ownership);
 			transport_trial_succeeded_ = true;
 		} catch (...) {
 			// Boundary data belongs to one scalar attempt.  Whether rejection
@@ -367,13 +392,39 @@ private:
 	void ValidateFrameOwnership(const CouplingPort& port, bool receiver,
 		double epsilon) const
 	{
-		for (const auto& frame : runtime_.HydraulicFrames()) {
+		const auto& frames = runtime_.HydraulicFrames();
+		for (std::size_t index = 0; index < frames.size(); ++index) {
+			const auto& frame = frames[index];
+			if (port.locator == "root") {
+				bool materially_inward = false;
+				bool materially_outward = false;
+				for (const double native_flow : runtime_.HydraulicFrameRootBranchNativeFlows(index)) {
+					materially_inward = materially_inward || native_flow > epsilon;
+					materially_outward = materially_outward || native_flow < -epsilon;
+				}
+				if (materially_inward && materially_outward)
+					throw std::runtime_error(
+						"1D staged root has mixed material branch directions within a hydraulic frame");
+				if (receiver && materially_outward)
+					throw std::runtime_error(
+						"1D staged root branch changes from receiver to donor within hydraulic frames");
+				if (!receiver && materially_inward)
+					throw std::runtime_error(
+						"1D staged root branch changes from donor to receiver within hydraulic frames");
+				continue;
+			}
 			const double flow = FrameOutwardFlow(port, frame);
 			if (receiver && flow > epsilon)
 				throw std::runtime_error("1D staged port changes from receiver to donor within hydraulic frames");
 			if (!receiver && flow < -epsilon)
 				throw std::runtime_error("1D staged port changes from donor to receiver within hydraulic frames");
 		}
+	}
+
+	double SpeciesFlowEpsilon() const
+	{
+		return controls_.species_flow_epsilon_m3_s.value_or(
+			runtime_.Configuration().coupling.flow_epsilon_m3_s);
 	}
 
 	void RequireOpen(const char* operation) const
@@ -436,6 +487,7 @@ private:
 	std::vector<CouplingPort> ports_;
 	OneDInletPolicy inlet_policy_;
 	std::map<std::string, std::string> species_bindings_;
+	OneDFlowTransportDomainControls controls_;
 	DomainStepContext step_;
 	std::map<std::string, PortBoundaryData> hydraulic_inputs_;
 	std::map<std::string, std::map<std::string, double>> concentration_inputs_;

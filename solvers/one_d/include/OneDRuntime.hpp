@@ -368,7 +368,9 @@ public:
 	}
 
 	void SolveStagedTransportTrial(const std::map<std::string, double>& root_concentrations,
-		const std::map<int, std::map<std::string, double>>& outlet_concentrations)
+		const std::map<int, std::map<std::string, double>>& outlet_concentrations,
+		OneDStagedRootTransportOwnership root_ownership
+			= OneDStagedRootTransportOwnership::Legacy)
 	{
 		RequirePhase(Phase::HydraulicSolved, "SolveStagedTransportTrial");
 		if (!trial_solve_succeeded_ || hydraulic_frames_.empty())
@@ -386,7 +388,7 @@ public:
 				for (auto& transport : transports_)
 					AdvanceOneDTransport(configuration_, network_, frame.post_flow, transport,
 						case_directory_, frame.start_time_s, frame.dt_s, &frame.pre_flow_area,
-						&frame_root_concentrations, &outlet_concentrations);
+						&frame_root_concentrations, &outlet_concentrations, root_ownership);
 			}
 			for (auto& transport : transports_)
 				for (auto& species : transport.species)
@@ -394,11 +396,13 @@ public:
 			last_inlet_ = hydraulic_frames_.back().inlet;
 			if (trial_inlet_mode_ != TrialInletMode::ConfiguredOpenLoop)
 				last_inlet_.species = root_concentrations;
+			staged_root_transport_ownership_ = root_ownership;
 			phase_ = Phase::TrialSolved;
 		} catch (...) {
 			// A rejected scalar trial must leave the accepted hydraulic frames
 			// reusable for a changed concentration without another flow solve.
 			transports_ = committed_.transports;
+			staged_root_transport_ownership_ = OneDStagedRootTransportOwnership::Legacy;
 			phase_ = Phase::HydraulicSolved;
 			throw;
 		}
@@ -414,6 +418,7 @@ public:
 		trial_outlet_concentrations_.clear();
 		trial_inlet_mode_ = TrialInletMode::None;
 		trial_solve_succeeded_ = false;
+		staged_root_transport_ownership_ = OneDStagedRootTransportOwnership::Legacy;
 		phase_ = Phase::TrialOpen;
 	}
 
@@ -422,6 +427,7 @@ public:
 		RequirePhase(Phase::TrialSolved, "RollbackStagedTransportTrial");
 		transports_ = committed_.transports;
 		last_inlet_ = hydraulic_frames_.back().inlet;
+		staged_root_transport_ownership_ = OneDStagedRootTransportOwnership::Legacy;
 		phase_ = Phase::HydraulicSolved;
 	}
 
@@ -430,6 +436,7 @@ public:
 		RequirePhase(Phase::TrialSolved, "RollbackTrial");
 		RestoreCommitted();
 		trial_solve_succeeded_ = false;
+		staged_root_transport_ownership_ = OneDStagedRootTransportOwnership::Legacy;
 		phase_ = Phase::TrialOpen;
 	}
 
@@ -497,8 +504,12 @@ public:
 				double concentration = species.concentration.at(cell);
 				bool root_concentration_supplied = false;
 				if (root) {
+					const bool explicit_interior_donor = phase_ == Phase::TrialSolved
+						&& staged_root_transport_ownership_
+							== OneDStagedRootTransportOwnership::InteriorDonor;
 					const auto boundary = last_inlet_.species.find(species.definition.field);
-					root_concentration_supplied = boundary != last_inlet_.species.end();
+					root_concentration_supplied = !explicit_interior_donor
+						&& boundary != last_inlet_.species.end();
 					double native_inward_flow = 0.0;
 					double native_outward_flow = 0.0;
 					double outward_weighted_concentration = 0.0;
@@ -507,7 +518,12 @@ public:
 							static_cast<std::size_t>(root_segment_index));
 						const auto root_cell = static_cast<std::size_t>(root_segment.cell_offset);
 						const double root_flow = flow_state_.flow.at(root_cell);
-						if (root_flow > configuration_.coupling.flow_epsilon_m3_s)
+						if (explicit_interior_donor) {
+							const double weight = std::abs(root_flow);
+							native_outward_flow += weight;
+							outward_weighted_concentration += weight
+								*species.concentration.at(root_cell);
+						} else if (root_flow > configuration_.coupling.flow_epsilon_m3_s)
 							native_inward_flow += root_flow;
 						else if (root_flow < -configuration_.coupling.flow_epsilon_m3_s) {
 							native_outward_flow -= root_flow;
@@ -515,10 +531,13 @@ public:
 								*species.concentration.at(root_cell);
 						}
 					}
-					if (native_inward_flow > 0.0 && native_outward_flow > 0.0)
+					if (!explicit_interior_donor && native_inward_flow > 0.0 && native_outward_flow > 0.0)
 						throw std::runtime_error(
 							"1d aggregate root port cannot report mixed-direction branch flow");
-					if (!root_concentration_supplied && native_outward_flow > 0.0)
+					if (explicit_interior_donor) {
+						if (native_outward_flow > 0.0)
+							concentration = outward_weighted_concentration/native_outward_flow;
+					} else if (!root_concentration_supplied && native_outward_flow > 0.0)
 						concentration = outward_weighted_concentration/native_outward_flow;
 					else if (root_concentration_supplied) concentration = boundary->second;
 					else concentration = species.inlet_value;
@@ -539,8 +558,12 @@ public:
 							static_cast<std::size_t>(root_segment_index));
 						const auto root_cell = static_cast<std::size_t>(root_segment.cell_offset);
 						const double root_flow = flow_state_.flow.at(root_cell);
-						const double exterior_concentration = !root_concentration_supplied
-							&& root_flow < -configuration_.coupling.flow_epsilon_m3_s
+						const bool interior_donor = (phase_ == Phase::TrialSolved
+							&& staged_root_transport_ownership_
+								== OneDStagedRootTransportOwnership::InteriorDonor)
+							|| (!root_concentration_supplied
+								&& root_flow < -configuration_.coupling.flow_epsilon_m3_s);
+						const double exterior_concentration = interior_donor
 							? species.concentration.at(root_cell) : boundary_concentration;
 						native_flux += OneDSpeciesFaceFlux(root_flow,
 							exterior_concentration, species.concentration.at(root_cell),
@@ -590,6 +613,19 @@ public:
 	const TrialDiagnostics& Diagnostics() const { return trial_diagnostics_; }
 	const std::vector<HydraulicFrame>& HydraulicFrames() const { return hydraulic_frames_; }
 
+	std::vector<double> HydraulicFrameRootBranchNativeFlows(std::size_t frame_index) const
+	{
+		if (frame_index >= hydraulic_frames_.size())
+			throw std::runtime_error("1d hydraulic frame index is out of range");
+		std::vector<double> result;
+		for (const int segment_index : OneDSegmentsOutOfNode(network_, network_.root)) {
+			const auto& segment = network_.segments.at(static_cast<std::size_t>(segment_index));
+			result.push_back(hydraulic_frames_[frame_index].post_flow.flow.at(
+				static_cast<std::size_t>(segment.cell_offset)));
+		}
+		return result;
+	}
+
 	static PortOrientation RootOrientation() { return {-1}; }
 
 private:
@@ -638,6 +674,7 @@ private:
 		trial_configured_open_loop_schedule_.clear();
 		hydraulic_frames_.clear();
 		trial_solve_succeeded_ = false;
+		staged_root_transport_ownership_ = OneDStagedRootTransportOwnership::Legacy;
 	}
 
 	int ConfiguredSubsteps(double macro_dt_s) const
@@ -693,6 +730,8 @@ private:
 	std::map<int, double> trial_outlet_pressure_overrides_;
 	std::map<int, std::map<std::string, double>> trial_outlet_concentrations_;
 	TrialInletMode trial_inlet_mode_ = TrialInletMode::None;
+	OneDStagedRootTransportOwnership staged_root_transport_ownership_
+		= OneDStagedRootTransportOwnership::Legacy;
 	bool trial_solve_succeeded_ = false;
 	TrialDiagnostics trial_diagnostics_;
 	double trial_time_s_ = 0.0;

@@ -371,7 +371,8 @@ private:
 	void ConfigureTransportPort(SimulationConfiguration& configuration,
 		const CouplingPort& port) const
 	{
-		if (port.species.empty()) return;
+		if (port.species.empty()
+			|| !port.requires.count(PortQuantity::SpeciesConcentration)) return;
 		const auto found = concentration_inputs_.find(port.id);
 		const bool has_concentration = found != concentration_inputs_.end();
 		const auto flow = GetHydraulicPortState(port.id);

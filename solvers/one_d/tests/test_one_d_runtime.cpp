@@ -705,6 +705,13 @@ int main()
 			iga::ResolveOneDInlet(staged_configuration), directory);
 		staged_native.InitializeOpenLoop(1.0e-9);
 		legacy_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainControls invalid_species_controls;
+		invalid_species_controls.species_flow_epsilon_m3_s = -1.0;
+		RequireRejected([&] {
+			iga::OneDFlowTransportDomainAdapter invalid("staged", staged_native,
+				{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
+				{{"logical_signal", "signal"}}, invalid_species_controls);
+		});
 		iga::OneDFlowTransportDomainAdapter staged("staged", staged_native,
 			{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
 			{{"logical_signal", "signal"}});
@@ -887,6 +894,156 @@ int main()
 		assert(reversed.GetTransportPortState("outlet-logical").outward_species_flux
 			.at("logical_signal") < -4.0e-9);
 		reversed.AbortStep();
+
+		// Graph ownership is authoritative for staged root replay.  In particular,
+		// a root flow in the gap between graph and native epsilons is a donor here;
+		// its FV boundary and reported donor concentration must use the interior
+		// trace, not the configured concentration (1.0).
+		auto ownership_configuration = staged_configuration;
+		ownership_configuration.coupling.flow_epsilon_m3_s = 1.0e-8;
+		for (auto& field : ownership_configuration.fields)
+			if (field.name == "signal") field.initial_value = 4.0;
+		iga::OneDFlowRuntime ownership_native(ownership_configuration, flow, network,
+			iga::ResolveOneDInlet(ownership_configuration), directory);
+		iga::OneDFlowRuntime legacy_ownership_native(ownership_configuration, flow, network,
+			iga::ResolveOneDInlet(ownership_configuration), directory);
+		ownership_native.InitializeOpenLoop(1.0e-9);
+		legacy_ownership_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainControls graph_ownership_controls;
+		graph_ownership_controls.species_flow_epsilon_m3_s = 1.0e-12;
+		iga::OneDFlowTransportDomainAdapter ownership_adapter("staged", ownership_native,
+			{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
+			{{"logical_signal", "signal"}}, graph_ownership_controls);
+		ownership_adapter.BeginStep({0, 0.0, ownership_configuration.time.dt});
+		iga::PortBoundaryData ownership_root;
+		ownership_root.time_s = ownership_configuration.time.dt;
+		ownership_root.outward_flow_m3_s = 5.0e-9;
+		iga::PortBoundaryData ownership_outlet;
+		ownership_outlet.time_s = ownership_root.time_s;
+		ownership_outlet.mean_pressure_pa = 0.0;
+		ownership_adapter.SetPortInput("root-logical", ownership_root);
+		ownership_adapter.SetPortInput("outlet-logical", ownership_outlet);
+		ownership_adapter.SolveHydraulicTrial();
+		assert(*ownership_adapter.GetHydraulicPortState("root-logical").outward_flow_m3_s
+			> *graph_ownership_controls.species_flow_epsilon_m3_s
+			&& *ownership_adapter.GetHydraulicPortState("root-logical").outward_flow_m3_s
+			< ownership_configuration.coupling.flow_epsilon_m3_s);
+		ownership_adapter.SetTransportConcentration("outlet-logical", ownership_root.time_s,
+			{{"logical_signal", 7.0}});
+		ownership_adapter.SolveTransportTrial();
+		const auto ownership_report = ownership_adapter.GetTransportPortState("root-logical");
+		const auto ownership_concentration = ownership_native.Transports().front().species.front().concentration;
+		assert(Close(ownership_report.concentration.at("logical_signal"),
+			ownership_concentration.front()));
+		assert(!Close(ownership_report.concentration.at("logical_signal"), 1.0));
+		const auto ownership_flux = ownership_report.outward_species_flux.at("logical_signal");
+
+		legacy_ownership_native.BeginStep(0.0, ownership_configuration.time.dt);
+		iga::VascularInletState legacy_ownership_inlet;
+		legacy_ownership_inlet.time_s = ownership_root.time_s;
+		legacy_ownership_inlet.has_flow = true;
+		legacy_ownership_inlet.flow_m3_s = -5.0e-9;
+		legacy_ownership_native.SetCoupledInlet(legacy_ownership_inlet);
+		legacy_ownership_native.SetPortInput("outlet:2", ownership_outlet);
+		legacy_ownership_native.SolveHydraulicTrial();
+		legacy_ownership_native.SolveStagedTransportTrial({}, {{1, {{"signal", 7.0}}}});
+		assert(ownership_native.Transports().front().species.front().concentration
+			!= legacy_ownership_native.Transports().front().species.front().concentration);
+		assert(!Close(ownership_flux,
+			legacy_ownership_native.GetPortState("root").outward_species_flux.at("signal")));
+
+		// Transport rollback retains the accepted flow frames and exactly replays
+		// the interior-donor root state when the receiver map is supplied again.
+		const auto ownership_flow = ownership_native.FlowState().flow;
+		ownership_adapter.RollbackTransportTrial();
+		assert(ownership_native.FlowState().flow == ownership_flow);
+		ownership_adapter.SetTransportConcentration("outlet-logical", ownership_root.time_s,
+			{{"logical_signal", 7.0}});
+		ownership_adapter.SolveTransportTrial();
+		assert(ownership_native.FlowState().flow == ownership_flow);
+		assert(ownership_native.Transports().front().species.front().concentration
+			== ownership_concentration);
+		assert(Close(ownership_adapter.GetTransportPortState("root-logical")
+			.outward_species_flux.at("logical_signal"), ownership_flux));
+		ownership_adapter.AbortStep();
+
+		// A near-zero donor selected by hysteresis has no imposed map; its root
+		// boundary still must be the interior trace even if native epsilon differs.
+		iga::OneDFlowRuntime hysteresis_native(ownership_configuration, flow, network,
+			iga::ResolveOneDInlet(ownership_configuration), directory);
+		hysteresis_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainControls hysteresis_controls;
+		hysteresis_controls.species_flow_epsilon_m3_s = 1.0e-6;
+		iga::OneDFlowTransportDomainAdapter hysteresis_adapter("staged", hysteresis_native,
+			{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
+			{{"logical_signal", "signal"}}, hysteresis_controls);
+		hysteresis_adapter.BeginStep({0, 0.0, ownership_configuration.time.dt});
+		hysteresis_adapter.SetPortInput("root-logical", ownership_root);
+		hysteresis_adapter.SetPortInput("outlet-logical", ownership_outlet);
+		hysteresis_adapter.SolveHydraulicTrial();
+		hysteresis_adapter.SetTransportConcentration("outlet-logical", ownership_root.time_s,
+			{{"logical_signal", 7.0}});
+		hysteresis_adapter.SolveTransportTrial();
+		assert(Close(hysteresis_adapter.GetTransportPortState("root-logical").concentration
+			.at("logical_signal"), hysteresis_native.Transports().front().species.front()
+			.concentration.front()));
+		hysteresis_adapter.AbortStep();
+
+		// Aggregate inlet flow cannot hide opposing immediate root branches.  Both
+		// branch magnitudes are below the deliberately large native epsilon but
+		// material under the graph ownership switch, so scalar replay must reject
+		// before it mutates the committed-species image.
+		auto mixed_configuration = ownership_configuration;
+		mixed_configuration.coupling.flow_epsilon_m3_s = 1.0e-6;
+		auto mixed_network = iga::ReadOneDNetwork(directory/"root-bifurcation.swc", 1.0,
+			1, flow.dynamic_viscosity);
+		iga::OneDFlowRuntime mixed_native(mixed_configuration, flow, mixed_network,
+			iga::ResolveOneDInlet(mixed_configuration), directory);
+		mixed_native.InitializeOpenLoop(1.0e-9);
+		auto branch_two = outlet;
+		branch_two.id = "branch-two";
+		branch_two.locator = "outlet:2";
+		auto branch_three = outlet;
+		branch_three.id = "branch-three";
+		branch_three.locator = "outlet:3";
+		iga::OneDFlowTransportDomainAdapter mixed_adapter("staged", mixed_native,
+			{root, branch_two, branch_three}, iga::OneDInletPolicy::CoupledRoot,
+			{{"logical_signal", "signal"}}, graph_ownership_controls);
+		const auto mixed_committed_flow = mixed_native.FlowState();
+		const auto mixed_committed_species = mixed_native.Transports();
+		mixed_adapter.BeginStep({0, 0.0, mixed_configuration.time.dt});
+		iga::PortBoundaryData mixed_root;
+		mixed_root.time_s = mixed_configuration.time.dt;
+		mixed_root.outward_flow_m3_s = 0.0;
+		iga::PortBoundaryData mixed_two;
+		mixed_two.time_s = mixed_root.time_s;
+		mixed_two.mean_pressure_pa = 0.0;
+		iga::PortBoundaryData mixed_three = mixed_two;
+		mixed_three.mean_pressure_pa = 1.0;
+		mixed_adapter.SetPortInput("root-logical", mixed_root);
+		mixed_adapter.SetPortInput("branch-two", mixed_two);
+		mixed_adapter.SetPortInput("branch-three", mixed_three);
+		mixed_adapter.SolveHydraulicTrial();
+		const auto mixed_branches = mixed_native.HydraulicFrameRootBranchNativeFlows(0);
+		assert(mixed_branches.size() == 2
+			&& ((mixed_branches[0] > *graph_ownership_controls.species_flow_epsilon_m3_s
+				&& mixed_branches[1] < -*graph_ownership_controls.species_flow_epsilon_m3_s)
+				|| (mixed_branches[1] > *graph_ownership_controls.species_flow_epsilon_m3_s
+					&& mixed_branches[0] < -*graph_ownership_controls.species_flow_epsilon_m3_s)));
+		RequireRejected([&mixed_adapter] { mixed_adapter.SolveTransportTrial(); });
+		assert(mixed_native.CurrentPhase() == iga::OneDFlowRuntime::Phase::HydraulicSolved);
+		assert(mixed_native.Transports().front().species.front().concentration
+			== mixed_committed_species.front().species.front().concentration);
+		// A retry against the fixed hydraulic frames remains a clean rejection,
+		// after which hydraulic rollback and abort restore the exact committed image.
+		RequireRejected([&mixed_adapter] { mixed_adapter.SolveTransportTrial(); });
+		mixed_adapter.RollbackHydraulicTrial();
+		mixed_adapter.AbortStep();
+		assert(mixed_native.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		assert(mixed_native.FlowState().area == mixed_committed_flow.area
+			&& mixed_native.FlowState().flow == mixed_committed_flow.flow);
+		assert(mixed_native.Transports().front().species.front().concentration
+			== mixed_committed_species.front().species.front().concentration);
 
 		auto vaso_configuration = staged_configuration;
 		vaso_configuration.physiology.vasodilation = true;
