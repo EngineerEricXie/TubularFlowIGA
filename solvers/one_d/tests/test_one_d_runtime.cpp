@@ -58,9 +58,44 @@ int main()
 		std::ofstream tree(directory/"tree.swc");
 		tree << "1 2 0 0 0 0.001 -1\n2 2 0.01 0 0 0.001 1\n";
 	}
+	{
+		std::ofstream tree(directory/"root-bifurcation.swc");
+		tree << "1 2 0 0 0 0.001 -1\n"
+			<< "2 2 0.01 0.01 0 0.001 1\n"
+			<< "3 2 0.01 -0.01 0 0.001 1\n";
+	}
 	auto configuration = iga::ParseOneDConfiguration(Configuration());
 	const auto flow = configuration.flow_systems.front();
 	auto network = iga::ReadOneDNetwork(directory/"tree.swc", 1.0, 1, flow.dynamic_viscosity);
+	{
+		auto bifurcated_network = iga::ReadOneDNetwork(directory/"root-bifurcation.swc",
+			1.0, 1, flow.dynamic_viscosity);
+		assert(iga::OneDSegmentsOutOfNode(bifurcated_network,
+			bifurcated_network.root).size() == 2);
+		iga::OneDFlowRuntime bifurcated(configuration, flow, bifurcated_network,
+			iga::ResolveOneDInlet(configuration), directory);
+		bifurcated.InitializeOpenLoop(1.0e-9);
+		bifurcated.BeginStep(0.0, configuration.time.dt);
+		iga::VascularInletState inlet;
+		inlet.time_s = configuration.time.dt;
+		inlet.has_flow = true;
+		inlet.flow_m3_s = 2.0e-9;
+		inlet.species.emplace("signal", 2.0);
+		bifurcated.SetCoupledInlet(inlet);
+		bifurcated.SolveTrial();
+		const auto& species = bifurcated.Transports().front().species.front();
+		double expected_native_flux = 0.0;
+		for (const int segment_index : iga::OneDSegmentsOutOfNode(
+			bifurcated.Network(), bifurcated.Network().root)) {
+			const auto& segment = bifurcated.Network().segments.at(
+				static_cast<std::size_t>(segment_index));
+			expected_native_flux += bifurcated.FlowState().flow.at(
+				static_cast<std::size_t>(segment.cell_offset))*2.0;
+		}
+		assert(Close(species.root_native_flux, expected_native_flux));
+		assert(Close(bifurcated.GetPortState("root").outward_species_flux.at("signal"),
+			-expected_native_flux));
+	}
 	{
 		auto macro_configuration = configuration;
 		macro_configuration.time.steps = 4;
@@ -291,6 +326,9 @@ int main()
 	assert(*first_outlet.outward_flow_m3_s > 0.0);
 	assert(Close(first_root.concentration.at("signal"), 2.0));
 	assert(Close(first_root.outward_species_flux.at("signal"), -4.0e-9));
+	assert(runtime.Transports().front().species.front().boundary_flux_valid);
+	assert(Close(first_root.outward_species_flux.at("signal"),
+		-runtime.Transports().front().species.front().root_native_flux));
 	assert(runtime.FlowState().completed_step == 1);
 	assert(runtime.FlowState().internal_substeps == 0);
 	assert(!Close(runtime.Network().segments.front().radius0, initial_radius));

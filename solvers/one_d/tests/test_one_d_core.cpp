@@ -213,6 +213,10 @@ int main()
 	assert(transport.species.size() == 1);
 	for (const double value : transport.species.front().concentration)
 		assert(std::isfinite(value));
+	assert(std::abs(iga::OneDSpeciesFaceFlux(2.0, 3.0, 1.0, 4.0, 0.5, 2.0)-8.0)
+		< 1.0e-14);
+	assert(std::abs(iga::OneDSpeciesFaceFlux(-2.0, 3.0, 1.0, 4.0, 0.5, 2.0))
+		< 1.0e-14);
 
 	const auto explicit_configuration = iga::ParseOneDConfiguration(
 		Configuration("compliant", "explicit_rusanov"));

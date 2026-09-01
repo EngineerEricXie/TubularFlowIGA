@@ -77,3 +77,14 @@ The 1D runtime must report the exact finite-volume face flux used by its
 conservative `A*C` update, including diffusion. Global balance must use
 time-integrated boundary transfer and sources, not only end-step flux. A
 species failure aborts the still-open flow transaction.
+
+The first 1D flux slice now centralizes the numerical face formula
+`Q*C_upwind - A*D*(C_right-C_left)/dx` for the conservative `A*C` update. The
+runtime stores and reports the actual final-substep numerical boundary flux;
+an immediate root bifurcation is aggregated across every root face before the
+root outward sign is applied. Terminal reporting uses its stored numerical
+face flux with the currently supported zero-gradient exterior trace. Focused
+core and runtime regressions pass, and focused numerical re-review accepted
+the aggregation, publication timing, and orientation. Time integration of
+those face transfers and reversal-safe outlet boundary inputs remain part of
+the PR 3.2 gate.

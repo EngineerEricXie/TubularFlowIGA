@@ -339,8 +339,30 @@ public:
 					else concentration = species.inlet_value;
 				}
 				state.concentration.emplace(species.definition.field, concentration);
+				double native_flux = 0.0;
+				const double dx = segment.length/segment.cells;
+				if (species.boundary_flux_valid) {
+					if (root) native_flux = species.root_native_flux;
+					else native_flux = species.outlet_native_flux.at(node);
+				} else if (root) {
+					double boundary_concentration = species.inlet_value;
+					const auto boundary = last_inlet_.species.find(species.definition.field);
+					if (boundary != last_inlet_.species.end())
+						boundary_concentration = boundary->second;
+					for (const int root_segment_index : OneDSegmentsOutOfNode(network_, node)) {
+						const auto& root_segment = network_.segments.at(
+							static_cast<std::size_t>(root_segment_index));
+						const auto root_cell = static_cast<std::size_t>(root_segment.cell_offset);
+						native_flux += OneDSpeciesFaceFlux(flow_state_.flow.at(root_cell),
+							boundary_concentration, species.concentration.at(root_cell),
+							flow_state_.area.at(root_cell), species.definition.diffusivity,
+							root_segment.length/root_segment.cells);
+					}
+				} else native_flux = OneDSpeciesFaceFlux(native_flow,
+					species.concentration.at(cell), species.concentration.at(cell),
+					flow_state_.area.at(cell), species.definition.diffusivity, dx);
 				state.outward_species_flux.emplace(species.definition.field,
-					*state.outward_flow_m3_s*concentration);
+					orientation.ToOutward(native_flux));
 			}
 		ValidatePortState(state);
 		return state;

@@ -22,12 +22,31 @@ struct OneDSpeciesState {
 	double wall_value = 0.0;
 	double wall_coefficient = 0.0;
 	double exterior_value = 0.0;
+	double root_native_flux = 0.0;
+	std::map<int, double> outlet_native_flux;
+	bool boundary_flux_valid = false;
 };
 
 struct OneDTransportState {
 	std::string name;
 	std::vector<OneDSpeciesState> species;
 };
+
+inline double OneDSpeciesFaceFlux(double flow_m3_s, double left_concentration,
+	double right_concentration, double face_area_m2, double diffusivity_m2_s,
+	double spacing_m)
+{
+	if (!std::isfinite(flow_m3_s) || !std::isfinite(left_concentration)
+		|| !std::isfinite(right_concentration) || !(face_area_m2 > 0.0)
+		|| !std::isfinite(face_area_m2) || diffusivity_m2_s < 0.0
+		|| !std::isfinite(diffusivity_m2_s) || !(spacing_m > 0.0)
+		|| !std::isfinite(spacing_m))
+		throw std::runtime_error("1d species face flux requires finite physical inputs");
+	const double upwind = flow_m3_s >= 0.0
+		? left_concentration : right_concentration;
+	return flow_m3_s*upwind-face_area_m2*diffusivity_m2_s
+		*(right_concentration-left_concentration)/spacing_m;
+}
 
 inline double OneDSpeciesSourceIntegral(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow,
@@ -139,6 +158,8 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 		const double elapsed = requested_dt-remaining;
 		const double inlet_concentration = EvaluateOneDSpeciesInlet(configuration,
 			species, case_directory, start_time+elapsed+dt);
+		double root_native_flux = 0.0;
+		std::map<int, double> outlet_native_flux;
 		for (const auto& segment : network.segments) {
 			const double dx = segment.length/segment.cells;
 			std::vector<double> concentration(static_cast<std::size_t>(segment.cells+2));
@@ -163,14 +184,17 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 				const double face_flow = face == 0
 					? flow.flow[static_cast<std::size_t>(segment.cell_offset)]
 					: flow.flow[static_cast<std::size_t>(segment.cell_offset+std::min(face, segment.cells)-1)];
-				const double upwind = face_flow >= 0.0
-					? concentration[static_cast<std::size_t>(face)]
-					: concentration[static_cast<std::size_t>(face+1)];
 				const double face_area = 0.5*(area[static_cast<std::size_t>(face)]+area[static_cast<std::size_t>(face+1)]);
-				q[static_cast<std::size_t>(face)] = face_flow*upwind
-					-face_area*species.definition.diffusivity
-					*(concentration[static_cast<std::size_t>(face+1)]-concentration[static_cast<std::size_t>(face)])/dx;
+				q[static_cast<std::size_t>(face)] = OneDSpeciesFaceFlux(face_flow,
+					concentration[static_cast<std::size_t>(face)],
+					concentration[static_cast<std::size_t>(face+1)], face_area,
+					species.definition.diffusivity, dx);
 			}
+			if (segment.parent == network.root)
+				root_native_flux += q.front();
+			if (std::find(network.outlet_nodes.begin(), network.outlet_nodes.end(),
+				segment.child) != network.outlet_nodes.end())
+				outlet_native_flux[segment.child] = q.back();
 			for (int cell = 0; cell < segment.cells; ++cell) {
 				const auto index = static_cast<std::size_t>(segment.cell_offset+cell);
 				const double c = scalar[index]/flow.area[index];
@@ -188,6 +212,9 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 				if (!std::isfinite(next[index])) throw std::runtime_error("1d species update produced a non-finite state");
 			}
 		}
+		species.root_native_flux = root_native_flux;
+		species.outlet_native_flux = std::move(outlet_native_flux);
+		species.boundary_flux_valid = true;
 		scalar.swap(next);
 		remaining -= dt;
 	}
