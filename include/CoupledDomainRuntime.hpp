@@ -4,6 +4,7 @@
 #include "CouplingEdge.hpp"
 
 #include <cmath>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -42,6 +43,35 @@ public:
 	virtual void AbortStep() = 0;
 	virtual void PrepareCommitStep() = 0;
 	virtual void FinalizeCommitStep() noexcept = 0;
+};
+
+// This deliberately sits beside CoupledDomainRuntime rather than extending it:
+// pressure/flow-only executors retain their established one-shot trial contract.
+// A flow/transport executor can instead hold an accepted hydraulic trial while
+// retrying scalar boundary data against its fixed trial velocity.
+struct SpeciesStepAccounting {
+	double initial_mass = 0.0;
+	double final_mass = 0.0;
+	double source_amount = 0.0;
+	std::map<std::string, double> outward_port_amount;
+	double residual = 0.0;
+};
+
+class StagedFlowTransportDomainRuntime {
+public:
+	virtual ~StagedFlowTransportDomainRuntime() = default;
+
+	virtual void SolveHydraulicTrial() = 0;
+	virtual PortState GetHydraulicPortState(const std::string& port_id) const = 0;
+	virtual void RollbackHydraulicTrial() = 0;
+
+	virtual void SetTransportConcentration(const std::string& port_id,
+		double time_s, const std::map<std::string, double>& concentration) = 0;
+	virtual void SolveTransportTrial() = 0;
+	virtual PortState GetTransportPortState(const std::string& port_id) const = 0;
+	virtual void RollbackTransportTrial() = 0;
+	virtual std::map<std::string, SpeciesStepAccounting>
+	GetSpeciesStepAccounting() const = 0;
 };
 
 } // namespace iga

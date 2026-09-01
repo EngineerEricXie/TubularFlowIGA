@@ -97,6 +97,37 @@ passes with the local PETSc/MPI toolchain. Focused Sol re-review accepted the
 transaction ownership, dynamic row semantics, executor-owned flux residual,
 and failure recovery.
 
+### Staged 3D prerequisite
+
+Species routing cannot safely use a guessed combined solve: under reversal the
+transport dependency can oppose the hydraulic execution order, guesses have no
+convergence contract, and provisional trials would corrupt exact integrated
+amount semantics. The accepted architecture therefore adds a separate
+`StagedFlowTransportDomainRuntime` beside the unchanged common runtime API.
+Hydraulics converge first; accepted outward flows define a donor-to-receiver
+transport graph; transport then solves once in its actual topological order.
+
+The composite 3D adapter now implements this staged contract. Hydraulic retries
+restore only flow while leaving transport open. Transport retries preserve the
+accepted flow vector and velocity while restoring only concentration state.
+Compatibility `SolveTrial` and full rollback remain wrappers over both stages.
+Observation and prepare require both stages to have succeeded, and abort still
+restores both native committed images.
+
+Logical `SpeciesStepAccounting` reports initial/final mass, source amount,
+per-port outward amounts, and
+`M1-M0+sum(outward)-source`. For the current single-step backward-Euler 3D
+transport, physical end-step compiled flux and source rates are multiplied by
+the native timestep. `BeginStep` rejects a macro timestep that differs from the
+compiled transport timestep before either native transaction opens. The
+residual remains an explicit physical diagnostic; SUPG algebraic flux is not
+silently folded into it or claimed conservative.
+
+Focused PETSc tests cover changed hydraulic replay, fixed accepted velocity,
+changed concentration replay, amount sign/time scaling, timestep mismatch,
+compatibility parity, and failure recovery. The staged state and accounting
+contract passed focused Sol review and re-review.
+
 The remaining numerical gate is a species-aware graph transaction: route donor
 concentrations after each hydraulic trial, compare both measured interface
 fluxes, validate time-integrated global balances, and only then prepare every
@@ -185,3 +216,13 @@ diffusive flux still contributes to species transfer, while its zero flow
 contributes no `Q*C` weight to the aggregate concentration. A focused
 flowing-plus-stagnant regression prevents fallback contamination; narrow
 numerical re-review accepted the fix.
+
+Before the graph executor can consume the staged interface, native 1D must be
+split into a hydraulic-frame stage and a transport replay stage. Each configured
+substep must retain its pre-flow area, accepted flow/area state, inlet schedule,
+and exact time interval so the existing conservative `A*C` update and integrated
+amounts remain identical to the legacy combined path. Schema-v6 staged execution
+will reject concentration-to-flow feedback such as vasodilation until a coupled
+substep iteration exists. The subsequent executor must reject transport cycles,
+enforce two-sided edge amounts and global balances before prepare, and commit
+donor hysteresis only after all domain finalizations.

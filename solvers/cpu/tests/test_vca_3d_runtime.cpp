@@ -208,7 +208,8 @@ iga::SimulationConfiguration AddTransportSystem(
 	system.kind = iga::EquationKind::LinearTransport;
 	system.unknowns = {"oxygen"};
 	system.terms = {{iga::TermKind::TimeDerivative, "oxygen", "oxygen", 1.0, ""},
-		{iga::TermKind::Advection, "oxygen", "oxygen", 1.0, "prescribed"}};
+		{iga::TermKind::Advection, "oxygen", "oxygen", 1.0, "prescribed"},
+		{iga::TermKind::VolumeSource, "oxygen", "oxygen", 0.5, ""}};
 	configuration.equation_systems.push_back(system);
 	configuration.velocity_sources.push_back(
 		{"in_memory_flow", "prescribed", "", "", "error"});
@@ -658,8 +659,79 @@ int main(int argc, char** argv)
 			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
 			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
 
+			// The staged interface keeps an accepted hydraulic trial in place while
+			// concentration data are retried.  The legacy combined calls above are
+			// intentionally retained as the compatibility-parity path.
+			RequireRejected([&adapter] { adapter.BeginStep({1, 0.1, 0.2}); },
+				"3D macro and compiled transport timestep mismatch");
+			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
 			adapter.BeginStep({1, 0.1, 0.1});
 			hydraulic.time_s = 0.2;
+			hydraulic.outward_flow_m3_s = reference_flow;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SolveHydraulicTrial();
+			const auto staged_first_flow = CopyVector(composite_flow.State());
+			const auto staged_first_velocity = composite_flow.GatherRequiredVelocity();
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
+			assert(adapter.GetHydraulicPortState("inlet").outward_flow_m3_s.has_value());
+			adapter.RollbackHydraulicTrial();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialReady);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
+			RequireRejected([&adapter] { adapter.SolveHydraulicTrial(); },
+				"staged hydraulic replay without reapplying cleared input");
+			hydraulic.outward_flow_m3_s = 0.5*reference_flow;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SolveHydraulicTrial();
+			const auto staged_changed_flow = CopyVector(composite_flow.State());
+			assert(staged_changed_flow != staged_first_flow);
+			adapter.RollbackHydraulicTrial();
+			hydraulic.outward_flow_m3_s = reference_flow;
+			adapter.SetPortInput("inlet", hydraulic);
+			adapter.SolveHydraulicTrial();
+			assert(CopyVector(composite_flow.State()) == staged_first_flow);
+			assert(composite_flow.GatherRequiredVelocity() == staged_first_velocity);
+			adapter.SetTransportConcentration("inlet", 0.2, {{"tracer", 2.0}});
+			adapter.SolveTransportTrial();
+			const auto staged_first_transport = composite_transport.GatherState();
+			assert(composite_flow.GatherRequiredVelocity() == staged_first_velocity);
+			const auto staged_port = adapter.GetTransportPortState("inlet");
+			const auto staged_accounting = adapter.GetSpeciesStepAccounting();
+			assert(staged_accounting.size() == 1 && staged_accounting.count("tracer") == 1);
+			const auto& tracer_accounting = staged_accounting.at("tracer");
+			assert(tracer_accounting.outward_port_amount.size() == 1
+				&& tracer_accounting.outward_port_amount.count("inlet") == 1);
+			RequireNear(0.1*staged_port.outward_species_flux.at("tracer"),
+				tracer_accounting.outward_port_amount.at("inlet"), 1e-12,
+				"staged transport outward amount time scaling");
+			RequireNear(tracer_accounting.final_mass-tracer_accounting.initial_mass
+				+tracer_accounting.outward_port_amount.at("inlet")
+				-tracer_accounting.source_amount, tracer_accounting.residual, 1e-12,
+				"staged transport accounting residual shape");
+			assert(tracer_accounting.source_amount > 0.0);
+			adapter.RollbackTransportTrial();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialSolved);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
+			assert(composite_flow.GatherRequiredVelocity() == staged_first_velocity);
+			RequireRejected([&adapter] { (void)adapter.GetSpeciesStepAccounting(); },
+				"staged accounting after transport rollback");
+			adapter.SetTransportConcentration("inlet", 0.2, {{"tracer", 3.0}});
+			adapter.SolveTransportTrial();
+			const auto staged_changed_transport = composite_transport.GatherState();
+			assert(staged_changed_transport != staged_first_transport);
+			adapter.RollbackTransportTrial();
+			adapter.SetTransportConcentration("inlet", 0.2, {{"tracer", 2.0}});
+			adapter.SolveTransportTrial();
+			assert(composite_transport.GatherState() == staged_first_transport);
+			adapter.PrepareCommitStep();
+			adapter.FinalizeCommitStep();
+			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
+			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
+			const auto staged_committed_flow = CopyVector(composite_flow.State());
+			const auto staged_committed_transport = composite_transport.GatherState();
+
+			adapter.BeginStep({2, 0.2, 0.1});
+			hydraulic.time_s = 0.3;
 			adapter.SetPortInput("inlet", hydraulic);
 			RequireRejected([&adapter] { adapter.SolveTrial(); },
 				"inward 3D species solve without concentration");
@@ -668,18 +740,18 @@ int main(int argc, char** argv)
 			adapter.AbortStep();
 			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
 			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
-			assert(CopyVector(composite_flow.State()) == first_flow_trial);
-			assert(composite_transport.GatherState() == first_transport_trial);
+			assert(CopyVector(composite_flow.State()) == staged_committed_flow);
+			assert(composite_transport.GatherState() == staged_committed_transport);
 
-			adapter.BeginStep({1, 0.1, 0.1});
+			adapter.BeginStep({2, 0.2, 0.1});
 			hydraulic.outward_flow_m3_s = -reference_flow;
 			adapter.SetPortInput("inlet", hydraulic);
 			adapter.SolveTrial();
 			assert(*adapter.GetPortState("inlet").outward_flow_m3_s > 0.0);
 			adapter.RollbackTrial();
 			adapter.AbortStep();
-			assert(CopyVector(composite_flow.State()) == first_flow_trial);
-			assert(composite_transport.GatherState() == first_transport_trial);
+			assert(CopyVector(composite_flow.State()) == staged_committed_flow);
+			assert(composite_transport.GatherState() == staged_committed_transport);
 
 			auto invalid_transport_configuration = combined_configuration;
 			iga::FieldBoundaryCondition invalid_scalar;
@@ -691,9 +763,9 @@ int main(int argc, char** argv)
 				"composite_three_d", composite_flow, composite_transport, {port},
 				invalid_transport_configuration, std::filesystem::temp_directory_path(),
 				{{"tracer", "oxygen"}}, {{"inlet", reference_flow}});
-			failing_adapter.BeginStep({1, 0.1, 0.1});
+			failing_adapter.BeginStep({2, 0.2, 0.1});
 			hydraulic.outward_flow_m3_s = reference_flow;
-			species.time_s = 0.2;
+			species.time_s = 0.3;
 			failing_adapter.SetPortInput("inlet", hydraulic);
 			failing_adapter.SetPortInput("inlet", species);
 			RequireRejected([&failing_adapter] { failing_adapter.SolveTrial(); },
@@ -708,8 +780,8 @@ int main(int argc, char** argv)
 			failing_adapter.RollbackTrial();
 			assert(composite_flow.Phase() == iga::FlowStepPhase::TrialReady);
 			assert(composite_transport.Phase() == iga::TransportStepPhase::TrialOpen);
-			assert(CopyVector(composite_flow.State()) == first_flow_trial);
-			assert(composite_transport.GatherState() == first_transport_trial);
+			assert(CopyVector(composite_flow.State()) == staged_committed_flow);
+			assert(composite_transport.GatherState() == staged_committed_transport);
 			failing_adapter.AbortStep();
 			assert(composite_flow.Phase() == iga::FlowStepPhase::Committed);
 			assert(composite_transport.Phase() == iga::TransportStepPhase::Committed);
