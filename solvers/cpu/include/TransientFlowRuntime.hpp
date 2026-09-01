@@ -59,6 +59,12 @@ struct FlowConvergenceMetrics {
 	double relative_mass_imbalance = 0.0;
 };
 
+enum class FlowStepPhase {
+	Committed,
+	TrialReady,
+	TrialSolved
+};
+
 class TransientFlowRuntime {
 public:
 	TransientFlowRuntime(Database& database, MPI_Comm communicator, bool configured,
@@ -83,10 +89,12 @@ public:
 		jacobian_ = assembler_.CreateMatrix(true);
 		state_ = assembler_.CreateVector();
 		previous_ = assembler_.CreateVector();
+		committed_state_ = assembler_.CreateVector();
 		update_ = assembler_.CreateVector();
 		rhs_ = assembler_.CreateVector();
 		VecSet(state_, 0.0);
 		VecSet(previous_, 0.0);
+		VecSet(committed_state_, 0.0);
 		VecSet(update_, 0.0);
 		VecSet(rhs_, 0.0);
 		for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node) {
@@ -142,6 +150,7 @@ public:
 		VecDestroy(&rhs_);
 		VecDestroy(&update_);
 		VecDestroy(&previous_);
+		VecDestroy(&committed_state_);
 		VecDestroy(&state_);
 		MatDestroy(&jacobian_);
 	}
@@ -166,34 +175,182 @@ public:
 
 	void CopyStateToPrevious()
 	{
+		RequirePhase(FlowStepPhase::Committed, "CopyStateToPrevious");
 		VecCopy(state_, previous_);
+	}
+
+	void BeginStep(int step, double physical_time, int maximum_newton,
+		double nonlinear_relative_tolerance, double nonlinear_absolute_tolerance,
+		double mass_relative_tolerance)
+	{
+		RequirePhase(FlowStepPhase::Committed, "BeginStep");
+		ValidateSolveControls(step, physical_time, maximum_newton,
+			nonlinear_relative_tolerance, nonlinear_absolute_tolerance,
+			mass_relative_tolerance);
+		VecCopy(state_, committed_state_);
+		VecCopy(committed_state_, previous_);
+		committed_boundaries_ = boundaries_;
+		committed_pressure_tractions_ = pressure_tractions_;
+		committed_outlet_models_ = outlet_models_;
+		trial_step_ = step;
+		trial_time_ = physical_time;
+		trial_maximum_newton_ = maximum_newton;
+		trial_nonlinear_relative_tolerance_ = nonlinear_relative_tolerance;
+		trial_nonlinear_absolute_tolerance_ = nonlinear_absolute_tolerance;
+		trial_mass_relative_tolerance_ = mass_relative_tolerance;
+		trial_linear_iterations_ = 0;
+		trial_solve_succeeded_ = false;
+		has_trial_configuration_ = false;
+		trial_pressure_overrides_.clear();
+		phase_ = FlowStepPhase::TrialReady;
+	}
+
+	void SetTrialBoundaryConfiguration(const SimulationConfiguration& step_configuration)
+	{
+		RequirePhase(FlowStepPhase::TrialReady, "SetTrialBoundaryConfiguration");
+		if (!configured_)
+			throw std::runtime_error(
+				"SetTrialBoundaryConfiguration requires a configured flow runtime");
+		trial_configuration_ = step_configuration;
+		has_trial_configuration_ = true;
+		UpdateConfiguredBoundaries(trial_configuration_);
+	}
+
+	void SetPortInput(const CouplingPort& port, const PortBoundaryData& input)
+	{
+		RequirePhase(FlowStepPhase::TrialReady, "SetPortInput");
+		if (configured_ && !has_trial_configuration_)
+			throw std::runtime_error(
+				"configured 3D flow trial requires SetTrialBoundaryConfiguration before SetPortInput");
+		ValidateCouplingPort(port);
+		ValidatePortBoundaryData(input);
+		const auto time_scale = std::max({1.0, std::abs(trial_time_), std::abs(input.time_s)});
+		if (std::abs(input.time_s-trial_time_) > 1e-12*time_scale)
+			throw std::runtime_error("3D trial port input time does not match the active step");
+		if (input.outward_flow_m3_s || input.total_pressure_pa
+			|| !input.concentration.empty() || !input.outward_species_flux.empty())
+			throw std::runtime_error(
+				"3D flow trial ports currently support only mean pressure or mean normal traction");
+		const int supplied = static_cast<int>(input.mean_pressure_pa.has_value())
+			+static_cast<int>(input.mean_normal_traction_pa.has_value());
+		if (supplied != 1)
+			throw std::runtime_error(
+				"3D flow trial port input requires exactly one of mean pressure or mean normal traction");
+		const auto quantity = input.mean_pressure_pa ? PortQuantity::MeanPressure
+			: PortQuantity::MeanNormalTraction;
+		if (!port.requires.count(quantity))
+			throw std::runtime_error(std::string("3D flow trial port does not require ")
+				+PortQuantityName(quantity));
+		const auto label = ParseBoundaryLabelLocator(port);
+		if (!boundary_label_index_.count(label))
+			throw std::runtime_error("3D flow trial port boundary label is absent from the database");
+		for (std::size_t node = 0; node < labels_.size(); ++node)
+			if (labels_[node] == label && boundaries_.pressure_constrained[node])
+				throw std::runtime_error(
+					"3D flow trial pressure cannot override a pressure Dirichlet boundary");
+		for (const auto& model : committed_outlet_models_)
+			if (model.label == label)
+				throw std::runtime_error(
+					"3D flow trial port pressure cannot override an active outlet model");
+		const auto pressure = input.mean_pressure_pa
+			? *input.mean_pressure_pa : -*input.mean_normal_traction_pa;
+		trial_pressure_overrides_[label] = pressure;
+		pressure_tractions_[label] = pressure;
+	}
+
+	IGA_FLOW_NOINLINE void SolveTrial()
+	{
+		RequirePhase(FlowStepPhase::TrialReady, "SolveTrial");
+		if (configured_ && !has_trial_configuration_)
+			throw std::runtime_error(
+				"configured 3D flow trial requires SetTrialBoundaryConfiguration before SolveTrial");
+		VecCopy(committed_state_, state_);
+		VecCopy(committed_state_, previous_);
+		outlet_models_ = committed_outlet_models_;
+		trial_linear_iterations_ = 0;
+		trial_solve_succeeded_ = false;
+		try {
+			SolveCurrentTrial();
+			trial_solve_succeeded_ = true;
+			phase_ = FlowStepPhase::TrialSolved;
+		} catch (...) {
+			phase_ = FlowStepPhase::TrialSolved;
+			throw;
+		}
+	}
+
+	void RollbackTrial()
+	{
+		RequirePhase(FlowStepPhase::TrialSolved, "RollbackTrial");
+		RestoreCommittedSnapshot();
+		phase_ = FlowStepPhase::TrialReady;
+	}
+
+	void CommitStep()
+	{
+		RequirePhase(FlowStepPhase::TrialSolved, "CommitStep");
+		if (!trial_solve_succeeded_)
+			throw std::runtime_error("CommitStep requires a successful 3D flow trial solve");
+		total_linear_iterations_ += trial_linear_iterations_;
+		trial_linear_iterations_ = 0;
+		trial_solve_succeeded_ = false;
+		has_trial_configuration_ = false;
+		trial_pressure_overrides_.clear();
+		phase_ = FlowStepPhase::Committed;
 	}
 
 	IGA_FLOW_NOINLINE void Advance(const SimulationConfiguration& step_configuration, int step,
 		double physical_time, int maximum_newton, double nonlinear_relative_tolerance,
 		double nonlinear_absolute_tolerance, double mass_relative_tolerance)
 	{
-		if (maximum_newton <= 0) throw std::invalid_argument("maximum Newton iterations must be positive");
-		if (!std::isfinite(nonlinear_relative_tolerance) || nonlinear_relative_tolerance <= 0.0)
-			throw std::invalid_argument("nonlinear relative tolerance must be finite and positive");
-		if (!std::isfinite(nonlinear_absolute_tolerance) || nonlinear_absolute_tolerance <= 0.0)
-			throw std::invalid_argument("nonlinear absolute tolerance must be finite and positive");
-		if (!std::isfinite(mass_relative_tolerance) || mass_relative_tolerance <= 0.0)
-			throw std::invalid_argument("mass relative tolerance must be finite and positive");
-		if (step > 0) VecCopy(state_, previous_);
+		BeginStep(step, physical_time, maximum_newton, nonlinear_relative_tolerance,
+			nonlinear_absolute_tolerance, mass_relative_tolerance);
+		try {
+			if (configured_) SetTrialBoundaryConfiguration(step_configuration);
+			SolveTrial();
+			CommitStep();
+		} catch (...) {
+			if (phase_ != FlowStepPhase::Committed) {
+				RestoreCommittedSnapshot();
+				phase_ = FlowStepPhase::Committed;
+			}
+			throw;
+		}
+	}
+
+	IGA_FLOW_NOINLINE PortState GetPortState(const CouplingPort& port) const
+	{
+		RequirePhase(FlowStepPhase::TrialSolved, "GetPortState");
+		if (!trial_solve_succeeded_)
+			throw std::runtime_error("GetPortState requires a successful 3D flow trial solve");
+		return MeasurePorts({port}, trial_time_, {}, {}).at(port.id);
+	}
+
+	FlowStepPhase Phase() const { return phase_; }
+	PetscInt TrialLinearIterations() const { return trial_linear_iterations_; }
+	std::optional<double> PressureTractionValue(int label) const
+	{
+		const auto found = pressure_tractions_.find(label);
+		return found == pressure_tractions_.end()
+			? std::optional<double>{} : std::optional<double>{found->second};
+	}
+
+private:
+	IGA_FLOW_NOINLINE void SolveCurrentTrial()
+	{
 		std::vector<double> previous_capacitor_pressure(outlet_models_.size());
 		for (std::size_t i = 0; i < outlet_models_.size(); ++i)
 			previous_capacitor_pressure[i] = outlet_models_[i].capacitor_pressure;
 		bool outlet_converged = false;
 		const int maximum_outlet_iterations = outlet_models_.empty() ? 1 : 12;
 		for (int coupling = 0; coupling < maximum_outlet_iterations; ++coupling) {
-			if (configured_) UpdateConfiguredBoundaries(step_configuration);
-			const auto converged = SolveNonlinearStep(step, physical_time, maximum_newton,
-				nonlinear_relative_tolerance, nonlinear_absolute_tolerance,
-				mass_relative_tolerance);
+			if (configured_) UpdateConfiguredBoundaries(trial_configuration_);
+			const auto converged = SolveNonlinearStep(trial_step_, trial_time_, trial_maximum_newton_,
+				trial_nonlinear_relative_tolerance_, trial_nonlinear_absolute_tolerance_,
+				trial_mass_relative_tolerance_);
 			if (!converged)
 				throw std::runtime_error("Navier-Stokes nonlinear solve reached MAX_NEWTON at physical step "
-					+std::to_string(step+1));
+					+std::to_string(trial_step_+1));
 			if (outlet_models_.empty()) {
 				outlet_converged = true;
 				break;
@@ -202,7 +359,7 @@ public:
 			const auto evaluated = EvaluateOutletCoupling(outlet_models_,
 				previous_capacitor_pressure, flows, parameters_.dt);
 			const auto tolerance = OutletCouplingTolerance(evaluated);
-			if (rank_ == 0) std::cout << "step=" << step+1 << " time=" << physical_time
+			if (rank_ == 0) std::cout << "step=" << trial_step_+1 << " time=" << trial_time_
 				<< " outlet_iteration=" << coupling
 				<< " pressure_change=" << evaluated.maximum_pressure_change
 				<< " tolerance=" << tolerance << '\n';
@@ -219,8 +376,10 @@ public:
 		}
 		if (!outlet_converged)
 			throw std::runtime_error("outlet fixed-point iteration did not converge at physical step "
-				+std::to_string(step+1));
+				+std::to_string(trial_step_+1));
 	}
+
+public:
 
 	IGA_FLOW_NOINLINE double ReferenceBoundaryFlow(int label) const
 	{
@@ -400,11 +559,56 @@ public:
 	const std::vector<Element>& Elements() const { return assembler_.elements(); }
 	const std::vector<Element>& OwnedElements() const { return owned_elements_; }
 	const std::vector<std::int32_t>& RequiredNodes() const { return ghost_nodes_; }
-	std::vector<OutletModelState>& OutletModels() { return outlet_models_; }
+	std::vector<OutletModelState>& OutletModels()
+	{
+		RequirePhase(FlowStepPhase::Committed, "mutable OutletModels");
+		return outlet_models_;
+	}
 	const std::vector<OutletModelState>& OutletModels() const { return outlet_models_; }
 
 private:
 	static constexpr std::uint64_t kScalablePreconditionerNodeThreshold = 1000;
+
+	void RestoreCommittedSnapshot()
+	{
+		VecCopy(committed_state_, state_);
+		VecCopy(committed_state_, previous_);
+		boundaries_ = committed_boundaries_;
+		pressure_tractions_ = committed_pressure_tractions_;
+		outlet_models_ = committed_outlet_models_;
+		trial_linear_iterations_ = 0;
+		trial_solve_succeeded_ = false;
+		has_trial_configuration_ = false;
+		trial_pressure_overrides_.clear();
+	}
+
+	void RequirePhase(FlowStepPhase required, const char* operation) const
+	{
+		if (phase_ != required)
+			throw std::runtime_error(std::string(operation)
+				+" is invalid in the current 3D flow lifecycle phase");
+	}
+
+	static void ValidateSolveControls(int step, double physical_time, int maximum_newton,
+		double nonlinear_relative_tolerance, double nonlinear_absolute_tolerance,
+		double mass_relative_tolerance)
+	{
+		if (step < 0) throw std::invalid_argument("physical step must be nonnegative");
+		if (!std::isfinite(physical_time) || physical_time < 0.0)
+			throw std::invalid_argument("physical time must be finite and nonnegative");
+		if (maximum_newton <= 0)
+			throw std::invalid_argument("maximum Newton iterations must be positive");
+		if (!std::isfinite(nonlinear_relative_tolerance)
+			|| nonlinear_relative_tolerance <= 0.0)
+			throw std::invalid_argument(
+				"nonlinear relative tolerance must be finite and positive");
+		if (!std::isfinite(nonlinear_absolute_tolerance)
+			|| nonlinear_absolute_tolerance <= 0.0)
+			throw std::invalid_argument(
+				"nonlinear absolute tolerance must be finite and positive");
+		if (!std::isfinite(mass_relative_tolerance) || mass_relative_tolerance <= 0.0)
+			throw std::invalid_argument("mass relative tolerance must be finite and positive");
+	}
 
 	static int ParseBoundaryLabelLocator(const CouplingPort& port)
 	{
@@ -558,9 +762,13 @@ private:
 	void UpdateConfiguredBoundaries(const SimulationConfiguration& step_configuration)
 	{
 		const auto configuration = MaterializeOutletPressures(step_configuration, outlet_models_);
-		pressure_tractions_ = ExtractPressureTractions(configuration, FirstNavierStokesSystem(configuration));
-		boundaries_ = ResolveFlowBoundaries(configuration, FirstNavierStokesSystem(configuration),
-			labels_, boundary_velocity_);
+		const auto& system = FirstNavierStokesSystem(configuration);
+		auto pressure_tractions = ExtractPressureTractions(configuration, system);
+		auto boundaries = ResolveFlowBoundaries(configuration, system, labels_, boundary_velocity_);
+		for (const auto& override : trial_pressure_overrides_)
+			pressure_tractions[override.first] = override.second;
+		pressure_tractions_ = std::move(pressure_tractions);
+		boundaries_ = std::move(boundaries);
 	}
 
 	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton,
@@ -668,7 +876,7 @@ private:
 			}
 			PetscInt iterations = 0;
 			KSPGetIterationNumber(solver_, &iterations);
-			total_linear_iterations_ += iterations;
+			trial_linear_iterations_ += iterations;
 			PetscReal linear_residual = 0.0, update_norm = 0.0;
 			KSPGetResidualNorm(solver_, &linear_residual);
 			VecNorm(update_, NORM_2, &update_norm);
@@ -735,12 +943,28 @@ private:
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;
 	std::map<int, double> pressure_tractions_;
 	Mat jacobian_ = nullptr;
-	Vec state_ = nullptr, previous_ = nullptr, update_ = nullptr, rhs_ = nullptr;
+	Vec state_ = nullptr, previous_ = nullptr, committed_state_ = nullptr;
+	Vec update_ = nullptr, rhs_ = nullptr;
 	IS source_rows_ = nullptr, destination_rows_ = nullptr;
 	Vec ghost_state_ = nullptr, ghost_previous_ = nullptr;
 	VecScatter scatter_ = nullptr;
 	KSP solver_ = nullptr;
 	PetscInt total_linear_iterations_ = 0;
+	PetscInt trial_linear_iterations_ = 0;
+	FlowStepPhase phase_ = FlowStepPhase::Committed;
+	ResolvedBoundaryConditions committed_boundaries_;
+	std::map<int, double> committed_pressure_tractions_;
+	std::vector<OutletModelState> committed_outlet_models_;
+	SimulationConfiguration trial_configuration_;
+	std::map<int, double> trial_pressure_overrides_;
+	int trial_step_ = -1;
+	double trial_time_ = 0.0;
+	int trial_maximum_newton_ = 0;
+	double trial_nonlinear_relative_tolerance_ = 0.0;
+	double trial_nonlinear_absolute_tolerance_ = 0.0;
+	double trial_mass_relative_tolerance_ = 0.0;
+	bool has_trial_configuration_ = false;
+	bool trial_solve_succeeded_ = false;
 	int rank_ = 0;
 };
 

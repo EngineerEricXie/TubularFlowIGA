@@ -475,9 +475,12 @@ int main(int argc, char** argv)
 					iga::ApplyThreeDVascularSpeciesInlet(step_configuration,
 						vca_transport->System(), inlet);
 			}
-			flow.Advance(step_configuration, step, physical_time, options.max_newton,
+			flow.BeginStep(step, physical_time, options.max_newton,
 				options.nonlinear_relative_tolerance, options.nonlinear_absolute_tolerance,
 				options.mass_relative_tolerance);
+			if (configured) flow.SetTrialBoundaryConfiguration(step_configuration);
+			flow.SolveTrial();
+			flow.CommitStep();
 			if (vca_transport) {
 				vca_transport->Advance(step_configuration, flow.RequiredNodes(),
 					flow.GatherRequiredVelocity());

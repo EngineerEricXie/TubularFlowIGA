@@ -129,6 +129,87 @@ iga::ResolvedBoundaryConditions MakeFlowBoundaries(std::size_t nodes)
 	return result;
 }
 
+iga::ResolvedBoundaryConditions MakeConstrainedFlowBoundaries(std::size_t nodes)
+{
+	auto result = MakeFlowBoundaries(nodes);
+	result.velocity_constrained.assign(nodes, 1);
+	result.pressure_constrained.assign(nodes, 1);
+	result.velocity_nodes = nodes;
+	result.pressure_nodes = nodes;
+	return result;
+}
+
+iga::SimulationConfiguration MakeFlowConfiguration(double velocity_x, double pressure)
+{
+	iga::SimulationConfiguration configuration;
+	configuration.fields = {{"velocity", iga::FieldKind::Vector3, 0.0},
+		{"pressure", iga::FieldKind::Pressure, 0.0}};
+	configuration.time = {0.1, 1};
+	iga::EquationSystemDefinition system;
+	system.name = "flow";
+	system.kind = iga::EquationKind::NavierStokes;
+	system.unknowns = {"velocity", "pressure"};
+	system.viscosity = 1.0;
+	system.density = 1.0;
+	system.time_integration = "backward_euler";
+	configuration.equation_systems.push_back(system);
+	iga::FieldBoundaryCondition velocity;
+	velocity.field = "velocity";
+	velocity.kind = iga::FieldBoundaryKind::Dirichlet;
+	velocity.value = {velocity_x, 0.0, 0.0};
+	iga::FieldBoundaryCondition pressure_condition;
+	pressure_condition.field = "pressure";
+	pressure_condition.kind = iga::FieldBoundaryKind::PressureTraction;
+	pressure_condition.value = {pressure};
+	configuration.boundaries.push_back({1, "constrained", {velocity, pressure_condition}});
+	return configuration;
+}
+
+iga::SimulationConfiguration MakeOutletFlowConfiguration()
+{
+	auto configuration = MakeFlowConfiguration(0.0, 0.0);
+	configuration.boundaries.front().conditions.pop_back();
+	iga::FieldBoundaryCondition outlet;
+	outlet.field = "pressure";
+	outlet.kind = iga::FieldBoundaryKind::WindkesselRC;
+	outlet.resistance = 1.0;
+	outlet.capacitance = 1e-8;
+	outlet.reference_pressure = 1.0;
+	outlet.initial_pressure = 3.0;
+	configuration.boundaries.front().conditions.push_back(outlet);
+	return configuration;
+}
+
+iga::CouplingPort MakePressureInputPort()
+{
+	iga::CouplingPort result;
+	result.id = "pressure_input";
+	result.subsystem_id = "three_d";
+	result.locator_kind = "boundary_label";
+	result.locator = "1";
+	result.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate};
+	result.requires = {iga::PortQuantity::MeanPressure};
+	return result;
+}
+
+std::vector<double> CopyVector(Vec vector)
+{
+	PetscInt local_size = 0;
+	VecGetLocalSize(vector, &local_size);
+	const PetscScalar* values = nullptr;
+	VecGetArrayRead(vector, &values);
+	std::vector<double> result(static_cast<std::size_t>(local_size));
+	for (PetscInt i = 0; i < local_size; ++i)
+		result[static_cast<std::size_t>(i)] = PetscRealPart(values[i]);
+	VecRestoreArrayRead(vector, &values);
+	return result;
+}
+
+double OutletCapacitorPressure(const iga::TransientFlowRuntime& runtime)
+{
+	return runtime.OutletModels().front().capacitor_pressure;
+}
+
 iga::CouplingPort MakeBoundaryPort(const std::string& id, const std::string& locator)
 {
 	iga::CouplingPort result;
@@ -241,6 +322,127 @@ int main(int argc, char** argv)
 			flow.MeasurePorts({generic_ports.front(), duplicate}, 0.0, species_fields,
 				species_state);
 		}, "duplicate generic boundary label locator");
+
+		iga::TransientFlowRuntime lifecycle(database, PETSC_COMM_WORLD, true, true,
+			{1.0, 1.0, 0.1}, MakeConstrainedFlowBoundaries(64),
+			std::vector<int>(64, 1),
+			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}), {}, {});
+		const auto initial_flow_configuration = MakeFlowConfiguration(0.0, 0.0);
+		const auto trial_flow_configuration = MakeFlowConfiguration(0.125, 2.0);
+		lifecycle.InitializeState(initial_flow_configuration);
+		const auto committed_state = CopyVector(lifecycle.State());
+		RequireRejected([&lifecycle] { lifecycle.SolveTrial(); },
+			"SolveTrial before BeginStep");
+		RequireRejected([&lifecycle] { lifecycle.CommitStep(); },
+			"CommitStep before a solved trial");
+		lifecycle.BeginStep(0, 0.1, 4, 1e-10, 1e-12, 1e-10);
+		RequireRejected([&lifecycle] {
+			lifecycle.BeginStep(0, 0.1, 4, 1e-10, 1e-12, 1e-10);
+		}, "nested BeginStep");
+		iga::PortBoundaryData pressure_input;
+		pressure_input.time_s = 0.1;
+		pressure_input.mean_pressure_pa = 4.0;
+		const auto pressure_port = MakePressureInputPort();
+		RequireRejected([&lifecycle, &pressure_port, &pressure_input] {
+			lifecycle.SetPortInput(pressure_port, pressure_input);
+		}, "port input before configured trial boundaries");
+		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		lifecycle.SetPortInput(pressure_port, pressure_input);
+		assert(lifecycle.PressureTractionValue(1).has_value());
+		RequireNear(4.0, *lifecycle.PressureTractionValue(1), 0.0,
+			"trial pressure input");
+		lifecycle.SolveTrial();
+		const auto first_trial = CopyVector(lifecycle.State());
+		const auto first_trial_iterations = lifecycle.TrialLinearIterations();
+		const auto trial_port_state = lifecycle.GetPortState(pressure_port);
+		RequireNear(0.1, trial_port_state.time_s, 0.0, "trial port state time");
+		assert(first_trial != committed_state);
+		assert(lifecycle.Summary().linear_iterations == 0);
+		RequireRejected([&lifecycle] { lifecycle.SolveTrial(); },
+			"SolveTrial without rollback");
+		lifecycle.RollbackTrial();
+		assert(CopyVector(lifecycle.State()) == committed_state);
+		assert(lifecycle.PressureTractionValue(1).has_value());
+		RequireNear(0.0, *lifecycle.PressureTractionValue(1), 0.0,
+			"committed pressure traction rollback");
+		RequireRejected([&lifecycle] { lifecycle.CommitStep(); },
+			"CommitStep after rollback");
+		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		auto normal_traction_port = pressure_port;
+		normal_traction_port.id = "normal_traction_input";
+		normal_traction_port.requires = {iga::PortQuantity::MeanNormalTraction};
+		iga::PortBoundaryData normal_traction_input;
+		normal_traction_input.time_s = 0.1;
+		normal_traction_input.mean_normal_traction_pa = -4.0;
+		lifecycle.SetPortInput(normal_traction_port, normal_traction_input);
+		RequireNear(4.0, *lifecycle.PressureTractionValue(1), 0.0,
+			"outward normal traction to pressure conversion");
+		lifecycle.SolveTrial();
+		const auto second_trial = CopyVector(lifecycle.State());
+		assert(second_trial == first_trial);
+		assert(lifecycle.TrialLinearIterations() == first_trial_iterations);
+		lifecycle.CommitStep();
+		assert(lifecycle.Phase() == iga::FlowStepPhase::Committed);
+		assert(CopyVector(lifecycle.State()) == first_trial);
+		assert(lifecycle.Summary().linear_iterations == first_trial_iterations);
+		RequireRejected([&lifecycle] { lifecycle.CommitStep(); },
+			"duplicate CommitStep");
+		RequireRejected([&lifecycle, &pressure_port] {
+			lifecycle.GetPortState(pressure_port);
+		}, "GetPortState after commit");
+		iga::TransientFlowRuntime advance_adapter(database, PETSC_COMM_WORLD, true, true,
+			{1.0, 1.0, 0.1}, MakeConstrainedFlowBoundaries(64),
+			std::vector<int>(64, 1),
+			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}), {}, {});
+		advance_adapter.InitializeState(initial_flow_configuration);
+		advance_adapter.Advance(trial_flow_configuration, 0, 0.1, 4, 1e-10, 1e-12, 1e-10);
+		assert(CopyVector(advance_adapter.State()) == first_trial);
+		assert(advance_adapter.Summary().linear_iterations == first_trial_iterations);
+		iga::PortBoundaryData unsupported_flow_input;
+		unsupported_flow_input.time_s = 0.2;
+		unsupported_flow_input.outward_flow_m3_s = 1.0;
+		lifecycle.BeginStep(1, 0.2, 4, 1e-10, 1e-12, 1e-10);
+		lifecycle.SetTrialBoundaryConfiguration(trial_flow_configuration);
+		RequireRejected([&lifecycle, &pressure_port, &unsupported_flow_input] {
+			lifecycle.SetPortInput(pressure_port, unsupported_flow_input);
+		}, "unsupported flow-profile trial input");
+
+		auto outlet_model = iga::OutletModelState{};
+		outlet_model.label = 1;
+		outlet_model.kind = iga::FieldBoundaryKind::WindkesselRC;
+		outlet_model.resistance = 1.0;
+		outlet_model.capacitance = 1e-8;
+		outlet_model.reference_pressure = 1.0;
+		outlet_model.capacitor_pressure = 3.0;
+		outlet_model.pressure = iga::EvaluateOutletModel(outlet_model, 0.0, 0.1).pressure;
+		iga::TransientFlowRuntime outlet_lifecycle(database, PETSC_COMM_WORLD, true, true,
+			{1.0, 1.0, 0.1}, MakeConstrainedFlowBoundaries(64),
+			std::vector<int>(64, 1),
+			std::vector<std::array<double, 3>>(64, {0.0, 0.0, 0.0}), {}, {outlet_model});
+		const auto outlet_configuration = MakeOutletFlowConfiguration();
+		outlet_lifecycle.InitializeState(outlet_configuration);
+		outlet_lifecycle.BeginStep(0, 0.1, 4, 1e-10, 1e-12, 1e-10);
+		outlet_lifecycle.SetTrialBoundaryConfiguration(outlet_configuration);
+		RequireRejected([&outlet_lifecycle, &pressure_port, &pressure_input] {
+			outlet_lifecycle.SetPortInput(pressure_port, pressure_input);
+		}, "pressure override conflicts with outlet model");
+		outlet_lifecycle.SolveTrial();
+		const auto first_trial_capacitor =
+			OutletCapacitorPressure(outlet_lifecycle);
+		assert(first_trial_capacitor != outlet_model.capacitor_pressure);
+		outlet_lifecycle.RollbackTrial();
+		RequireNear(outlet_model.capacitor_pressure,
+			OutletCapacitorPressure(outlet_lifecycle), 0.0,
+			"outlet capacitor rollback");
+		outlet_lifecycle.SetTrialBoundaryConfiguration(outlet_configuration);
+		outlet_lifecycle.SolveTrial();
+		RequireNear(first_trial_capacitor,
+			OutletCapacitorPressure(outlet_lifecycle), 0.0,
+			"outlet capacitor deterministic replay");
+		outlet_lifecycle.CommitStep();
+		RequireNear(first_trial_capacitor,
+			OutletCapacitorPressure(outlet_lifecycle), 0.0,
+			"outlet capacitor single commit");
 		auto initial_configuration = MakeConfiguration(0.0);
 		auto system = iga::CompileLinearSystem(initial_configuration, "oxygen_transport");
 		system.velocity_source = "prescribed";

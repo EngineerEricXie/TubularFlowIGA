@@ -17,11 +17,14 @@ checkpoints, and output. `TransientFlowRuntime` owns the PETSc flow objects,
 resolved boundary data, outlet-model state, assembly, nonlinear solves, and
 boundary measurements.
 
-The current `Advance` method is not a trial solve. For `step > 0` it copies
-`state_` to `previous_`, then mutates `state_`, resolved boundary data,
-pressure tractions, outlet flow/pressure, capacitor pressure, and accumulated
-linear-iteration diagnostics. Calling it repeatedly during one physical step
-would therefore advance history incorrectly.
+The runtime now owns an explicit committed/trial lifecycle. `BeginStep`
+snapshots `state_`, resolved boundary data, pressure tractions, and every outlet
+model value, and sets backward-Euler `previous_` from the committed flow vector
+exactly once for the macro-step. `SolveTrial` restores the committed vector and
+outlet state before every attempt. Trial linear iterations remain provisional;
+`CommitStep` adds them to the physical total exactly once, while
+`RollbackTrial` discards them. The legacy `Advance` entry point is a
+compatibility adapter over begin, configure, solve, and commit.
 
 `MeasurePorts` already performs distributed outward-normal flow integration,
 area-weighted pressure integration, and advective species-flux integration.
@@ -185,7 +188,7 @@ public:
 };
 ```
 
-The legal sequence is:
+The implemented 3D legal sequence is:
 
 ```text
 committed -> BeginStep -> trial-ready
@@ -198,6 +201,28 @@ Invalid transitions fail clearly. `SolveTrial` always starts from the same
 committed `t_n` snapshot, including internal 1D subcycling and terminal-model
 state. `CommitStep` succeeds exactly once. A failed solve leaves a rollback
 path and cannot emit output or advance external circuit state.
+
+`TransientFlowRuntime::BeginStep` additionally receives the existing CLI step
+index and nonlinear tolerances because those controls belong to the 3D solve,
+not to a generic port value. Existing materialized 3D boundary conditions are
+applied through `SetTrialBoundaryConfiguration`. The current overload
+`SetPortInput(const CouplingPort&, const PortBoundaryData&)` accepts only a
+`boundary_label` port requiring either mean static pressure or outward mean
+normal traction. Static pressure is applied through the existing pressure-
+traction weak form; outward normal traction uses `pressure = -traction`.
+Prescribed flow, total pressure, species values, and flow profiles are rejected:
+the current solver has no scientifically defined way to derive a velocity
+profile from one scalar flow value. A trial pressure override also cannot
+replace an active resistance/RC/RCR outlet model. This narrow interface is
+intentional until Phase 1 defines those models.
+
+For a configured runtime, `SetTrialBoundaryConfiguration` must precede
+`SetPortInput` so pressure-Dirichlet and outlet-model conflicts are checked
+against the current step rather than stale committed boundaries. During an
+active step, backward-Euler `previous_` is deliberately the committed `t_n`
+flow vector; rollback preserves that value for exact trial replay. The older
+pre-step `previous_` vector is solver scratch once `BeginStep` establishes the
+new macro-step and is not a separately committed physical state.
 
 For fixed-point coupling, the driver performs:
 
@@ -212,11 +237,11 @@ BeginStep(A, B)
 
 ## Smallest implementation boundaries
 
-The 3D refactor will first be flow-only. A wrapper or additions to
-`TransientFlowRuntime` will make snapshot ownership explicit and remove the
-`step > 0` history copy from trial execution. Generic measurements will accept
+The 3D refactor is flow-only. Additions to `TransientFlowRuntime` make snapshot
+ownership explicit and remove the `step > 0` history copy from trial execution.
+Generic measurements accept
 an explicit set of boundary-label locators and return area as well as flow and
-pressure. The VCA adapter will call that implementation so its output remains
+pressure. The VCA adapter calls that implementation so its output remains
 unchanged. Transport rollback follows only when flow lifecycle parity passes.
 
 The 1D refactor will collect existing orchestration into a runtime object

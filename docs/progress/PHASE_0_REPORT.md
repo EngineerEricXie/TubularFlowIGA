@@ -70,6 +70,35 @@ This slice does not alter solver runtimes, VCA adapters, CLIs, schemas, or
 No CLI, schema, database, 1D, CUDA, time-integration, history, or rollback
 behavior changed in this slice.
 
+### PR 0.4 rollback-safe 3D flow lifecycle
+
+- Added explicit `BeginStep`, `SetTrialBoundaryConfiguration`, `SetPortInput`,
+  `SolveTrial`, `RollbackTrial`, `CommitStep`, and `GetPortState` operations to
+  `TransientFlowRuntime`, with clear rejection of invalid transitions.
+- `BeginStep` takes an in-memory snapshot of the committed PETSc flow vector,
+  resolved boundary values, pressure tractions, and full outlet-model state.
+  Every trial restores the same flow vector and outlet snapshot and uses that
+  vector as the backward-Euler history at `t_n`.
+- Trial linear-iteration counts are provisional. Rollback discards them and
+  commit publishes them to the physical cumulative total exactly once.
+- The CLI now performs the explicit lifecycle before transport, VCA circuit
+  advancement, histories, output, and checkpoints. The retained `Advance`
+  method is a compatibility adapter using the same lifecycle and numerical
+  implementation.
+- The current 3D port input supports only mean static pressure or outward mean
+  normal traction on a `boundary_label`, using the existing pressure-traction
+  weak form. It rejects scalar prescribed flow because no scientifically valid
+  velocity-profile reconstruction exists, and rejects conflicts with active
+  resistance/RC/RCR outlet models.
+- Extended the focused PETSc runtime test with exact trial--rollback--trial
+  flow-vector and iteration-count equality, boundary-traction restoration,
+  RC capacitor rollback/replay, single commit, invalid transitions, port-state
+  timing, unsupported input rejection, and `Advance` adapter parity.
+
+This slice does not add 3D transport rollback or move the VCA circuit into the
+flow lifecycle. Those objects remain CLI-owned and advance only after a
+successful flow commit.
+
 ## Baseline evidence
 
 On 2026-08-31, before Phase 0 implementation:
@@ -84,6 +113,10 @@ On 2026-08-31, before Phase 0 implementation:
 | `./solvers/cpu/vca_3d_runtime_test` | pass | generic measurement values, locator rejection, and VCA parity |
 | `make -C solvers/cpu vca_3d_smoke_test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` | pass | VCA flow/transport executable and smoke-test build |
 | `./solvers/cpu/vca_3d_smoke_test` | pass | one-/two-rank VCA flow, transport, checkpoint, and restart regression |
+| `make -C solvers/cpu vca_3d_runtime_test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` after PR 0.4 | pass | warning-clean focused lifecycle/port/outlet test build |
+| `./solvers/cpu/vca_3d_runtime_test` after PR 0.4 | pass | deterministic flow replay, boundary/outlet rollback, transition guards, single commit, and adapter parity |
+| `make -C solvers/cpu petsc-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` after PR 0.4 | pass | PETSc kernels, two-rank boundary preflight, lifecycle runtime, and one-/two-rank VCA checkpoint/restart smoke |
+| `make cpu-test && make -C solvers/one_d core-test` after PR 0.4 | pass | unchanged dependency-free CPU and native 1D fast baselines |
 
 PETSc was discoverable locally through `pkg-config` as version 3.15.5. PETSc
 runtime, multi-rank VCA, and numerical parity gates remain required when their
@@ -111,8 +144,9 @@ test and VCA smoke regression pass.
 
 ## Known limitations and risks
 
-- `TransientFlowRuntime::Advance` currently advances backward-Euler history
-  based on its CLI step argument and is not trial-safe.
+- The trial API accepts only pressure/normal-traction port inputs; scalar flow
+  input remains unsupported until a scientifically explicit profile model is
+  designed.
 - 3D transport and VCA circuit state have no rollback lifecycle yet.
 - The 1D CLI still owns runtime orchestration and mutable dynamic geometry.
 - `ApplyOneDCoupledInlet` mutates configuration and transport inlet state.
@@ -122,11 +156,10 @@ test and VCA smoke regression pass.
 
 ## Remaining Phase 0 work
 
-1. Add 3D trial/rollback/commit and deterministic replay tests.
-2. Extract a reusable 1D runtime with equivalent standalone behavior.
-3. Include transport, dynamic-radius, circuit, time, and output state in the
+1. Extract a reusable 1D runtime with equivalent standalone behavior.
+2. Include transport, dynamic-radius, circuit, time, and output state in the
    correct lifecycle boundary.
-4. Run engineering, numerical, and architecture gates.
+3. Run engineering, numerical, and architecture gates.
 
 ## Phase 0 exit condition
 
