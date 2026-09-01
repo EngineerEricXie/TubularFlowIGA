@@ -105,6 +105,58 @@ int main()
 		assert(Close(species.root_native_flux, expected_native_flux));
 		assert(Close(bifurcated.GetPortState("root").outward_species_flux.at("signal"),
 			-expected_native_flux));
+		bifurcated.AbortStep();
+		auto mixed_flow = bifurcated.FlowState();
+		const auto root_segments = iga::OneDSegmentsOutOfNode(
+			bifurcated.Network(), bifurcated.Network().root);
+		mixed_flow.flow.at(static_cast<std::size_t>(
+			bifurcated.Network().segments.at(static_cast<std::size_t>(root_segments[0])).cell_offset))
+			= 1.0e-9;
+		mixed_flow.flow.at(static_cast<std::size_t>(
+			bifurcated.Network().segments.at(static_cast<std::size_t>(root_segments[1])).cell_offset))
+			= -1.0e-9;
+		bifurcated.RestoreCommittedState(std::move(mixed_flow), bifurcated.Transports(),
+			bifurcated.Network());
+		RequireRejected([&bifurcated] { bifurcated.GetPortState("root"); });
+	}
+	{
+		auto reversed_text = Configuration();
+		const auto initial = reversed_text.find("\"initial_value\":1.0");
+		assert(initial != std::string::npos);
+		reversed_text.replace(initial, std::string("\"initial_value\":1.0").size(),
+			"\"initial_value\":2.0");
+		const auto reversed_configuration = iga::ParseOneDConfiguration(reversed_text);
+		iga::OneDFlowRuntime reversed(reversed_configuration, flow, network,
+			iga::ResolveOneDInlet(reversed_configuration), directory);
+		reversed.InitializeOpenLoop(-1.0e-9);
+		const auto initial_reversed_root = reversed.GetPortState("root");
+		assert(Close(initial_reversed_root.concentration.at("signal"), 2.0));
+		assert(Close(initial_reversed_root.outward_species_flux.at("signal"), 2.0e-9));
+		reversed.BeginStep(0.0, configuration.time.dt);
+		iga::PortBoundaryData root;
+		root.time_s = configuration.time.dt;
+		root.outward_flow_m3_s = 1.0e-9;
+		reversed.SetPortInput("root", root);
+		iga::PortBoundaryData terminal;
+		terminal.time_s = configuration.time.dt;
+		terminal.mean_pressure_pa = 0.0;
+		reversed.SetPortInput("outlet:2", terminal);
+		RequireRejected([&reversed] { reversed.SolveTrial(); });
+		RequireRejected([&reversed] { reversed.GetSpeciesStepAccounting(); });
+		reversed.RollbackTrial();
+		terminal.concentration.emplace("signal", 5.0);
+		reversed.SetPortInput("outlet:2", terminal);
+		reversed.SolveTrial();
+		const auto reversed_root = reversed.GetPortState("root");
+		const auto reversed_terminal = reversed.GetPortState("outlet:2");
+		assert(Close(*reversed_root.outward_flow_m3_s, 1.0e-9));
+		assert(Close(*reversed_terminal.outward_flow_m3_s, -1.0e-9));
+		assert(Close(reversed_root.concentration.at("signal"),
+			reversed.Transports().front().species.front().concentration.front()));
+		assert(!Close(reversed_root.concentration.at("signal"), 1.0));
+		assert(Close(reversed_root.outward_species_flux.at("signal"), 2.0e-9));
+		assert(Close(reversed_terminal.outward_species_flux.at("signal"), -5.0e-9));
+		assert(Conserved(reversed.GetSpeciesStepAccounting().at("signal")));
 	}
 	{
 		auto macro_configuration = configuration;

@@ -107,3 +107,23 @@ independently accumulated root/outlet/source amounts; the macro test confirms
 that vasodilation actually changes area while balance remains conserved; and
 a partially failed trial rejects accounting before rollback. The affected
 PETSc `iga_1d` application also compiles warning-free.
+
+Reversal-safe 1D boundary transport is the next bounded slice. A distal port
+may now receive an exterior concentration together with its pressure input;
+that trace is used by the same advective-diffusive face operator. A materially
+reversed, explicitly coupled terminal without a supplied concentration fails
+before the parallel species update; local outlet closures retain their legacy
+zero-gradient trace. At an outflowing root, omission of remote concentration
+selects the interior trace, avoiding reuse of a stale inlet value. A focused
+reversal regression covers missing-data failure, rollback, supplied terminal
+upwinding, root and terminal outward signs, and the integrated balance.
+
+The reversed-root donor state uses that same decision in both numerical flux
+and `PortState`: without a current supplied trace, concentration is the
+outward-flow-weighted interior value across root branches. Mixed materially
+inward/outward root branches are rejected because one aggregate concentration
+cannot represent both roles. The regression makes configured/stale inlet and
+interior concentrations distinct and checks both pre-advance and solved-state
+reporting. Focused numerical re-review accepted the direction epsilon,
+outward weighting, mixed-flow rejection, fallback consistency, and reversal
+signs with no remaining blocker.

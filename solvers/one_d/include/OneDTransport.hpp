@@ -207,7 +207,9 @@ inline double OneDTransportStableDt(const OneDNetwork& network,
 inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDSpeciesState& species,
 	const std::filesystem::path& case_directory, double start_time, double requested_dt,
-	const std::vector<double>* initial_area = nullptr)
+	const std::vector<double>* initial_area = nullptr,
+	const std::map<std::string, double>* root_concentrations = nullptr,
+	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr)
 {
 	double remaining = requested_dt;
 	std::vector<double> scalar(species.concentration.size());
@@ -225,8 +227,16 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 		const double dt = std::min(remaining,
 			std::isfinite(stable) && stable > 0.0 ? stable : remaining);
 		const double elapsed = requested_dt-remaining;
-		const double inlet_concentration = EvaluateOneDSpeciesInlet(configuration,
+		double inlet_concentration = EvaluateOneDSpeciesInlet(configuration,
 			species, case_directory, start_time+elapsed+dt);
+		bool root_concentration_supplied = false;
+		if (root_concentrations) {
+			const auto supplied = root_concentrations->find(species.definition.field);
+			if (supplied != root_concentrations->end()) {
+				inlet_concentration = supplied->second;
+				root_concentration_supplied = true;
+			}
+		}
 		double root_native_flux = 0.0;
 		std::map<int, double> outlet_native_flux;
 		double source_amount = 0.0;
@@ -240,14 +250,36 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 				concentration[static_cast<std::size_t>(cell+1)] = scalar[index]/flow.area[index];
 				area[static_cast<std::size_t>(cell+1)] = flow.area[index];
 			}
-			if (segment.parent == network.root) concentration[0] = inlet_concentration;
+			if (segment.parent == network.root) {
+				const double root_flow = flow.flow.at(
+					static_cast<std::size_t>(segment.cell_offset));
+				concentration[0] = root_concentrations && !root_concentration_supplied
+					&& root_flow < -configuration.coupling.flow_epsilon_m3_s
+					? concentration[1] : inlet_concentration;
+			}
 			else {
 				const int incoming = OneDSegmentIntoNode(network, segment.parent);
 				const auto& parent = network.segments[static_cast<std::size_t>(incoming)];
 				concentration[0] = scalar[static_cast<std::size_t>(parent.cell_offset+parent.cells-1)]
 					/flow.area[static_cast<std::size_t>(parent.cell_offset+parent.cells-1)];
 			}
-			concentration[static_cast<std::size_t>(segment.cells+1)] = concentration[static_cast<std::size_t>(segment.cells)];
+			const bool outlet = std::find(network.outlet_nodes.begin(),
+				network.outlet_nodes.end(), segment.child) != network.outlet_nodes.end();
+			bool outlet_concentration_supplied = false;
+			if (outlet && outlet_concentrations) {
+				const auto node = outlet_concentrations->find(segment.child);
+				if (node != outlet_concentrations->end()) {
+					const auto supplied = node->second.find(species.definition.field);
+					if (supplied != node->second.end()) {
+						concentration[static_cast<std::size_t>(segment.cells+1)]
+							= supplied->second;
+						outlet_concentration_supplied = true;
+					}
+				}
+			}
+			if (!outlet_concentration_supplied)
+				concentration[static_cast<std::size_t>(segment.cells+1)]
+					= concentration[static_cast<std::size_t>(segment.cells)];
 			area[0] = area[1];
 			area[static_cast<std::size_t>(segment.cells+1)] = area[static_cast<std::size_t>(segment.cells)];
 			for (int face = 0; face <= segment.cells; ++face) {
@@ -262,8 +294,7 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 			}
 			if (segment.parent == network.root)
 				root_native_flux += q.front();
-			if (std::find(network.outlet_nodes.begin(), network.outlet_nodes.end(),
-				segment.child) != network.outlet_nodes.end())
+			if (outlet)
 				outlet_native_flux[segment.child] = q.back();
 			for (int cell = 0; cell < segment.cells; ++cell) {
 				const auto index = static_cast<std::size_t>(segment.cell_offset+cell);
@@ -301,15 +332,32 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDTransportState& transport,
 	const std::filesystem::path& case_directory, double start_time, double dt,
-	const std::vector<double>* initial_area = nullptr)
+	const std::vector<double>* initial_area = nullptr,
+	const std::map<std::string, double>* root_concentrations = nullptr,
+	const std::map<int, std::map<std::string, double>>* outlet_concentrations = nullptr)
 {
+	if (outlet_concentrations)
+		for (const auto& segment : network.segments) {
+			if (std::find(network.outlet_nodes.begin(), network.outlet_nodes.end(),
+				segment.child) == network.outlet_nodes.end()
+				|| flow.flow.at(static_cast<std::size_t>(
+					segment.cell_offset+segment.cells-1))
+					>= -configuration.coupling.flow_epsilon_m3_s)
+				continue;
+			const auto node = outlet_concentrations->find(segment.child);
+			if (node == outlet_concentrations->end()) continue;
+			for (const auto& species : transport.species)
+				if (node->second.find(species.definition.field) == node->second.end())
+					throw std::runtime_error("reversed 1d outlet flow requires a supplied concentration for species '"
+						+species.definition.field+"'");
+		}
 	#ifdef _OPENMP
 	#pragma omp parallel for schedule(static) if(transport.species.size() >= 4)
 	#endif
 	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i)
 		AdvanceOneDSpecies(configuration, network, flow,
 			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt,
-			initial_area);
+			initial_area, root_concentrations, outlet_concentrations);
 }
 
 inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportState>& transports,

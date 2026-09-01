@@ -115,6 +115,7 @@ public:
 		trial_dt_s_ = dt_s;
 		trial_inlet_.reset();
 		trial_outlet_pressure_overrides_.clear();
+		trial_outlet_concentrations_.clear();
 		trial_inlet_mode_ = TrialInletMode::None;
 		trial_diagnostics_ = {};
 		trial_diagnostics_.planned_configured_substeps = configured_substeps;
@@ -150,14 +151,19 @@ public:
 		const int node = OutletNode(port_id);
 		if (!input.mean_pressure_pa || input.outward_flow_m3_s
 			|| input.mean_normal_traction_pa || input.total_pressure_pa
-			|| !input.concentration.empty() || !input.outward_species_flux.empty())
+			|| !input.outward_species_flux.empty())
 			throw std::runtime_error(
-				"native 1d outlet trial input requires only mean_pressure_pa");
+				"native 1d outlet trial input requires mean_pressure_pa and optional concentrations");
+		for (const auto& concentration : input.concentration)
+			if (!FindOneDSpecies(transports_, concentration.first))
+				throw std::runtime_error("1d outlet concentration species '"
+					+concentration.first+"' is not transported");
 		const auto& outlet = flow_state_.outlets.at(OutletIndex(node));
 		if (outlet.kind != OneDOutletKind::Pressure)
 			throw std::runtime_error(
 				"native 1d outlet pressure cannot replace a resistance or RCR closure");
 		trial_outlet_pressure_overrides_[node] = *input.mean_pressure_pa;
+		trial_outlet_concentrations_[node] = input.concentration;
 	}
 
 	// Compatibility path for VCA/replay inputs; coupled perfusate mutations are
@@ -252,7 +258,8 @@ public:
 				for (auto& transport : transports_)
 					AdvanceOneDTransport(configuration_, network_, flow_state_, transport,
 						case_directory_, sub_start, configuration_.time.dt,
-						&transport_initial_area);
+						&transport_initial_area, &inlet.species,
+						&trial_outlet_concentrations_);
 				ApplyOneDVasodilation(configuration_, network_, transports_, configuration_.time.dt, flow_.dynamic_viscosity);
 				++flow_state_.completed_step;
 				flow_state_.physical_time = sub_end;
@@ -342,9 +349,32 @@ public:
 		for (const auto& transport : transports_)
 			for (const auto& species : transport.species) {
 				double concentration = species.concentration.at(cell);
+				bool root_concentration_supplied = false;
 				if (root) {
 					const auto boundary = last_inlet_.species.find(species.definition.field);
-					if (boundary != last_inlet_.species.end()) concentration = boundary->second;
+					root_concentration_supplied = boundary != last_inlet_.species.end();
+					double native_inward_flow = 0.0;
+					double native_outward_flow = 0.0;
+					double outward_weighted_concentration = 0.0;
+					for (const int root_segment_index : OneDSegmentsOutOfNode(network_, node)) {
+						const auto& root_segment = network_.segments.at(
+							static_cast<std::size_t>(root_segment_index));
+						const auto root_cell = static_cast<std::size_t>(root_segment.cell_offset);
+						const double root_flow = flow_state_.flow.at(root_cell);
+						if (root_flow > configuration_.coupling.flow_epsilon_m3_s)
+							native_inward_flow += root_flow;
+						else if (root_flow < -configuration_.coupling.flow_epsilon_m3_s) {
+							native_outward_flow -= root_flow;
+							outward_weighted_concentration -= root_flow
+								*species.concentration.at(root_cell);
+						}
+					}
+					if (native_inward_flow > 0.0 && native_outward_flow > 0.0)
+						throw std::runtime_error(
+							"1d aggregate root port cannot report mixed-direction branch flow");
+					if (!root_concentration_supplied && native_outward_flow > 0.0)
+						concentration = outward_weighted_concentration/native_outward_flow;
+					else if (root_concentration_supplied) concentration = boundary->second;
 					else concentration = species.inlet_value;
 				}
 				state.concentration.emplace(species.definition.field, concentration);
@@ -362,8 +392,12 @@ public:
 						const auto& root_segment = network_.segments.at(
 							static_cast<std::size_t>(root_segment_index));
 						const auto root_cell = static_cast<std::size_t>(root_segment.cell_offset);
-						native_flux += OneDSpeciesFaceFlux(flow_state_.flow.at(root_cell),
-							boundary_concentration, species.concentration.at(root_cell),
+						const double root_flow = flow_state_.flow.at(root_cell);
+						const double exterior_concentration = !root_concentration_supplied
+							&& root_flow < -configuration_.coupling.flow_epsilon_m3_s
+							? species.concentration.at(root_cell) : boundary_concentration;
+						native_flux += OneDSpeciesFaceFlux(root_flow,
+							exterior_concentration, species.concentration.at(root_cell),
 							flow_state_.area.at(root_cell), species.definition.diffusivity,
 							root_segment.length/root_segment.cells);
 					}
@@ -453,6 +487,7 @@ private:
 		committed_ = Snapshot{};
 		trial_inlet_.reset();
 		trial_outlet_pressure_overrides_.clear();
+		trial_outlet_concentrations_.clear();
 		trial_configured_open_loop_schedule_.clear();
 		trial_solve_succeeded_ = false;
 	}
@@ -507,6 +542,7 @@ private:
 	std::optional<VascularInletState> trial_inlet_;
 	std::vector<VascularInletState> trial_configured_open_loop_schedule_;
 	std::map<int, double> trial_outlet_pressure_overrides_;
+	std::map<int, std::map<std::string, double>> trial_outlet_concentrations_;
 	TrialInletMode trial_inlet_mode_ = TrialInletMode::None;
 	bool trial_solve_succeeded_ = false;
 	TrialDiagnostics trial_diagnostics_;
