@@ -217,12 +217,35 @@ contributes no `Q*C` weight to the aggregate concentration. A focused
 flowing-plus-stagnant regression prevents fallback contamination; narrow
 numerical re-review accepted the fix.
 
-Before the graph executor can consume the staged interface, native 1D must be
-split into a hydraulic-frame stage and a transport replay stage. Each configured
-substep must retain its pre-flow area, accepted flow/area state, inlet schedule,
-and exact time interval so the existing conservative `A*C` update and integrated
-amounts remain identical to the legacy combined path. Schema-v6 staged execution
-will reject concentration-to-flow feedback such as vasodilation until a coupled
-substep iteration exists. The subsequent executor must reject transport cycles,
-enforce two-sided edge amounts and global balances before prepare, and commit
-donor hysteresis only after all domain finalizations.
+### Staged 1D prerequisite
+
+Native 1D now separates hydraulic advancement from conservative transport
+replay. Every configured substep retains its pre-flow area, accepted flow/area
+state, sampled inlet schedule, start time, and exact interval. Transport restores
+the committed species image and replays those frames through the unchanged
+finite-volume `A*C` update, so integrated boundary/source amounts and the final
+state match the legacy combined path. Configured-open-loop replay uses each
+frame's sampled species values rather than one macro-end value.
+
+The staged adapter exposes logical/native species mapping and exact native
+accounting through `StagedFlowTransportDomainRuntime`. A rejected scalar attempt
+consumes its concentration-input generation but preserves accepted hydraulic
+frames, allowing a changed concentration retry without another flow solve.
+Hydraulic rollback and scalar rollback restore their respective committed
+images, while abort restores both exactly. Concentration-to-flow feedback such
+as vasodilation remains rejected before opening a staged native transaction.
+
+One concentration ownership decision cannot represent a port whose material
+flow direction changes within the stored hydraulic frames. The adapter therefore
+checks every frame with the configured flow epsilon and rejects such a macro
+step until per-frame graph routing exists. Focused tests cover two-substep
+nonconstant schedule parity, changed-input scalar retry at fixed flow, direction
+change rejection, exact replay and abort restoration, core transport, and the
+PETSc 1D build. Focused Sol re-review accepted the replay formulation, ownership,
+and transaction semantics.
+
+The remaining PR 3.2 gate is the species-aware graph executor. It must reject
+transport cycles, route complete donor concentrations in deterministic
+topological order after hydraulic convergence, enforce two-sided edge amounts
+and global balances before prepare, and commit donor hysteresis only after all
+domain finalizations.

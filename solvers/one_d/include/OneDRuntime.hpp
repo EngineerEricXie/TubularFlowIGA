@@ -29,7 +29,7 @@ public:
 	using ImplicitAdvance = std::function<void(const OneDNetwork&,
 		const OneDFlowSystemDefinition&, OneDFlowState&, double, double)>;
 
-	enum class Phase { Uninitialized, Ready, TrialOpen, TrialSolved, CommitPrepared };
+	enum class Phase { Uninitialized, Ready, TrialOpen, HydraulicSolved, TrialSolved, CommitPrepared };
 	enum class TrialInletMode { None, HeldOpenLoop, Coupled, ConfiguredOpenLoop };
 
 	struct TrialDiagnostics {
@@ -40,6 +40,17 @@ public:
 		std::vector<double> configured_open_loop_endpoint_times_s;
 		std::vector<double> configured_open_loop_endpoint_flows_m3_s;
 		std::vector<double> substep_endpoint_flows_m3_s;
+	};
+
+	// A staged hydraulic trial records the exact flow image consumed by each
+	// conservative transport substep.  It deliberately owns copies: transport
+	// retries must never recompute or mutate the accepted hydraulic trajectory.
+	struct HydraulicFrame {
+		std::vector<double> pre_flow_area;
+		OneDFlowState post_flow;
+		VascularInletState inlet;
+		double start_time_s = 0.0;
+		double dt_s = 0.0;
 	};
 
 	OneDFlowRuntime(OneDConfiguration configuration, OneDFlowSystemDefinition flow,
@@ -279,6 +290,141 @@ public:
 		}
 	}
 
+	// Staged flow/transport support is intentionally separate from SolveTrial:
+	// flow-only callers retain the established combined numerical path.
+	void SolveHydraulicTrial()
+	{
+		RequirePhase(Phase::TrialOpen, "SolveHydraulicTrial");
+		if (configuration_.physiology.vasodilation)
+			throw std::runtime_error(
+				"staged 1d transport does not support concentration-driven vasodilation");
+		if (trial_inlet_mode_ != TrialInletMode::ConfiguredOpenLoop
+			&& (!trial_inlet_ || !trial_inlet_->has_flow))
+			throw std::runtime_error("1d staged hydraulic solve requires a root flow input");
+		RestoreCommitted();
+		trial_solve_succeeded_ = false;
+		hydraulic_frames_.clear();
+		trial_diagnostics_.attempted_configured_substeps = 0;
+		trial_diagnostics_.completed_configured_substeps = 0;
+		trial_diagnostics_.explicit_cfl_substep_delta = 0;
+		trial_diagnostics_.configured_open_loop_endpoint_times_s.clear();
+		trial_diagnostics_.configured_open_loop_endpoint_flows_m3_s.clear();
+		trial_diagnostics_.substep_endpoint_flows_m3_s.clear();
+		const long long cfl_before = flow_state_.internal_substeps;
+		try {
+			const double coupled_inlet_flow = trial_inlet_mode_ == TrialInletMode::Coupled
+				? trial_inlet_->flow_m3_s : 0.0;
+			for (int substep = 0; substep < trial_diagnostics_.planned_configured_substeps; ++substep) {
+				++trial_diagnostics_.attempted_configured_substeps;
+				const double sub_start = trial_time_s_+substep*configuration_.time.dt;
+				const double sub_end = substep+1 == trial_diagnostics_.planned_configured_substeps
+					? trial_time_s_+trial_dt_s_ : trial_time_s_+(substep+1)*configuration_.time.dt;
+				for (const auto& override : trial_outlet_pressure_overrides_) {
+					auto& outlet = flow_state_.outlets.at(OutletIndex(override.first));
+					outlet.pressure = override.second;
+					outlet.reference_pressure = override.second;
+					outlet.capacitor_pressure = override.second;
+				}
+				VascularInletState inlet = trial_inlet_mode_ == TrialInletMode::ConfiguredOpenLoop
+					? trial_configured_open_loop_schedule_.at(static_cast<std::size_t>(substep)) : *trial_inlet_;
+				if (trial_inlet_mode_ == TrialInletMode::ConfiguredOpenLoop) {
+					trial_diagnostics_.configured_open_loop_endpoint_times_s.push_back(sub_end);
+					trial_diagnostics_.configured_open_loop_endpoint_flows_m3_s.push_back(inlet.flow_m3_s);
+				}
+				const double inlet_flow = trial_inlet_mode_ == TrialInletMode::Coupled
+					? coupled_inlet_flow : inlet.flow_m3_s;
+				trial_diagnostics_.substep_endpoint_flows_m3_s.push_back(inlet_flow);
+				HydraulicFrame frame;
+				frame.pre_flow_area = flow_state_.area;
+				frame.inlet = inlet;
+				frame.start_time_s = sub_start;
+				frame.dt_s = configuration_.time.dt;
+				if (flow_.scheme == OneDFlowScheme::SteadyPoiseuille)
+					SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else if (flow_.scheme == OneDFlowScheme::RigidInertance)
+					SolveRigidInertanceOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else if (flow_.scheme == OneDFlowScheme::ExplicitRusanov)
+					AdvanceExplicitOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else {
+					if (!implicit_advance_)
+						throw std::runtime_error("1d implicit trial solve requires an injected PETSc advance function");
+					implicit_advance_(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				}
+				++flow_state_.completed_step;
+				flow_state_.physical_time = sub_end;
+				frame.post_flow = flow_state_;
+				hydraulic_frames_.push_back(std::move(frame));
+				last_inlet_ = std::move(inlet);
+				++trial_diagnostics_.completed_configured_substeps;
+			}
+			trial_diagnostics_.explicit_cfl_substep_delta = flow_state_.internal_substeps-cfl_before;
+			trial_solve_succeeded_ = true;
+			phase_ = Phase::HydraulicSolved;
+		} catch (...) {
+			trial_diagnostics_.explicit_cfl_substep_delta = flow_state_.internal_substeps-cfl_before;
+			phase_ = Phase::HydraulicSolved;
+			throw;
+		}
+	}
+
+	void SolveStagedTransportTrial(const std::map<std::string, double>& root_concentrations,
+		const std::map<int, std::map<std::string, double>>& outlet_concentrations)
+	{
+		RequirePhase(Phase::HydraulicSolved, "SolveStagedTransportTrial");
+		if (!trial_solve_succeeded_ || hydraulic_frames_.empty())
+			throw std::runtime_error("1d staged transport requires a successful hydraulic trial");
+		transports_ = committed_.transports;
+		OneDFlowState initial_flow = hydraulic_frames_.front().post_flow;
+		initial_flow.area = hydraulic_frames_.front().pre_flow_area;
+		for (auto& transport : transports_)
+			for (auto& species : transport.species)
+				ResetOneDSpeciesStepAccounting(network_, initial_flow, species);
+		try {
+			for (const auto& frame : hydraulic_frames_) {
+				const auto& frame_root_concentrations = trial_inlet_mode_
+					== TrialInletMode::ConfiguredOpenLoop ? frame.inlet.species : root_concentrations;
+				for (auto& transport : transports_)
+					AdvanceOneDTransport(configuration_, network_, frame.post_flow, transport,
+						case_directory_, frame.start_time_s, frame.dt_s, &frame.pre_flow_area,
+						&frame_root_concentrations, &outlet_concentrations);
+			}
+			for (auto& transport : transports_)
+				for (auto& species : transport.species)
+					species.step_accounting_valid = true;
+			last_inlet_ = hydraulic_frames_.back().inlet;
+			if (trial_inlet_mode_ != TrialInletMode::ConfiguredOpenLoop)
+				last_inlet_.species = root_concentrations;
+			phase_ = Phase::TrialSolved;
+		} catch (...) {
+			// A rejected scalar trial must leave the accepted hydraulic frames
+			// reusable for a changed concentration without another flow solve.
+			transports_ = committed_.transports;
+			phase_ = Phase::HydraulicSolved;
+			throw;
+		}
+	}
+
+	void RollbackHydraulicTrial()
+	{
+		RequirePhase(Phase::HydraulicSolved, "RollbackHydraulicTrial");
+		RestoreCommitted();
+		hydraulic_frames_.clear();
+		trial_inlet_.reset();
+		trial_outlet_pressure_overrides_.clear();
+		trial_outlet_concentrations_.clear();
+		trial_inlet_mode_ = TrialInletMode::None;
+		trial_solve_succeeded_ = false;
+		phase_ = Phase::TrialOpen;
+	}
+
+	void RollbackStagedTransportTrial()
+	{
+		RequirePhase(Phase::TrialSolved, "RollbackStagedTransportTrial");
+		transports_ = committed_.transports;
+		last_inlet_ = hydraulic_frames_.back().inlet;
+		phase_ = Phase::HydraulicSolved;
+	}
+
 	void RollbackTrial()
 	{
 		RequirePhase(Phase::TrialSolved, "RollbackTrial");
@@ -290,7 +436,7 @@ public:
 	void AbortStep()
 	{
 		if (phase_ == Phase::Ready) return;
-		if (phase_ != Phase::TrialOpen && phase_ != Phase::TrialSolved
+		if (phase_ != Phase::TrialOpen && phase_ != Phase::HydraulicSolved && phase_ != Phase::TrialSolved
 			&& phase_ != Phase::CommitPrepared)
 			throw std::runtime_error("illegal 1d runtime transition: AbortStep");
 		RestoreCommitted();
@@ -325,7 +471,7 @@ public:
 
 	PortState GetPortState(const std::string& port_id) const
 	{
-		if (phase_ != Phase::TrialSolved && phase_ != Phase::Ready)
+		if (phase_ != Phase::HydraulicSolved && phase_ != Phase::TrialSolved && phase_ != Phase::Ready)
 			throw std::runtime_error("1d GetPortState requires a solved or committed state");
 		int node = network_.root;
 		PortOrientation orientation = RootOrientation();
@@ -442,6 +588,7 @@ public:
 	const VascularInletState& LastInlet() const { return last_inlet_; }
 	Phase CurrentPhase() const { return phase_; }
 	const TrialDiagnostics& Diagnostics() const { return trial_diagnostics_; }
+	const std::vector<HydraulicFrame>& HydraulicFrames() const { return hydraulic_frames_; }
 
 	static PortOrientation RootOrientation() { return {-1}; }
 
@@ -489,6 +636,7 @@ private:
 		trial_outlet_pressure_overrides_.clear();
 		trial_outlet_concentrations_.clear();
 		trial_configured_open_loop_schedule_.clear();
+		hydraulic_frames_.clear();
 		trial_solve_succeeded_ = false;
 	}
 
@@ -541,6 +689,7 @@ private:
 	Snapshot committed_;
 	std::optional<VascularInletState> trial_inlet_;
 	std::vector<VascularInletState> trial_configured_open_loop_schedule_;
+	std::vector<HydraulicFrame> hydraulic_frames_;
 	std::map<int, double> trial_outlet_pressure_overrides_;
 	std::map<int, std::map<std::string, double>> trial_outlet_concentrations_;
 	TrialInletMode trial_inlet_mode_ = TrialInletMode::None;

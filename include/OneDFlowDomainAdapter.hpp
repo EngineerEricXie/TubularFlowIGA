@@ -6,6 +6,9 @@
 #include "OneDRuntime.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -67,6 +70,377 @@ private:
 	OneDFlowRuntime& runtime_;
 	std::vector<CouplingPort> ports_;
 	OneDInletPolicy inlet_policy_;
+};
+
+// The species-aware adapter owns the staged coupling contract.  The original
+// OneDFlowDomainAdapter remains flow-only so established callers continue to
+// use OneDFlowRuntime::SolveTrial without an altered numerical route.
+class OneDFlowTransportDomainAdapter : public CoupledDomainRuntime,
+	public StagedFlowTransportDomainRuntime {
+public:
+	OneDFlowTransportDomainAdapter(std::string domain_id, OneDFlowRuntime& runtime,
+		std::vector<CouplingPort> ports, OneDInletPolicy inlet_policy,
+		std::map<std::string, std::string> species_bindings)
+		: domain_id_(std::move(domain_id)), runtime_(runtime), ports_(std::move(ports)),
+		  inlet_policy_(inlet_policy), species_bindings_(std::move(species_bindings))
+	{
+		ValidateOneDFlowDomainMetadata(domain_id_, ports_, inlet_policy_);
+		std::set<std::string> native_species;
+		for (const auto& binding : species_bindings_) {
+			if (binding.first.empty() || binding.second.empty()
+				|| !FindOneDSpecies(runtime_.Transports(), binding.second))
+				throw std::runtime_error("1D staged species binding must name a transported native field");
+			if (!native_species.insert(binding.second).second)
+				throw std::runtime_error("1D staged species bindings require unique native fields");
+		}
+		for (const auto& port : ports_)
+			for (const auto& species : port.species)
+				if (!species_bindings_.count(species))
+					throw std::runtime_error("1D staged coupled port species '"+species
+						+"' has no native binding");
+	}
+
+	const std::string& DomainId() const noexcept override { return domain_id_; }
+	DomainKind Kind() const noexcept override { return DomainKind::OneDFlow; }
+	const std::vector<CouplingPort>& Ports() const noexcept override { return ports_; }
+
+	void BeginStep(const DomainStepContext& step) override
+	{
+		step.Validate();
+		if (runtime_.Configuration().physiology.vasodilation)
+			throw std::runtime_error(
+				"staged 1D flow/transport rejects enabled concentration-driven vasodilation");
+		runtime_.BeginStep(step.start_time_s, step.dt_s);
+		if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop)
+			runtime_.SetConfiguredOpenLoopInlet();
+		step_ = step;
+		hydraulic_inputs_.clear();
+		concentration_inputs_.clear();
+		hydraulic_trial_succeeded_ = false;
+		transport_trial_succeeded_ = false;
+	}
+
+	void SetPortInput(const std::string& port_id, const PortBoundaryData& input) override
+	{
+		RequireOpen("1D flow/transport input");
+		const auto& port = Port(port_id);
+		ValidatePortBoundaryData(input);
+		ValidateTime(input.time_s);
+		if (!input.outward_species_flux.empty())
+			throw std::runtime_error("1D peer species flux is executor-owned, not a boundary input");
+		const auto hydraulic = HydraulicInput(input);
+		if (HydraulicValueCount(hydraulic) > 0) {
+			if (hydraulic_inputs_.count(port_id))
+				throw std::runtime_error("1D staged hydraulic input was supplied more than once");
+			hydraulic_inputs_.emplace(port_id, hydraulic);
+		}
+		if (!input.concentration.empty()) {
+			if (!port.requires.count(PortQuantity::SpeciesConcentration))
+				throw std::runtime_error("1D staged port does not accept concentration input");
+			if (concentration_inputs_.count(port_id))
+				throw std::runtime_error("1D staged concentration was supplied more than once");
+			concentration_inputs_.emplace(port_id, input.concentration);
+		}
+	}
+
+	void SolveTrial() override
+	{
+		SolveHydraulicTrial();
+		SolveTransportTrial();
+	}
+
+	PortState GetPortState(const std::string& port_id) const override
+	{
+		return GetTransportPortState(port_id);
+	}
+
+	void RollbackTrial() override
+	{
+		if (!hydraulic_trial_succeeded_)
+			throw std::runtime_error("1D staged rollback requires a hydraulic trial");
+		if (transport_trial_succeeded_) RollbackTransportTrial();
+		RollbackHydraulicTrial();
+	}
+
+	void AbortStep() override
+	{
+		runtime_.AbortStep();
+		hydraulic_inputs_.clear();
+		concentration_inputs_.clear();
+		hydraulic_trial_succeeded_ = false;
+		transport_trial_succeeded_ = false;
+	}
+
+	void PrepareCommitStep() override
+	{
+		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+			throw std::runtime_error("1D staged prepare requires hydraulic and transport trials");
+		runtime_.PrepareCommitStep();
+	}
+
+	void FinalizeCommitStep() noexcept override
+	{
+		runtime_.FinalizeCommitStep();
+		hydraulic_inputs_.clear();
+		concentration_inputs_.clear();
+		hydraulic_trial_succeeded_ = false;
+		transport_trial_succeeded_ = false;
+	}
+
+	void SolveHydraulicTrial() override
+	{
+		RequireOpen("1D staged hydraulic solve");
+		for (const auto& port : ports_) {
+			const auto found = hydraulic_inputs_.find(port.id);
+			const int supplied = found == hydraulic_inputs_.end() ? 0 : HydraulicValueCount(found->second);
+			if (HydraulicRequirementCount(port) != supplied)
+				throw std::runtime_error("1D staged hydraulic input is missing or extra for port '"+port.id+"'");
+			if (supplied) runtime_.SetPortInput(port.locator, found->second);
+		}
+		hydraulic_trial_succeeded_ = false;
+		runtime_.SolveHydraulicTrial();
+		hydraulic_trial_succeeded_ = true;
+	}
+
+	PortState GetHydraulicPortState(const std::string& port_id) const override
+	{
+		if (!hydraulic_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+			throw std::runtime_error("1D staged hydraulic state requires a successful hydraulic trial");
+		auto state = runtime_.GetPortState(Port(port_id).locator);
+		state.concentration.clear();
+		state.outward_species_flux.clear();
+		return state;
+	}
+
+	void RollbackHydraulicTrial() override
+	{
+		if (!hydraulic_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+			throw std::runtime_error("1D staged hydraulic rollback requires a solved hydraulic trial");
+		runtime_.RollbackHydraulicTrial();
+		hydraulic_inputs_.clear();
+		hydraulic_trial_succeeded_ = false;
+	}
+
+	void SetTransportConcentration(const std::string& port_id, double time_s,
+		const std::map<std::string, double>& concentration) override
+	{
+		if (!hydraulic_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+			throw std::runtime_error("1D staged concentration requires accepted hydraulics");
+		const auto& port = Port(port_id);
+		if (!port.requires.count(PortQuantity::SpeciesConcentration)
+			|| port.species.empty() || SpeciesKeys(concentration) != port.species)
+			throw std::runtime_error("1D staged concentration requires the complete logical species map");
+		for (const auto& value : concentration)
+			if (!std::isfinite(value.second))
+				throw std::runtime_error("1D staged concentration must be finite");
+		ValidateTime(time_s);
+		if (concentration_inputs_.count(port_id))
+			throw std::runtime_error("1D staged concentration was supplied more than once");
+		concentration_inputs_.emplace(port_id, concentration);
+	}
+
+	void SolveTransportTrial() override
+	{
+		if (!hydraulic_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+			throw std::runtime_error("1D staged transport requires accepted hydraulics");
+		try {
+			std::map<std::string, double> root;
+			std::map<int, std::map<std::string, double>> outlets;
+			for (const auto& port : ports_) {
+				if (port.species.empty()) continue;
+				const auto found = concentration_inputs_.find(port.id);
+				const bool supplied = found != concentration_inputs_.end();
+				const auto flow = GetHydraulicPortState(port.id).outward_flow_m3_s;
+				if (!flow) throw std::runtime_error("1D staged species port omitted outward flow");
+				const double epsilon = runtime_.Configuration().coupling.flow_epsilon_m3_s;
+				const bool configured_root = inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop
+					&& port.locator == "root";
+				if (configured_root && supplied)
+					throw std::runtime_error(
+						"1D configured-open-loop root owns its scheduled concentration");
+				const bool receiver = configured_root || *flow < -epsilon
+					|| (std::abs(*flow) <= epsilon && supplied);
+				if (!configured_root && *flow < -epsilon && !supplied)
+					throw std::runtime_error("1D inward species port requires a complete concentration");
+				if (*flow > epsilon && supplied)
+					throw std::runtime_error("1D outward species port must not impose concentration");
+				ValidateFrameOwnership(port, receiver, epsilon);
+				if (!supplied) continue;
+				std::map<std::string, double> native;
+				for (const auto& logical : port.species)
+					native.emplace(species_bindings_.at(logical), found->second.at(logical));
+				if (port.locator == "root") root = std::move(native);
+				else outlets.emplace(NativeOutletNode(port), std::move(native));
+			}
+			transport_trial_succeeded_ = false;
+			runtime_.SolveStagedTransportTrial(root, outlets);
+			transport_trial_succeeded_ = true;
+		} catch (...) {
+			// Boundary data belongs to one scalar attempt.  Whether rejection
+			// happened before native replay or inside it, retries must explicitly
+			// provide a fresh complete concentration map against fixed frames.
+			concentration_inputs_.clear();
+			transport_trial_succeeded_ = false;
+			throw;
+		}
+	}
+
+	PortState GetTransportPortState(const std::string& port_id) const override
+	{
+		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::TrialSolved)
+			throw std::runtime_error("1D staged transport state requires successful trials");
+		auto state = runtime_.GetPortState(Port(port_id).locator);
+		LogicalizeState(Port(port_id), state);
+		return state;
+	}
+
+	void RollbackTransportTrial() override
+	{
+		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_
+			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::TrialSolved)
+			throw std::runtime_error("1D staged transport rollback requires successful trials");
+		runtime_.RollbackStagedTransportTrial();
+		concentration_inputs_.clear();
+		transport_trial_succeeded_ = false;
+	}
+
+	std::map<std::string, SpeciesStepAccounting> GetSpeciesStepAccounting() const override
+	{
+		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+			throw std::runtime_error("1D staged accounting requires successful trials");
+		const auto native = runtime_.GetSpeciesStepAccounting();
+		std::map<std::string, SpeciesStepAccounting> result;
+		for (const auto& binding : species_bindings_) {
+			const auto& value = native.at(binding.second);
+			SpeciesStepAccounting accounting;
+			accounting.initial_mass = value.initial_mass;
+			accounting.final_mass = value.final_mass;
+			accounting.source_amount = value.source_amount;
+			for (const auto& port : ports_) if (port.species.count(binding.first)) {
+				if (port.locator == "root")
+					accounting.outward_port_amount.emplace(port.id, value.root_outward_amount);
+				else accounting.outward_port_amount.emplace(port.id,
+					value.outlet_outward_amount.at(NativeOutletNode(port)));
+			}
+			accounting.residual = value.balance_residual;
+			result.emplace(binding.first, std::move(accounting));
+		}
+		return result;
+	}
+
+private:
+	const CouplingPort& Port(const std::string& port_id) const
+	{
+		const auto found = std::find_if(ports_.begin(), ports_.end(),
+			[&](const CouplingPort& port) { return port.id == port_id; });
+		if (found == ports_.end()) throw std::runtime_error("1D staged adapter has no port '"+port_id+"'");
+		return *found;
+	}
+
+	int NativeOutletNode(const CouplingPort& port) const
+	{
+		const int node_id = ParseOneDOutletNodeLocator(port);
+		const auto found = runtime_.Network().node_index.find(node_id);
+		if (found == runtime_.Network().node_index.end())
+			throw std::runtime_error("1D staged outlet locator is not in the native network");
+		return found->second;
+	}
+
+	double FrameOutwardFlow(const CouplingPort& port,
+		const OneDFlowRuntime::HydraulicFrame& frame) const
+	{
+		if (port.locator == "root") return -frame.post_flow.inlet_flow;
+		const int node = NativeOutletNode(port);
+		const auto found = std::find_if(frame.post_flow.outlets.begin(),
+			frame.post_flow.outlets.end(),
+			[node](const OneDOutletState& outlet) { return outlet.node == node; });
+		if (found == frame.post_flow.outlets.end())
+			throw std::runtime_error("1D staged frame is missing a configured outlet state");
+		return found->flow;
+	}
+
+	void ValidateFrameOwnership(const CouplingPort& port, bool receiver,
+		double epsilon) const
+	{
+		for (const auto& frame : runtime_.HydraulicFrames()) {
+			const double flow = FrameOutwardFlow(port, frame);
+			if (receiver && flow > epsilon)
+				throw std::runtime_error("1D staged port changes from receiver to donor within hydraulic frames");
+			if (!receiver && flow < -epsilon)
+				throw std::runtime_error("1D staged port changes from donor to receiver within hydraulic frames");
+		}
+	}
+
+	void RequireOpen(const char* operation) const
+	{
+		if (runtime_.CurrentPhase() != OneDFlowRuntime::Phase::TrialOpen)
+			throw std::runtime_error(std::string(operation)+" requires a trial-open step");
+	}
+
+	void ValidateTime(double time_s) const
+	{
+		const double scale = std::max({1.0, std::abs(step_.EndTime()), std::abs(time_s)});
+		if (!std::isfinite(time_s) || std::abs(time_s-step_.EndTime()) > 1.0e-12*scale)
+			throw std::runtime_error("1D staged input time does not match the active step");
+	}
+
+	static int HydraulicRequirementCount(const CouplingPort& port)
+	{
+		return port.requires.count(PortQuantity::FlowRate)
+			+port.requires.count(PortQuantity::MeanPressure);
+	}
+
+	static int HydraulicValueCount(const PortBoundaryData& input)
+	{
+		return static_cast<int>(input.outward_flow_m3_s.has_value())
+			+static_cast<int>(input.mean_pressure_pa.has_value());
+	}
+
+	static PortBoundaryData HydraulicInput(const PortBoundaryData& input)
+	{
+		PortBoundaryData result;
+		result.time_s = input.time_s;
+		result.outward_flow_m3_s = input.outward_flow_m3_s;
+		result.mean_pressure_pa = input.mean_pressure_pa;
+		return result;
+	}
+
+	static std::set<std::string> SpeciesKeys(const std::map<std::string, double>& values)
+	{
+		std::set<std::string> result;
+		for (const auto& value : values) result.insert(value.first);
+		return result;
+	}
+
+	void LogicalizeState(const CouplingPort& port, PortState& state) const
+	{
+		std::map<std::string, double> concentration;
+		std::map<std::string, double> flux;
+		for (const auto& logical : port.species) {
+			const auto& native = species_bindings_.at(logical);
+			concentration.emplace(logical, state.concentration.at(native));
+			flux.emplace(logical, state.outward_species_flux.at(native));
+		}
+		state.concentration = std::move(concentration);
+		state.outward_species_flux = std::move(flux);
+		ValidatePortState(state);
+	}
+
+	std::string domain_id_;
+	OneDFlowRuntime& runtime_;
+	std::vector<CouplingPort> ports_;
+	OneDInletPolicy inlet_policy_;
+	std::map<std::string, std::string> species_bindings_;
+	DomainStepContext step_;
+	std::map<std::string, PortBoundaryData> hydraulic_inputs_;
+	std::map<std::string, std::map<std::string, double>> concentration_inputs_;
+	bool hydraulic_trial_succeeded_ = false;
+	bool transport_trial_succeeded_ = false;
 };
 
 } // namespace iga

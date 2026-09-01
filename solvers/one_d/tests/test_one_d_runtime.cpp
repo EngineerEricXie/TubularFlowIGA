@@ -676,6 +676,268 @@ int main()
 				iga::OneDInletPolicy::ConfiguredOpenLoop);
 		});
 	}
+	{
+		// Staged flow/transport uses the legacy conservative scalar update over
+		// fixed hydraulic frames.  This macro step has two configured substeps,
+		// diffusion, and a nonzero volume source.
+		auto staged_configuration = configuration;
+		staged_configuration.time.steps = 4;
+		staged_configuration.physiology.vasodilation = false;
+		staged_configuration.transport_systems.front().species.front().diffusivity = 1.0e-8;
+		staged_configuration.transport_systems.front().species.front().volume_source = 0.5;
+		iga::CouplingPort root;
+		root.id = "root-logical";
+		root.subsystem_id = "staged";
+		root.locator_kind = "runtime_port";
+		root.locator = "root";
+		root.provides = {iga::PortQuantity::Area, iga::PortQuantity::FlowRate,
+			iga::PortQuantity::MeanPressure, iga::PortQuantity::SpeciesConcentration,
+			iga::PortQuantity::SpeciesFlux};
+		root.requires = {iga::PortQuantity::FlowRate, iga::PortQuantity::SpeciesConcentration};
+		root.species = {"logical_signal"};
+		auto outlet = root;
+		outlet.id = "outlet-logical";
+		outlet.locator = "outlet:2";
+		outlet.requires = {iga::PortQuantity::MeanPressure, iga::PortQuantity::SpeciesConcentration};
+		iga::OneDFlowRuntime staged_native(staged_configuration, flow, network,
+			iga::ResolveOneDInlet(staged_configuration), directory);
+		iga::OneDFlowRuntime legacy_native(staged_configuration, flow, network,
+			iga::ResolveOneDInlet(staged_configuration), directory);
+		staged_native.InitializeOpenLoop(1.0e-9);
+		legacy_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainAdapter staged("staged", staged_native,
+			{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
+			{{"logical_signal", "signal"}});
+		staged.BeginStep({0, 0.0, 2.0*staged_configuration.time.dt});
+		iga::PortBoundaryData staged_root;
+		staged_root.time_s = 2.0*staged_configuration.time.dt;
+		staged_root.outward_flow_m3_s = -2.0e-9;
+		staged_root.concentration.emplace("logical_signal", 2.0);
+		staged.SetPortInput("root-logical", staged_root);
+		iga::PortBoundaryData staged_outlet;
+		staged_outlet.time_s = 2.0*staged_configuration.time.dt;
+		staged_outlet.mean_pressure_pa = 0.0;
+		staged.SetPortInput("outlet-logical", staged_outlet);
+		staged.SolveTrial();
+		assert(staged_native.HydraulicFrames().size() == 2);
+		assert(Close(staged_native.HydraulicFrames()[0].start_time_s, 0.0)
+			&& Close(staged_native.HydraulicFrames()[0].dt_s, staged_configuration.time.dt)
+			&& Close(staged_native.HydraulicFrames()[1].post_flow.physical_time,
+				2.0*staged_configuration.time.dt));
+		legacy_native.BeginStep(0.0, 2.0*staged_configuration.time.dt);
+		iga::VascularInletState legacy_inlet;
+		legacy_inlet.time_s = 2.0*staged_configuration.time.dt;
+		legacy_inlet.has_flow = true;
+		legacy_inlet.flow_m3_s = 2.0e-9;
+		legacy_inlet.species.emplace("signal", 2.0);
+		legacy_native.SetCoupledInlet(legacy_inlet);
+		iga::PortBoundaryData legacy_pressure;
+		legacy_pressure.time_s = legacy_inlet.time_s;
+		legacy_pressure.mean_pressure_pa = 0.0;
+		legacy_native.SetPortInput("outlet:2", legacy_pressure);
+		legacy_native.SolveTrial();
+		assert(staged_native.FlowState().area == legacy_native.FlowState().area);
+		assert(staged_native.FlowState().flow == legacy_native.FlowState().flow);
+		assert(staged_native.Transports().front().species.front().concentration
+			== legacy_native.Transports().front().species.front().concentration);
+		const auto staged_state = staged.GetTransportPortState("root-logical");
+		assert(staged_state.concentration.count("logical_signal") == 1
+			&& !staged_state.concentration.count("signal"));
+		const auto staged_accounting = staged.GetSpeciesStepAccounting().at("logical_signal");
+		const auto legacy_accounting = legacy_native.GetSpeciesStepAccounting().at("signal");
+		assert(Close(staged_accounting.initial_mass, legacy_accounting.initial_mass)
+			&& Close(staged_accounting.final_mass, legacy_accounting.final_mass)
+			&& Close(staged_accounting.source_amount, legacy_accounting.source_amount)
+			&& Close(staged_accounting.residual, legacy_accounting.balance_residual));
+		assert(Close(staged_accounting.outward_port_amount.at("root-logical"),
+			legacy_accounting.root_outward_amount));
+		assert(Close(staged_accounting.outward_port_amount.at("outlet-logical"),
+			legacy_accounting.outlet_outward_amount.at(1)));
+		staged.PrepareCommitStep();
+		staged.FinalizeCommitStep();
+
+		// Configured open-loop transport must use the sampled species inlet for
+		// each frame, not a single macro-end concentration.
+		auto waveform_configuration = staged_configuration;
+		waveform_configuration.time.steps = 2;
+		iga::TemporalFunctionDefinition species_waveform;
+		species_waveform.name = "species_pulse";
+		species_waveform.kind = iga::TemporalFunctionKind::Sinusoid;
+		species_waveform.units = "1";
+		species_waveform.mean = 2.0;
+		species_waveform.amplitude = 0.5;
+		species_waveform.period = 0.004;
+		waveform_configuration.temporal_functions.push_back(species_waveform);
+		waveform_configuration.boundaries.front().conditions[1].waveform = species_waveform.name;
+		auto configured_root = root;
+		configured_root.subsystem_id = "configured-staged";
+		configured_root.requires.clear();
+		auto configured_outlet = outlet;
+		configured_outlet.subsystem_id = "configured-staged";
+		iga::OneDFlowRuntime configured_native(waveform_configuration, flow, network,
+			iga::ResolveOneDInlet(waveform_configuration), directory);
+		iga::OneDFlowRuntime configured_legacy(waveform_configuration, flow, network,
+			iga::ResolveOneDInlet(waveform_configuration), directory);
+		configured_native.InitializeOpenLoop(1.0e-9);
+		configured_legacy.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainAdapter configured("configured-staged", configured_native,
+			{configured_root, configured_outlet}, iga::OneDInletPolicy::ConfiguredOpenLoop,
+			{{"logical_signal", "signal"}});
+		configured.BeginStep({0, 0.0, 2.0*waveform_configuration.time.dt});
+		iga::PortBoundaryData configured_pressure;
+		configured_pressure.time_s = 2.0*waveform_configuration.time.dt;
+		configured_pressure.mean_pressure_pa = 0.0;
+		configured.SetPortInput("outlet-logical", configured_pressure);
+		configured.SolveTrial();
+		configured_legacy.BeginStep(0.0, 2.0*waveform_configuration.time.dt);
+		configured_legacy.SetConfiguredOpenLoopInlet();
+		configured_legacy.SetPortInput("outlet:2", configured_pressure);
+		configured_legacy.SolveTrial();
+		assert(configured_native.Transports().front().species.front().concentration
+			== configured_legacy.Transports().front().species.front().concentration);
+		assert(Close(configured_native.LastInlet().species.at("signal"), 2.0));
+		assert(!Close(configured_native.HydraulicFrames().front().inlet.species.at("signal"),
+			configured_native.LastInlet().species.at("signal")));
+		assert(Close(configured.GetTransportPortState("root-logical").concentration
+			.at("logical_signal"), configured_legacy.GetPortState("root").concentration.at("signal")));
+		configured.AbortStep();
+
+		// Hydraulic rollback restores the one committed image and clears inputs.
+		staged.BeginStep({1, 2.0*staged_configuration.time.dt, 2.0*staged_configuration.time.dt});
+		staged_root.time_s = 4.0*staged_configuration.time.dt;
+		staged_root.outward_flow_m3_s = -1.0e-9;
+		staged_root.concentration.clear();
+		staged_outlet.time_s = staged_root.time_s;
+		staged.SetPortInput("root-logical", staged_root);
+		staged.SetPortInput("outlet-logical", staged_outlet);
+		staged.SolveHydraulicTrial();
+		RequireRejected([&staged] { staged.PrepareCommitStep(); });
+		RequireRejected([&staged, &staged_root] {
+			staged.SetTransportConcentration("root-logical", staged_root.time_s+1.0e-6,
+				{{"logical_signal", 2.0}});
+		});
+		const auto replay_flow = staged.GetHydraulicPortState("root-logical").outward_flow_m3_s;
+		const auto replay_velocity = staged_native.FlowState().flow;
+		staged.RollbackHydraulicTrial();
+		RequireRejected([&staged] { staged.SolveHydraulicTrial(); });
+		staged_root.outward_flow_m3_s = -0.5e-9;
+		staged.SetPortInput("root-logical", staged_root);
+		staged.SetPortInput("outlet-logical", staged_outlet);
+		staged.SolveHydraulicTrial();
+		assert(!Close(*staged.GetHydraulicPortState("root-logical").outward_flow_m3_s, *replay_flow));
+		staged.RollbackHydraulicTrial();
+		staged_root.outward_flow_m3_s = -1.0e-9;
+		staged.SetPortInput("root-logical", staged_root);
+		staged.SetPortInput("outlet-logical", staged_outlet);
+		staged.SolveHydraulicTrial();
+		assert(Close(*staged.GetHydraulicPortState("root-logical").outward_flow_m3_s, *replay_flow));
+		assert(staged_native.FlowState().flow == replay_velocity);
+		staged.SetTransportConcentration("root-logical", staged_root.time_s,
+			{{"logical_signal", 2.0}});
+		staged.SetTransportConcentration("outlet-logical", staged_root.time_s,
+			{{"logical_signal", 7.0}});
+		RequireRejected([&staged] { staged.SolveTransportTrial(); });
+		assert(staged_native.FlowState().flow == replay_velocity);
+		// The rejected direction check consumed both maps, so a fresh root map
+		// can be supplied without recomputing hydraulics.
+		staged.SetTransportConcentration("root-logical", staged_root.time_s,
+			{{"logical_signal", 2.0}});
+		staged.SolveTransportTrial();
+		const auto transport_two = staged.GetTransportPortState("root-logical").concentration;
+		const auto fixed_flow = staged_native.FlowState().flow;
+		staged.RollbackTransportTrial();
+		assert(staged_native.FlowState().flow == fixed_flow);
+		staged.SetTransportConcentration("root-logical", staged_root.time_s,
+			{{"logical_signal", 3.0}});
+		staged.SolveTransportTrial();
+		assert(staged_native.FlowState().flow == fixed_flow);
+		assert(!Close(staged.GetTransportPortState("root-logical").concentration.at("logical_signal"),
+			transport_two.at("logical_signal")));
+		staged.RollbackTransportTrial();
+		staged.SetTransportConcentration("root-logical", staged_root.time_s,
+			{{"logical_signal", 2.0}});
+		staged.SolveTransportTrial();
+		assert(staged.GetTransportPortState("root-logical").concentration == transport_two);
+		staged.PrepareCommitStep();
+		staged.FinalizeCommitStep();
+
+		// Reverse flow makes the terminal a receiver; failed routing is recoverable
+		// without recomputing the accepted hydraulic state.
+		iga::OneDFlowRuntime reversed_native(staged_configuration, flow, network,
+			iga::ResolveOneDInlet(staged_configuration), directory);
+		reversed_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainAdapter reversed("staged", reversed_native,
+			{root, outlet}, iga::OneDInletPolicy::CoupledRoot,
+			{{"logical_signal", "signal"}});
+		reversed.BeginStep({0, 0.0, staged_configuration.time.dt});
+		iga::PortBoundaryData reverse_root;
+		reverse_root.time_s = staged_configuration.time.dt;
+		reverse_root.outward_flow_m3_s = 1.0e-9;
+		reversed.SetPortInput("root-logical", reverse_root);
+		iga::PortBoundaryData reverse_outlet;
+		reverse_outlet.time_s = reverse_root.time_s;
+		reverse_outlet.mean_pressure_pa = 0.0;
+		reversed.SetPortInput("outlet-logical", reverse_outlet);
+		reversed.SolveHydraulicTrial();
+		RequireRejected([&reversed] { reversed.SolveTransportTrial(); });
+		RequireRejected([&reversed] { reversed.PrepareCommitStep(); });
+		reversed.SetTransportConcentration("outlet-logical", reverse_root.time_s,
+			{{"logical_signal", 5.0}});
+		reversed.SolveTransportTrial();
+		assert(reversed.GetTransportPortState("outlet-logical").outward_species_flux
+			.at("logical_signal") < -4.0e-9);
+		reversed.AbortStep();
+
+		auto vaso_configuration = staged_configuration;
+		vaso_configuration.physiology.vasodilation = true;
+		iga::OneDFlowRuntime vaso_native(vaso_configuration, flow, network,
+			iga::ResolveOneDInlet(vaso_configuration), directory);
+		vaso_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainAdapter vaso("staged", vaso_native, {root, outlet},
+			iga::OneDInletPolicy::CoupledRoot, {{"logical_signal", "signal"}});
+		const auto vaso_committed = vaso_native.FlowState();
+		RequireRejected([&vaso, &staged_configuration] {
+			vaso.BeginStep({0, 0.0, staged_configuration.time.dt});
+		});
+		assert(vaso_native.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		assert(vaso_native.FlowState().area == vaso_committed.area);
+
+		// A selected receiver/donor ownership may not flip across the fixed
+		// hydraulic frames.  Abort returns the exact committed image.
+		auto sign_change_configuration = waveform_configuration;
+		iga::TemporalFunctionDefinition sign_change;
+		sign_change.name = "sign_change";
+		sign_change.kind = iga::TemporalFunctionKind::Sinusoid;
+		sign_change.units = "m3/s";
+		sign_change.mean = 0.0;
+		sign_change.amplitude = 1.0e-9;
+		sign_change.period = 0.006;
+		sign_change.phase = 0.5*std::acos(-1.0);
+		sign_change_configuration.temporal_functions.push_back(sign_change);
+		sign_change_configuration.boundaries.front().conditions.front().waveform = sign_change.name;
+		iga::OneDFlowRuntime sign_native(sign_change_configuration, flow, network,
+			iga::ResolveOneDInlet(sign_change_configuration), directory);
+		sign_native.InitializeOpenLoop(1.0e-9);
+		iga::OneDFlowTransportDomainAdapter sign_adapter("configured-staged", sign_native,
+			{configured_root, configured_outlet}, iga::OneDInletPolicy::ConfiguredOpenLoop,
+			{{"logical_signal", "signal"}});
+		const auto sign_committed_flow = sign_native.FlowState();
+		const auto sign_committed_species = sign_native.Transports();
+		sign_adapter.BeginStep({0, 0.0, 2.0*sign_change_configuration.time.dt});
+		configured_pressure.time_s = 2.0*sign_change_configuration.time.dt;
+		sign_adapter.SetPortInput("outlet-logical", configured_pressure);
+		sign_adapter.SolveHydraulicTrial();
+		assert(sign_native.HydraulicFrames().size() == 2
+			&& sign_native.HydraulicFrames().front().post_flow.inlet_flow > 0.0
+			&& sign_native.HydraulicFrames().back().post_flow.inlet_flow < 0.0);
+		RequireRejected([&sign_adapter] { sign_adapter.SolveTransportTrial(); });
+		sign_adapter.AbortStep();
+		assert(sign_native.CurrentPhase() == iga::OneDFlowRuntime::Phase::Ready);
+		assert(sign_native.FlowState().area == sign_committed_flow.area
+			&& sign_native.FlowState().flow == sign_committed_flow.flow);
+		assert(sign_native.Transports().front().species.front().concentration
+			== sign_committed_species.front().species.front().concentration);
+	}
 	fs::remove_all(directory);
 	std::cout << "one-dimensional runtime tests passed\n";
 }
