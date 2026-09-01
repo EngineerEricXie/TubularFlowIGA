@@ -2,6 +2,21 @@
 
 Status: **in progress**.
 
+## PR 5.2b1: strict ASCII VTP PolyData ingestion
+
+The dependency-free CPU layer now reads bounded ASCII-only VTP PolyData
+buffers, text, and paths into the canonical closed-surface validator.  Its
+small XML tokenizer accepts a leading declaration and comments while rejecting
+DTDs, entities, later processing instructions, malformed nesting/attributes,
+and oversized input/tokens.  It accepts exactly one PolyData Piece with points
+and triangular polygons in strict ASCII arrays, rejects compression and binary
+or appended formats, and optionally maps one integral CellData boundary array
+(default `boundary_id`); an empty `CellData` is treated as absent and uses the
+configured default label.  Counts, offsets, indices, labels, and finite numeric
+tokens are checked before the existing builder applies physical scale once.
+Focused coverage is `make -C solvers/cpu surface_vtp_test`; it is included in
+the dependency-free aggregate test target.
+
 ## PR 5.2a4: strict STL ingestion
 
 The dependency-free CPU layer now reads strict ASCII and binary STL buffers or
