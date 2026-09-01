@@ -296,6 +296,30 @@ Q_A,out + Q_B,out = 0
 Phi_A,out(species) + Phi_B,out(species) = 0.
 ```
 
+### Schema-v6 species metadata
+
+Schema v6 adds the metadata foundation for conservative species coupling while
+schema v5 remains the executable flow-only graph contract. A graph-level
+registry assigns every logical species a stable ID and concentration unit;
+its flux unit is derived explicitly as that concentration unit times `m^3/s`.
+Each domain maps the logical ID to its native scalar field, so coupling code
+never gives special meaning to names such as `oxygen`. Each participating port
+and pressure-flow edge carries an explicit sorted logical-species set.
+
+Species-capable edge endpoints must both provide and accept concentration and
+total outward flux. This symmetric capability is required because physical
+flow reversal swaps donor and receiver; hydraulic input roles remain separate
+and retain the pressure/flow formulation. Routing uses the measured outward
+flows, not endpoint ordering or the topological flow plan. Opposite-sign,
+conservative flows select the positive-outward endpoint as donor. Near zero,
+the last committed donor owns the tie; without committed ownership the state
+is ambiguous and rejected. Same-sign or materially nonconservative pairs are
+rejected.
+
+PR 3.1 is intentionally metadata and dependency-free routing only. Production
+runners reject schema v6 until transactional 1D/3D transport, total-flux
+measurement, and time-integrated balance accounting are implemented.
+
 The edge applies the sign reversal explicitly. Boundary labels, graph order,
 and inlet/outlet names never imply a sign.
 

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -84,6 +85,38 @@ std::string ValidConfiguration()
 })json";
 }
 
+std::string ValidSpeciesConfiguration()
+{
+	return R"json({
+  "schema_version":6,
+  "species":[
+    {"id":"tracer_alpha","concentration_unit":"kg/m^3"},
+    {"id":"drug_parent","concentration_unit":"mol/m^3"}
+  ],
+  "time":{"dt":0.01,"steps":2},"start_domain":"upstream",
+  "execution":{"kind":"explicit"},
+  "domains":[
+    {"id":"upstream","dimension":"1d","kind":"network_flow",
+     "case":"upstream","inlet_policy":"configured_open_loop",
+     "species_bindings":{"tracer_alpha":"native_tracer","drug_parent":"native_drug"},
+     "ports":[{"id":"terminal","locator_kind":"runtime_port","locator":"outlet:2",
+       "provides":["area","flow_rate","mean_pressure","species_concentration","species_flux"],
+       "requires":["mean_pressure","species_concentration","species_flux"],
+       "species":["tracer_alpha","drug_parent"]}]},
+    {"id":"region","dimension":"3d","kind":"body_fitted_iga_flow",
+     "case":"region","database":"region.ntiga",
+     "species_bindings":{"drug_parent":"scalar_b","tracer_alpha":"scalar_a"},
+     "ports":[{"id":"inlet","locator_kind":"boundary_label","locator":"1",
+       "provides":["area","flow_rate","mean_pressure","species_concentration","species_flux"],
+       "requires":["flow_rate","species_flux","species_concentration"],
+       "species":["drug_parent","tracer_alpha"]}]}
+  ],
+  "couplings":[{"id":"interface","a":{"domain":"upstream","port":"terminal"},
+    "b":{"domain":"region","port":"inlet"},"mode":"pressure_flow",
+    "initial_pressure_pa":0,"species":["drug_parent","tracer_alpha"]}]
+})json";
+}
+
 std::string Replace(std::string text, const std::string& from, const std::string& to)
 {
 	const auto position = text.find(from);
@@ -105,6 +138,34 @@ std::string InsertBeforeLast(std::string text, const std::string& marker,
 
 int main()
 {
+	{
+		const auto species = iga::ParseMultidomainConfiguration(ValidSpeciesConfiguration());
+		assert(species.schema_version == 6);
+		assert(species.graph.Species().size() == 2);
+		assert(species.graph.Species().begin()->first == "drug_parent");
+		assert(species.graph.Domain("upstream").species_bindings.at("tracer_alpha")
+			== "native_tracer");
+		assert(species.graph.Edge("interface").species
+			== std::set<std::string>({"drug_parent", "tracer_alpha"}));
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+				"{\"id\":\"drug_parent\",\"concentration_unit\":\"mol/m^3\"}",
+				"{\"id\":\"tracer_alpha\",\"concentration_unit\":\"mol/m^3\"}"));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+				"\"species\":[\"drug_parent\",\"tracer_alpha\"]}]",
+				"\"species\":[\"drug_parent\"]}]"));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+				"\"drug_parent\":\"scalar_b\",", ""));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ValidSpeciesConfiguration(),
+				",\"species_flux\"]", "]"));
+		});
+	}
 	const auto configuration = iga::ParseMultidomainConfiguration(ValidConfiguration());
 	assert(configuration.schema_version == 5);
 	assert(configuration.time.dt_s == 0.01 && configuration.time.steps == 8);
@@ -121,6 +182,12 @@ int main()
 	assert(configuration.graph.Domains().size() == 3);
 	assert(configuration.graph.Edges().size() == 2);
 	assert(configuration.initial_pressure_pa.at("upstream_to_roi") == 10.0);
+	const auto legacy_species_output = iga::ParseMultidomainConfiguration(Replace(
+		ValidConfiguration(),
+		"\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[]",
+		"\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\",\"species_flux\"],\"requires\":[]"));
+	assert(legacy_species_output.graph.Port({"upstream", "root_state"}).provides.count(
+		iga::PortQuantity::SpeciesFlux));
 	const auto plan = iga::MakeSequentialPlan(configuration.graph,
 		configuration.start_domain_id);
 	assert(plan.domain_ids

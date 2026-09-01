@@ -645,6 +645,9 @@ int main(int argc, char** argv)
 					"simulation_config.json", "schema-v5 manifest");
 				graph_configuration.emplace(
 					iga::ReadMultidomainConfiguration(manifest.string()));
+				if (graph_configuration->schema_version != 5)
+					throw std::runtime_error(
+						"sequential flow runner supports schema version 5; schema 6 species is not yet executable");
 				graph_definition.emplace(
 					iga::ResolveSequentialOneDThreeDOneD(*graph_configuration));
 				graph_assets = iga::ResolveGraphDomainAssets(*graph_configuration,

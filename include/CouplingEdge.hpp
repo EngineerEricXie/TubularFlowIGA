@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace iga {
 
@@ -65,6 +66,14 @@ struct CouplingEdge {
 	PortRef first;
 	PortRef second;
 	CouplingLaw law = CouplingLaw::PressureFlow;
+	std::set<std::string> species;
+
+	CouplingEdge() = default;
+	CouplingEdge(std::string edge_id, PortRef first_endpoint, PortRef second_endpoint,
+		CouplingLaw edge_law, std::set<std::string> coupled_species = {})
+		: id(std::move(edge_id)), first(std::move(first_endpoint)),
+		  second(std::move(second_endpoint)), law(edge_law),
+		  species(std::move(coupled_species)) {}
 };
 
 inline void ValidateCouplingEdge(const CouplingEdge& edge)
@@ -87,9 +96,11 @@ inline void ValidatePressureFlowEdgePorts(const CouplingPort& first,
 			throw std::runtime_error(
 				"pressure_flow endpoints must report flow_rate and mean_pressure");
 		for (const auto quantity : port->requires)
-			if (quantity != PortQuantity::FlowRate && quantity != PortQuantity::MeanPressure)
+			if (quantity != PortQuantity::FlowRate && quantity != PortQuantity::MeanPressure
+				&& quantity != PortQuantity::SpeciesConcentration
+				&& quantity != PortQuantity::SpeciesFlux)
 				throw std::runtime_error(
-					"pressure_flow endpoints may accept only flow_rate or mean_pressure");
+					"pressure_flow endpoints declare an unsupported input quantity");
 	}
 	const bool first_accepts_flow = first.requires.count(PortQuantity::FlowRate) != 0;
 	const bool second_accepts_flow = second.requires.count(PortQuantity::FlowRate) != 0;
@@ -105,6 +116,25 @@ inline void ValidatePressureFlowEdgePorts(const CouplingPort& first,
 		|| (first_accepts_pressure && !second.provides.count(PortQuantity::MeanPressure))
 		|| (second_accepts_pressure && !first.provides.count(PortQuantity::MeanPressure)))
 		throw std::runtime_error("pressure_flow endpoint does not provide its peer's input");
+}
+
+inline void ValidatePressureFlowSpeciesPorts(const CouplingEdge& edge,
+	const CouplingPort& first, const CouplingPort& second)
+{
+	if (edge.species.empty()) {
+		if (!first.species.empty() || !second.species.empty())
+			throw std::runtime_error("uncoupled species cannot be declared on an edge endpoint");
+		return;
+	}
+	if (first.species != edge.species || second.species != edge.species)
+		throw std::runtime_error("coupled species sets must match both edge endpoints");
+	const std::set<PortQuantity> capabilities{PortQuantity::SpeciesConcentration,
+		PortQuantity::SpeciesFlux};
+	for (const auto* port : {&first, &second})
+		for (const auto quantity : capabilities)
+			if (!port->provides.count(quantity) || !port->requires.count(quantity))
+				throw std::runtime_error(
+					"species edge endpoints must provide and accept concentration and total flux");
 }
 
 } // namespace iga

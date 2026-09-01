@@ -94,6 +94,7 @@ int main()
 	port.orientation.native_to_outward_sign = 1;
 	port.provides = {iga::PortQuantity::FlowRate, iga::PortQuantity::MeanPressure};
 	port.requires = {iga::PortQuantity::SpeciesConcentration};
+	port.species = {"tracer"};
 	iga::ValidateCouplingPort(port);
 	RequireRejected([&port] {
 		auto invalid = port;
@@ -151,12 +152,16 @@ int main()
 	iga::PortState first;
 	first.outward_flow_m3_s = 1.0e-6;
 	first.outward_species_flux["tracer"] = 2.0e-6;
+	first.outward_species_flux["drug_parent"] = 3.0e-9;
 	iga::PortState second;
 	second.outward_flow_m3_s = -1.0e-6;
 	second.outward_species_flux["tracer"] = -2.0e-6;
-	const auto residual = iga::ConservativeEdgeResidual(first, second);
+	second.outward_species_flux["drug_parent"] = -3.0e-9;
+	const auto residual = iga::ConservativeEdgeResidual(first, second,
+		{"drug_parent", "tracer"});
 	assert(Close(residual.outward_flow_m3_s, 0.0));
 	assert(Close(residual.outward_species_flux.at("tracer"), 0.0));
+	assert(Close(residual.outward_species_flux.at("drug_parent"), 0.0));
 	second.outward_flow_m3_s = -0.75e-6;
 	const auto nonconservative = iga::ConservativeEdgeResidual(first, second);
 	assert(Close(nonconservative.outward_flow_m3_s, 0.25e-6));
@@ -174,6 +179,30 @@ int main()
 		second.outward_flow_m3_s = 0.0;
 		iga::ConservativeEdgeResidual(first, second);
 	}, "mismatched edge species");
+	const iga::SpeciesRoutingControls routing{1.0e-12, 1.0e-14, 1.0e-10};
+	assert(iga::ResolveSpeciesDonor(2.0e-6, -2.0e-6, routing)
+		== iga::SpeciesDonor::First);
+	assert(iga::ResolveSpeciesDonor(-3.0e-6, 3.0e-6, routing)
+		== iga::SpeciesDonor::Second);
+	assert(iga::ResolveSpeciesDonor(0.5e-12, -0.5e-12, routing,
+		iga::SpeciesDonor::Second) == iga::SpeciesDonor::Second);
+	RequireRejected([&routing] {
+		(void)iga::ResolveSpeciesDonor(0.0, 0.0, routing);
+	}, "near-zero routing without committed ownership");
+	RequireRejected([&routing] {
+		(void)iga::ResolveSpeciesDonor(2.0e-6, 1.0e-6, routing);
+	}, "same-sign species flows");
+	RequireRejected([&routing] {
+		(void)iga::ResolveSpeciesDonor(2.0e-6, -1.0e-6, routing);
+	}, "nonconservative species flows");
+	const auto registry = iga::MakeSpeciesRegistry({{"drug_parent", "mol/m^3"},
+		{"tracer_alpha", "kg/m^3"}});
+	assert(registry.begin()->first == "drug_parent");
+	assert(iga::SpeciesFluxUnit(registry.at("tracer_alpha")) == "(kg/m^3)*m^3/s");
+	RequireRejected([] {
+		(void)iga::MakeSpeciesRegistry({{"oxygen", "mol/m^3"},
+			{"oxygen", "kg/m^3"}});
+	}, "duplicate logical species");
 
 	std::cout << "coupling port tests passed\n";
 }

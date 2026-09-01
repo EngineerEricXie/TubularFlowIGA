@@ -17,6 +17,14 @@ struct DomainNode {
 	std::string id;
 	DomainKind kind = DomainKind::OneDFlow;
 	std::vector<CouplingPort> ports;
+	std::map<std::string, std::string> species_bindings;
+
+	DomainNode() = default;
+	DomainNode(std::string domain_id, DomainKind domain_kind,
+		std::vector<CouplingPort> domain_ports,
+		std::map<std::string, std::string> bindings = {})
+		: id(std::move(domain_id)), kind(domain_kind), ports(std::move(domain_ports)),
+		  species_bindings(std::move(bindings)) {}
 };
 
 struct SequentialCouplingPlan {
@@ -39,8 +47,9 @@ struct PressureFlowComponentPlan {
 
 class SimulationGraph {
 public:
-	SimulationGraph(std::vector<DomainNode> domains, std::vector<CouplingEdge> edges)
-		: edges_(std::move(edges))
+	SimulationGraph(std::vector<DomainNode> domains, std::vector<CouplingEdge> edges,
+		std::vector<SpeciesDefinition> species = {})
+		: species_(MakeSpeciesRegistry(species)), edges_(std::move(edges))
 	{
 		if (domains.empty()) throw std::runtime_error("simulation graph requires at least one domain");
 		for (auto& domain : domains) {
@@ -65,7 +74,19 @@ public:
 			if (!endpoint_pairs.insert(pair).second)
 				throw std::runtime_error("simulation graph has a duplicate endpoint pair");
 			if (edge.law == CouplingLaw::PressureFlow)
+			{
 				ValidatePressureFlowEdgePorts(first, second);
+				ValidatePressureFlowSpeciesPorts(edge, first, second);
+			}
+			for (const auto& species_id : edge.species) {
+				if (!species_.count(species_id))
+					throw std::runtime_error("coupling edge references undeclared species '"
+						+species_id+"'");
+				for (const auto* reference : {&edge.first, &edge.second})
+					if (!Domain(reference->domain_id).species_bindings.count(species_id))
+						throw std::runtime_error("coupling endpoint domain has no binding for species '"
+							+species_id+"'");
+			}
 		}
 	}
 
@@ -100,9 +121,10 @@ public:
 
 	const std::map<std::string, DomainNode>& Domains() const noexcept { return domains_; }
 	const std::vector<CouplingEdge>& Edges() const noexcept { return edges_; }
+	const std::map<std::string, SpeciesDefinition>& Species() const noexcept { return species_; }
 
 private:
-	static void ValidateDomain(const DomainNode& domain)
+	void ValidateDomain(const DomainNode& domain) const
 	{
 		if (domain.id.empty()) throw std::runtime_error("simulation graph domain id must be nonempty");
 		if (!IsKnownDomainKind(domain.kind))
@@ -116,9 +138,24 @@ private:
 				throw std::runtime_error("simulation graph port subsystem_id does not match its domain");
 			if (!locators.emplace(port.locator_kind, port.locator).second)
 				throw std::runtime_error("simulation graph logical ports must have unique physical locators within a domain");
+			for (const auto& species_id : port.species)
+				if (!species_.count(species_id))
+					throw std::runtime_error("domain port references undeclared species '"
+						+species_id+"'");
+				else if (!domain.species_bindings.count(species_id))
+					throw std::runtime_error("domain port has no native binding for species '"
+						+species_id+"'");
+		}
+		std::set<std::string> native_fields;
+		for (const auto& binding : domain.species_bindings) {
+			if (binding.first.empty() || binding.second.empty() || !species_.count(binding.first))
+				throw std::runtime_error("domain has an invalid species binding");
+			if (!native_fields.insert(binding.second).second)
+				throw std::runtime_error("domain species bindings require unique native fields");
 		}
 	}
 
+	std::map<std::string, SpeciesDefinition> species_;
 	std::map<std::string, DomainNode> domains_;
 	std::vector<CouplingEdge> edges_;
 };

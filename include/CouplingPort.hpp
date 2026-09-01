@@ -1,6 +1,8 @@
 #ifndef IGA_COUPLING_PORT_HPP
 #define IGA_COUPLING_PORT_HPP
 
+#include "SpeciesCoupling.hpp"
+
 #include <cmath>
 #include <map>
 #include <optional>
@@ -115,6 +117,7 @@ struct CouplingPort {
 	PortOrientation orientation;
 	std::set<PortQuantity> provides;
 	std::set<PortQuantity> requires;
+	std::set<std::string> species;
 };
 
 struct CouplingResidual {
@@ -195,6 +198,16 @@ inline void ValidateCouplingPort(const CouplingPort& port)
 	ValidatePortQuantityDeclarations(
 		std::vector<PortQuantity>(port.provides.begin(), port.provides.end()),
 		std::vector<PortQuantity>(port.requires.begin(), port.requires.end()));
+	for (const auto& species : port.species)
+		if (species.empty()) throw std::runtime_error("port species id must be nonempty");
+	const bool has_species_quantity
+		= port.provides.count(PortQuantity::SpeciesConcentration)
+		|| port.provides.count(PortQuantity::SpeciesFlux)
+		|| port.requires.count(PortQuantity::SpeciesConcentration)
+		|| port.requires.count(PortQuantity::SpeciesFlux);
+	if (!port.species.empty() && !has_species_quantity)
+		throw std::runtime_error(
+			"port species declarations require species quantities");
 }
 
 inline void ValidateCouplingPorts(const std::vector<CouplingPort>& ports)
@@ -225,6 +238,18 @@ inline CouplingResidual ConservativeEdgeResidual(const PortState& first,
 			throw std::runtime_error("conservative edge residual requires matching species sets");
 		result.outward_species_flux.emplace(species.first, species.second+other->second);
 	}
+	return result;
+}
+
+inline CouplingResidual ConservativeEdgeResidual(const PortState& first,
+	const PortState& second, const std::set<std::string>& species)
+{
+	const auto result = ConservativeEdgeResidual(first, second);
+	std::set<std::string> actual;
+	for (const auto& value : result.outward_species_flux) actual.insert(value.first);
+	if (actual != species)
+		throw std::runtime_error(
+			"conservative edge residual does not match its declared species set");
 	return result;
 }
 

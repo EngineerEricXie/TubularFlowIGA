@@ -49,17 +49,24 @@ inline void ValidateOneDFlowDomainMetadata(const std::string& domain_id,
 		for (const auto quantity : port.provides)
 			if (!supported_provides.count(quantity))
 				throw std::runtime_error("1D flow runtime port declares an unsupported output quantity");
+		std::set<PortQuantity> hydraulic_requires = port.requires;
+		hydraulic_requires.erase(PortQuantity::SpeciesConcentration);
+		hydraulic_requires.erase(PortQuantity::SpeciesFlux);
 		if (port.locator == "root") {
-			if (!port.requires.empty()
-				&& port.requires != std::set<PortQuantity>{PortQuantity::FlowRate})
+			if (!hydraulic_requires.empty()
+				&& hydraulic_requires != std::set<PortQuantity>{PortQuantity::FlowRate})
 				throw std::runtime_error("1D root runtime port may receive only flow_rate");
-			if (port.requires.count(PortQuantity::FlowRate)) ++root_flow_receivers;
+			if (hydraulic_requires.count(PortQuantity::FlowRate)) ++root_flow_receivers;
 		} else {
 			(void)ParseOneDOutletNodeLocator(port);
-			if (!port.requires.empty()
-				&& port.requires != std::set<PortQuantity>{PortQuantity::MeanPressure})
+			if (!hydraulic_requires.empty()
+				&& hydraulic_requires != std::set<PortQuantity>{PortQuantity::MeanPressure})
 				throw std::runtime_error("1D outlet runtime port may receive only mean_pressure");
 		}
+		if (port.requires.count(PortQuantity::SpeciesFlux)
+			&& !port.requires.count(PortQuantity::SpeciesConcentration))
+			throw std::runtime_error(
+				"1D species-flux input requires concentration input capability");
 	}
 	if (inlet_policy == OneDInletPolicy::ConfiguredOpenLoop && root_flow_receivers != 0)
 		throw std::runtime_error(
@@ -90,14 +97,19 @@ inline void ValidateThreeDBodyFittedFlowDomainMetadata(const std::string& domain
 	if (domain_id.empty()) throw std::runtime_error("3D flow domain id must be nonempty");
 	ValidateCouplingPorts(ports);
 	const std::set<PortQuantity> supported_provides = {PortQuantity::Area,
-		PortQuantity::FlowRate, PortQuantity::MeanPressure};
+		PortQuantity::FlowRate, PortQuantity::MeanPressure,
+		PortQuantity::SpeciesConcentration, PortQuantity::SpeciesFlux};
 	const std::set<PortQuantity> supported_requires = {PortQuantity::FlowRate,
-		PortQuantity::MeanPressure, PortQuantity::MeanNormalTraction};
+		PortQuantity::MeanPressure, PortQuantity::MeanNormalTraction,
+		PortQuantity::SpeciesConcentration, PortQuantity::SpeciesFlux};
 	for (const auto& port : ports) {
 		if (port.subsystem_id != domain_id)
 			throw std::runtime_error("3D flow domain port metadata has a mismatched domain id");
 		(void)ParseThreeDFlowBoundaryLabel(port);
-		if (port.requires.size() > 1)
+		const std::size_t hydraulic_inputs = port.requires.count(PortQuantity::FlowRate)
+			+port.requires.count(PortQuantity::MeanPressure)
+			+port.requires.count(PortQuantity::MeanNormalTraction);
+		if (hydraulic_inputs > 1)
 			throw std::runtime_error("3D flow port may receive at most one input quantity");
 		for (const auto quantity : port.provides)
 			if (!supported_provides.count(quantity))

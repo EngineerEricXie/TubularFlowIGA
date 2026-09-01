@@ -19,4 +19,9 @@ printf '%s\n' "$v5_output" | grep -q 'schema_version=5 mode=multidomain'
 printf '%s\n' "$v5_output" | grep -q 'sequential_pressure_flow_runner_compatible=yes'
 printf '%s\n' "$v5_output" | grep -q 'acyclic_pressure_flow_component_compatible=yes'
 
+v6='{"schema_version":6,"species":[{"id":"tracer_alpha","concentration_unit":"mol/m^3"}],"time":{"dt":0.01,"steps":2},"start_domain":"upstream","execution":{"kind":"explicit"},"domains":[{"id":"upstream","dimension":"1d","kind":"network_flow","case":"domains/upstream","inlet_policy":"configured_open_loop","species_bindings":{"tracer_alpha":"native_tracer"},"ports":[{"id":"terminal","locator_kind":"runtime_port","locator":"outlet:2","provides":["area","flow_rate","mean_pressure","species_concentration","species_flux"],"requires":["mean_pressure","species_concentration","species_flux"],"species":["tracer_alpha"]}]},{"id":"roi","dimension":"3d","kind":"body_fitted_iga_flow","case":"domains/roi","database":"domains/roi/roi.ntiga","species_bindings":{"tracer_alpha":"scalar_a"},"ports":[{"id":"inlet","locator_kind":"boundary_label","locator":"1","provides":["area","flow_rate","mean_pressure","species_concentration","species_flux"],"requires":["flow_rate","species_concentration","species_flux"],"species":["tracer_alpha"]}]}],"couplings":[{"id":"upstream_to_roi","a":{"domain":"upstream","port":"terminal"},"b":{"domain":"roi","port":"inlet"},"mode":"pressure_flow","initial_pressure_pa":0,"species":["tracer_alpha"]}]}'
+v6_output=$(printf '%s\n' "$v6" | "$checker" -)
+printf '%s\n' "$v6_output" | grep -q 'schema_version=6 mode=multidomain'
+printf '%s\n' "$v6_output" | grep -q 'native_species_runner_compatible=no'
+
 printf '%s\n' 'iga_config_check dispatch tests passed'

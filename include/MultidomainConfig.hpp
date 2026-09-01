@@ -42,6 +42,7 @@ struct GraphDomainDefinition {
 	std::filesystem::path database;
 	OneDInletPolicy one_d_inlet_policy = OneDInletPolicy::ConfiguredOpenLoop;
 	std::vector<CouplingPort> ports;
+	std::map<std::string, std::string> species_bindings;
 };
 
 struct MultidomainConfiguration {
@@ -53,10 +54,10 @@ struct MultidomainConfiguration {
 	std::map<std::string, double> initial_pressure_pa;
 	SimulationGraph graph;
 
-	MultidomainConfiguration(GraphTimeDefinition time_value, std::string start_domain,
+	MultidomainConfiguration(int schema, GraphTimeDefinition time_value, std::string start_domain,
 		GraphExecutionDefinition execution_value, std::vector<GraphDomainDefinition> domain_values,
 		std::map<std::string, double> initial_pressures, SimulationGraph graph_value)
-		: time(time_value), start_domain_id(std::move(start_domain)),
+		: schema_version(schema), time(time_value), start_domain_id(std::move(start_domain)),
 		  execution(execution_value), domains(std::move(domain_values)),
 		  initial_pressure_pa(std::move(initial_pressures)), graph(std::move(graph_value)) {}
 };
@@ -122,13 +123,29 @@ inline std::set<PortQuantity> ParseQuantities(const JsonValue& value,
 	return result;
 }
 
+inline std::set<std::string> ParseSpeciesIds(const JsonValue& value,
+	const std::string& context)
+{
+	std::set<std::string> result;
+	const auto& values = RequireArray(value, context);
+	for (std::size_t i = 0; i < values.size(); ++i) {
+		const auto id = RequireString(values[i], context+"["+std::to_string(i)+"]");
+		if (id.empty() || !result.insert(id).second)
+			throw std::runtime_error("simulation_config.json: "+context
+				+" requires unique nonempty species ids");
+	}
+	return result;
+}
+
 inline CouplingPort ParsePort(const JsonValue& value, const std::string& domain_id,
-	std::size_t index)
+	std::size_t index, int schema_version)
 {
 	const auto context = "domains."+domain_id+".ports["+std::to_string(index)+"]";
 	const auto& object = RequireObject(value, context);
-	RequireKnownKeys(object, {"id", "locator_kind", "locator", "native_to_outward_sign",
-		"provides", "requires"}, context);
+	auto keys = std::set<std::string>{"id", "locator_kind", "locator",
+		"native_to_outward_sign", "provides", "requires"};
+	if (schema_version == 6) keys.insert("species");
+	RequireKnownKeys(object, keys, context);
 	CouplingPort port;
 	port.id = RequireString(Required(object, "id", context), context+".id");
 	port.subsystem_id = domain_id;
@@ -147,16 +164,32 @@ inline CouplingPort ParsePort(const JsonValue& value, const std::string& domain_
 		context+".provides");
 	port.requires = ParseQuantities(Required(object, "requires", context),
 		context+".requires");
+	if (schema_version == 6)
+		port.species = ParseSpeciesIds(Required(object, "species", context),
+			context+".species");
 	ValidateCouplingPort(port);
+	if (schema_version == 6) {
+		const bool has_species_quantity
+			= port.provides.count(PortQuantity::SpeciesConcentration)
+			|| port.provides.count(PortQuantity::SpeciesFlux)
+			|| port.requires.count(PortQuantity::SpeciesConcentration)
+			|| port.requires.count(PortQuantity::SpeciesFlux);
+		if (has_species_quantity != !port.species.empty())
+			throw std::runtime_error("simulation_config.json: "+context
+				+" species declarations and quantities must be present together");
+	}
 	return port;
 }
 
-inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t index)
+inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t index,
+	int schema_version)
 {
 	const auto context = "domains["+std::to_string(index)+"]";
 	const auto& object = RequireObject(value, context);
-	RequireKnownKeys(object, {"id", "dimension", "kind", "case", "database",
-		"inlet_policy", "ports"}, context);
+	auto keys = std::set<std::string>{"id", "dimension", "kind", "case", "database",
+		"inlet_policy", "ports"};
+	if (schema_version == 6) keys.insert("species_bindings");
+	RequireKnownKeys(object, keys, context);
 	GraphDomainDefinition domain;
 	domain.id = RequireString(Required(object, "id", context), context+".id");
 	const auto dimension = RequireString(Required(object, "dimension", context),
@@ -188,7 +221,19 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 	domain.case_directory = RelativePath(Required(object, "case", context), context+".case");
 	const auto& ports = RequireArray(Required(object, "ports", context), context+".ports");
 	for (std::size_t port = 0; port < ports.size(); ++port)
-		domain.ports.push_back(ParsePort(ports[port], domain.id, port));
+		domain.ports.push_back(ParsePort(ports[port], domain.id, port, schema_version));
+	if (schema_version == 6) {
+		const auto& bindings = RequireObject(Required(object, "species_bindings", context),
+			context+".species_bindings");
+		for (const auto& binding : bindings) {
+			const auto field = RequireString(binding.second,
+				context+".species_bindings."+binding.first);
+			if (binding.first.empty() || field.empty())
+				throw std::runtime_error(
+					"simulation_config.json: species bindings must be nonempty");
+			domain.species_bindings.emplace(binding.first, field);
+		}
+	}
 	if (domain.kind == DomainKind::OneDFlow)
 		ValidateOneDFlowDomainMetadata(domain.id, domain.ports, domain.one_d_inlet_policy);
 	else ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
@@ -256,10 +301,30 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 	using namespace multidomain_detail;
 	const auto root_value = config_detail::JsonParser(text).Parse();
 	const auto& root = RequireObject(root_value, "root");
-	RequireKnownKeys(root, {"schema_version", "time", "start_domain", "execution",
-		"domains", "couplings"}, "root");
-	if (RequireInteger(Required(root, "schema_version", "root"), "schema_version") != 5)
-		throw std::runtime_error("simulation_config.json: multidomain configuration requires schema_version 5");
+	const int schema_version = RequireInteger(Required(root, "schema_version", "root"),
+		"schema_version");
+	if (schema_version != 5 && schema_version != 6)
+		throw std::runtime_error(
+			"simulation_config.json: multidomain configuration requires schema_version 5 or 6");
+	auto root_keys = std::set<std::string>{"schema_version", "time", "start_domain",
+		"execution", "domains", "couplings"};
+	if (schema_version == 6) root_keys.insert("species");
+	RequireKnownKeys(root, root_keys, "root");
+	std::vector<SpeciesDefinition> species;
+	if (schema_version == 6) {
+		const auto& definitions = RequireArray(Required(root, "species", "root"), "species");
+		for (std::size_t i = 0; i < definitions.size(); ++i) {
+			const auto context = "species["+std::to_string(i)+"]";
+			const auto& object = RequireObject(definitions[i], context);
+			RequireKnownKeys(object, {"id", "concentration_unit"}, context);
+			species.push_back({RequireString(Required(object, "id", context), context+".id"),
+				RequireString(Required(object, "concentration_unit", context),
+					context+".concentration_unit")});
+		}
+		if (species.empty())
+			throw std::runtime_error("simulation_config.json: schema_version 6 requires species");
+		(void)MakeSpeciesRegistry(species);
+	}
 	GraphTimeDefinition time;
 	const auto& time_object = RequireObject(Required(root, "time", "root"), "time");
 	RequireKnownKeys(time_object, {"dt", "steps"}, "time");
@@ -274,8 +339,8 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 	std::vector<DomainNode> nodes;
 	const auto& domain_values = RequireArray(Required(root, "domains", "root"), "domains");
 	for (std::size_t i = 0; i < domain_values.size(); ++i) {
-		auto domain = ParseDomain(domain_values[i], i);
-		nodes.push_back({domain.id, domain.kind, domain.ports});
+		auto domain = ParseDomain(domain_values[i], i, schema_version);
+		nodes.push_back({domain.id, domain.kind, domain.ports, domain.species_bindings});
 		domains.push_back(std::move(domain));
 	}
 	std::vector<CouplingEdge> edges;
@@ -285,7 +350,9 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 	for (std::size_t i = 0; i < coupling_values.size(); ++i) {
 		const auto context = "couplings["+std::to_string(i)+"]";
 		const auto& object = RequireObject(coupling_values[i], context);
-		RequireKnownKeys(object, {"id", "a", "b", "mode", "initial_pressure_pa"}, context);
+		auto keys = std::set<std::string>{"id", "a", "b", "mode", "initial_pressure_pa"};
+		if (schema_version == 6) keys.insert("species");
+		RequireKnownKeys(object, keys, context);
 		CouplingEdge edge;
 		edge.id = RequireString(Required(object, "id", context), context+".id");
 		edge.first = ParseEndpoint(Required(object, "a", context), context+".a");
@@ -294,16 +361,19 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		if (mode != "pressure_flow")
 			throw std::runtime_error("simulation_config.json: unsupported coupling mode '"+mode+"'");
 		edge.law = CouplingLaw::PressureFlow;
+		if (schema_version == 6)
+			edge.species = ParseSpeciesIds(Required(object, "species", context),
+				context+".species");
 		const double pressure = RequireNumber(Required(object, "initial_pressure_pa", context),
 			context+".initial_pressure_pa");
 		if (!initial_pressure.emplace(edge.id, pressure).second)
 			throw std::runtime_error("simulation_config.json: coupling ids must be unique");
 		edges.push_back(std::move(edge));
 	}
-	SimulationGraph graph(std::move(nodes), std::move(edges));
+	SimulationGraph graph(std::move(nodes), std::move(edges), std::move(species));
 	if (graph.Domains().size() < 2 || graph.Edges().empty())
 		throw std::runtime_error(
-			"simulation_config.json: schema_version 5 requires multiple coupled domains");
+			"simulation_config.json: multidomain schema requires multiple coupled domains");
 	(void)graph.Domain(start_domain);
 	ValidateConnectedGraph(graph, start_domain);
 	std::set<PortRef> attached_ports;
@@ -317,7 +387,7 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 				&& !attached_ports.count({domain.first, port.id}))
 				throw std::runtime_error("simulation_config.json: required port '"
 					+domain.first+"."+port.id+"' is not attached to a coupling");
-	return {time, start_domain, execution, std::move(domains),
+	return {schema_version, time, start_domain, execution, std::move(domains),
 		std::move(initial_pressure), std::move(graph)};
 }
 

@@ -19,7 +19,8 @@ inline bool SameCouplingPort(const CouplingPort& first, const CouplingPort& seco
 	return first.id == second.id && first.subsystem_id == second.subsystem_id
 		&& first.locator_kind == second.locator_kind && first.locator == second.locator
 		&& first.orientation.native_to_outward_sign == second.orientation.native_to_outward_sign
-		&& first.provides == second.provides && first.requires == second.requires;
+		&& first.provides == second.provides && first.requires == second.requires
+		&& first.species == second.species;
 }
 
 class DomainRuntimeRegistry {

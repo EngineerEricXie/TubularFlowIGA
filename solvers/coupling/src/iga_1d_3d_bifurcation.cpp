@@ -553,6 +553,9 @@ int main(int argc, char** argv)
 			configuration_holder.emplace(iga::ReadMultidomainConfiguration(
 				iga::ResolveContainedCaseFile(graph_root, "simulation_config.json",
 					"schema-v5 manifest").string()));
+			if (configuration_holder->schema_version != 5)
+				throw std::runtime_error(
+					"multidomain flow runner supports schema version 5; schema 6 species is not yet executable");
 			plan_holder.emplace(iga::MakeAcyclicPressureFlowPlan(
 				configuration_holder->graph, configuration_holder->start_domain_id));
 #ifdef IGA_BIFURCATION_ENTRY

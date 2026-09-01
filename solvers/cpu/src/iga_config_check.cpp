@@ -25,9 +25,9 @@ int main(int argc, char** argv)
 		const auto* version_value = iga::config_detail::Find(root, "schema_version");
 		if (!version_value) throw std::runtime_error("simulation_config.json requires schema_version");
 		const int version = iga::config_detail::RequireInteger(*version_value, "schema_version");
-		if (version == 5) {
+		if (version == 5 || version == 6) {
 			const auto configuration = iga::ParseMultidomainConfiguration(text);
-			std::cout << "schema_version=5 mode=multidomain"
+			std::cout << "schema_version=" << version << " mode=multidomain"
 				<< " domains=" << configuration.graph.Domains().size()
 				<< " couplings=" << configuration.graph.Edges().size()
 				<< " start_domain=" << configuration.start_domain_id
@@ -59,6 +59,8 @@ int main(int argc, char** argv)
 				std::cout << "acyclic_pressure_flow_component_compatible=no"
 					<< " reason=" << error.what() << '\n';
 			}
+			if (version == 6)
+				std::cout << "native_species_runner_compatible=no reason=Phase_3_metadata_only\n";
 			return 0;
 		}
 		if (version == 3) {

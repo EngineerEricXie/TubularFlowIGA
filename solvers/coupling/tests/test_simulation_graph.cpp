@@ -40,6 +40,19 @@ iga::DomainNode Domain(const std::string& id, iga::DomainKind kind,
 	return {id, kind, std::move(ports)};
 }
 
+iga::CouplingPort SpeciesPort(const std::string& domain_id, const std::string& id,
+	iga::PortQuantity hydraulic_input)
+{
+	auto port = LogicalPort(domain_id, id, id, hydraulic_input);
+	port.provides.insert(iga::PortQuantity::SpeciesConcentration);
+	port.provides.insert(iga::PortQuantity::SpeciesFlux);
+	port.requires.insert(iga::PortQuantity::SpeciesConcentration);
+	port.requires.insert(iga::PortQuantity::SpeciesFlux);
+	port.species = {"drug_parent", "tracer_alpha"};
+	iga::ValidateCouplingPort(port);
+	return port;
+}
+
 iga::SimulationGraph StraightChain()
 {
 	auto upstream = Domain("upstream", iga::DomainKind::OneDFlow,
@@ -88,6 +101,44 @@ iga::SimulationGraph Bifurcation(bool permuted = false)
 
 int main()
 {
+	{
+		auto first = Domain("one", iga::DomainKind::OneDFlow,
+			{SpeciesPort("one", "outlet:2", iga::PortQuantity::MeanPressure)});
+		first.species_bindings = {{"drug_parent", "native_drug"},
+			{"tracer_alpha", "native_tracer"}};
+		auto second = Domain("three", iga::DomainKind::ThreeDBodyFittedFlow,
+			{SpeciesPort("three", "boundary:1", iga::PortQuantity::FlowRate)});
+		second.species_bindings = {{"tracer_alpha", "scalar_a"},
+			{"drug_parent", "scalar_b"}};
+		const std::set<std::string> species{"tracer_alpha", "drug_parent"};
+		const iga::SimulationGraph species_graph({first, second},
+			{{"edge", {"one", "outlet:2"}, {"three", "boundary:1"},
+				iga::CouplingLaw::PressureFlow, species}},
+			{{"tracer_alpha", "kg/m^3"}, {"drug_parent", "mol/m^3"}});
+		assert(species_graph.Species().begin()->first == "drug_parent");
+		assert(species_graph.Edge("edge").species
+			== std::set<std::string>({"drug_parent", "tracer_alpha"}));
+		const iga::SimulationGraph permuted({second, first},
+			{{"edge", {"three", "boundary:1"}, {"one", "outlet:2"},
+				iga::CouplingLaw::PressureFlow, species}},
+			{{"drug_parent", "mol/m^3"}, {"tracer_alpha", "kg/m^3"}});
+		assert(permuted.Species() == species_graph.Species());
+		RequireRejected([&first, &second, &species] {
+			auto incomplete = second;
+			incomplete.species_bindings.erase("drug_parent");
+			iga::SimulationGraph({first, incomplete},
+				{{"edge", {"one", "outlet:2"}, {"three", "boundary:1"},
+					iga::CouplingLaw::PressureFlow, species}},
+				{{"tracer_alpha", "kg/m^3"}, {"drug_parent", "mol/m^3"}});
+		});
+		RequireRejected([] {
+			auto unattached = SpeciesPort("observation", "unused",
+				iga::PortQuantity::MeanPressure);
+			unattached.species = {"unbound_species"};
+			iga::SimulationGraph({Domain("observation", iga::DomainKind::OneDFlow,
+				{unattached})}, {}, {{"unbound_species", "mol/m^3"}});
+		});
+	}
 	const auto graph = StraightChain();
 	assert(graph.Domains().size() == 3);
 	assert(graph.Edges().size() == 2);
