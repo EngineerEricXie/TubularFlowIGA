@@ -2,6 +2,23 @@
 
 Status: **in progress**.
 
+## PR 5.4: adaptive cut-cell volume quadrature
+
+`CutCellVolumeQuadratureCatalog` retains one immutable, cell-id-sorted result
+for every Cartesian background cell without retaining surface geometry.  Inside
+cells reuse the existing 4x4x4 reference rule, outside cells are certified
+empty, and cut cells use a deterministic x-fast octree.  Certified leaves add
+scaled positive Gauss rules; unresolved leaves use point classification only
+and report lower/upper reference and physical-volume bounds.  Predicate
+ambiguity is retained for inspection but makes a rule unusable for assembly.
+Rules require an exact grid and canonical-surface binding before assembly;
+physical diagnostic estimates sum stored reference weights times the materialized
+element Jacobian, while assembly itself continues to own its physical measure.
+
+Focused evidence: `make -C solvers/cpu cut_cell_volume_quadrature_test`.
+The target is included in the dependency-free aggregate CPU test.  Surface
+quadrature remains explicitly deferred to PR 5.5.
+
 ## PR 5.2b2: strict VTP PolyData ingestion complete
 
 The dependency-free CPU layer now reads bounded VTP PolyData buffers, text,
