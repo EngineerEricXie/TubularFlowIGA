@@ -5,8 +5,30 @@ Status: **in progress**.
 ## PR 5.2 prerequisite: canonical hashing
 
 The dependency-free CPU layer includes a self-contained incremental SHA-256
-utility with FIPS known-answer and chunk-boundary coverage.  Surface parsing
-and topology validation remain pending.
+utility with FIPS known-answer and chunk-boundary coverage.
+
+## PR 5.2a2: canonical closed-surface topology and orientation
+
+The dependency-free CPU layer now accepts an in-memory raw triangle soup and
+constructs an immutable canonical closed triangulated surface in physical
+metres.  It exactly deduplicates scaled coordinates, validates closed manifold
+edge use, consistent local winding, a single face component, and one cyclic
+incident-face fan at every vertex.  It rejects degeneracy, duplicate facets,
+open/non-manifold/pinched topology, and numerically zero enclosed volume.
+Inward shells are flipped consistently.  Canonical lexicographic vertices and
+oriented triangles produce a versioned SHA-256 identity that is invariant to
+input vertex/triangle ordering, cyclic triangle starts, and global orientation.
+Equivalent source units have the same identity only when conversion produces
+identical canonical physical double values (there is no coordinate
+quantization); boundary labels are retained and hash-sensitive.  Diagnostics
+expose counts, bounds, area, volume, edge/area
+minima, topology counts, flip state, label histogram, and hash.
+
+Focused coverage is `make -C solvers/cpu surface_geometry_test`; it is also
+included in the dependency-free aggregate `make -C solvers/cpu test`.
+
+Intersection/BVH and self-intersection validation, positive-tolerance welding,
+and STL/VTP readers remain pending work.
 
 ## PR 5.1: cubic Cartesian background
 
