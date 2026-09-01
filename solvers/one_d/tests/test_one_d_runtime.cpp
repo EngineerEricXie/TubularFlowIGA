@@ -60,6 +60,187 @@ int main()
 	auto configuration = iga::ParseOneDConfiguration(Configuration());
 	const auto flow = configuration.flow_systems.front();
 	auto network = iga::ReadOneDNetwork(directory/"tree.swc", 1.0, 1, flow.dynamic_viscosity);
+	{
+		auto macro_configuration = configuration;
+		macro_configuration.time.steps = 4;
+		iga::OneDFlowRuntime subcycled(macro_configuration, flow, network,
+			iga::ResolveOneDInlet(macro_configuration), directory);
+		iga::OneDFlowRuntime sequential(macro_configuration, flow, network,
+			iga::ResolveOneDInlet(macro_configuration), directory);
+		subcycled.InitializeOpenLoop(1.0e-9);
+		sequential.InitializeOpenLoop(1.0e-9);
+		subcycled.BeginStep(0.0, 4.0*macro_configuration.time.dt);
+		subcycled.SetOpenLoopInlet(subcycled.OpenLoopInlet(4.0*macro_configuration.time.dt, 1.0e-9));
+		subcycled.SolveTrial();
+		assert(subcycled.Diagnostics().planned_configured_substeps == 4);
+		assert(subcycled.Diagnostics().attempted_configured_substeps == 4);
+		assert(subcycled.Diagnostics().completed_configured_substeps == 4);
+		for (int step = 0; step < 4; ++step) {
+			sequential.BeginStep(sequential.FlowState().physical_time, macro_configuration.time.dt);
+			sequential.SetOpenLoopInlet(sequential.OpenLoopInlet((step+1)*macro_configuration.time.dt, 1.0e-9));
+			sequential.SolveTrial();
+			sequential.CommitStep();
+		}
+		assert(subcycled.FlowState().area == sequential.FlowState().area);
+		assert(subcycled.FlowState().flow == sequential.FlowState().flow);
+		assert(subcycled.FlowState().pressure == sequential.FlowState().pressure);
+		assert(subcycled.FlowState().node_pressure == sequential.FlowState().node_pressure);
+		assert(subcycled.FlowState().segment_flow == sequential.FlowState().segment_flow);
+		assert(subcycled.FlowState().outlets.size() == sequential.FlowState().outlets.size());
+		for (std::size_t i = 0; i < subcycled.FlowState().outlets.size(); ++i) {
+			const auto& macro_outlet = subcycled.FlowState().outlets[i];
+			const auto& sequential_outlet = sequential.FlowState().outlets[i];
+			assert(Close(macro_outlet.pressure, sequential_outlet.pressure)
+				&& Close(macro_outlet.flow, sequential_outlet.flow)
+				&& Close(macro_outlet.capacitor_pressure, sequential_outlet.capacitor_pressure));
+		}
+		assert(subcycled.Transports().size() == sequential.Transports().size());
+		for (std::size_t i = 0; i < subcycled.Transports().size(); ++i) {
+			assert(subcycled.Transports()[i].species.size() == sequential.Transports()[i].species.size());
+			for (std::size_t species = 0; species < subcycled.Transports()[i].species.size(); ++species) {
+				const auto& macro_species = subcycled.Transports()[i].species[species];
+				const auto& sequential_species = sequential.Transports()[i].species[species];
+				assert(macro_species.concentration == sequential_species.concentration
+					&& Close(macro_species.inlet_value, sequential_species.inlet_value));
+			}
+		}
+		assert(subcycled.Network().segments.size() == sequential.Network().segments.size());
+		for (std::size_t i = 0; i < subcycled.Network().segments.size(); ++i) {
+			const auto& macro_segment = subcycled.Network().segments[i];
+			const auto& sequential_segment = sequential.Network().segments[i];
+			assert(Close(macro_segment.radius0, sequential_segment.radius0)
+				&& Close(macro_segment.area0, sequential_segment.area0)
+				&& Close(macro_segment.resistance, sequential_segment.resistance));
+		}
+		assert(Close(subcycled.Configuration().physiology.hematocrit_percent,
+			sequential.Configuration().physiology.hematocrit_percent));
+		assert(subcycled.FlowState().completed_step == 4);
+		RequireRejected([&sequential] { sequential.BeginStep(sequential.FlowState().physical_time, sequential.Configuration().time.dt); });
+		subcycled.RollbackTrial();
+		subcycled.SolveTrial();
+		assert(subcycled.FlowState().area == sequential.FlowState().area);
+		assert(subcycled.FlowState().flow == sequential.FlowState().flow);
+		assert(subcycled.Transports().front().species.front().concentration
+			== sequential.Transports().front().species.front().concentration);
+		assert(Close(subcycled.Network().segments.front().radius0,
+			sequential.Network().segments.front().radius0));
+		auto configured_configuration = configuration;
+		configured_configuration.time.dt = 0.0025;
+		configured_configuration.time.steps = 4;
+		iga::OneDFlowRuntime configured(configured_configuration, flow, network,
+			iga::ResolveOneDInlet(configured_configuration), directory);
+		configured.InitializeOpenLoop(1.0e-9);
+		configured.BeginStep(0.0, 0.01);
+		configured.SetConfiguredOpenLoopInlet();
+		configured.SolveTrial();
+		const auto& endpoints = configured.Diagnostics().configured_open_loop_endpoint_times_s;
+		assert(endpoints.size() == 4);
+		assert(Close(endpoints[0], 0.0025) && Close(endpoints[1], 0.005)
+			&& Close(endpoints[2], 0.0075) && Close(endpoints[3], 0.01));
+		auto waveform_configuration = configured_configuration;
+		iga::TemporalFunctionDefinition waveform;
+		waveform.name = "pulse";
+		waveform.kind = iga::TemporalFunctionKind::Sinusoid;
+		waveform.units = "m3/s";
+		waveform.mean = 1.0e-9;
+		waveform.amplitude = 0.5e-9;
+		waveform.period = 0.01;
+		waveform_configuration.temporal_functions.push_back(waveform);
+		waveform_configuration.boundaries.front().conditions.front().waveform = "pulse";
+		iga::OneDFlowRuntime waveform_runtime(waveform_configuration, flow, network,
+			iga::ResolveOneDInlet(waveform_configuration), directory);
+		waveform_runtime.InitializeOpenLoop(1.0e-9);
+		waveform_runtime.BeginStep(0.0, 0.01);
+		waveform_runtime.SetConfiguredOpenLoopInlet();
+		waveform_runtime.SolveTrial();
+		const auto& waveform_flows = waveform_runtime.Diagnostics().configured_open_loop_endpoint_flows_m3_s;
+		assert(waveform_flows.size() == 4);
+		for (std::size_t i = 0; i < waveform_flows.size(); ++i) {
+			const double time_s = (i+1)*0.0025;
+			assert(Close(waveform_flows[i], 1.0e-9+0.5e-9*std::sin(2.0*std::acos(-1.0)*time_s/0.01)));
+		}
+		const auto first_waveform_flows = waveform_flows;
+		waveform_runtime.RollbackTrial();
+		waveform_runtime.SolveTrial();
+		assert(waveform_runtime.Diagnostics().configured_open_loop_endpoint_flows_m3_s == first_waveform_flows);
+		iga::OneDFlowRuntime held(configured_configuration, flow, network,
+			iga::ResolveOneDInlet(configured_configuration), directory);
+		held.InitializeOpenLoop(1.0e-9);
+		held.BeginStep(0.0, 0.01);
+		held.SetOpenLoopInlet(held.OpenLoopInlet(0.01, 2.0e-9));
+		held.SolveTrial();
+		assert(held.Diagnostics().configured_open_loop_endpoint_flows_m3_s.empty());
+		assert(held.Diagnostics().substep_endpoint_flows_m3_s.size() == 4);
+		for (const double inlet_flow : held.Diagnostics().substep_endpoint_flows_m3_s)
+			assert(Close(inlet_flow, 2.0e-9));
+	}
+	{
+		auto explicit_configuration = configuration;
+		explicit_configuration.time.dt = 0.0025;
+		explicit_configuration.time.steps = 4;
+		auto explicit_flow = flow;
+		explicit_flow.model = iga::OneDFlowModel::Compliant;
+		explicit_flow.scheme = iga::OneDFlowScheme::ExplicitRusanov;
+		iga::OneDFlowRuntime explicit_runtime(explicit_configuration, explicit_flow, network,
+			iga::ResolveOneDInlet(explicit_configuration), directory);
+		explicit_runtime.InitializeOpenLoop(1.0e-9);
+		const auto committed = explicit_runtime.FlowState();
+		explicit_runtime.BeginStep(0.0, 0.01);
+		explicit_runtime.SetOpenLoopInlet(explicit_runtime.OpenLoopInlet(0.01, 1.0e-9));
+		explicit_runtime.SolveTrial();
+		const auto trial = explicit_runtime.FlowState();
+		const auto diagnostics = explicit_runtime.Diagnostics();
+		assert(diagnostics.planned_configured_substeps == 4 && diagnostics.attempted_configured_substeps == 4
+			&& diagnostics.completed_configured_substeps == 4 && diagnostics.explicit_cfl_substep_delta >= 4);
+		assert(trial.internal_substeps >= committed.internal_substeps+4);
+		explicit_runtime.RollbackTrial();
+		assert(explicit_runtime.FlowState().area == committed.area && explicit_runtime.FlowState().flow == committed.flow
+			&& explicit_runtime.FlowState().pressure == committed.pressure
+			&& explicit_runtime.FlowState().internal_substeps == committed.internal_substeps);
+		explicit_runtime.SolveTrial();
+		assert(explicit_runtime.FlowState().area == trial.area && explicit_runtime.FlowState().flow == trial.flow
+			&& explicit_runtime.FlowState().pressure == trial.pressure
+			&& explicit_runtime.Diagnostics().explicit_cfl_substep_delta == diagnostics.explicit_cfl_substep_delta);
+		explicit_runtime.CommitStep();
+		assert(explicit_runtime.FlowState().completed_step == 4 && explicit_runtime.FlowState().internal_substeps == trial.internal_substeps);
+		auto failing_explicit_configuration = explicit_configuration;
+		iga::TemporalFunctionDefinition jump;
+		jump.name = "late_extreme_jump";
+		jump.kind = iga::TemporalFunctionKind::Sinusoid;
+		jump.units = "m3/s";
+		jump.mean = 1.0e5;
+		jump.amplitude = -1.0e5;
+		jump.period = 0.01;
+		jump.phase = 0.0;
+		failing_explicit_configuration.temporal_functions.push_back(jump);
+		failing_explicit_configuration.boundaries.front().conditions.front().waveform = jump.name;
+		iga::OneDFlowRuntime failing_explicit(failing_explicit_configuration, explicit_flow, network,
+			iga::ResolveOneDInlet(failing_explicit_configuration), directory);
+		failing_explicit.InitializeOpenLoop(1.0e-9);
+		const auto explicit_committed = failing_explicit.FlowState();
+		failing_explicit.BeginStep(0.0, 0.01);
+		failing_explicit.SetConfiguredOpenLoopInlet();
+		RequireRejected([&failing_explicit] { failing_explicit.SolveTrial(); });
+		const auto partial = failing_explicit.Diagnostics();
+		assert(failing_explicit.CurrentPhase() == iga::OneDFlowRuntime::Phase::TrialSolved);
+		assert(partial.attempted_configured_substeps == 2 && partial.completed_configured_substeps == 1
+			&& partial.explicit_cfl_substep_delta > 0
+			&& failing_explicit.FlowState().internal_substeps-explicit_committed.internal_substeps
+			== partial.explicit_cfl_substep_delta);
+		const auto frozen_schedule = partial.configured_open_loop_endpoint_flows_m3_s;
+		failing_explicit.RollbackTrial();
+		assert(failing_explicit.FlowState().area == explicit_committed.area
+			&& failing_explicit.FlowState().flow == explicit_committed.flow
+			&& failing_explicit.FlowState().internal_substeps == explicit_committed.internal_substeps);
+		RequireRejected([&failing_explicit] { failing_explicit.SolveTrial(); });
+		assert(failing_explicit.Diagnostics().configured_open_loop_endpoint_flows_m3_s == frozen_schedule
+			&& failing_explicit.Diagnostics().attempted_configured_substeps == partial.attempted_configured_substeps
+			&& failing_explicit.Diagnostics().completed_configured_substeps == partial.completed_configured_substeps);
+		failing_explicit.RollbackTrial();
+		failing_explicit.SetOpenLoopInlet(failing_explicit.OpenLoopInlet(0.01, 1.0e-9));
+		failing_explicit.SolveTrial();
+		assert(failing_explicit.Diagnostics().completed_configured_substeps == 4);
+	}
 	iga::OneDFlowRuntime runtime(configuration, flow, network,
 		iga::ResolveOneDInlet(configuration), directory);
 	runtime.InitializeOpenLoop(1.0e-9);
@@ -149,6 +330,39 @@ int main()
 	assert(failing.FlowState().completed_step == 0);
 	assert(failing.CurrentPhase() == iga::OneDFlowRuntime::Phase::TrialOpen);
 
+	auto sub_configuration = configuration;
+	sub_configuration.time.dt = 0.0025;
+	sub_configuration.time.steps = 4;
+	std::vector<double> implicit_dts;
+	int implicit_calls = 0;
+	bool fail_implicit_substep = true;
+	iga::OneDFlowRuntime implicit_subcycled(sub_configuration, failing_flow, network,
+		iga::ResolveOneDInlet(sub_configuration), directory,
+		[&implicit_dts, &implicit_calls, &fail_implicit_substep](const iga::OneDNetwork&, const iga::OneDFlowSystemDefinition&,
+			iga::OneDFlowState& state, double inlet_flow, double dt_s) {
+			implicit_dts.push_back(dt_s);
+			++implicit_calls;
+			if (fail_implicit_substep && implicit_calls == 3) throw std::runtime_error("substep three failure");
+			state.inlet_flow = inlet_flow;
+		});
+	implicit_subcycled.InitializeOpenLoop(1.0e-9);
+	implicit_subcycled.BeginStep(0.0, 0.01);
+	implicit_subcycled.SetOpenLoopInlet(implicit_subcycled.OpenLoopInlet(0.01, 1.0e-9));
+	RequireRejected([&implicit_subcycled] { implicit_subcycled.SolveTrial(); });
+	assert(implicit_subcycled.Diagnostics().planned_configured_substeps == 4);
+	assert(implicit_subcycled.Diagnostics().attempted_configured_substeps == 3);
+	assert(implicit_subcycled.Diagnostics().completed_configured_substeps == 2);
+	assert(implicit_subcycled.Diagnostics().explicit_cfl_substep_delta == 0);
+	implicit_subcycled.RollbackTrial();
+	assert(implicit_subcycled.FlowState().completed_step == 0);
+	implicit_calls = 0;
+	fail_implicit_substep = false;
+	implicit_dts.clear();
+	implicit_subcycled.SolveTrial();
+	assert(implicit_dts.size() == 4);
+	for (const double dt_s : implicit_dts) assert(Close(dt_s, 0.0025));
+	assert(implicit_subcycled.FlowState().completed_step == 4);
+
 	auto resistance_configuration = configuration;
 	auto& resistance = resistance_configuration.boundaries.back().conditions.front();
 	resistance.type = "resistance";
@@ -194,6 +408,34 @@ int main()
 	rcr_runtime.CommitStep();
 	assert(rcr_runtime.FlowState().outlets.front().capacitor_pressure == trial_capacitor);
 	RequireRejected([&rcr_runtime] { rcr_runtime.CommitStep(); });
+	{
+		auto rcr_sub_configuration = rcr_configuration;
+		rcr_sub_configuration.time.dt = 0.0025;
+		rcr_sub_configuration.time.steps = 4;
+		iga::OneDFlowRuntime macro(rcr_sub_configuration, flow, network,
+			iga::ResolveOneDInlet(rcr_sub_configuration), directory);
+		iga::OneDFlowRuntime sequential(rcr_sub_configuration, flow, network,
+			iga::ResolveOneDInlet(rcr_sub_configuration), directory);
+		macro.InitializeOpenLoop(1.0e-9);
+		sequential.InitializeOpenLoop(1.0e-9);
+		macro.BeginStep(0.0, 0.01);
+		macro.SetOpenLoopInlet(macro.OpenLoopInlet(0.01, 1.0e-9));
+		macro.SolveTrial();
+		for (int step = 0; step < 4; ++step) {
+			sequential.BeginStep(sequential.FlowState().physical_time, 0.0025);
+			sequential.SetOpenLoopInlet(sequential.OpenLoopInlet((step+1)*0.0025, 1.0e-9));
+			sequential.SolveTrial();
+			sequential.CommitStep();
+		}
+		assert(Close(macro.FlowState().outlets.front().capacitor_pressure,
+			sequential.FlowState().outlets.front().capacitor_pressure));
+		assert(Close(macro.FlowState().outlets.front().pressure, sequential.FlowState().outlets.front().pressure));
+		assert(macro.FlowState().completed_step == 4 && Close(macro.FlowState().physical_time, 0.01));
+		macro.RollbackTrial();
+		macro.SolveTrial();
+		assert(Close(macro.FlowState().outlets.front().capacitor_pressure,
+			sequential.FlowState().outlets.front().capacitor_pressure));
+	}
 	fs::remove_all(directory);
 	std::cout << "one-dimensional runtime tests passed\n";
 }

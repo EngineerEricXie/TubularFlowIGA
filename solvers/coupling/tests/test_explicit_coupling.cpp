@@ -18,6 +18,27 @@ void RequireRejected(Function&& function)
 
 int main()
 {
+	const auto one = iga::MakeOneDSubcyclingPlan(0.01, 3, 0.01, 3);
+	assert(one.configured_substeps_per_macro_step == 1);
+	const auto four = iga::MakeOneDSubcyclingPlan(0.0025, 12, 0.01, 3);
+	assert(four.configured_substeps_per_macro_step == 4);
+	const auto two = iga::MakeOneDSubcyclingPlan(0.005, 6, 0.01, 3);
+	assert(two.configured_substeps_per_macro_step == 2);
+	iga::OneDTrialWorkAccumulator work;
+	work.Add(5, 3);
+	work.Add(7, 4);
+	work.Add(6, 2);
+	assert(work.configured_substeps == 18 && work.explicit_cfl_substeps == 9);
+	assert(work.RejectedConfiguredSubsteps(6) == 12);
+	assert(work.RejectedExplicitCflSubsteps(2) == 7);
+	RequireRejected([&work] { work.Add(-1, 0); });
+	RequireRejected([&work] { work.RejectedConfiguredSubsteps(19); });
+	RequireRejected([&work] { work.RejectedExplicitCflSubsteps(10); });
+	RequireRejected([] { iga::MakeOneDSubcyclingPlan(0.003, 10, 0.01, 3); });
+	RequireRejected([] { iga::MakeOneDSubcyclingPlan(0.02, 3, 0.01, 3); });
+	RequireRejected([] { iga::MakeOneDSubcyclingPlan(0.0025, 11, 0.01, 3); });
+	RequireRejected([] { iga::MakeOneDSubcyclingPlan(std::numeric_limits<double>::infinity(), 12, 0.01, 3); });
+	RequireRejected([] { iga::MakeOneDSubcyclingPlan(1.0e-12, std::numeric_limits<int>::max(), 1.0, 3); });
 	iga::ExplicitCouplingScalarPreflight preflight;
 	preflight.dt_s = 0.01;
 	preflight.steps = 2;
@@ -49,6 +70,12 @@ int main()
 	row.three_d_outlet_area_m2 = 1.0;
 	row.downstream_root_area_m2 = 1.0;
 	row.downstream_terminal_area_m2 = 1.0;
+	row.upstream_configured_substeps_attempted = 1;
+	row.downstream_configured_substeps_attempted = 1;
+	row.upstream_accepted_configured_substeps = 1;
+	row.upstream_all_configured_substeps = 1;
+	row.downstream_accepted_configured_substeps = 1;
+	row.downstream_all_configured_substeps = 1;
 	iga::ValidateExplicitCouplingHistoryRow(row);
 	std::ostringstream output;
 	iga::WriteExplicitCouplingHistoryHeader(output);
@@ -65,6 +92,10 @@ int main()
 	row.relaxation_factor = 1.0;
 	row.downstream_root_area_m2 = 0.0;
 	RequireRejected([&row] { iga::ValidateExplicitCouplingHistoryRow(row); });
+	row.downstream_root_area_m2 = 1.0;
+	row.upstream_accepted_explicit_cfl_substeps = -1;
+	RequireRejected([&row] { iga::ValidateExplicitCouplingHistoryRow(row); });
+	row.upstream_accepted_explicit_cfl_substeps = 0;
 
 	iga::StrongCouplingControls controls;
 	controls.pressure_reference_pa = 100.0;
@@ -102,6 +133,10 @@ int main()
 	iteration.three_d_mass_imbalance_m3_s = 1.0e-12;
 	iteration.three_d_attempt_linear_iterations = 3;
 	iteration.three_d_cumulative_step_linear_iterations = 6;
+	iteration.upstream_1d_attempt_configured_substeps = 1;
+	iteration.upstream_1d_cumulative_configured_substeps = 2;
+	iteration.downstream_1d_attempt_configured_substeps = 1;
+	iteration.downstream_1d_cumulative_configured_substeps = 2;
 	iga::ValidateStrongCouplingIterationRow(iteration);
 	std::ostringstream iteration_output;
 	iga::WriteStrongCouplingIterationHeader(iteration_output);
@@ -115,6 +150,12 @@ int main()
 	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
 	iteration.aitken_status_code = -1;
 	iteration.aitken_scaled_numerator = 1.0;
+	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
+	iteration.aitken_scaled_numerator = 0.0;
+	iteration.upstream_1d_cumulative_explicit_cfl_substeps = -1;
+	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
+	iteration.upstream_1d_cumulative_explicit_cfl_substeps = 0;
+	iteration.downstream_1d_cumulative_configured_substeps = 0;
 	RequireRejected([&iteration] { iga::ValidateStrongCouplingIterationRow(iteration); });
 	iga::AitkenRelaxationControls aitken_controls;
 	iga::ValidateAitkenRelaxationControls(aitken_controls);

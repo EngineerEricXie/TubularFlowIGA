@@ -100,13 +100,21 @@ pressure because the applied 3D quantity is a pressure-traction parameter.  Reje
 attempts contribute to coordinator work diagnostics but never to runtime
 committed counters.  A successful strong run writes separate
 `strong_coupling_history.csv`, `strong_coupling_iterations.csv`, and
-`strong_coupling_manifest.json`; restart and subcycling remain unsupported.
+`strong_coupling_manifest.json`; restart remains unsupported.
 
 PR 1.3 adds `strong-aitken` for the same two-pressure vector only. It resets
 at every macro step and uses the signed raw pressure residual `r=G-x` in the
 documented vector order. A proposed relaxation is clamped to its configured
 interval and accepted only after reverse rollback, immediately before the
-next trial uses it. It does not add subcycling, restart, or graph coupling.
+next trial uses it. It does not add restart or graph coupling.
+
+PR 1.4 permits each 1D domain to use an integer subdivision of the 3D macro
+step. The 3D grid remains the macro grid; a 1D horizon must match it and its
+configured step count must be `macro_steps*N`. Interface data are zero-order
+held through the N configured 1D substeps, while a configured upstream
+waveform is sampled at each endpoint. A macro trial snapshots once and rolls
+all N substeps back together. Configured-substep counts and explicit CFL work
+are separate diagnostics; `internal_substeps` remains a native CFL counter.
 
 ## State ownership and rollback inventory
 

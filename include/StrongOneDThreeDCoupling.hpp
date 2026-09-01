@@ -77,6 +77,14 @@ struct StrongCouplingIterationRow {
 	double three_d_mass_imbalance_m3_s = 0.0;
 	long long three_d_attempt_linear_iterations = 0;
 	long long three_d_cumulative_step_linear_iterations = 0;
+	int upstream_1d_attempt_configured_substeps = 0;
+	long long upstream_1d_attempt_explicit_cfl_substeps = 0;
+	long long upstream_1d_cumulative_configured_substeps = 0;
+	long long upstream_1d_cumulative_explicit_cfl_substeps = 0;
+	int downstream_1d_attempt_configured_substeps = 0;
+	long long downstream_1d_attempt_explicit_cfl_substeps = 0;
+	long long downstream_1d_cumulative_configured_substeps = 0;
+	long long downstream_1d_cumulative_explicit_cfl_substeps = 0;
 	double relaxation_factor_for_next_guess = 1.0;
 	double unclamped_relaxation_factor = 1.0;
 	double aitken_scaled_numerator = 0.0;
@@ -110,6 +118,12 @@ inline void ValidateStrongCouplingIterationRow(const StrongCouplingIterationRow&
 		|| row.normalized_downstream_pressure_residual < 0.0
 		|| row.three_d_attempt_linear_iterations < 0
 		|| row.three_d_cumulative_step_linear_iterations < row.three_d_attempt_linear_iterations
+		|| row.upstream_1d_attempt_configured_substeps < 1 || row.downstream_1d_attempt_configured_substeps < 1
+		|| row.upstream_1d_attempt_explicit_cfl_substeps < 0 || row.downstream_1d_attempt_explicit_cfl_substeps < 0
+		|| row.upstream_1d_cumulative_configured_substeps < row.upstream_1d_attempt_configured_substeps
+		|| row.downstream_1d_cumulative_configured_substeps < row.downstream_1d_attempt_configured_substeps
+		|| row.upstream_1d_cumulative_explicit_cfl_substeps < row.upstream_1d_attempt_explicit_cfl_substeps
+		|| row.downstream_1d_cumulative_explicit_cfl_substeps < row.downstream_1d_attempt_explicit_cfl_substeps
 		|| !(row.relaxation_factor_for_next_guess > 0.0) || row.relaxation_factor_for_next_guess > 1.0
 		|| row.aitken_scaled_denominator < 0.0 || row.aitken_status_code < -1 || row.aitken_status_code > 5
 		|| (row.converged && row.relaxation_update_applied))
@@ -137,6 +151,8 @@ inline void WriteStrongCouplingIterationHeader(std::ostream& output)
 		"normalized_upstream_three_d_flow_residual,normalized_three_d_downstream_flow_residual,"
 		"three_d_wall_outward_flow_m3_s,three_d_mass_imbalance_m3_s,"
 		"three_d_attempt_linear_iterations,three_d_cumulative_step_linear_iterations,"
+		"upstream_1d_attempt_configured_substeps,upstream_1d_attempt_explicit_cfl_substeps,upstream_1d_cumulative_configured_substeps,upstream_1d_cumulative_explicit_cfl_substeps,"
+		"downstream_1d_attempt_configured_substeps,downstream_1d_attempt_explicit_cfl_substeps,downstream_1d_cumulative_configured_substeps,downstream_1d_cumulative_explicit_cfl_substeps,"
 		"relaxation_factor_for_next_guess,unclamped_relaxation_factor,aitken_scaled_numerator,aitken_scaled_denominator,"
 		"aitken_status_code,relaxation_update_applied,aitken_has_previous_residual,converged\n";
 }
@@ -157,6 +173,8 @@ inline void WriteStrongCouplingIterationRow(std::ostream& output, const StrongCo
 		<< row.normalized_three_d_downstream_flow_residual << ','
 		<< row.three_d_wall_outward_flow_m3_s << ',' << row.three_d_mass_imbalance_m3_s << ','
 		<< row.three_d_attempt_linear_iterations << ',' << row.three_d_cumulative_step_linear_iterations << ','
+		<< row.upstream_1d_attempt_configured_substeps << ',' << row.upstream_1d_attempt_explicit_cfl_substeps << ',' << row.upstream_1d_cumulative_configured_substeps << ',' << row.upstream_1d_cumulative_explicit_cfl_substeps << ','
+		<< row.downstream_1d_attempt_configured_substeps << ',' << row.downstream_1d_attempt_explicit_cfl_substeps << ',' << row.downstream_1d_cumulative_configured_substeps << ',' << row.downstream_1d_cumulative_explicit_cfl_substeps << ','
 		<< row.relaxation_factor_for_next_guess << ',' << row.unclamped_relaxation_factor << ','
 		<< row.aitken_scaled_numerator << ',' << row.aitken_scaled_denominator << ',' << row.aitken_status_code << ','
 		<< (row.relaxation_update_applied ? 1 : 0) << ',' << (row.aitken_has_previous_residual ? 1 : 0) << ','

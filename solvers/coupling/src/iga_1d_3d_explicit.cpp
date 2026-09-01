@@ -247,12 +247,34 @@ std::string JsonEscape(const std::string& text)
 	return escaped.str();
 }
 
+struct OneDWorkTotals {
+	long long accepted_configured = 0, all_configured = 0, rejected_configured = 0;
+	long long accepted_cfl = 0, all_cfl = 0, rejected_cfl = 0;
+};
+
+OneDWorkTotals SumOneDWork(const std::vector<iga::ExplicitCouplingHistoryRow>& history, bool upstream)
+{
+	OneDWorkTotals totals;
+	for (const auto& row : history) {
+		const long long accepted_configured = upstream ? row.upstream_accepted_configured_substeps : row.downstream_accepted_configured_substeps;
+		const long long all_configured = upstream ? row.upstream_all_configured_substeps : row.downstream_all_configured_substeps;
+		const long long rejected_configured = upstream ? row.upstream_rejected_configured_substeps : row.downstream_rejected_configured_substeps;
+		const long long accepted_cfl = upstream ? row.upstream_accepted_explicit_cfl_substeps : row.downstream_accepted_explicit_cfl_substeps;
+		const long long all_cfl = upstream ? row.upstream_all_explicit_cfl_substeps : row.downstream_all_explicit_cfl_substeps;
+		const long long rejected_cfl = upstream ? row.upstream_rejected_explicit_cfl_substeps : row.downstream_rejected_explicit_cfl_substeps;
+		totals.accepted_configured += accepted_configured; totals.all_configured += all_configured; totals.rejected_configured += rejected_configured;
+		totals.accepted_cfl += accepted_cfl; totals.all_cfl += all_cfl; totals.rejected_cfl += rejected_cfl;
+	}
+	return totals;
+}
+
 void WriteExplicitCouplingManifest(const fs::path& path, int upstream_terminal_node,
 	int three_d_inlet_label, int three_d_outlet_label, double dt_s, int configured_steps,
 	int completed_steps,
 	double density_kg_m3, double dynamic_viscosity_pa_s, double normalized_length_m,
 	double reference_inlet_outward_flow_m3_s, double initial_three_d_inlet_pressure_pa,
-	double initial_downstream_root_pressure_pa)
+	double initial_downstream_root_pressure_pa, const iga::OneDSubcyclingPlan& upstream_subcycling,
+	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history)
 {
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create explicit coupling manifest");
@@ -283,7 +305,23 @@ void WriteExplicitCouplingManifest(const fs::path& path, int upstream_terminal_n
 		<< ", \"mass_relative_tolerance\": " << kThreeDMassRelativeTolerance << "},\n"
 		<< "  \"initial_lagged_pressures_pa\": {\"three_d_inlet\": "
 		<< initial_three_d_inlet_pressure_pa << ", \"downstream_root\": "
-		<< initial_downstream_root_pressure_pa << "}\n"
+		<< initial_downstream_root_pressure_pa << "},\n"
+		<< "  \"one_d_subcycling\": {\"macro_dt_s\": " << upstream_subcycling.macro_dt_s
+		<< ", \"macro_steps\": " << upstream_subcycling.macro_steps
+		<< ", \"ratio_relative_tolerance\": 1e-12, \"upstream\": {\"configured_dt_s\": " << upstream_subcycling.configured_dt_s
+		<< ", \"configured_steps\": " << upstream_subcycling.configured_steps << ", \"N\": " << upstream_subcycling.configured_substeps_per_macro_step
+		<< "}, \"downstream\": {\"configured_dt_s\": " << downstream_subcycling.configured_dt_s
+		<< ", \"configured_steps\": " << downstream_subcycling.configured_steps << ", \"N\": " << downstream_subcycling.configured_substeps_per_macro_step
+		<< "}, \"semantics\": \"zero-order held interface data; configured open-loop sampling at substep endpoints; endpoint residuals; internal_substeps is explicit CFL only\"},\n";
+	const auto upstream_work = SumOneDWork(history, true);
+	const auto downstream_work = SumOneDWork(history, false);
+	output << "  \"one_d_work_totals\": {\"upstream\": {\"accepted_configured_substeps\": " << upstream_work.accepted_configured
+		<< ", \"all_configured_substeps\": " << upstream_work.all_configured << ", \"rejected_configured_substeps\": " << upstream_work.rejected_configured
+		<< ", \"accepted_explicit_cfl_substeps\": " << upstream_work.accepted_cfl << ", \"all_explicit_cfl_substeps\": " << upstream_work.all_cfl
+		<< ", \"rejected_explicit_cfl_substeps\": " << upstream_work.rejected_cfl << "}, \"downstream\": {\"accepted_configured_substeps\": " << downstream_work.accepted_configured
+		<< ", \"all_configured_substeps\": " << downstream_work.all_configured << ", \"rejected_configured_substeps\": " << downstream_work.rejected_configured
+		<< ", \"accepted_explicit_cfl_substeps\": " << downstream_work.accepted_cfl << ", \"all_explicit_cfl_substeps\": " << downstream_work.all_cfl
+		<< ", \"rejected_explicit_cfl_substeps\": " << downstream_work.rejected_cfl << "}}\n"
 		<< "}\n";
 	if (!output) throw std::runtime_error("cannot write explicit coupling manifest");
 }
@@ -295,7 +333,8 @@ void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCoupling
 	int three_d_inlet_label, int three_d_outlet_label, double initial_upstream_pressure_pa,
 	double initial_three_d_outlet_traction_pressure_pa, long long total_coupling_iterations,
 	double reference_inlet_outward_flow_m3_s, const std::array<long long, 6>& aitken_status_counts,
-	long long accepted_ksp, long long all_ksp)
+	long long accepted_ksp, long long all_ksp, const iga::OneDSubcyclingPlan& upstream_subcycling,
+	const iga::OneDSubcyclingPlan& downstream_subcycling, const std::vector<iga::ExplicitCouplingHistoryRow>& history)
 {
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create strong coupling manifest");
@@ -345,11 +384,20 @@ void WriteStrongCouplingManifest(const fs::path& path, const iga::StrongCoupling
 	output
 		<< "  \"formula\": \"pressure_raw_i=G_i-x_i; eta_i=abs(pressure_raw_i)/max(Pref,abs(G_i),abs(x_i)); convergence requires both nonnegative normalized pressure residuals eta_i <= pressure_relative_tolerance and both absolute signed outward-flow residuals abs((Q_a_out+Q_b_out)/max(abs(Q_a_out),abs(Q_b_out),1e-30)) <= flow_relative_tolerance; x_next=x+omega*(G-x)\",\n"
 		<< "  \"output_semantics\": \"History, iteration CSV, and manifest are written only after the complete run succeeds; rejected trials produce no persistent coupling output.\",\n"
-		<< "  \"work_semantics\": \"accepted 3D KSP work is the final committed attempt of each step; all_attempts includes rejected strong sweeps; rejected is all_attempts minus accepted. Rejected 1D computational work is not reported.\",\n"
+		<< "  \"work_semantics\": \"accepted 3D KSP work is the final committed attempt of each step; all_attempts includes rejected strong sweeps; rejected is all_attempts minus accepted. Per-domain configured and explicit-CFL 1D accepted/all/rejected work is serialized in every step row.\",\n"
 		<< "  \"total_coupling_iterations\": " << total_coupling_iterations << ",\n"
 		<< "  \"three_d_ksp_iterations\": {\"accepted\": " << accepted_ksp
 		<< ", \"all_attempts\": " << all_ksp << ", \"rejected\": "
-		<< all_ksp-accepted_ksp << "}\n}\n";
+		<< all_ksp-accepted_ksp << "},\n";
+	const auto upstream_work = SumOneDWork(history, true);
+	const auto downstream_work = SumOneDWork(history, false);
+	output << "  \"one_d_subcycling\": {\"macro_dt_s\": " << upstream_subcycling.macro_dt_s
+		<< ", \"macro_steps\": " << upstream_subcycling.macro_steps << ", \"ratio_relative_tolerance\": 1e-12"
+		<< ", \"upstream\": {\"configured_dt_s\": " << upstream_subcycling.configured_dt_s << ", \"configured_steps\": " << upstream_subcycling.configured_steps << ", \"N\": " << upstream_subcycling.configured_substeps_per_macro_step
+		<< "}, \"downstream\": {\"configured_dt_s\": " << downstream_subcycling.configured_dt_s << ", \"configured_steps\": " << downstream_subcycling.configured_steps << ", \"N\": " << downstream_subcycling.configured_substeps_per_macro_step
+		<< "}, \"semantics\": \"zero-order held interface data; configured open-loop sampling at substep endpoints; endpoint residuals; internal_substeps is explicit CFL only\"},\n"
+		<< "  \"one_d_work_totals\": {\"upstream\": {\"accepted_configured_substeps\": " << upstream_work.accepted_configured << ", \"all_configured_substeps\": " << upstream_work.all_configured << ", \"rejected_configured_substeps\": " << upstream_work.rejected_configured << ", \"accepted_explicit_cfl_substeps\": " << upstream_work.accepted_cfl << ", \"all_explicit_cfl_substeps\": " << upstream_work.all_cfl << ", \"rejected_explicit_cfl_substeps\": " << upstream_work.rejected_cfl
+		<< "}, \"downstream\": {\"accepted_configured_substeps\": " << downstream_work.accepted_configured << ", \"all_configured_substeps\": " << downstream_work.all_configured << ", \"rejected_configured_substeps\": " << downstream_work.rejected_configured << ", \"accepted_explicit_cfl_substeps\": " << downstream_work.accepted_cfl << ", \"all_explicit_cfl_substeps\": " << downstream_work.all_cfl << ", \"rejected_explicit_cfl_substeps\": " << downstream_work.rejected_cfl << "}}\n}\n";
 	if (!output) throw std::runtime_error("cannot write strong coupling manifest");
 }
 
@@ -376,6 +424,19 @@ void WriteStrongFailureIteration(std::ostream& output, const iga::StrongCoupling
 		<< " status=" << row.aitken_status_code << " has_previous=" << row.aitken_has_previous_residual
 		<< " applied=" << row.relaxation_update_applied << " converged=" << row.converged
 		<< " ksp=(" << row.three_d_attempt_linear_iterations << ',' << row.three_d_cumulative_step_linear_iterations << ")\n";
+	output << "upstream_1d_work=(" << row.upstream_1d_attempt_configured_substeps << ','
+		<< row.upstream_1d_attempt_explicit_cfl_substeps << ',' << row.upstream_1d_cumulative_configured_substeps << ','
+		<< row.upstream_1d_cumulative_explicit_cfl_substeps << ") downstream_1d_work=("
+		<< row.downstream_1d_attempt_configured_substeps << ',' << row.downstream_1d_attempt_explicit_cfl_substeps << ','
+		<< row.downstream_1d_cumulative_configured_substeps << ',' << row.downstream_1d_cumulative_explicit_cfl_substeps << ")\n";
+}
+
+void WriteStrongOneDWorkTuple(std::ostream& output, const char* name, const iga::OneDFlowRuntime::TrialDiagnostics& diagnostics,
+	const iga::OneDTrialWorkAccumulator& cumulative)
+{
+	output << name << "_1d_work=(" << diagnostics.attempted_configured_substeps << ','
+		<< diagnostics.explicit_cfl_substep_delta << ',' << cumulative.configured_substeps << ','
+		<< cumulative.explicit_cfl_substeps << ')';
 }
 
 void RollbackSolved(iga::OneDFlowRuntime& runtime)
@@ -386,6 +447,19 @@ void RollbackSolved(iga::OneDFlowRuntime& runtime)
 void RollbackSolved(iga::TransientFlowRuntime& runtime)
 {
 	if (runtime.Phase() == iga::FlowStepPhase::TrialSolved) runtime.RollbackTrial();
+}
+
+void SetOneDAttemptWork(iga::ExplicitCouplingHistoryRow& row, const iga::OneDFlowRuntime& upstream,
+	const iga::OneDFlowRuntime& downstream)
+{
+	row.upstream_configured_substeps_attempted = upstream.Diagnostics().attempted_configured_substeps;
+	row.upstream_explicit_cfl_substeps = upstream.Diagnostics().explicit_cfl_substep_delta;
+	row.downstream_configured_substeps_attempted = downstream.Diagnostics().attempted_configured_substeps;
+	row.downstream_explicit_cfl_substeps = downstream.Diagnostics().explicit_cfl_substep_delta;
+	row.upstream_accepted_configured_substeps = row.upstream_all_configured_substeps = row.upstream_configured_substeps_attempted;
+	row.upstream_accepted_explicit_cfl_substeps = row.upstream_all_explicit_cfl_substeps = row.upstream_explicit_cfl_substeps;
+	row.downstream_accepted_configured_substeps = row.downstream_all_configured_substeps = row.downstream_configured_substeps_attempted;
+	row.downstream_accepted_explicit_cfl_substeps = row.downstream_all_explicit_cfl_substeps = row.downstream_explicit_cfl_substeps;
 }
 
 } // namespace
@@ -518,13 +592,17 @@ int main(int argc, char** argv)
 		scalar.normalized_length_m = normalized_length;
 		scalar.reference_inlet_outward_flow_m3_s = reference_inlet_flow;
 		iga::ValidateExplicitCouplingScalarPreflight(scalar);
-		if (upstream.Configuration().time.dt != scalar.dt_s || downstream.Configuration().time.dt != scalar.dt_s
-			|| upstream.Configuration().time.steps != scalar.steps || downstream.Configuration().time.steps != scalar.steps
-			|| upstream.FlowSystem().density != scalar.density_kg_m3
+		const auto upstream_subcycling = iga::MakeOneDSubcyclingPlan(upstream.Configuration().time.dt,
+			upstream.Configuration().time.steps, scalar.dt_s, scalar.steps);
+		const auto downstream_subcycling = iga::MakeOneDSubcyclingPlan(downstream.Configuration().time.dt,
+			downstream.Configuration().time.steps, scalar.dt_s, scalar.steps);
+		if (upstream.FlowSystem().density != scalar.density_kg_m3
 			|| downstream.FlowSystem().density != scalar.density_kg_m3
 			|| upstream.FlowSystem().dynamic_viscosity != scalar.dynamic_viscosity_pa_s
 			|| downstream.FlowSystem().dynamic_viscosity != scalar.dynamic_viscosity_pa_s)
-			throw std::runtime_error("explicit 1D--3D coupling requires identical dt, steps, density, and viscosity");
+			throw std::runtime_error("explicit 1D--3D coupling requires identical density and viscosity");
+		(void)upstream_subcycling;
+		(void)downstream_subcycling;
 		const auto three_d_inlet_profile = MakeThreeDPort("three_d_inlet", ports.inlet_label, {},
 			{iga::PortQuantity::FlowRate});
 		const auto three_d_inlet_measure = MakeThreeDPort("three_d_inlet", ports.inlet_label,
@@ -577,6 +655,8 @@ int main(int argc, char** argv)
 				double applied_upstream_pressure = lagged_three_d_inlet_pressure;
 				double applied_three_d_pressure = lagged_downstream_root_pressure;
 				long long all_ksp = 0;
+				iga::OneDTrialWorkAccumulator upstream_work;
+				iga::OneDTrialWorkAccumulator downstream_work;
 				int relaxation_updates = 0;
 				double last_applied_relaxation = 0.0;
 				bool committed = false;
@@ -588,15 +668,28 @@ int main(int argc, char** argv)
 						kThreeDNonlinearRelativeTolerance, kThreeDNonlinearAbsoluteTolerance,
 						kThreeDMassRelativeTolerance);
 					downstream.BeginStep(downstream.FlowState().physical_time, scalar.dt_s);
+					upstream.SetConfiguredOpenLoopInlet();
 					for (int iteration = 1; iteration <= options.strong_controls.maximum_iterations; ++iteration) {
-						const double upstream_flow = iga::EvaluateOneDInlet(upstream.Configuration(), upstream.InletDefinition(),
-							options.upstream_case, time, upstream.Network().segments.front().area0);
-						upstream.SetOpenLoopInlet(upstream.OpenLoopInlet(time, upstream_flow));
 						iga::PortBoundaryData upstream_pressure;
 						upstream_pressure.time_s = time;
 						upstream_pressure.mean_pressure_pa = applied_upstream_pressure;
 						upstream.SetPortInput(upstream_terminal, upstream_pressure);
-						upstream.SolveTrial();
+						try { upstream.SolveTrial(); }
+						catch (...) {
+							upstream_work.Add(upstream.Diagnostics().attempted_configured_substeps,
+								upstream.Diagnostics().explicit_cfl_substep_delta);
+							std::ostringstream diagnostic;
+							diagnostic << std::setprecision(17) << "step=" << step << " iteration=" << iteration
+								<< " x=(" << applied_upstream_pressure << ',' << applied_three_d_pressure << ')'
+								<< " upstream SolveTrial failed ";
+							WriteStrongOneDWorkTuple(diagnostic, "upstream", upstream.Diagnostics(), upstream_work);
+							diagnostic << ' ';
+							WriteStrongOneDWorkTuple(diagnostic, "downstream", downstream.Diagnostics(), downstream_work);
+							final_strong_diagnostics = diagnostic.str();
+							throw;
+						}
+						upstream_work.Add(upstream.Diagnostics().attempted_configured_substeps,
+							upstream.Diagnostics().explicit_cfl_substep_delta);
 						const auto upstream_port = upstream.GetPortState(upstream_terminal);
 						const double upstream_q = RequirePortValue(upstream_port.outward_flow_m3_s, "upstream terminal flow");
 
@@ -625,7 +718,10 @@ int main(int argc, char** argv)
 								<< " G=(unavailable,unavailable) signed_pressure_residual_pa=(unavailable,unavailable)"
 								<< " normalized_pressure_residual=(unavailable,unavailable)"
 								<< " flow_residuals_m3_s=(unavailable,unavailable) mass_imbalance_m3_s=unavailable"
-								<< " three_d_ksp_attempt=" << trial_ksp << " three_d_ksp_cumulative=" << all_ksp;
+								<< " three_d_ksp_attempt=" << trial_ksp << " three_d_ksp_cumulative=" << all_ksp << ' ';
+							WriteStrongOneDWorkTuple(diagnostic, "upstream", upstream.Diagnostics(), upstream_work);
+							diagnostic << ' ';
+							WriteStrongOneDWorkTuple(diagnostic, "downstream", downstream.Diagnostics(), downstream_work);
 							final_strong_diagnostics = diagnostic.str();
 							throw;
 						}
@@ -640,7 +736,22 @@ int main(int argc, char** argv)
 						downstream_input.time_s = time;
 						downstream_input.outward_flow_m3_s = -three_d_outlet_q;
 						downstream.SetPortInput("root", downstream_input);
-						downstream.SolveTrial();
+						try { downstream.SolveTrial(); }
+						catch (...) {
+							downstream_work.Add(downstream.Diagnostics().attempted_configured_substeps,
+								downstream.Diagnostics().explicit_cfl_substep_delta);
+							std::ostringstream diagnostic;
+							diagnostic << std::setprecision(17) << "step=" << step << " iteration=" << iteration
+								<< " x=(" << applied_upstream_pressure << ',' << applied_three_d_pressure << ')'
+								<< " downstream SolveTrial failed ";
+							WriteStrongOneDWorkTuple(diagnostic, "upstream", upstream.Diagnostics(), upstream_work);
+							diagnostic << ' ';
+							WriteStrongOneDWorkTuple(diagnostic, "downstream", downstream.Diagnostics(), downstream_work);
+							final_strong_diagnostics = diagnostic.str();
+							throw;
+						}
+						downstream_work.Add(downstream.Diagnostics().attempted_configured_substeps,
+							downstream.Diagnostics().explicit_cfl_substep_delta);
 						const auto downstream_root = downstream.GetPortState("root");
 						const auto downstream_terminal_port = downstream.GetPortState(downstream_terminal);
 						const auto upstream_root = upstream.GetPortState("root");
@@ -678,6 +789,7 @@ int main(int argc, char** argv)
 						row.iteration_count = iteration;
 						row.relaxation_factor = options.strong_controls.relaxation_factor;
 						row.three_d_trial_linear_iterations = trial_ksp;
+						SetOneDAttemptWork(row, upstream, downstream);
 						iga::ValidateExplicitCouplingHistoryRow(row);
 
 						iga::StrongCouplingIterationRow iteration_row;
@@ -727,6 +839,14 @@ int main(int argc, char** argv)
 						iteration_row.three_d_mass_imbalance_m3_s = row.three_d_mass_imbalance_m3_s;
 						iteration_row.three_d_attempt_linear_iterations = trial_ksp;
 						iteration_row.three_d_cumulative_step_linear_iterations = all_ksp;
+						iteration_row.upstream_1d_attempt_configured_substeps = upstream.Diagnostics().attempted_configured_substeps;
+						iteration_row.upstream_1d_attempt_explicit_cfl_substeps = upstream.Diagnostics().explicit_cfl_substep_delta;
+						iteration_row.upstream_1d_cumulative_configured_substeps = upstream_work.configured_substeps;
+						iteration_row.upstream_1d_cumulative_explicit_cfl_substeps = upstream_work.explicit_cfl_substeps;
+						iteration_row.downstream_1d_attempt_configured_substeps = downstream.Diagnostics().attempted_configured_substeps;
+						iteration_row.downstream_1d_attempt_explicit_cfl_substeps = downstream.Diagnostics().explicit_cfl_substep_delta;
+						iteration_row.downstream_1d_cumulative_configured_substeps = downstream_work.configured_substeps;
+						iteration_row.downstream_1d_cumulative_explicit_cfl_substeps = downstream_work.explicit_cfl_substeps;
 						iga::ValidateStrongCouplingIterationRow(iteration_row);
 						std::ostringstream diagnostic;
 						diagnostic << std::setprecision(17) << "step=" << step << " iteration=" << iteration
@@ -757,6 +877,19 @@ int main(int argc, char** argv)
 						if (iteration_row.converged) {
 							iteration_row.relaxation_update_applied = false;
 							row.relaxation_factor = relaxation_updates > 0 ? last_applied_relaxation : options.strong_controls.relaxation_factor;
+							row.upstream_accepted_configured_substeps = iteration_row.upstream_1d_attempt_configured_substeps;
+							row.upstream_all_configured_substeps = upstream_work.configured_substeps;
+							row.upstream_rejected_configured_substeps = upstream_work.RejectedConfiguredSubsteps(row.upstream_accepted_configured_substeps);
+							row.upstream_accepted_explicit_cfl_substeps = iteration_row.upstream_1d_attempt_explicit_cfl_substeps;
+							row.upstream_all_explicit_cfl_substeps = upstream_work.explicit_cfl_substeps;
+							row.upstream_rejected_explicit_cfl_substeps = upstream_work.RejectedExplicitCflSubsteps(row.upstream_accepted_explicit_cfl_substeps);
+							row.downstream_accepted_configured_substeps = iteration_row.downstream_1d_attempt_configured_substeps;
+							row.downstream_all_configured_substeps = downstream_work.configured_substeps;
+							row.downstream_rejected_configured_substeps = downstream_work.RejectedConfiguredSubsteps(row.downstream_accepted_configured_substeps);
+							row.downstream_accepted_explicit_cfl_substeps = iteration_row.downstream_1d_attempt_explicit_cfl_substeps;
+							row.downstream_all_explicit_cfl_substeps = downstream_work.explicit_cfl_substeps;
+							row.downstream_rejected_explicit_cfl_substeps = downstream_work.RejectedExplicitCflSubsteps(row.downstream_accepted_explicit_cfl_substeps);
+							iga::ValidateExplicitCouplingHistoryRow(row);
 							strong_iterations.push_back(iteration_row);
 							if (injected_failure_step == step)
 								throw std::runtime_error("injected strong coupling failure before commit");
@@ -803,10 +936,8 @@ int main(int argc, char** argv)
 		} else for (int step = 1; step <= final_step; ++step) {
 			const double time = step*scalar.dt_s;
 			try {
-				const double upstream_flow = iga::EvaluateOneDInlet(upstream.Configuration(), upstream.InletDefinition(),
-					options.upstream_case, time, upstream.Network().segments.front().area0);
 				upstream.BeginStep(upstream.FlowState().physical_time, scalar.dt_s);
-				upstream.SetOpenLoopInlet(upstream.OpenLoopInlet(time, upstream_flow));
+				upstream.SetConfiguredOpenLoopInlet();
 				iga::PortBoundaryData upstream_pressure;
 				upstream_pressure.time_s = time;
 				upstream_pressure.mean_pressure_pa = lagged_three_d_inlet_pressure;
@@ -881,6 +1012,7 @@ int main(int argc, char** argv)
 				row.upstream_three_d_pressure_jump_pa = row.upstream_terminal_pressure_pa-row.three_d_inlet_pressure_pa;
 				row.three_d_downstream_pressure_jump_pa = row.three_d_outlet_pressure_pa-row.downstream_root_pressure_pa;
 				row.three_d_trial_linear_iterations = three_d.TrialLinearIterations();
+				SetOneDAttemptWork(row, upstream, downstream);
 				iga::ValidateExplicitCouplingHistoryRow(row);
 				if (injected_failure_step == step)
 					throw std::runtime_error("injected explicit coupling failure before commit");
@@ -912,7 +1044,7 @@ int main(int argc, char** argv)
 					scalar.steps, static_cast<int>(history.size()), scalar.density_kg_m3,
 					scalar.dynamic_viscosity_pa_s, normalized_length,
 					reference_inlet_flow, initial_lagged_three_d_inlet_pressure,
-					initial_lagged_downstream_root_pressure);
+					initial_lagged_downstream_root_pressure, upstream_subcycling, downstream_subcycling, history);
 			} else {
 				std::ofstream history_output(options.output_directory/"strong_coupling_history.csv");
 				std::ofstream iteration_output(options.output_directory/"strong_coupling_iterations.csv");
@@ -964,7 +1096,8 @@ int main(int argc, char** argv)
 					scalar.density_kg_m3, scalar.dynamic_viscosity_pa_s, normalized_length,
 					options.upstream_terminal_node, ports.inlet_label, ports.outlet_labels.front(),
 					initial_lagged_three_d_inlet_pressure, initial_lagged_downstream_root_pressure,
-					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, aitken_status_counts, accepted_ksp, all_ksp);
+					static_cast<long long>(strong_iterations.size()), reference_inlet_flow, aitken_status_counts, accepted_ksp, all_ksp,
+					upstream_subcycling, downstream_subcycling, history);
 			}
 		} catch (const std::exception& error) {
 			output_failed = 1;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
 #include <ostream>
@@ -12,6 +13,77 @@
 #include <string>
 
 namespace iga {
+
+struct OneDSubcyclingPlan {
+	int configured_substeps_per_macro_step = 1;
+	double configured_dt_s = 0.0;
+	double macro_dt_s = 0.0;
+	int macro_steps = 0;
+	int configured_steps = 0;
+};
+
+inline OneDSubcyclingPlan MakeOneDSubcyclingPlan(double configured_dt_s, int configured_steps,
+	double macro_dt_s, int macro_steps)
+{
+	if (!(configured_dt_s > 0.0) || !std::isfinite(configured_dt_s)
+		|| configured_steps < 1 || !(macro_dt_s > 0.0) || !std::isfinite(macro_dt_s) || macro_steps < 1)
+		throw std::runtime_error("1D subcycling requires finite positive dt and step counts");
+	const long double ratio = static_cast<long double>(macro_dt_s)/static_cast<long double>(configured_dt_s);
+	if (!std::isfinite(ratio) || ratio < 1.0L
+		|| ratio > static_cast<long double>(std::numeric_limits<int>::max()))
+		throw std::runtime_error("1D subcycling requires configured dt no larger than macro dt and an int substep count");
+	const long long rounded = std::llround(ratio);
+	if (rounded < 1 || rounded > std::numeric_limits<int>::max())
+		throw std::runtime_error("1D subcycling ratio is out of range");
+	const long double reconstructed = static_cast<long double>(rounded)*static_cast<long double>(configured_dt_s);
+	const long double scale = std::max({1.0L, std::abs(static_cast<long double>(macro_dt_s)),
+		std::abs(reconstructed)});
+	if (std::abs(ratio-static_cast<long double>(rounded)) > 1.0e-12L*std::max(1.0L, std::abs(ratio))
+		|| std::abs(reconstructed-static_cast<long double>(macro_dt_s)) > 1.0e-12L*scale)
+		throw std::runtime_error("1D subcycling requires an integer macro/configured dt ratio");
+	if (static_cast<long long>(macro_steps) > std::numeric_limits<int>::max()/rounded
+		|| configured_steps != macro_steps*rounded)
+		throw std::runtime_error("1D subcycling configured steps must equal macro steps times substeps");
+	const long double configured_horizon = static_cast<long double>(configured_steps)*configured_dt_s;
+	const long double macro_horizon = static_cast<long double>(macro_steps)*macro_dt_s;
+	if (std::abs(configured_horizon-macro_horizon) > 1.0e-12L*
+		std::max({1.0L, std::abs(configured_horizon), std::abs(macro_horizon)}))
+		throw std::runtime_error("1D subcycling configured and macro horizons differ");
+	return {static_cast<int>(rounded), configured_dt_s, macro_dt_s, macro_steps, configured_steps};
+}
+
+// Per-macro-step work is accumulated from each actual 1D trial attempt.  In
+// particular, strong iterations must not infer it from a nominal substep plan:
+// a failed attempt can complete only part of that plan.
+struct OneDTrialWorkAccumulator {
+	long long configured_substeps = 0;
+	long long explicit_cfl_substeps = 0;
+
+	void Add(int attempted_configured_substeps, long long attempted_explicit_cfl_substeps)
+	{
+		if (attempted_configured_substeps < 0 || attempted_explicit_cfl_substeps < 0)
+			throw std::runtime_error("1D trial work requires nonnegative attempt counters");
+		if (configured_substeps > std::numeric_limits<long long>::max()-attempted_configured_substeps
+			|| explicit_cfl_substeps > std::numeric_limits<long long>::max()-attempted_explicit_cfl_substeps)
+			throw std::runtime_error("1D trial work counter overflow");
+		configured_substeps += attempted_configured_substeps;
+		explicit_cfl_substeps += attempted_explicit_cfl_substeps;
+	}
+
+	long long RejectedConfiguredSubsteps(int accepted_configured_substeps) const
+	{
+		if (accepted_configured_substeps < 0 || accepted_configured_substeps > configured_substeps)
+			throw std::runtime_error("1D accepted configured work exceeds trial work");
+		return configured_substeps-accepted_configured_substeps;
+	}
+
+	long long RejectedExplicitCflSubsteps(long long accepted_explicit_cfl_substeps) const
+	{
+		if (accepted_explicit_cfl_substeps < 0 || accepted_explicit_cfl_substeps > explicit_cfl_substeps)
+			throw std::runtime_error("1D accepted explicit CFL work exceeds trial work");
+		return explicit_cfl_substeps-accepted_explicit_cfl_substeps;
+	}
+};
 
 struct ExplicitCouplingScalarPreflight {
 	double dt_s = 0.0;
@@ -97,6 +169,22 @@ struct ExplicitCouplingHistoryRow {
 	int iteration_count = 1;
 	double relaxation_factor = 1.0;
 	long long three_d_trial_linear_iterations = 0;
+	int upstream_configured_substeps_attempted = 0;
+	long long upstream_explicit_cfl_substeps = 0;
+	int downstream_configured_substeps_attempted = 0;
+	long long downstream_explicit_cfl_substeps = 0;
+	long long upstream_accepted_configured_substeps = 0;
+	long long upstream_all_configured_substeps = 0;
+	long long upstream_rejected_configured_substeps = 0;
+	long long upstream_accepted_explicit_cfl_substeps = 0;
+	long long upstream_all_explicit_cfl_substeps = 0;
+	long long upstream_rejected_explicit_cfl_substeps = 0;
+	long long downstream_accepted_configured_substeps = 0;
+	long long downstream_all_configured_substeps = 0;
+	long long downstream_rejected_configured_substeps = 0;
+	long long downstream_accepted_explicit_cfl_substeps = 0;
+	long long downstream_all_explicit_cfl_substeps = 0;
+	long long downstream_rejected_explicit_cfl_substeps = 0;
 };
 
 inline void ValidateExplicitCouplingHistoryRow(const ExplicitCouplingHistoryRow& row)
@@ -129,6 +217,18 @@ inline void ValidateExplicitCouplingHistoryRow(const ExplicitCouplingHistoryRow&
 	if (row.iteration_count < 1 || !(row.relaxation_factor > 0.0) || row.relaxation_factor > 1.0
 		|| row.three_d_trial_linear_iterations < 0)
 		throw std::runtime_error("coupling history requires a positive iteration count and relaxation in (0,1]");
+	if (row.upstream_configured_substeps_attempted < 1 || row.downstream_configured_substeps_attempted < 1
+		|| row.upstream_explicit_cfl_substeps < 0 || row.downstream_explicit_cfl_substeps < 0)
+		throw std::runtime_error("coupling history requires nonnegative 1D subcycling diagnostics");
+	if (row.upstream_accepted_configured_substeps < 0 || row.upstream_all_configured_substeps < row.upstream_accepted_configured_substeps
+		|| row.upstream_rejected_configured_substeps != row.upstream_all_configured_substeps-row.upstream_accepted_configured_substeps
+		|| row.downstream_accepted_configured_substeps < 0 || row.downstream_all_configured_substeps < row.downstream_accepted_configured_substeps
+		|| row.downstream_rejected_configured_substeps != row.downstream_all_configured_substeps-row.downstream_accepted_configured_substeps
+		|| row.upstream_accepted_explicit_cfl_substeps < 0 || row.upstream_all_explicit_cfl_substeps < row.upstream_accepted_explicit_cfl_substeps
+		|| row.upstream_rejected_explicit_cfl_substeps != row.upstream_all_explicit_cfl_substeps-row.upstream_accepted_explicit_cfl_substeps
+		|| row.downstream_accepted_explicit_cfl_substeps < 0 || row.downstream_all_explicit_cfl_substeps < row.downstream_accepted_explicit_cfl_substeps
+		|| row.downstream_rejected_explicit_cfl_substeps != row.downstream_all_explicit_cfl_substeps-row.downstream_accepted_explicit_cfl_substeps)
+		throw std::runtime_error("coupling history has inconsistent 1D work accounting");
 }
 
 inline void WriteExplicitCouplingHistoryHeader(std::ostream& output)
@@ -143,7 +243,13 @@ inline void WriteExplicitCouplingHistoryHeader(std::ostream& output)
 		"upstream_three_d_normalized_residual,three_d_downstream_normalized_residual,"
 		"three_d_mass_imbalance_m3_s,three_d_wall_outward_flow_m3_s,net_external_outward_flow_m3_s,external_pressure_drop_pa,"
 		"upstream_three_d_pressure_jump_pa,three_d_downstream_pressure_jump_pa,"
-		"iteration_count,relaxation_factor,three_d_trial_linear_iterations\n";
+		"iteration_count,relaxation_factor,three_d_trial_linear_iterations,"
+		"upstream_configured_substeps_attempted,upstream_explicit_cfl_substeps,"
+		"downstream_configured_substeps_attempted,downstream_explicit_cfl_substeps,"
+		"upstream_accepted_configured_substeps,upstream_all_configured_substeps,upstream_rejected_configured_substeps,"
+		"upstream_accepted_explicit_cfl_substeps,upstream_all_explicit_cfl_substeps,upstream_rejected_explicit_cfl_substeps,"
+		"downstream_accepted_configured_substeps,downstream_all_configured_substeps,downstream_rejected_configured_substeps,"
+		"downstream_accepted_explicit_cfl_substeps,downstream_all_explicit_cfl_substeps,downstream_rejected_explicit_cfl_substeps\n";
 }
 
 inline void WriteExplicitCouplingHistoryRow(std::ostream& output,
@@ -168,7 +274,13 @@ inline void WriteExplicitCouplingHistoryRow(std::ostream& output,
 		<< row.external_pressure_drop_pa << ','
 		<< row.upstream_three_d_pressure_jump_pa << ','
 		<< row.three_d_downstream_pressure_jump_pa << ',' << row.iteration_count << ','
-		<< row.relaxation_factor << ',' << row.three_d_trial_linear_iterations << '\n';
+		<< row.relaxation_factor << ',' << row.three_d_trial_linear_iterations << ','
+		<< row.upstream_configured_substeps_attempted << ',' << row.upstream_explicit_cfl_substeps << ','
+		<< row.downstream_configured_substeps_attempted << ',' << row.downstream_explicit_cfl_substeps << ','
+		<< row.upstream_accepted_configured_substeps << ',' << row.upstream_all_configured_substeps << ',' << row.upstream_rejected_configured_substeps << ','
+		<< row.upstream_accepted_explicit_cfl_substeps << ',' << row.upstream_all_explicit_cfl_substeps << ',' << row.upstream_rejected_explicit_cfl_substeps << ','
+		<< row.downstream_accepted_configured_substeps << ',' << row.downstream_all_configured_substeps << ',' << row.downstream_rejected_configured_substeps << ','
+		<< row.downstream_accepted_explicit_cfl_substeps << ',' << row.downstream_all_explicit_cfl_substeps << ',' << row.downstream_rejected_explicit_cfl_substeps << '\n';
 }
 
 } // namespace iga

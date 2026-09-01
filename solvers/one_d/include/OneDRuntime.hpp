@@ -9,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -27,6 +28,17 @@ public:
 		const OneDFlowSystemDefinition&, OneDFlowState&, double, double)>;
 
 	enum class Phase { Uninitialized, Ready, TrialOpen, TrialSolved };
+	enum class TrialInletMode { None, HeldOpenLoop, Coupled, ConfiguredOpenLoop };
+
+	struct TrialDiagnostics {
+		int planned_configured_substeps = 0;
+		int attempted_configured_substeps = 0;
+		int completed_configured_substeps = 0;
+		long long explicit_cfl_substep_delta = 0;
+		std::vector<double> configured_open_loop_endpoint_times_s;
+		std::vector<double> configured_open_loop_endpoint_flows_m3_s;
+		std::vector<double> substep_endpoint_flows_m3_s;
+	};
 
 	OneDFlowRuntime(OneDConfiguration configuration, OneDFlowSystemDefinition flow,
 		OneDNetwork network, OneDInletState inlet, std::filesystem::path case_directory,
@@ -93,12 +105,18 @@ public:
 			throw std::runtime_error("1d BeginStep requires a finite positive dt_s");
 		if (!Close(time_s, flow_state_.physical_time))
 			throw std::runtime_error("1d BeginStep time_s must equal committed physical time");
+		const int configured_substeps = ConfiguredSubsteps(dt_s);
+		if (flow_state_.completed_step > configuration_.time.steps-configured_substeps)
+			throw std::runtime_error("1d BeginStep would exceed configured step count");
 		committed_ = Snapshot{configuration_, network_, flow_state_, transports_, last_inlet_};
 		trial_time_s_ = time_s;
 		trial_dt_s_ = dt_s;
 		trial_inlet_.reset();
 		trial_outlet_pressure_overrides_.clear();
-		trial_coupled_ = false;
+		trial_inlet_mode_ = TrialInletMode::None;
+		trial_diagnostics_ = {};
+		trial_diagnostics_.planned_configured_substeps = configured_substeps;
+		trial_configured_open_loop_schedule_.clear();
 		trial_solve_succeeded_ = false;
 		phase_ = Phase::TrialOpen;
 	}
@@ -124,7 +142,7 @@ public:
 			inlet.flow_m3_s = RootOrientation().ToNative(*input.outward_flow_m3_s);
 			inlet.species = input.concentration;
 			trial_inlet_ = std::move(inlet);
-			trial_coupled_ = true;
+			trial_inlet_mode_ = TrialInletMode::Coupled;
 			return;
 		}
 		const int node = OutletNode(port_id);
@@ -149,7 +167,7 @@ public:
 		if (!Close(inlet.time_s, trial_time_s_+trial_dt_s_))
 			throw std::runtime_error("1d coupled inlet time_s must equal trial end time");
 		trial_inlet_ = inlet;
-		trial_coupled_ = true;
+		trial_inlet_mode_ = TrialInletMode::Coupled;
 	}
 
 	void SetOpenLoopInlet(const VascularInletState& inlet)
@@ -159,47 +177,83 @@ public:
 		if (!inlet.has_flow || !Close(inlet.time_s, trial_time_s_+trial_dt_s_))
 			throw std::runtime_error("1d open-loop inlet must contain end-time flow data");
 		trial_inlet_ = inlet;
-		trial_coupled_ = false;
+		trial_inlet_mode_ = TrialInletMode::HeldOpenLoop;
+	}
+
+	void SetConfiguredOpenLoopInlet()
+	{
+		RequirePhase(Phase::TrialOpen, "SetConfiguredOpenLoopInlet");
+		trial_inlet_.reset();
+		trial_inlet_mode_ = TrialInletMode::ConfiguredOpenLoop;
+		trial_configured_open_loop_schedule_.clear();
+		for (int substep = 0; substep < trial_diagnostics_.planned_configured_substeps; ++substep) {
+			const double endpoint = substep+1 == trial_diagnostics_.planned_configured_substeps
+				? trial_time_s_+trial_dt_s_ : trial_time_s_+(substep+1)*configuration_.time.dt;
+			trial_configured_open_loop_schedule_.push_back(OpenLoopInlet(endpoint,
+				EvaluateOneDInlet(configuration_, inlet_, case_directory_, endpoint, network_.segments.front().area0)));
+		}
 	}
 
 	void SolveTrial()
 	{
 		RequirePhase(Phase::TrialOpen, "SolveTrial");
-		if (!trial_inlet_ || !trial_inlet_->has_flow)
+		if (trial_inlet_mode_ != TrialInletMode::ConfiguredOpenLoop
+			&& (!trial_inlet_ || !trial_inlet_->has_flow))
 			throw std::runtime_error("1d SolveTrial requires a root flow input");
 		RestoreCommitted();
 		trial_solve_succeeded_ = false;
+		trial_diagnostics_.attempted_configured_substeps = 0;
+		trial_diagnostics_.completed_configured_substeps = 0;
+		trial_diagnostics_.explicit_cfl_substep_delta = 0;
+		trial_diagnostics_.configured_open_loop_endpoint_times_s.clear();
+		trial_diagnostics_.configured_open_loop_endpoint_flows_m3_s.clear();
+		trial_diagnostics_.substep_endpoint_flows_m3_s.clear();
+		const long long cfl_before = flow_state_.internal_substeps;
 		try {
-			for (const auto& override : trial_outlet_pressure_overrides_) {
-				auto& outlet = flow_state_.outlets.at(OutletIndex(override.first));
-				outlet.pressure = override.second;
-				outlet.reference_pressure = override.second;
-				outlet.capacitor_pressure = override.second;
+			double coupled_inlet_flow = 0.0;
+			if (trial_inlet_mode_ == TrialInletMode::Coupled)
+				coupled_inlet_flow = ApplyOneDCoupledInlet(configuration_, transports_, *trial_inlet_);
+			for (int substep = 0; substep < trial_diagnostics_.planned_configured_substeps; ++substep) {
+				++trial_diagnostics_.attempted_configured_substeps;
+				const double sub_start = trial_time_s_+substep*configuration_.time.dt;
+				const double sub_end = substep+1 == trial_diagnostics_.planned_configured_substeps
+					? trial_time_s_+trial_dt_s_ : trial_time_s_+(substep+1)*configuration_.time.dt;
+				for (const auto& override : trial_outlet_pressure_overrides_) {
+					auto& outlet = flow_state_.outlets.at(OutletIndex(override.first));
+					outlet.pressure = override.second;
+					outlet.reference_pressure = override.second;
+					outlet.capacitor_pressure = override.second;
+				}
+				VascularInletState inlet = trial_inlet_mode_ == TrialInletMode::ConfiguredOpenLoop
+					? trial_configured_open_loop_schedule_.at(static_cast<std::size_t>(substep)) : *trial_inlet_;
+				if (trial_inlet_mode_ == TrialInletMode::ConfiguredOpenLoop)
+				{
+					trial_diagnostics_.configured_open_loop_endpoint_times_s.push_back(sub_end);
+					trial_diagnostics_.configured_open_loop_endpoint_flows_m3_s.push_back(inlet.flow_m3_s);
+				}
+				const double inlet_flow = trial_inlet_mode_ == TrialInletMode::Coupled ? coupled_inlet_flow : inlet.flow_m3_s;
+				trial_diagnostics_.substep_endpoint_flows_m3_s.push_back(inlet_flow);
+				if (flow_.scheme == OneDFlowScheme::SteadyPoiseuille)
+					SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else if (flow_.scheme == OneDFlowScheme::ExplicitRusanov)
+					AdvanceExplicitOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				else {
+					if (!implicit_advance_) throw std::runtime_error("1d implicit trial solve requires an injected PETSc advance function");
+					implicit_advance_(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+				}
+				for (auto& transport : transports_)
+					AdvanceOneDTransport(configuration_, network_, flow_state_, transport, case_directory_, sub_start, configuration_.time.dt);
+				ApplyOneDVasodilation(configuration_, network_, transports_, configuration_.time.dt, flow_.dynamic_viscosity);
+				++flow_state_.completed_step;
+				flow_state_.physical_time = sub_end;
+				last_inlet_ = std::move(inlet);
+				++trial_diagnostics_.completed_configured_substeps;
 			}
-			const double inlet_flow = trial_coupled_
-				? ApplyOneDCoupledInlet(configuration_, transports_, *trial_inlet_)
-				: trial_inlet_->flow_m3_s;
-			if (flow_.scheme == OneDFlowScheme::SteadyPoiseuille)
-				SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, trial_dt_s_);
-			else if (flow_.scheme == OneDFlowScheme::ExplicitRusanov)
-				AdvanceExplicitOneD(network_, flow_, flow_state_, inlet_flow, trial_dt_s_);
-			else {
-				if (!implicit_advance_)
-					throw std::runtime_error(
-						"1d implicit trial solve requires an injected PETSc advance function");
-				implicit_advance_(network_, flow_, flow_state_, inlet_flow, trial_dt_s_);
-			}
-			for (auto& transport : transports_)
-				AdvanceOneDTransport(configuration_, network_, flow_state_, transport,
-					case_directory_, trial_time_s_, trial_dt_s_);
-			ApplyOneDVasodilation(configuration_, network_, transports_, trial_dt_s_,
-				flow_.dynamic_viscosity);
-			flow_state_.completed_step = committed_.flow.completed_step+1;
-			flow_state_.physical_time = trial_time_s_+trial_dt_s_;
-			last_inlet_ = *trial_inlet_;
+			trial_diagnostics_.explicit_cfl_substep_delta = flow_state_.internal_substeps-cfl_before;
 			trial_solve_succeeded_ = true;
 			phase_ = Phase::TrialSolved;
 		} catch (...) {
+			trial_diagnostics_.explicit_cfl_substep_delta = flow_state_.internal_substeps-cfl_before;
 			phase_ = Phase::TrialSolved;
 			throw;
 		}
@@ -220,6 +274,7 @@ public:
 			throw std::runtime_error("1d CommitStep requires a successful trial solve");
 		committed_ = Snapshot{};
 		trial_outlet_pressure_overrides_.clear();
+		trial_configured_open_loop_schedule_.clear();
 		trial_solve_succeeded_ = false;
 		phase_ = Phase::Ready;
 	}
@@ -280,6 +335,7 @@ public:
 	const std::vector<OneDTransportState>& Transports() const { return transports_; }
 	const VascularInletState& LastInlet() const { return last_inlet_; }
 	Phase CurrentPhase() const { return phase_; }
+	const TrialDiagnostics& Diagnostics() const { return trial_diagnostics_; }
 
 	static PortOrientation RootOrientation() { return {-1}; }
 
@@ -316,6 +372,16 @@ private:
 		flow_state_ = committed_.flow;
 		transports_ = committed_.transports;
 		last_inlet_ = committed_.last_inlet;
+	}
+
+	int ConfiguredSubsteps(double macro_dt_s) const
+	{
+		const long double ratio = static_cast<long double>(macro_dt_s)/configuration_.time.dt;
+		const long long rounded = std::llround(ratio);
+		if (ratio < 1.0L || rounded < 1 || rounded > std::numeric_limits<int>::max()
+			|| std::abs(ratio-rounded) > 1.0e-12L*std::max(1.0L, std::abs(ratio)))
+			throw std::runtime_error("1d BeginStep macro dt must be an integer multiple of configured dt");
+		return static_cast<int>(rounded);
 	}
 
 	int OutletNode(const std::string& port_id) const
@@ -356,9 +422,11 @@ private:
 	VascularInletState last_inlet_;
 	Snapshot committed_;
 	std::optional<VascularInletState> trial_inlet_;
+	std::vector<VascularInletState> trial_configured_open_loop_schedule_;
 	std::map<int, double> trial_outlet_pressure_overrides_;
-	bool trial_coupled_ = false;
+	TrialInletMode trial_inlet_mode_ = TrialInletMode::None;
 	bool trial_solve_succeeded_ = false;
+	TrialDiagnostics trial_diagnostics_;
 	double trial_time_s_ = 0.0;
 	double trial_dt_s_ = 0.0;
 	Phase phase_ = Phase::Uninitialized;

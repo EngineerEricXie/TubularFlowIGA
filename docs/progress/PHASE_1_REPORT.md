@@ -1,8 +1,54 @@
 # Phase 1 report
 
-Status: PR 1.3 complete; Phase 1 remains in progress pending subcycling and
-the full convergence benchmark. Restart and a
+Status: PR 1.4 complete; Phase 1 remains in progress pending the full
+straight-vessel convergence benchmark. Restart and a
 general multidomain graph remain deferred.
+
+## PR 1.4 time-subcycling status
+
+The 1D runtime now executes an integer number of configured-time substeps
+inside one rollback-safe macro lifecycle transaction, sampling configured
+upstream waveforms at endpoints and holding interface data across the macro
+interval. The dependency-free preflight validates ratio, reconstructed time,
+step count, and horizon consistency; fast tests cover `N=1`, `N=2`, `N=4` and
+invalid ratios/horizons. Runtime tests establish rigid `N=4` equivalence with
+four committed `N=1` steps plus exact rollback replay. This remains
+zero-order-held coupling, not a subcycling convergence benchmark.
+
+The generated PETSc smoke additionally runs independent upstream/downstream
+`dt=0.0025 s`, `steps=12` cases beneath the unchanged 3D `dt=0.01 s`,
+`steps=3` macro grid for explicit, strong-fixed, and strong-Aitken modes on
+one and two MPI ranks. It verifies endpoint histories against the unsplit
+rigid reference, rank parity, and per-domain work identities: an explicit step
+has accepted/all/rejected configured work `4/4/0`; strong attempts have four
+configured substeps each, so accepted work is four and all/rejected work is
+the actual sum over attempts and its accepted-work difference. For the
+constant-work fixture these reduce to `4*iteration_count` and
+`4*(iteration_count-1)`. A synthetic variable-work audit proves that the
+implementation does not infer totals from the final attempt. The N=4 fixture
+retained the existing deterministic 21-sweep fixed and 3-sweep Aitken first
+macro step.
+The runtime fast suite additionally verifies N=4 RCR capacitor/pressure state
+against four committed N=1 steps and an injected implicit failure at configured
+substep three: diagnostics report planned/attempted/completed `4/3/2`, rollback
+restores the initial state, and retry executes four `0.0025 s` callbacks.
+Configured open-loop diagnostics record the exact endpoint sequence
+`.0025,.005,.0075,.01 s` for the N=4 macro trial. Manifests now record both
+plans, ratio tolerance, ZOH/endpoint/CFL semantics, and summed per-domain 1D
+accepted/all/rejected configured and CFL work.
+
+The runtime suite also compares every transported species field and dynamic
+vasodilation state after one N=4 macro trial with four committed N=1 trials.
+An explicit Rusanov failure after one completed configured substep preserves
+the partial CFL-work delta, restores the committed state, and replays the
+frozen inlet schedule exactly on retry. The MPI smoke independently sums the
+iteration CSV into step accepted/all/rejected totals and then cross-checks the
+manifest for all three coupling modes on one and two ranks. Invalid ratios and
+horizons fail before producing output, and injected or maximum-iteration
+failures leave no artifacts.
+
+Architecture Gates A, B, and C pass for PR 1.4. The full PETSc/MPI suite and
+the dependency-free 1D and coupling suites passed on the final snapshot.
 
 ## PR 1.1 explicit 1D--3D--1D smoke evidence
 

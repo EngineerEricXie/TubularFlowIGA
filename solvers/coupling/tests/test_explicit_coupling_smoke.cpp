@@ -140,7 +140,7 @@ void WriteThreeDCase(const fs::path& directory)
 		<< "  ]\n}\n";
 }
 
-void WriteOneDCase(const fs::path& directory)
+void WriteOneDCase(const fs::path& directory, double dt_s = kDtS, int steps = kSteps)
 {
 	std::ofstream network(directory/"tree.swc");
 	if (!network) throw std::runtime_error("cannot create smoke 1D network");
@@ -152,7 +152,7 @@ void WriteOneDCase(const fs::path& directory)
 		<< "  \"simulation_scope\": {\"mode\": \"flow_only\"},\n"
 		<< "  \"geometry\": {\"kind\": \"swc_network\", \"file\": \"tree.swc\", \"length_scale_to_m\": 1.0},\n"
 		<< "  \"fields\": [{\"name\": \"area\", \"kind\": \"scalar\"}, {\"name\": \"flow_rate\", \"kind\": \"scalar\"}, {\"name\": \"pressure\", \"kind\": \"pressure\"}],\n"
-		<< "  \"time\": {\"dt\": " << JsonNumber(kDtS) << ", \"steps\": " << kSteps << ", \"output_every\": 1},\n"
+		<< "  \"time\": {\"dt\": " << JsonNumber(dt_s) << ", \"steps\": " << steps << ", \"output_every\": 1},\n"
 		<< "  \"temporal_functions\": [{\"name\": \"inlet_flow\", \"kind\": \"constant\", \"units\": \"m3/s\", \"value\": " << JsonNumber(kFlowM3S) << "}],\n"
 		<< "  \"equation_systems\": [{\"name\": \"flow\", \"kind\": \"network_flow_1d\", \"unknowns\": [\"area\", \"flow_rate\", \"pressure\"],\n"
 		<< "    \"model\": \"rigid\", \"scheme\": \"steady_poiseuille\", \"dynamic_viscosity\": " << JsonNumber(kViscosityPaS)
@@ -334,6 +334,27 @@ void RequireSameHistory(const std::vector<CsvRow>& first, const std::vector<CsvR
 	}
 }
 
+void RequireSubcycledWork(const std::vector<CsvRow>& rows, bool strong)
+{
+	for (const auto& row : rows) {
+		for (const char* prefix : {"upstream", "downstream"}) {
+			const std::string base(prefix);
+			if (Value(row, (base+"_configured_substeps_attempted").c_str()) != 4.0
+				|| Value(row, (base+"_explicit_cfl_substeps").c_str()) != 0.0
+				|| Value(row, (base+"_accepted_configured_substeps").c_str()) != 4.0
+				|| Value(row, (base+"_accepted_explicit_cfl_substeps").c_str()) != 0.0)
+				throw std::runtime_error("subcycled 1D attempt diagnostics are invalid");
+			const double iterations = Value(row, "iteration_count");
+			const double expected_all = strong ? 4.0*iterations : 4.0;
+			if (Value(row, (base+"_all_configured_substeps").c_str()) != expected_all
+				|| Value(row, (base+"_rejected_configured_substeps").c_str()) != expected_all-4.0
+				|| Value(row, (base+"_all_explicit_cfl_substeps").c_str()) != 0.0
+				|| Value(row, (base+"_rejected_explicit_cfl_substeps").c_str()) != 0.0)
+				throw std::runtime_error("subcycled 1D work accounting is invalid");
+		}
+	}
+}
+
 struct PhysicalHistoryDifference {
 	double maximum_pressure_difference_pa = 0.0;
 	double maximum_nonpressure_difference = 0.0;
@@ -349,7 +370,8 @@ PhysicalHistoryDifference RequireEquivalentPhysicalHistory(const std::vector<Csv
 	for (std::size_t i = 0; i < fixed.size(); ++i)
 		for (const auto& value : fixed[i]) {
 			if (value.first.find("iteration") != std::string::npos || value.first.find("ksp") != std::string::npos
-				|| value.first.find("relaxation") != std::string::npos || value.first.find("residual") != std::string::npos)
+				|| value.first.find("relaxation") != std::string::npos || value.first.find("residual") != std::string::npos
+				|| value.first.find("substeps") != std::string::npos)
 				continue;
 			const double peer = Value(aitken[i], value.first.c_str());
 			const double absolute_difference = std::abs(value.second-peer);
@@ -388,6 +410,70 @@ double ManifestNumber(const fs::path& path, const std::string& key)
 	return std::stod(text.substr(colon+1, end-colon-1));
 }
 
+std::string ManifestText(const fs::path& path)
+{
+	std::ifstream input(path);
+	if (!input) throw std::runtime_error("cannot read coupling manifest");
+	return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
+
+double ManifestNumberAfter(const std::string& text, std::size_t start, const std::string& key)
+{
+	const auto position = text.find("\""+key+"\"", start);
+	if (position == std::string::npos) throw std::runtime_error("missing manifest key: "+key);
+	const auto colon = text.find(':', position);
+	const auto end = text.find_first_of(",}", colon+1);
+	if (colon == std::string::npos || end == std::string::npos) throw std::runtime_error("malformed manifest key: "+key);
+	return std::stod(text.substr(colon+1, end-colon-1));
+}
+
+void RequireManifestSubcycling(const fs::path& path, const std::vector<CsvRow>& rows,
+	double configured_dt_s, int configured_steps, int substeps)
+{
+	const std::string text = ManifestText(path);
+	const auto plan = text.find("\"one_d_subcycling\"");
+	const auto work = text.find("\"one_d_work_totals\"");
+	const auto upstream = text.find("\"upstream\"", plan);
+	const auto downstream = text.find("\"downstream\"", upstream);
+	const auto upstream_work = text.find("\"upstream\"", work);
+	const auto downstream_work = text.find("\"downstream\"", upstream_work);
+	if (plan == std::string::npos || work == std::string::npos || upstream == std::string::npos
+		|| downstream == std::string::npos || upstream_work == std::string::npos || downstream_work == std::string::npos
+		|| text.find("zero-order held interface data") == std::string::npos
+		|| text.find("configured open-loop sampling at substep endpoints") == std::string::npos
+		|| text.find("endpoint residuals") == std::string::npos
+		|| text.find("internal_substeps is explicit CFL only") == std::string::npos)
+		throw std::runtime_error("subcycling manifest semantics are incomplete");
+	if (!Close(ManifestNumberAfter(text, plan, "macro_dt_s"), kDtS)
+		|| ManifestNumberAfter(text, plan, "macro_steps") != kSteps
+		|| !Close(ManifestNumberAfter(text, plan, "ratio_relative_tolerance"), 1.0e-12))
+		throw std::runtime_error("subcycling manifest macro timing is invalid");
+	for (const auto section : {upstream, downstream})
+		if (!Close(ManifestNumberAfter(text, section, "configured_dt_s"), configured_dt_s)
+			|| ManifestNumberAfter(text, section, "configured_steps") != configured_steps
+			|| ManifestNumberAfter(text, section, "N") != substeps)
+			throw std::runtime_error("subcycling manifest domain plan is invalid");
+	for (const auto& domain : std::array<std::pair<std::string, std::size_t>, 2>{{{"upstream", upstream_work}, {"downstream", downstream_work}}}) {
+		long long accepted_configured = 0, all_configured = 0, rejected_configured = 0;
+		long long accepted_cfl = 0, all_cfl = 0, rejected_cfl = 0;
+		for (const auto& row : rows) {
+			accepted_configured += static_cast<long long>(Value(row, (domain.first+"_accepted_configured_substeps").c_str()));
+			all_configured += static_cast<long long>(Value(row, (domain.first+"_all_configured_substeps").c_str()));
+			rejected_configured += static_cast<long long>(Value(row, (domain.first+"_rejected_configured_substeps").c_str()));
+			accepted_cfl += static_cast<long long>(Value(row, (domain.first+"_accepted_explicit_cfl_substeps").c_str()));
+			all_cfl += static_cast<long long>(Value(row, (domain.first+"_all_explicit_cfl_substeps").c_str()));
+			rejected_cfl += static_cast<long long>(Value(row, (domain.first+"_rejected_explicit_cfl_substeps").c_str()));
+		}
+		if (ManifestNumberAfter(text, domain.second, "accepted_configured_substeps") != accepted_configured
+			|| ManifestNumberAfter(text, domain.second, "all_configured_substeps") != all_configured
+			|| ManifestNumberAfter(text, domain.second, "rejected_configured_substeps") != rejected_configured
+			|| ManifestNumberAfter(text, domain.second, "accepted_explicit_cfl_substeps") != accepted_cfl
+			|| ManifestNumberAfter(text, domain.second, "all_explicit_cfl_substeps") != all_cfl
+			|| ManifestNumberAfter(text, domain.second, "rejected_explicit_cfl_substeps") != rejected_cfl)
+			throw std::runtime_error("subcycling manifest work total differs from step CSV");
+	}
+}
+
 void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<CsvRow>& iterations,
 	const fs::path& manifest, bool fixed_mode = true)
 {
@@ -409,6 +495,8 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 		const auto& rows = entry.second;
 		if (rows.empty() || rows.size() > 50) throw std::runtime_error("strong iteration count is invalid");
 		long long attempt_sum = 0;
+		long long upstream_configured_sum = 0, upstream_cfl_sum = 0;
+		long long downstream_configured_sum = 0, downstream_cfl_sum = 0;
 		for (std::size_t index = 0; index < rows.size(); ++index) {
 			if (fixed_mode && (!Close(Value(rows[index], "relaxation_factor_for_next_guess"), 0.5)
 				|| !Close(Value(rows[index], "unclamped_relaxation_factor"), 0.5)
@@ -467,6 +555,22 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 			attempt_sum += static_cast<long long>(Value(rows[index], "three_d_attempt_linear_iterations"));
 			if (static_cast<long long>(Value(rows[index], "three_d_cumulative_step_linear_iterations")) != attempt_sum)
 				throw std::runtime_error("strong cumulative KSP work is invalid");
+			const long long upstream_attempt_configured = static_cast<long long>(Value(rows[index], "upstream_1d_attempt_configured_substeps"));
+			const long long upstream_attempt_cfl = static_cast<long long>(Value(rows[index], "upstream_1d_attempt_explicit_cfl_substeps"));
+			const long long downstream_attempt_configured = static_cast<long long>(Value(rows[index], "downstream_1d_attempt_configured_substeps"));
+			const long long downstream_attempt_cfl = static_cast<long long>(Value(rows[index], "downstream_1d_attempt_explicit_cfl_substeps"));
+			if (upstream_attempt_configured < 1 || upstream_attempt_cfl < 0
+				|| downstream_attempt_configured < 1 || downstream_attempt_cfl < 0)
+				throw std::runtime_error("strong iteration has invalid 1D attempt work");
+			upstream_configured_sum += upstream_attempt_configured;
+			upstream_cfl_sum += upstream_attempt_cfl;
+			downstream_configured_sum += downstream_attempt_configured;
+			downstream_cfl_sum += downstream_attempt_cfl;
+			if (static_cast<long long>(Value(rows[index], "upstream_1d_cumulative_configured_substeps")) != upstream_configured_sum
+				|| static_cast<long long>(Value(rows[index], "upstream_1d_cumulative_explicit_cfl_substeps")) != upstream_cfl_sum
+				|| static_cast<long long>(Value(rows[index], "downstream_1d_cumulative_configured_substeps")) != downstream_configured_sum
+				|| static_cast<long long>(Value(rows[index], "downstream_1d_cumulative_explicit_cfl_substeps")) != downstream_cfl_sum)
+				throw std::runtime_error("strong cumulative 1D work is invalid");
 		}
 		const auto& final = rows.back();
 		if (Value(final, "normalized_upstream_pressure_residual") > pressure_relative_tolerance
@@ -481,8 +585,25 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 			|| static_cast<long long>(Value(step, "accepted_three_d_ksp_iterations"))
 				!= static_cast<long long>(Value(final, "three_d_attempt_linear_iterations"))
 			|| static_cast<long long>(Value(step, "rejected_three_d_ksp_iterations"))
-				!= attempt_sum-static_cast<long long>(Value(final, "three_d_attempt_linear_iterations")))
+			!= attempt_sum-static_cast<long long>(Value(final, "three_d_attempt_linear_iterations")))
 			throw std::runtime_error("strong step work accounting does not equal iteration attempts");
+		const auto RequireStepOneDWork = [&](const char* domain, long long attempt_configured,
+			long long all_configured, long long attempt_cfl, long long all_cfl) {
+			const long long accepted_configured = static_cast<long long>(Value(step, (std::string(domain)+"_accepted_configured_substeps").c_str()));
+			const long long serialized_all_configured = static_cast<long long>(Value(step, (std::string(domain)+"_all_configured_substeps").c_str()));
+			const long long rejected_configured = static_cast<long long>(Value(step, (std::string(domain)+"_rejected_configured_substeps").c_str()));
+			const long long accepted_cfl = static_cast<long long>(Value(step, (std::string(domain)+"_accepted_explicit_cfl_substeps").c_str()));
+			const long long serialized_all_cfl = static_cast<long long>(Value(step, (std::string(domain)+"_all_explicit_cfl_substeps").c_str()));
+			const long long rejected_cfl = static_cast<long long>(Value(step, (std::string(domain)+"_rejected_explicit_cfl_substeps").c_str()));
+			if (accepted_configured != attempt_configured || serialized_all_configured != all_configured
+				|| rejected_configured != all_configured-attempt_configured || accepted_cfl != attempt_cfl
+				|| serialized_all_cfl != all_cfl || rejected_cfl != all_cfl-attempt_cfl)
+				throw std::runtime_error(std::string("strong ")+domain+" 1D step work does not equal iteration attempts");
+		};
+		RequireStepOneDWork("upstream", static_cast<long long>(Value(final, "upstream_1d_attempt_configured_substeps")),
+			upstream_configured_sum, static_cast<long long>(Value(final, "upstream_1d_attempt_explicit_cfl_substeps")), upstream_cfl_sum);
+		RequireStepOneDWork("downstream", static_cast<long long>(Value(final, "downstream_1d_attempt_configured_substeps")),
+			downstream_configured_sum, static_cast<long long>(Value(final, "downstream_1d_attempt_explicit_cfl_substeps")), downstream_cfl_sum);
 		sum_all_ksp += attempt_sum;
 		sum_accepted_ksp += static_cast<long long>(Value(final, "three_d_attempt_linear_iterations"));
 	}
@@ -652,6 +773,14 @@ int main()
 		WriteThreeDCase(root/"three_d");
 		WriteOneDCase(root/"upstream");
 		WriteOneDCase(root/"downstream");
+		fs::create_directories(root/"upstream_subcycled");
+		fs::create_directories(root/"downstream_subcycled");
+		WriteOneDCase(root/"upstream_subcycled", 0.0025, 12);
+		WriteOneDCase(root/"downstream_subcycled", 0.0025, 12);
+		fs::create_directories(root/"upstream_noninteger");
+		fs::create_directories(root/"upstream_bad_horizon");
+		WriteOneDCase(root/"upstream_noninteger", 0.003, 10);
+		WriteOneDCase(root/"upstream_bad_horizon", 0.0025, 11);
 		WriteUnitDatabase(root/"one.ntiga", 1);
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"invalid_explicit_aitken_min", "", "",
 			" --coupling-mode explicit --strong-aitken-min-relaxation 0.05") == 0
@@ -664,10 +793,17 @@ int main()
 			|| fs::exists(root/"invalid_fixed_aitken_max/explicit_coupling_history.csv")
 			|| fs::exists(root/"invalid_fixed_aitken_max/strong_coupling_history.csv"))
 			throw std::runtime_error("strong-fixed mode accepted an Aitken maximum option or wrote output");
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_noninteger", root/"downstream_subcycled", root/"invalid_noninteger_subcycling", "") == 0
+			|| fs::exists(root/"invalid_noninteger_subcycling/explicit_coupling_history.csv"))
+			throw std::runtime_error("noninteger 1D subcycling ratio unexpectedly succeeded");
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_bad_horizon", root/"downstream_subcycled", root/"invalid_horizon_subcycling", "") == 0
+			|| fs::exists(root/"invalid_horizon_subcycling/explicit_coupling_history.csv"))
+			throw std::runtime_error("mismatched 1D subcycling horizon unexpectedly succeeded");
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"one", "") != 0)
 			throw std::runtime_error("one-rank explicit coupling smoke run failed");
 		const auto one = ReadHistory(root/"one/explicit_coupling_history.csv");
 		RequireManifest(root/"one/explicit_coupling_manifest.json");
+		RequireManifestSubcycling(root/"one/explicit_coupling_manifest.json", one, kDtS, kSteps, 1);
 		ValidateRows(one);
 		WriteUnitDatabase(root/"two.ntiga", 2);
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"two", "mpiexec -np 2 ") != 0)
@@ -684,6 +820,7 @@ int main()
 		const auto strong_one = ReadHistory(root/"strong_one/strong_coupling_history.csv");
 		const auto strong_one_iterations = ReadHistory(root/"strong_one/strong_coupling_iterations.csv");
 		RequireStrongManifest(root/"strong_one/strong_coupling_manifest.json");
+		RequireManifestSubcycling(root/"strong_one/strong_coupling_manifest.json", strong_one, kDtS, kSteps, 1);
 		ValidateStrongRun(strong_one, strong_one_iterations, root/"strong_one/strong_coupling_manifest.json");
 		if (Run(root/"two.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"strong_two", "mpiexec -np 2 ", "", strong_arguments) != 0)
 			throw std::runtime_error("two-rank strong coupling smoke run failed");
@@ -701,6 +838,7 @@ int main()
 		const auto aitken_one = ReadHistory(root/"aitken_one/strong_coupling_history.csv");
 		const auto aitken_one_iterations = ReadHistory(root/"aitken_one/strong_coupling_iterations.csv");
 		RequireAitkenManifest(root/"aitken_one/strong_coupling_manifest.json");
+		RequireManifestSubcycling(root/"aitken_one/strong_coupling_manifest.json", aitken_one, kDtS, kSteps, 1);
 		ValidateAitkenRun(aitken_one, aitken_one_iterations, root/"aitken_one/strong_coupling_manifest.json",
 			static_cast<std::size_t>(Value(strong_one.front(), "iteration_count")));
 		RequireEquivalentPhysicalHistory(strong_one, aitken_one);
@@ -713,6 +851,74 @@ int main()
 			static_cast<std::size_t>(Value(strong_two.front(), "iteration_count")));
 		RequireSameHistory(aitken_one, aitken_two);
 		RequireSameHistory(aitken_one_iterations, aitken_two_iterations);
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_explicit_one", "") != 0)
+			throw std::runtime_error("one-rank subcycled explicit coupling smoke run failed");
+		const auto sub_explicit_one = ReadHistory(root/"sub_explicit_one/explicit_coupling_history.csv");
+		RequireManifestSubcycling(root/"sub_explicit_one/explicit_coupling_manifest.json", sub_explicit_one, 0.0025, 12, 4);
+		ValidateRows(sub_explicit_one);
+		RequireSubcycledWork(sub_explicit_one, false);
+		RequireEquivalentPhysicalHistory(one, sub_explicit_one);
+		if (Run(root/"two.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_explicit_two", "mpiexec -np 2 ") != 0)
+			throw std::runtime_error("two-rank subcycled explicit coupling smoke run failed");
+		const auto sub_explicit_two = ReadHistory(root/"sub_explicit_two/explicit_coupling_history.csv");
+		RequireSubcycledWork(sub_explicit_two, false);
+		RequireSameHistory(sub_explicit_one, sub_explicit_two);
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_strong_one", "", "", strong_arguments) != 0)
+			throw std::runtime_error("one-rank subcycled fixed strong coupling smoke run failed");
+		const auto sub_strong_one = ReadHistory(root/"sub_strong_one/strong_coupling_history.csv");
+		const auto sub_strong_one_iterations = ReadHistory(root/"sub_strong_one/strong_coupling_iterations.csv");
+		ValidateStrongRun(sub_strong_one, sub_strong_one_iterations, root/"sub_strong_one/strong_coupling_manifest.json");
+		RequireManifestSubcycling(root/"sub_strong_one/strong_coupling_manifest.json", sub_strong_one, 0.0025, 12, 4);
+		RequireSubcycledWork(sub_strong_one, true);
+		RequireEquivalentPhysicalHistory(strong_one, sub_strong_one);
+		if (Run(root/"two.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_strong_two", "mpiexec -np 2 ", "", strong_arguments) != 0)
+			throw std::runtime_error("two-rank subcycled fixed strong coupling smoke run failed");
+		const auto sub_strong_two = ReadHistory(root/"sub_strong_two/strong_coupling_history.csv");
+		RequireSubcycledWork(sub_strong_two, true);
+		RequireSameHistory(sub_strong_one, sub_strong_two);
+		if (Run(root/"one.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_aitken_one", "", "", aitken_arguments) != 0)
+			throw std::runtime_error("one-rank subcycled Aitken coupling smoke run failed");
+		const auto sub_aitken_one = ReadHistory(root/"sub_aitken_one/strong_coupling_history.csv");
+		const auto sub_aitken_one_iterations = ReadHistory(root/"sub_aitken_one/strong_coupling_iterations.csv");
+		ValidateAitkenRun(sub_aitken_one, sub_aitken_one_iterations, root/"sub_aitken_one/strong_coupling_manifest.json",
+			static_cast<std::size_t>(Value(sub_strong_one.front(), "iteration_count")));
+		RequireManifestSubcycling(root/"sub_aitken_one/strong_coupling_manifest.json", sub_aitken_one, 0.0025, 12, 4);
+		RequireSubcycledWork(sub_aitken_one, true);
+		RequireEquivalentPhysicalHistory(sub_strong_one, sub_aitken_one);
+		if (Run(root/"two.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", root/"sub_aitken_two", "mpiexec -np 2 ", "", aitken_arguments) != 0)
+			throw std::runtime_error("two-rank subcycled Aitken coupling smoke run failed");
+		const auto sub_aitken_two = ReadHistory(root/"sub_aitken_two/strong_coupling_history.csv");
+		RequireSubcycledWork(sub_aitken_two, true);
+		RequireSameHistory(sub_aitken_one, sub_aitken_two);
+		const auto require_subcycled_failure = [&root](const std::string& name, const std::string& prefix,
+			const std::string& arguments, const std::string& expected_final_tuple) {
+			const auto output = root/name;
+			const auto log = root/(name+".log");
+			if (Run(root/"one.ntiga", root/"three_d", root/"upstream_subcycled", root/"downstream_subcycled", output, "", prefix, arguments, log) == 0)
+				throw std::runtime_error("subcycled strong failure unexpectedly succeeded: "+name);
+			if (fs::exists(output/"strong_coupling_history.csv") || fs::exists(output/"strong_coupling_iterations.csv")
+				|| fs::exists(output/"strong_coupling_manifest.json"))
+				throw std::runtime_error("subcycled strong failure wrote persistent output: "+name);
+			const std::string text = ReadText(log);
+			if (text.find("iteration=") == std::string::npos || text.find("G=(") == std::string::npos
+				|| text.find("normalized_q=(") == std::string::npos
+				|| text.find("upstream_1d_work=(") == std::string::npos
+				|| text.find("downstream_1d_work=(") == std::string::npos
+				|| text.find(expected_final_tuple) == std::string::npos)
+				throw std::runtime_error("subcycled strong failure lacks complete final work diagnostics: "+name);
+		};
+		require_subcycled_failure("sub_fixed_max_one", "",
+			" --coupling-mode strong-fixed --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"
+			" --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5",
+			"upstream_1d_work=(4,0,4,0)");
+		require_subcycled_failure("sub_aitken_max_one", "",
+			" --coupling-mode strong-aitken --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"
+			" --strong-pressure-reference-pa "+JsonNumber(kPressureReferencePa)+" --strong-flow-relative-tol 1e-10 --strong-relaxation 0.5",
+			"upstream_1d_work=(4,0,4,0)");
+		require_subcycled_failure("sub_fixed_injected", "TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=1 ", strong_arguments,
+			"upstream_1d_work=(4,0,84,0)");
+		require_subcycled_failure("sub_aitken_injected", "TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP=1 ", aitken_arguments,
+			"upstream_1d_work=(4,0,12,0)");
 		const auto aitken_nonconverged_log = root/"aitken_nonconverged.log";
 		if (Run(root/"one.ntiga", root/"three_d", root/"upstream", root/"downstream", root/"aitken_nonconverged", "", "",
 			" --coupling-mode strong-aitken --strong-max-iterations 1 --strong-pressure-relative-tol 1e-20"

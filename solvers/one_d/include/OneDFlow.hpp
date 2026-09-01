@@ -509,8 +509,9 @@ inline void AdvanceExplicitOneD(const OneDNetwork& network,
 			right_boundary[static_cast<std::size_t>(incoming)].flow = total;
 		}
 
+		int nonphysical_update = 0;
 		#ifdef _OPENMP
-		#pragma omp parallel for schedule(static) if(network.segments.size() >= 64)
+		#pragma omp parallel for schedule(static) if(network.segments.size() >= 64) reduction(max:nonphysical_update)
 		#endif
 		for (long long segment_index = 0;
 			segment_index < static_cast<long long>(network.segments.size()); ++segment_index) {
@@ -539,9 +540,11 @@ inline void AdvanceExplicitOneD(const OneDNetwork& network,
 					-dt*(8.0*OneDPi*flow.dynamic_viscosity/flow.density)*state.flow[index]/state.area[index];
 				if (!std::isfinite(new_area[index]) || !std::isfinite(new_flow[index])
 					|| !(new_area[index] >= segment.area0*flow.discretization.min_area_fraction))
-					throw std::runtime_error("explicit 1d update produced a non-physical state");
+					nonphysical_update = 1;
 			}
 		}
+		if (nonphysical_update)
+			throw std::runtime_error("explicit 1d update produced a non-physical state");
 		state.area.swap(new_area);
 		state.flow.swap(new_flow);
 		remaining -= dt;
