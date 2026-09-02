@@ -1,6 +1,90 @@
 # Phase 5 report
 
-Status: **in progress**.
+Status: **complete**.
+
+## PR 5.10: aggregate manufactured-closure evidence (2026-09-02)
+
+The aggregate command `./solvers/cpu/phase5_closure_test --all` completed with
+exit status 0 against system PETSc 3.15 (`PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`;
+linked `/lib/x86_64-linux-gnu/libpetsc_real.so.3.15`).  It exercises an
+arbitrary closed immersed box on a compact cubic background through a
+converged incompressible-flow solve.
+
+| cells | h | dofs | uL2 | uH1 | pL2 | div L2 | pressure mean |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3 | 1 | 865 | 1.9851558135e-3 | 6.1261210319e-3 | 1.4589680951e-2 | 2.4672897644e-3 | 2.4678194537e-18 |
+| 6 | 0.5 | 2917 | 4.1436317970e-5 | 2.2766384238e-4 | 3.4918893201e-4 | 1.3381586806e-4 | 9.2160914576e-19 |
+| 12 | 0.25 | 8789 | 2.4734497479e-6 | 1.2401881371e-5 | 2.4039081405e-5 | 3.4648080904e-6 | -3.1080232377e-18 |
+
+The `(uL2,uH1,pL2,div)` observed orders are `(5.5822126268,4.7499967844,
+5.3847966928,4.2046060512)` from 3→6 and
+`(4.0662993167,4.1982742807,3.8605541585,5.2713299463)` from 6→12.  At the
+finest level, normalized errors are `(1.4657479987e-4,3.7218720498e-4,
+1.4428518143e-3,1.0398077520e-4)`.
+
+Independent high-order integration changed the prior accepted level-6 evidence
+by `0.03840%`, `0.000404%`, `0.000713%`, and `0%` respectively.  With the
+requested outer tolerance tightened 100×, the error norms changed by less than
+`1.2e-5%`.  The achieved residual was not asserted to be 100× smaller; the
+request was a tolerance change, not a residual-ratio claim.
+
+The centered finite-difference diagnostic keeps `J(0)d` frozen, then compares
+it with `-(b(+eps*d)-b(-eps*d))/(2 eps)` for the stored negative residual.  Its
+full relative defect was `0.213162`, stable over `eps=1e-4..1e-7`; volume-only
+was `2.35395`; wall+ghost-only converged to the expected roundoff/truncation
+range (`8.9e-13` at `1e-4` through `9.45e-10` at `1e-7`).  This is consistent
+with the frozen-VMS-tangent hypothesis, not a claim that the full Jacobian is
+exact.  The nonzero-state contribution-decomposition assertion also passed.
+
+The solver's block residual gates passed.  Initially nonzero momentum and
+continuity blocks must fall by `1e9`; an initially zero gauge instead has the
+scale-aware absolute bound `atol + rtol*||F0||`, so no `1e9` gauge-reduction
+claim is made.
+
+### Predeclared gates (all passed)
+
+- Each manufactured solve requires convergence, expected volume/surface/ghost
+  counts, `total_dofs=4*active_nodes+1`, pressure measure within
+  `5e-8` relative of the analytic box measure, `|pmean|<1e-10`, global final
+  residual no larger than `rtol*initial` (which must exceed `atol`), and each
+  independent error-integration change below `2e-3`.  Each initially nonzero
+  residual block must be no larger than its initial value divided by `1e9`; an
+  initially zero block must be no larger than `atol + rtol*initial`.
+- The level triplet requires strictly decreasing four error norms for both
+  pairs, strictly increasing dofs, 6→12 order floors `(2.5,2.0,2.0,1.5)`, and
+  level-12 normalized-error caps `(0.02,0.05,0.05,0.05)`.
+- The nonzero-state decomposition requires each matrix and residual difference
+  to be below `2e-11` for `full_ungauged=volume+wall+ghost` and
+  `full_gauged=full_ungauged+gauge`.
+- Every sliver case requires the expected minimum fraction within `5e-5`
+  relative, a covered nonempty ghost catalog, analytic gauge measure within
+  `5e-8` relative, exact repeated-assembly/action agreement, a finite nonzero
+  mixed spectrum, sign-flipped symmetry defect at most `2e-10`, and normalized
+  constant-pressure defect below `2e-10`; aggregate condition growth must be
+  finite and below `100`.
+
+The sliver sequence had `dofs=865`, `faces=54`, `records=27`, and
+`logical=1728` in every case; the gauge measure equalled the analytic box
+measure.  Its results were:
+
+| m | alpha | normalized pressure defect | min abs eig | condition |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.3828125 | 1.4847756290e-16 | 0.0025999412605 | 3248.396953 |
+| 2 | 0.19140625 | 1.1682996957e-16 | 0.00078432965147 | 10754.912455 |
+| 3 | 0.095703125 | 1.3122712676e-16 | 0.00043263506790 | 19521.898638 |
+| 4 | 0.0478515625 | 1.1660008727e-16 | 0.00031946694595 | 26456.657277 |
+| 5 | 0.02392578125 | 1.1659537158e-16 | 0.00027401546389 | 30846.322401 |
+| 6 | 0.011962890625 | 1.1660958035e-16 | 0.00025365318610 | 33318.483234 |
+| 7 | 0.0059814453125 | 1.1662177314e-16 | 0.00024401712163 | 34630.585697 |
+| 8 | 0.00299072265625 | 1.1896193476e-16 | 0.00023932999445 | 35306.537317 |
+
+The maximum eigenvalue was approximately `8.435`–`8.452`, all symmetry defects
+were at most `2.04e-16`, and the aggregate condition-growth ratio was
+`10.868910982`.
+
+Phase 5 is complete: arbitrary closed immersed box → compact cubic background
+→ converged incompressible flow.  The phase-closing Sol review returned **GO**
+with no blocking findings.
 
 ## PR 5.9: serial global immersed static flow
 
@@ -18,8 +102,9 @@ streamed volume base before adding its surface terms, and ghost residuals use a
 bounded face-local state accessor rather than a background-sized expansion.
 Cut walls require the matching,
 covered ghost catalog; mismatched bindings and uncovered cut cells fail before
-assembly.  A second deterministic lazy volume pass forms one gauge weight per
-active pressure node; the gauge is `R=[F+g lambda; g^T p]`, with positive
+assembly.  One deterministic lazy volume pass after catalog preflight and
+active compaction caches the immutable gauge weight per active pressure node;
+the gauge is `R=[F+g lambda; g^T p]`, with positive
 matrix blocks and negative-residual signs in both pressure and gauge rows.
 The constant-pressure defect is measured before gauge insertion.
 

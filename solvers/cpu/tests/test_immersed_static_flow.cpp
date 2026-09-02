@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
 #include <stdexcept>
 #include <vector>
 
@@ -55,6 +56,8 @@ double DirectMeasure(const iga::CartesianDomainClassification& domain, const iga
 int main(int argc, char** argv)
 {
 	PetscInitialize(&argc, &argv, nullptr, nullptr);
+	int status = 0;
+	try {
 	{
 	const auto domain = Domain();
 	const iga::CutCellVolumeQuadratureCatalog volume(domain, {4,500000,500000,3000000});
@@ -64,7 +67,25 @@ int main(int argc, char** argv)
 	iga::ImmersedStaticFlowRuntime zero(domain, volume, surface, ghost, options);
 	zero.Assemble(); const auto first = zero.AssembledNegativeResidual(); zero.Assemble();
 	assert(first == zero.AssembledNegativeResidual());
-	assert(zero.Diagnostics().active_nodes < domain.Background().NodeCount());
+	// A pivot shift is strictly an LU-preconditioner option: it must not alter
+	// the assembled operator or residual presented to GMRES.
+	iga::ImmersedStaticFlowOptions shifted_assembly_options = options;
+	shifted_assembly_options.lu_pivot_shift = 1e-12;
+	iga::ImmersedStaticFlowRuntime shifted_assembly(domain, volume, surface, ghost, shifted_assembly_options);
+	shifted_assembly.Assemble();
+	assert(first == shifted_assembly.AssembledNegativeResidual());
+	assert(zero.AssembledJacobianDense() == shifted_assembly.AssembledJacobianDense());
+	std::vector<std::int32_t> expected_active;
+	for (std::uint64_t id = 0; id < domain.Cells().size(); ++id) {
+		const auto classification = domain.Cells()[static_cast<std::size_t>(id)].classification;
+		const auto& cell = volume.Cell(id);
+		if ((classification != iga::CellClassification::Inside && classification != iga::CellClassification::Cut) || !cell.usable
+			|| !(cell.diagnostics.estimated_reference_volume > 0.0)) continue;
+		const auto element = domain.Background().MaterializeElement(id);
+		expected_active.insert(expected_active.end(), element.connectivity.begin(), element.connectivity.end());
+	}
+	std::sort(expected_active.begin(), expected_active.end()); expected_active.erase(std::unique(expected_active.begin(), expected_active.end()), expected_active.end());
+	assert(expected_active == zero.ActiveNodes());
 	assert(zero.Diagnostics().total_dofs == 4*zero.Diagnostics().active_nodes+1);
 	assert(zero.Diagnostics().volume_cells > 0 && zero.Diagnostics().surface_cells > 0 && zero.Diagnostics().ghost_faces == ghost.Faces().size());
 	assert(std::abs(zero.Diagnostics().pressure_measure-DirectMeasure(domain, volume)) < 2e-12);
@@ -74,6 +95,7 @@ int main(int argc, char** argv)
 		if (!std::binary_search(zero.ActiveNodes().begin(), zero.ActiveNodes().end(), static_cast<std::int32_t>(raw_node))) {
 			Reject([&] { zero.Dof(static_cast<std::int32_t>(raw_node), 0); }); break;
 		}
+	Reject([&] { zero.Dof(-1, 0); });
 	// R=[F+g lambda;g^T p], while rhs stores -R.  Test both signs through
 	// independent lambda and pressure states, plus the assembled matrix action.
 	std::vector<PetscScalar> gauge_state(zero.Diagnostics().total_dofs, 0.0);
@@ -155,13 +177,16 @@ int main(int argc, char** argv)
 	assert(fault != fault_cells.end()); fault->usable = false;
 	Reject([&] { iga::ImmersedStaticFlowRuntime invalid(domain, fault_volume, surface, fault_ghost, options); });
 
-	iga::ImmersedStaticFlowOptions one_update_options = options; one_update_options.nonlinear_maximum_iterations = 1;
+	// All nonzero regression solves request the portable LU regularization
+	// explicitly.  Default (zero) remains a production policy choice.
+	iga::ImmersedStaticFlowOptions solve_options = options; solve_options.lu_pivot_shift = 1e-12;
+	iga::ImmersedStaticFlowOptions one_update_options = solve_options; one_update_options.nonlinear_maximum_iterations = 1;
 	iga::ImmersedStaticFlowRuntime one_update(domain, volume, surface, ghost, one_update_options);
 	assert(one_update.SolveTrial());
 	assert(one_update.Diagnostics().converged && one_update.Diagnostics().nonlinear_iterations == 1);
 	one_update.Commit();
 
-	iga::ImmersedStaticFlowRuntime solve(domain, volume, surface, ghost, options);
+	iga::ImmersedStaticFlowRuntime solve(domain, volume, surface, ghost, solve_options);
 	assert(solve.SolveTrial()); Reject([&] { solve.SetCommittedState(solve.CommittedState()); }); solve.Commit();
 	for (const auto value : solve.CommittedState()) assert(std::isfinite(PetscRealPart(value)));
 	assert(solve.Diagnostics().commit_count == 1 && solve.Diagnostics().committed);
@@ -174,7 +199,7 @@ int main(int argc, char** argv)
 	bool candidate_state_was_mutated = false;
 	std::vector<PetscScalar> accepted_candidate;
 	iga::ImmersedStaticFlowRuntime* reusable_pointer = nullptr;
-	iga::ImmersedStaticFlowOptions reusable_options = options;
+	iga::ImmersedStaticFlowOptions reusable_options = solve_options;
 	reusable_options.body_force = [&](const std::array<double, 3>&) {
 		++callback_calls;
 		if (throw_on_call != 0 && callback_calls == throw_on_call) {
@@ -204,12 +229,18 @@ int main(int argc, char** argv)
 
 	const iga::CutCellVolumeQuadratureCatalog compact(domain, {4,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact);
 	const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
-	iga::ImmersedStaticFlowRuntime compact_runtime(domain, compact, surface, compact_ghost, options);
+	iga::ImmersedStaticFlowRuntime compact_runtime(domain, compact, surface, compact_ghost, solve_options);
 	compact_runtime.Assemble();
 	assert(std::abs(compact_runtime.Diagnostics().pressure_measure-DirectMeasure(domain, compact)) < 2e-12);
 	assert(compact_runtime.SolveTrial()); compact_runtime.Commit();
 	for (const auto value : compact_runtime.CommittedState()) assert(std::isfinite(PetscRealPart(value)));
 	}
+	} catch (const std::exception& error) {
+		// The inner scope has already destroyed every PETSc object.  This keeps a
+		// failed solve from terminating the process before PetscFinalize().
+		std::cerr << "immersed_static_flow_test: " << error.what() << '\n';
+		status = 1;
+	}
 	PetscFinalize();
-	return 0;
+	return status;
 }
