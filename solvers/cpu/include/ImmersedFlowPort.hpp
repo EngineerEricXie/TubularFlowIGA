@@ -79,6 +79,64 @@ inline void AddImmersedFlowPortFinite(double& total, double value, const char* w
 	if (!std::isfinite(total)) throw std::overflow_error(std::string("immersed flow port ")+what+" overflows");
 }
 
+// Physical all-label trace that completes the conservative resolved mixed
+// volume form.  It intentionally has no port-control/load policy: every
+// retained surface point contributes exactly once, independently of whether
+// it is later used by Nitsche or a port controller.
+//
+// R_u,p = -int_Gamma N_a p n,  R_p,u = +int_Gamma N_a (u.n).
+// The stored vector is -R, hence the +N_a p n and -N_a(u.n) additions below.
+inline NavierStokesSystem BuildImmersedConservativeMixedTraceElement(
+	const Element& element, const SurfaceQuadratureRule& rule,
+	const std::vector<std::array<double, 4>>& nodal_state)
+{
+	if (nodal_state.size() != element.connectivity.size())
+		throw std::invalid_argument("immersed conservative mixed trace nodal-state size is invalid");
+	ValidateSurfaceQuadratureRule(element, rule);
+	const std::size_t ndof = 4*element.connectivity.size();
+	NavierStokesSystem result{std::vector<PetscScalar>(ndof*ndof, 0.0),
+		std::vector<PetscScalar>(ndof, 0.0)};
+	for (const auto& point : rule.Points()) {
+		const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
+		double pressure = 0.0;
+		std::array<double, 3> velocity{};
+		for (std::size_t b = 0; b < element.connectivity.size(); ++b) {
+			AddImmersedFlowPortFinite(pressure, CheckedImmersedFlowPortProduct(nodal_state[b][3], basis.value[b], "mixed trace pressure"), "mixed trace pressure accumulation");
+			for (int component = 0; component < 3; ++component)
+				AddImmersedFlowPortFinite(velocity[component], CheckedImmersedFlowPortProduct(nodal_state[b][component], basis.value[b], "mixed trace velocity"), "mixed trace velocity accumulation");
+		}
+		double normal_velocity = 0.0;
+		for (int component = 0; component < 3; ++component)
+			AddImmersedFlowPortFinite(normal_velocity, CheckedImmersedFlowPortProduct(velocity[component], point.normal[component], "mixed trace normal velocity"), "mixed trace normal velocity accumulation");
+		for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+			const double test_weight = CheckedImmersedFlowPortProduct(basis.value[a], point.weight, "mixed trace test weight");
+			const std::size_t pressure_row = 4*a+3;
+			double continuity_rhs = PetscRealPart(result.negative_residual[pressure_row]);
+			AddImmersedFlowPortFinite(continuity_rhs, -CheckedImmersedFlowPortProduct(test_weight, normal_velocity, "mixed trace continuity residual"), "mixed trace continuity residual accumulation");
+			result.negative_residual[pressure_row] = continuity_rhs;
+			for (int component = 0; component < 3; ++component) {
+				const std::size_t velocity_row = 4*a+component;
+				double momentum_rhs = PetscRealPart(result.negative_residual[velocity_row]);
+				AddImmersedFlowPortFinite(momentum_rhs, CheckedImmersedFlowPortProduct(CheckedImmersedFlowPortProduct(test_weight, pressure, "mixed trace momentum pressure"), point.normal[component], "mixed trace momentum normal"), "mixed trace momentum residual accumulation");
+				result.negative_residual[velocity_row] = momentum_rhs;
+			}
+			for (std::size_t b = 0; b < element.connectivity.size(); ++b)
+				for (int component = 0; component < 3; ++component) {
+					const double coefficient = CheckedImmersedFlowPortProduct(CheckedImmersedFlowPortProduct(test_weight, basis.value[b], "mixed trace Jacobian basis"), point.normal[component], "mixed trace Jacobian normal");
+					const std::size_t up = (4*a+component)*ndof+4*b+3;
+					const std::size_t pu = pressure_row*ndof+4*b+component;
+					double up_total = PetscRealPart(result.jacobian[up]);
+					AddImmersedFlowPortFinite(up_total, -coefficient, "mixed trace velocity-pressure Jacobian accumulation");
+					result.jacobian[up] = up_total;
+					double pu_total = PetscRealPart(result.jacobian[pu]);
+					AddImmersedFlowPortFinite(pu_total, coefficient, "mixed trace pressure-velocity Jacobian accumulation");
+					result.jacobian[pu] = pu_total;
+				}
+		}
+	}
+	return result;
+}
+
 inline ImmersedFlowPortElementAssembly BuildImmersedFlowPortElement(
 	const Element& element, const SurfaceQuadratureRule& rule, int boundary_label,
 	ImmersedFlowPortControlMode mode, double value,

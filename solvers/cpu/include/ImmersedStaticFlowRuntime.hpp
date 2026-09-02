@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -107,7 +108,27 @@ struct ImmersedStaticFlowDiagnostics {
 	bool scalar_diagonal_structure_verified = false;
 	std::size_t wall_selected_points = 0;
 	std::map<int, std::size_t> wall_selected_points_by_label;
+	// Wall-clock observations are diagnostics only.  Aggregates cover this
+	// runtime object's lifetime and intentionally do not participate in any
+	// nonlinear, controller, or acceptance criterion.
+	double last_assembly_seconds = 0.0, aggregate_assembly_seconds = 0.0;
+	double last_linear_solve_seconds = 0.0, aggregate_linear_solve_seconds = 0.0;
+	double last_line_search_candidate_assembly_seconds = 0.0,
+		aggregate_line_search_candidate_assembly_seconds = 0.0;
 	std::vector<ImmersedStaticFlowNewtonStep> newton_steps;
+};
+
+// These are trace and volume diagnostics only: they neither enter the
+// controller constraint nor alter the assembled continuity equations.  They
+// deliberately stream the exact catalog rules used by production assembly so
+// a cut-domain divergence-theorem discrepancy is observable without mixing in
+// full-cell or independently reconstructed quadrature.
+struct ImmersedStaticFlowConservationDiagnostics {
+	std::map<int, double> surface_flow_by_boundary_label_m3_s;
+	double open_port_outward_flow_m3_s = 0.0;
+	double wall_outward_flow_m3_s = 0.0;
+	double total_surface_outward_flow_m3_s = 0.0;
+	double volume_divergence_integral_m3_s = 0.0;
 };
 
 // Keep the scalar topology in size_t until every contribution has been
@@ -197,6 +218,11 @@ public:
 				Check(PCFactorSetShiftType(pc, MAT_SHIFT_NONZERO), "PCFactorSetShiftType");
 				Check(PCFactorSetShiftAmount(pc, options_.lu_pivot_shift), "PCFactorSetShiftAmount");
 			}
+			// Keep the ordinary GMRES/LU defaults above, but let a caller request
+			// PETSc monitoring or a solver/preconditioner variant without colliding
+			// with another KSP in a coupled application.
+			Check(KSPSetOptionsPrefix(ksp_, "immersed_static_"), "KSPSetOptionsPrefix");
+			Check(KSPSetFromOptions(ksp_), "KSPSetFromOptions");
 		} catch (...) { Destroy(); throw; }
 	}
 
@@ -239,6 +265,10 @@ public:
 	}
 	std::vector<PetscScalar> CommittedState() const { return CopyVector(committed_); }
 	std::vector<PetscScalar> TrialState() const { return CopyVector(state_); }
+	ImmersedStaticFlowConservationDiagnostics ConservationDiagnostics() const
+	{
+		return MeasureConservation();
+	}
 	std::vector<PetscScalar> AssembledNegativeResidual() const { return CopyVector(rhs_); }
 	std::vector<PetscScalar> AssembledJacobianAction(const std::vector<PetscScalar>& values) const
 	{
@@ -272,6 +302,7 @@ public:
 	// 64-node element and <=80-node face blocks supplied by the catalog APIs.
 	void Assemble()
 	{
+		const auto assembly_start = std::chrono::steady_clock::now();
 		ValidateAllFlowCompatibility();
 		Check(MatZeroEntries(jacobian_), "MatZeroEntries"); Check(VecSet(rhs_, 0.0), "VecSet rhs");
 		diagnostics_.volume_cells = diagnostics_.surface_cells = diagnostics_.ghost_faces = 0;
@@ -287,6 +318,12 @@ public:
 			if (domain_.Cells()[static_cast<std::size_t>(id)].classification == CellClassification::Cut) {
 				if (!ghost_.Covered(id)) throw std::runtime_error("covered immersed wall and ghost policy mismatch");
 				const auto& rule = surface_.UsableRule(domain_, id);
+				// Conservative resolved volume terms are completed over every physical
+				// surface label.  This is deliberately outside the Nitsche switch: an
+				// open cap and a wall both belong to the physical mixed trace.
+				if (options_.assemble_volume)
+					ScatterElement(element.connectivity,
+						BuildImmersedConservativeMixedTraceElement(element, rule, nodal));
 				// With no ports, retain the Phase-5 selected-wall preflight exactly:
 				// every positive cut cell must produce a selected wall contribution.
 				if (options_.ports.empty() || HasSelectedWallPoint(rule)) {
@@ -323,6 +360,10 @@ public:
 		if (options_.assemble_gauge && HasGauge()) InsertGauge();
 		Check(MatAssemblyBegin(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyBegin gauge"); Check(MatAssemblyEnd(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyEnd gauge");
 		Check(VecAssemblyBegin(rhs_), "VecAssemblyBegin gauge"); Check(VecAssemblyEnd(rhs_), "VecAssemblyEnd gauge");
+		const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-assembly_start).count();
+		if (!std::isfinite(elapsed) || elapsed < 0.0) throw std::runtime_error("immersed static-flow assembly timing is invalid");
+		diagnostics_.last_assembly_seconds = elapsed;
+		diagnostics_.aggregate_assembly_seconds += elapsed;
 	}
 
 	// Start each Newton attempt from an exact copy of the committed vector.
@@ -348,7 +389,13 @@ public:
 				// independently reported true linear residual.  KSP implementations
 				// are permitted to use their input work vector internally.
 				Check(VecCopy(rhs_, action_input_), "VecCopy linear right hand side");
-				Check(KSPSetOperators(ksp_, jacobian_, jacobian_), "KSPSetOperators"); Check(KSPSolve(ksp_, rhs_, update_), "KSPSolve");
+				Check(KSPSetOperators(ksp_, jacobian_, jacobian_), "KSPSetOperators");
+				const auto linear_solve_start = std::chrono::steady_clock::now();
+				Check(KSPSolve(ksp_, rhs_, update_), "KSPSolve");
+				const double linear_solve_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_solve_start).count();
+				if (!std::isfinite(linear_solve_elapsed) || linear_solve_elapsed < 0.0) throw std::runtime_error("immersed static-flow linear-solve timing is invalid");
+				diagnostics_.last_linear_solve_seconds = linear_solve_elapsed;
+				diagnostics_.aggregate_linear_solve_seconds += linear_solve_elapsed;
 				Check(KSPGetConvergedReason(ksp_, &diagnostics_.ksp_reason), "KSPGetConvergedReason"); PetscInt work = 0; Check(KSPGetIterationNumber(ksp_, &work), "KSPGetIterationNumber"); diagnostics_.ksp_iterations += work;
 				PetscReal ksp_residual = 0.0; Check(KSPGetResidualNorm(ksp_, &ksp_residual), "KSPGetResidualNorm");
 				step.ksp_iterations = work; step.ksp_reason = diagnostics_.ksp_reason; step.ksp_residual_norm = ksp_residual;
@@ -359,7 +406,14 @@ public:
 				step.update_norm = update_norm; step.linear_residual_norm = linear_residual; step.linear_relative_residual = linear_residual/residual;
 				double damping = 1.0, old = residual; bool accepted = false;
 				while (damping >= options_.minimum_damping) {
-					Check(VecAXPY(state_, damping, update_), "VecAXPY trial update"); Assemble(); PetscReal candidate = 0.0; Check(VecNorm(rhs_, NORM_2, &candidate), "VecNorm candidate");
+					Check(VecAXPY(state_, damping, update_), "VecAXPY trial update");
+					const auto candidate_assembly_start = std::chrono::steady_clock::now();
+					Assemble();
+					const double candidate_assembly_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-candidate_assembly_start).count();
+					if (!std::isfinite(candidate_assembly_elapsed) || candidate_assembly_elapsed < 0.0) throw std::runtime_error("immersed static-flow line-search assembly timing is invalid");
+					diagnostics_.last_line_search_candidate_assembly_seconds = candidate_assembly_elapsed;
+					diagnostics_.aggregate_line_search_candidate_assembly_seconds += candidate_assembly_elapsed;
+					PetscReal candidate = 0.0; Check(VecNorm(rhs_, NORM_2, &candidate), "VecNorm candidate");
 				if (std::isfinite(candidate) && candidate < old) {
 					accepted = true; step.damping = damping; step.candidate_residual_norm = candidate; diagnostics_.damping = damping; diagnostics_.residual_norm = candidate;
 					++diagnostics_.nonlinear_iterations;
@@ -618,13 +672,62 @@ private:
 		for (std::size_t a = 0; a < result.size(); ++a) for (int f = 0; f < 4; ++f) result[a][f] = PetscRealPart(values.Data()[Dof(element.connectivity[a], f)]);
 		values.Close("VecRestoreArrayRead gather"); return result;
 	}
+	ImmersedStaticFlowConservationDiagnostics MeasureConservation() const
+	{
+		ImmersedStaticFlowConservationDiagnostics result;
+		const auto selected_wall = [this](int label) {
+			return std::binary_search(options_.wall_labels.begin(), options_.wall_labels.end(), label);
+		};
+		const auto selected_port = [this](int label) {
+			return std::any_of(options_.ports.begin(), options_.ports.end(), [label](const ImmersedFlowPortDefinition& port) {
+				return port.boundary_label == label;
+			});
+		};
+		for (std::uint64_t id = 0; id < domain_.Cells().size(); ++id) {
+			if (!UsablePositive(id)) continue;
+			const auto element = domain_.Background().MaterializeElement(id);
+			const auto nodal = Gather(element);
+			const auto add_divergence = [&result, &element, &nodal](const VolumeQuadraturePoint& point) {
+				const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
+				double divergence = 0.0;
+				for (std::size_t a = 0; a < nodal.size(); ++a)
+					for (int component = 0; component < 3; ++component)
+						AddImmersedFlowPortFinite(divergence, nodal[a][component]*basis.gradient[a][component], "conservation divergence");
+				AddImmersedFlowPortFinite(result.volume_divergence_integral_m3_s,
+					point.weight*basis.raw_determinant*divergence, "conservation volume divergence");
+			};
+			if (volume_.StorageMode() == CutCellVolumeQuadratureStorageMode::Expanded)
+				for (const auto& point : volume_.UsableRule(domain_, id).Points()) add_divergence(point);
+			else ForEachVolumePoint(volume_.UsableCompactRule(domain_, id), add_divergence);
+			if (domain_.Cells()[static_cast<std::size_t>(id)].classification != CellClassification::Cut) continue;
+			const auto& rule = surface_.UsableRule(domain_, id);
+			for (const auto& point : rule.Points()) {
+				const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
+				double flow = 0.0;
+				for (std::size_t a = 0; a < nodal.size(); ++a)
+					for (int component = 0; component < 3; ++component)
+						AddImmersedFlowPortFinite(flow, nodal[a][component]*basis.value[a]*point.normal[component]*point.weight, "conservation surface flow");
+				AddImmersedFlowPortFinite(result.surface_flow_by_boundary_label_m3_s[point.boundary_id], flow, "conservation boundary flow");
+				AddImmersedFlowPortFinite(result.total_surface_outward_flow_m3_s, flow, "conservation total surface flow");
+				if (selected_wall(point.boundary_id))
+					AddImmersedFlowPortFinite(result.wall_outward_flow_m3_s, flow, "conservation wall flow");
+				else if (selected_port(point.boundary_id))
+					AddImmersedFlowPortFinite(result.open_port_outward_flow_m3_s, flow, "conservation open-port flow");
+				else throw std::runtime_error("immersed conservation diagnostics found an unconfigured surface label");
+			}
+		}
+		return result;
+	}
 	NavierStokesSystem BuildVolumeSystem(const Element& element, const std::vector<std::array<double, 4>>& nodal, std::uint64_t id) const
 	{
 		if (volume_.StorageMode() == CutCellVolumeQuadratureStorageMode::Expanded)
-			return BuildNavierStokesElement(element, nodal, {}, options_.parameters, volume_.UsableRule(domain_, id), options_.body_force);
+			return BuildNavierStokesElementFromPoints(element, nodal, {}, options_.parameters,
+				[this, id](const auto& consume) { for (const auto& point : volume_.UsableRule(domain_, id).Points()) consume(point); },
+				options_.body_force, NavierStokesResolvedMixedForm::Conservative);
 		const auto& rule = volume_.UsableCompactRule(domain_, id);
 		return BuildNavierStokesElementFromPoints(element, nodal, {}, options_.parameters,
-			[&rule](const auto& consume) { ForEachVolumePoint(rule, consume); }, options_.body_force);
+			[&rule](const auto& consume) { ForEachVolumePoint(rule, consume); }, options_.body_force,
+			NavierStokesResolvedMixedForm::Conservative);
 	}
 	void ScatterElement(const std::vector<std::int32_t>& nodes, const NavierStokesSystem& system)
 	{

@@ -1,4 +1,5 @@
 #include "BoundaryFlow.hpp"
+#include "ImmersedFlowPort.hpp"
 #include "NavierStokesElement.hpp"
 
 #include <algorithm>
@@ -26,6 +27,36 @@ iga::Element UnitElement()
 				element.bezier_points[p] = {i/3.0, j/3.0, k/3.0};
 			}
 	return element;
+}
+
+iga::SurfaceQuadratureRule UnitSurfaceQuadrature()
+{
+	std::vector<iga::SurfaceQuadraturePoint> points;
+	points.reserve(96);
+	for (int face = 0; face < 6; ++face)
+		for (std::size_t q1 = 0; q1 < 4; ++q1)
+			for (std::size_t q2 = 0; q2 < 4; ++q2) {
+				std::array<double, 3> x{};
+				std::array<double, 3> n{};
+				switch (face) {
+				case 0: x = {{iga::kGaussFourPoints[q1], iga::kGaussFourPoints[q2], 0.0}}; n = {{0.0,0.0,-1.0}}; break;
+				case 1: x = {{iga::kGaussFourPoints[q1], 0.0, iga::kGaussFourPoints[q2]}}; n = {{0.0,-1.0,0.0}}; break;
+				case 2: x = {{1.0, iga::kGaussFourPoints[q1], iga::kGaussFourPoints[q2]}}; n = {{1.0,0.0,0.0}}; break;
+				case 3: x = {{iga::kGaussFourPoints[q1], 1.0, iga::kGaussFourPoints[q2]}}; n = {{0.0,1.0,0.0}}; break;
+				case 4: x = {{0.0, iga::kGaussFourPoints[q1], iga::kGaussFourPoints[q2]}}; n = {{-1.0,0.0,0.0}}; break;
+				default: x = {{iga::kGaussFourPoints[q1], iga::kGaussFourPoints[q2], 1.0}}; n = {{0.0,0.0,1.0}}; break;
+				}
+				points.push_back({x, x, n, iga::kGaussFourWeights[q1]*iga::kGaussFourWeights[q2]/4.0, face});
+			}
+	return iga::SurfaceQuadratureRule(std::move(points));
+}
+
+void AddSystem(iga::NavierStokesSystem& left, const iga::NavierStokesSystem& right)
+{
+	assert(left.jacobian.size() == right.jacobian.size());
+	assert(left.negative_residual.size() == right.negative_residual.size());
+	for (std::size_t i = 0; i < left.jacobian.size(); ++i) left.jacobian[i] += right.jacobian[i];
+	for (std::size_t i = 0; i < left.negative_residual.size(); ++i) left.negative_residual[i] += right.negative_residual[i];
 }
 
 void LegacyStabilization(const std::array<std::array<double, 3>, 3>& inverse_jacobian,
@@ -196,6 +227,30 @@ int main()
 	RequireEqual(legacy.jacobian, explicit_steady.jacobian, "steady wrapper Jacobian");
 	RequireEqual(legacy.negative_residual, frozen_steady.negative_residual,
 		"steady wrapper negative residual");
+	// The conservative resolved pair is explicitly opt-in.  Its all-label
+	// physical trace recovers the legacy body-fitted pair exactly on this
+	// polynomial cube, while the resolved J_pu and J_up blocks remain skew.
+	const auto conservative = iga::BuildNavierStokesElementFromPoints(element, state, {},
+		{1.0, 0.17, 0.0}, [&unit_quadrature](const auto& consume) {
+			for (const auto& point : unit_quadrature.Rule().Points()) consume(point);
+		}, [](const std::array<double, 3>&) { return std::array<double, 3>{{0.0,0.0,0.0}}; },
+		iga::NavierStokesResolvedMixedForm::Conservative);
+	const auto trace = iga::BuildImmersedConservativeMixedTraceElement(element,
+		UnitSurfaceQuadrature(), state);
+	auto completed_conservative = conservative;
+	AddSystem(completed_conservative, trace);
+	RequireEqual(explicit_steady.jacobian, completed_conservative.jacobian,
+		"conservative mixed trace Jacobian completion");
+	RequireEqual(explicit_steady.negative_residual, completed_conservative.negative_residual,
+		"conservative mixed trace residual completion");
+	constexpr std::size_t ndof = 256;
+	for (std::size_t a = 0; a < 64; ++a)
+		for (std::size_t b = 0; b < 64; ++b)
+			for (int component = 0; component < 3; ++component) {
+				const auto pressure_velocity = PetscRealPart(trace.jacobian[(4*a+3)*ndof+4*b+component]);
+				const auto velocity_pressure = PetscRealPart(trace.jacobian[(4*b+component)*ndof+4*a+3]);
+				assert(std::abs(pressure_velocity+velocity_pressure) < 2e-12);
+			}
 	auto curved = element;
 	for (auto& point : curved.bezier_points) {
 		point[0] += 0.08*point[0]*point[1];

@@ -24,6 +24,15 @@ struct NavierStokesParameters {
 	double dt = 0.0;
 };
 
+// The established body-fitted weak form integrates the resolved mixed pair by
+// parts in the volume.  Immersed cut cells can instead retain the resolved
+// gradients in the volume and supply the cancelling physical trace explicitly.
+// VMS/PSPG remains identical in both forms.
+enum class NavierStokesResolvedMixedForm {
+	LegacyBodyFitted,
+	Conservative
+};
+
 // Physical body-force density per unit volume (N/m^3).  Keeping it as a
 // point evaluator makes manufactured loads and spatially varying gravity
 // unambiguous, while the zero evaluator preserves the established API.
@@ -62,7 +71,8 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, PointVisitor&& visit_points,
-	const NavierStokesBodyForceEvaluator& body_force)
+	const NavierStokesBodyForceEvaluator& body_force,
+	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
 {
 	if (!(parameters.density > 0.0) || !(parameters.dynamic_viscosity > 0.0) || parameters.dt < 0.0)
 		throw std::runtime_error("invalid Navier-Stokes density, dynamic viscosity, or time step");
@@ -129,14 +139,21 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 					std::array<double, 4> residual{};
 					for (int component = 0; component < 3; ++component) {
 						residual[component] = density*na*time_derivative[component]-na*force[component]
-							- ga[component]*state[3] - ga[component]*fine_pressure;
+							- ga[component]*fine_pressure;
+						if (resolved_mixed_form == NavierStokesResolvedMixedForm::Conservative)
+							residual[component] += na*gradient[3][component];
+						else residual[component] -= ga[component]*state[3];
 						for (int direction = 0; direction < 3; ++direction) {
 							residual[component] += viscosity * ga[direction] * (gradient[component][direction] + gradient[direction][component]);
 							residual[component] += density*na * (state[direction]+fine_velocity[direction]) * gradient[component][direction];
 							residual[component] -= density*ga[direction] * fine_velocity[component] * (state[direction]+fine_velocity[direction]);
 						}
 					}
-					residual[3] = na*(gradient[0][0]+gradient[1][1]+gradient[2][2])
+					residual[3] = -ga[0]*fine_velocity[0] - ga[1]*fine_velocity[1] - ga[2]*fine_velocity[2];
+					if (resolved_mixed_form == NavierStokesResolvedMixedForm::Conservative)
+						for (int direction = 0; direction < 3; ++direction)
+							residual[3] -= ga[direction]*state[direction];
+					else residual[3] = na*(gradient[0][0]+gradient[1][1]+gradient[2][2])
 						- ga[0]*fine_velocity[0] - ga[1]*fine_velocity[1] - ga[2]*fine_velocity[2];
 					for (int field = 0; field < 4; ++field)
 						system.negative_residual[4*a+field] -= residual[field]*measure;
@@ -187,7 +204,10 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 								*(gradient[0][0]+gradient[1][1]+gradient[2][2])+tau_c*delta_divergence);
 							for (int i = 0; i < 3; ++i) {
 								double tangent = density*na*(parameters.dt > 0.0 && field == i ? nb/parameters.dt : 0.0)
-									- ga[i]*delta_pressure-ga[i]*delta_fine_pressure;
+									- ga[i]*delta_fine_pressure;
+								if (resolved_mixed_form == NavierStokesResolvedMixedForm::Conservative)
+									tangent += na*delta_pressure_gradient[i];
+								else tangent -= ga[i]*delta_pressure;
 								for (int direction = 0; direction < 3; ++direction) {
 									tangent += viscosity*ga[direction]*((field == i ? gb[direction] : 0.0)
 										+ (field == direction ? gb[i] : 0.0));
@@ -200,7 +220,9 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 								}
 								system.jacobian[(4*a+i)*ndof+4*b+field] += tangent*measure;
 							}
-							double continuity_tangent = na*delta_divergence;
+							double continuity_tangent = resolved_mixed_form == NavierStokesResolvedMixedForm::Conservative
+								? -(ga[0]*delta_velocity[0]+ga[1]*delta_velocity[1]+ga[2]*delta_velocity[2])
+								: na*delta_divergence;
 							for (int direction = 0; direction < 3; ++direction)
 								continuity_tangent -= ga[direction]*fine_velocity_derivative[direction];
 							system.jacobian[(4*a+3)*ndof+4*b+field] += continuity_tangent*measure;

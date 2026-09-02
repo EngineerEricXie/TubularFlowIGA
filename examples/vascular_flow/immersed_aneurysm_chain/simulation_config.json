@@ -1,0 +1,23 @@
+{
+  "schema_version": 5,
+  "time": {"dt": 0.01, "steps": 3}, "start_domain": "source",
+  "execution": {"kind": "explicit", "maximum_iterations": 1,
+    "pressure_relative_tolerance": 1e-6, "pressure_reference_pa": 1,
+    "flow_relative_tolerance": 1e-10, "relaxation_factor": 0.5,
+    "minimum_relaxation": 0.05, "maximum_relaxation": 0.999},
+  "domains": [
+    {"id":"source","dimension":"1d","kind":"network_flow","case":"source","inlet_policy":"configured_open_loop","ports":[
+      {"id":"root","locator_kind":"runtime_port","locator":"root","provides":["area","flow_rate","mean_pressure"],"requires":[]},
+      {"id":"terminal","locator_kind":"runtime_port","locator":"outlet:2","provides":["area","flow_rate","mean_pressure"],"requires":["mean_pressure"]}]},
+    {"id":"immersed","dimension":"3d","kind":"three_d_immersed_flow","case":"immersed","ports":[
+      {"id":"inlet","locator_kind":"boundary_label","locator":"1","provides":["area","flow_rate","mean_pressure"],"requires":["flow_rate"]},
+      {"id":"outlet","locator_kind":"boundary_label","locator":"2","provides":["area","flow_rate","mean_pressure"],"requires":["mean_pressure"]}]},
+    {"id":"sink","dimension":"1d","kind":"network_flow","case":"sink","inlet_policy":"coupled_root","ports":[
+      {"id":"root","locator_kind":"runtime_port","locator":"root","provides":["area","flow_rate","mean_pressure"],"requires":["flow_rate"]},
+      {"id":"terminal","locator_kind":"runtime_port","locator":"outlet:2","provides":["area","flow_rate","mean_pressure"],"requires":[]}]}
+  ],
+  "couplings": [
+    {"id":"source_inlet","a":{"domain":"source","port":"terminal"},"b":{"domain":"immersed","port":"inlet"},"mode":"pressure_flow","initial_pressure_pa":0},
+    {"id":"outlet_sink","a":{"domain":"immersed","port":"outlet"},"b":{"domain":"sink","port":"root"},"mode":"pressure_flow","initial_pressure_pa":0}
+  ]
+}

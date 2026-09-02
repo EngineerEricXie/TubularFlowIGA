@@ -247,6 +247,53 @@ int main(int argc, char** argv)
 		}
 		assert(pressure_sign); // t_n maps p_b=-t_n and therefore reverses the body-fitted load sign.
 
+		// The conservative resolved mixed form is completed on every retained
+		// physical label.  Summing physical pressure residuals therefore yields
+		// the open velocity trace plus the prescribed wall-normal trace, not the
+		// independently sampled volume-divergence-minus-wall-flow diagnostic.
+		iga::ImmersedStaticFlowOptions mixed_trace = base;
+		mixed_trace.ports = { {"pressure1",1,iga::ImmersedFlowPortControlMode::Pressure,0.0},
+			{"pressure2",2,iga::ImmersedFlowPortControlMode::Pressure,0.0} };
+		mixed_trace.assemble_ghost = false;
+		mixed_trace.wall_velocity = [](const std::array<double, 3>& x, int) {
+			return std::array<double, 3>{{x[0],x[1],0.0}};
+		};
+		iga::ImmersedStaticFlowRuntime mixed_trace_runtime(domain, expanded, surface, expanded_ghost, mixed_trace);
+		std::vector<PetscScalar> mixed_trace_state(mixed_trace_runtime.Diagnostics().total_dofs, 0.0);
+		const auto trace_grid = domain.Background().Spec();
+		const std::uint32_t trace_nx = trace_grid.cells[0]+3, trace_ny = trace_grid.cells[1]+3;
+		for (const auto node : mixed_trace_runtime.ActiveNodes()) {
+			const std::uint32_t i = static_cast<std::uint32_t>(node)%trace_nx;
+			const std::uint32_t j = (static_cast<std::uint32_t>(node)/trace_nx)%trace_ny;
+			const std::uint32_t k = static_cast<std::uint32_t>(node)/(trace_nx*trace_ny);
+			const auto x = domain.Background().Greville(i, j, k);
+			mixed_trace_state[static_cast<std::size_t>(mixed_trace_runtime.Dof(node, 2))] = 2.0*x[2];
+		}
+		mixed_trace_runtime.SetCommittedState(mixed_trace_state); mixed_trace_runtime.Assemble();
+		const auto mixed_trace_rhs = mixed_trace_runtime.AssembledNegativeResidual();
+		double pressure_residual_sum = 0.0;
+		for (std::size_t node = 0; node < mixed_trace_runtime.Diagnostics().active_nodes; ++node)
+			pressure_residual_sum -= PetscRealPart(mixed_trace_rhs[4*node+3]); // Convert stored -R to R.
+		const auto mixed_trace_conservation = mixed_trace_runtime.ConservationDiagnostics();
+		double label_sum = 0.0, open_label_sum = 0.0, wall_label_sum = 0.0, prescribed_wall_trace = 0.0;
+		for (const auto& entry : mixed_trace_conservation.surface_flow_by_boundary_label_m3_s) {
+			label_sum += entry.second;
+			if (entry.first == 0) wall_label_sum += entry.second;
+			else open_label_sum += entry.second;
+		}
+		for (std::uint64_t id = 0; id < domain.Cells().size(); ++id) {
+			const auto element = domain.Background().MaterializeElement(id);
+			for (const auto& point : surface.UsableRule(domain, id).Points()) if (point.boundary_id == 0)
+				prescribed_wall_trace += (point.physical[0]*point.normal[0]+point.physical[1]*point.normal[1])*point.weight;
+		}
+		assert(std::abs(label_sum-mixed_trace_conservation.total_surface_outward_flow_m3_s) < 2e-12);
+		assert(std::abs(open_label_sum-mixed_trace_conservation.open_port_outward_flow_m3_s) < 2e-12);
+		assert(std::abs(wall_label_sum-mixed_trace_conservation.wall_outward_flow_m3_s) < 2e-12);
+		assert(std::abs(pressure_residual_sum-(mixed_trace_conservation.open_port_outward_flow_m3_s+prescribed_wall_trace)) < 3e-11);
+		const double old_volume_minus_wall = mixed_trace_conservation.volume_divergence_integral_m3_s
+			-mixed_trace_conservation.wall_outward_flow_m3_s;
+		assert(std::abs(pressure_residual_sum-old_volume_minus_wall) > 1e-4);
+
 		iga::ImmersedStaticFlowOptions mixed = flow; mixed.ports[1] = {"pressure",2,iga::ImmersedFlowPortControlMode::Pressure,0.0};
 		iga::ImmersedStaticFlowRuntime mixed_runtime(domain, expanded, surface, expanded_ghost, mixed);
 		assert(!mixed_runtime.HasGauge() && mixed_runtime.Diagnostics().total_dofs == mixed_runtime.Diagnostics().physical_dofs+1);

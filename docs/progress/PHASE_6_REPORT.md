@@ -159,3 +159,61 @@ profile/gauge, total-pressure, grid/quadrature/ghost/runtime range, physics
 override, and exact port ID/label/control negatives.  The generic-runner smoke
 also executes an immersed fixture and audits kind, hash, grid, and catalogs;
 the existing body-fitted generic smoke remains in that target.
+
+## PR6.5 — Quasi-static immersed aneurysm-chain closure benchmark
+
+Status: in progress.
+
+`examples/vascular_flow/immersed_aneurysm_chain/` contains the deterministic
+steady low-Reynolds-number 1D--immersed-3D--1D case: a gradual octagonal
+surface-of-revolution bulge, planar labelled inlet/outlet caps (1/2), and wall
+label 0. It is deliberately a quasi-static steady backend example and makes
+no transient or backward-Euler-equivalence claim.
+
+The current focused depth-2 conservative-form evidence is recorded in PR6.6.
+It does not establish depth-3 or full coupled-chain closure, so Phase 6
+remains in progress.
+
+## PR6.6 — Conservative resolved mixed form
+
+The immersed volume path now explicitly selects the conservative resolved
+mixed form, while every other `BuildNavierStokesElementFromPoints` caller keeps
+the legacy body-fitted default.  Its resolved terms are
+
+\[
+R_{u,p}^{\Omega}=\int_\Omega N_a\nabla p,\qquad
+R_{p,u}^{\Omega}=-\int_\Omega\nabla N_a\cdot u.
+\]
+
+Every retained physical surface point on a positive cut cell supplies the
+all-label completion
+
+\[
+R_{u,p}^{\Gamma}=-\int_\Gamma N_a p n,\qquad
+R_{p,u}^{\Gamma}=+\int_\Gamma N_a u\cdot n.
+\]
+
+Thus the stored negative residual adds `+N_a p n` and
+`-N_a(u\cdot n)`, and the two trace Jacobian blocks are exact negatives of one
+another under transpose.  VMS and PSPG residuals and derivatives, including
+the committed `25fd551` tangent, are unchanged.  The trace is assembled when
+volume assembly is enabled, independently of Nitsche-wall selection.
+
+The focused algebraic coverage uses a cubic body-fitted completion tolerance
+of `2e-14` and a trace-block `J_{p,u}+J_{u,p}^T` tolerance of `2e-12`.
+The multi-label runtime fixture checks that the summed physical pressure
+residual is the open velocity trace plus a nonzero prescribed wall-normal
+trace, rather than volume divergence minus measured wall flow; it also checks
+total/open/wall diagnostic and per-label sums.
+
+On local serial PETSc 3.15, the focused conservative-form depth-2 aneurysm
+Jacobian/conservation regression completed in `35.18 s`. Its first accepted
+candidate residual was `1.09978e-8`; the final nonlinear residual was
+`2.50713e-17`; and the first true linear relative residual was
+`1.49106e-13`. The inlet controller error was `2.71051e-20 m^3/s`. Production
+quadrature reported open, wall, total, and volume-divergence flows of
+`-2.08177e-19`, `1.57300e-9`, `1.57300e-9`, and `1.43606e-9 m^3/s`,
+respectively. The open normalized balance and wall leakage normalized by
+throughflow both pass the focused `1e-3` gates. The volume-divergence value is
+retained as a diagnostic only. Depth-3 and full coupled-chain closure remain
+pending.
