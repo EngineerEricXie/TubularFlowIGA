@@ -191,11 +191,9 @@ int main()
 		element, state, {}, {1.0, 0.17, 0.0}, unit_quadrature.Rule());
 	const auto frozen_steady = LegacyTensorNavierStokesElement(element, state, {},
 		{1.0, 0.17, 0.0});
-	RequireEqual(frozen_steady.jacobian, explicit_steady.jacobian,
-		"frozen steady Jacobian");
 	RequireEqual(frozen_steady.negative_residual, explicit_steady.negative_residual,
 		"frozen steady negative residual");
-	RequireEqual(legacy.jacobian, frozen_steady.jacobian, "steady wrapper Jacobian");
+	RequireEqual(legacy.jacobian, explicit_steady.jacobian, "steady wrapper Jacobian");
 	RequireEqual(legacy.negative_residual, frozen_steady.negative_residual,
 		"steady wrapper negative residual");
 	auto curved = element;
@@ -210,11 +208,9 @@ int main()
 		curved, state, {}, {1.0, 0.17, 0.0}, curved_quadrature.Rule());
 	const auto frozen_curved_steady = LegacyTensorNavierStokesElement(curved, state, {},
 		{1.0, 0.17, 0.0});
-	RequireEqual(frozen_curved_steady.jacobian, curved_explicit.jacobian,
-		"frozen curved steady Jacobian");
 	RequireEqual(frozen_curved_steady.negative_residual, curved_explicit.negative_residual,
 		"frozen curved steady negative residual");
-	RequireEqual(curved_legacy.jacobian, frozen_curved_steady.jacobian,
+	RequireEqual(curved_legacy.jacobian, curved_explicit.jacobian,
 		"curved steady wrapper Jacobian");
 	RequireEqual(curved_legacy.negative_residual, frozen_curved_steady.negative_residual,
 		"curved steady wrapper negative residual");
@@ -227,19 +223,45 @@ int main()
 		nonconstant_previous, nonconstant_transient_parameters, unit_quadrature.Rule());
 	const auto frozen_nonconstant_transient = LegacyTensorNavierStokesElement(element,
 		state, nonconstant_previous, nonconstant_transient_parameters);
-	RequireEqual(frozen_nonconstant_transient.jacobian, nonconstant_transient.jacobian,
-		"frozen nonconstant transient Jacobian");
 	RequireEqual(frozen_nonconstant_transient.negative_residual,
 		nonconstant_transient.negative_residual, "frozen nonconstant transient negative residual");
 	const auto curved_nonconstant_transient = iga::BuildNavierStokesElement(curved, state,
 		nonconstant_previous, nonconstant_transient_parameters, curved_quadrature.Rule());
 	const auto frozen_curved_nonconstant_transient = LegacyTensorNavierStokesElement(curved,
 		state, nonconstant_previous, nonconstant_transient_parameters);
-	RequireEqual(frozen_curved_nonconstant_transient.jacobian,
-		curved_nonconstant_transient.jacobian, "frozen curved nonconstant transient Jacobian");
 	RequireEqual(frozen_curved_nonconstant_transient.negative_residual,
 		curved_nonconstant_transient.negative_residual,
 		"frozen curved nonconstant transient negative residual");
+	// The VMS residual retains the strong viscous term in fine_velocity.  Its
+	// tangent must therefore include that term, as well as the velocity
+	// dependence of tau_m and tau_c; verify the complete nonlinear action.
+	std::vector<std::array<double, 4>> fd_plus = state, fd_minus = state;
+	std::vector<double> fd_direction(256);
+	constexpr double fd_epsilon = 1e-4;
+	for (std::size_t a = 0; a < state.size(); ++a)
+		for (int field = 0; field < 4; ++field) {
+			const double direction = 1e-3*(1.0+static_cast<double>((7*a+3*field)%13));
+			fd_direction[4*a+field] = direction;
+			fd_plus[a][field] += fd_epsilon*direction;
+			fd_minus[a][field] -= fd_epsilon*direction;
+		}
+	const auto fd_plus_system = iga::BuildNavierStokesElement(element, fd_plus,
+		nonconstant_previous, nonconstant_transient_parameters, unit_quadrature.Rule());
+	const auto fd_minus_system = iga::BuildNavierStokesElement(element, fd_minus,
+		nonconstant_previous, nonconstant_transient_parameters, unit_quadrature.Rule());
+	double action_squared = 0.0, defect_squared = 0.0;
+	for (std::size_t row = 0; row < 256; ++row) {
+		double action = 0.0;
+		for (std::size_t column = 0; column < 256; ++column)
+			action += PetscRealPart(nonconstant_transient.jacobian[row*256+column])*fd_direction[column];
+		const double defect = action+(PetscRealPart(fd_plus_system.negative_residual[row])
+			-PetscRealPart(fd_minus_system.negative_residual[row]))/(2.0*fd_epsilon);
+		action_squared += action*action;
+		defect_squared += defect*defect;
+	}
+	const double nonlinear_fd_defect = std::sqrt(defect_squared/action_squared);
+	std::cerr << "nonlinear Navier-Stokes Jacobian relative defect " << nonlinear_fd_defect << '\n';
+	assert(nonlinear_fd_defect <= 1e-8);
 
 	constexpr double density = 2.5;
 	constexpr double dt = 0.2;
@@ -254,11 +276,9 @@ int main()
 		element, state, previous_state, {density, 0.17, dt}, unit_quadrature.Rule());
 	const auto frozen_transient = LegacyTensorNavierStokesElement(element, state,
 		previous_state, {density, 0.17, dt});
-	RequireEqual(frozen_transient.jacobian, transient_explicit.jacobian,
-		"frozen transient Jacobian");
 	RequireEqual(frozen_transient.negative_residual, transient_explicit.negative_residual,
 		"frozen transient negative residual");
-	RequireEqual(transient.jacobian, frozen_transient.jacobian, "transient wrapper Jacobian");
+	RequireEqual(transient.jacobian, transient_explicit.jacobian, "transient wrapper Jacobian");
 	RequireEqual(transient.negative_residual, frozen_transient.negative_residual,
 		"transient wrapper negative residual");
 	for (int component = 0; component < 3; ++component) {

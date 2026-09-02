@@ -117,6 +117,11 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 				}
 				const auto fine_pressure = -density*tau_c
 					* (gradient[0][0] + gradient[1][1] + gradient[2][2]);
+				double metric[3][3]{};
+				for (int i = 0; i < 3; ++i)
+					for (int j = 0; j < 3; ++j)
+						for (int k = 0; k < 3; ++k)
+							metric[i][j] += basis.inverse_jacobian[k][i]*basis.inverse_jacobian[k][j];
 
 				for (std::size_t a = 0; a < nen; ++a) {
 					const auto na = basis.value[a];
@@ -136,28 +141,70 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 					for (int field = 0; field < 4; ++field)
 						system.negative_residual[4*a+field] -= residual[field]*measure;
 
+					// Differentiate the residual above exactly.  In particular, the
+					// continuity row contains -grad(N_a).fine_velocity: its velocity
+					// derivative includes the strong viscous Laplacian and both
+					// stabilization parameters depend on the resolved velocity.
 					for (std::size_t b = 0; b < nen; ++b) {
 						const auto nb = basis.value[b];
 						const auto& gb = basis.gradient[b];
-						const auto convection_b = state[0]*gb[0] + state[1]*gb[1] + state[2]*gb[2];
-						const auto streamline_a = state[0]*ga[0] + state[1]*ga[1] + state[2]*ga[2];
-						double tangent[4][4]{};
-						const auto mass_b = parameters.dt > 0.0 ? nb/parameters.dt : 0.0;
-						const auto diagonal = density*na*(mass_b+convection_b)
-							+ viscosity*(ga[0]*gb[0]+ga[1]*gb[1]+ga[2]*gb[2])
-							+ density*tau_m*streamline_a*(mass_b+convection_b);
-						for (int i = 0; i < 3; ++i)
-							for (int j = 0; j < 3; ++j)
-								tangent[i][j] = viscosity*ga[j]*gb[i] + density*tau_c*ga[i]*gb[j];
-						for (int i = 0; i < 3; ++i) tangent[i][i] += diagonal;
-						for (int i = 0; i < 3; ++i) {
-							tangent[i][3] = -ga[i]*nb + tau_m*streamline_a*gb[i];
-							tangent[3][i] = na*gb[i] + tau_m*ga[i]*(mass_b+convection_b);
+						const double laplacian_b = basis.hessian[b][0][0]+basis.hessian[b][1][1]+basis.hessian[b][2][2];
+						for (int field = 0; field < 4; ++field) {
+							std::array<double, 3> delta_velocity{};
+							std::array<double, 3> delta_laplacian{};
+							std::array<double, 3> delta_pressure_gradient{};
+							const double delta_pressure = field == 3 ? nb : 0.0;
+							if (field < 3) {
+								delta_velocity[field] = nb;
+								delta_laplacian[field] = laplacian_b;
+							} else delta_pressure_gradient = gb;
+							double velocity_metric_direction = 0.0;
+							for (int i = 0; i < 3; ++i)
+								for (int j = 0; j < 3; ++j)
+									velocity_metric_direction += delta_velocity[i]*metric[i][j]*state[j];
+							const double delta_tau_m = -tau_m*tau_m*tau_m*velocity_metric_direction;
+							const double delta_tau_c = tau_c*tau_m*tau_m*velocity_metric_direction;
+							const double delta_divergence = field < 3 ? gb[field] : 0.0;
+							std::array<double, 3> strong_residual_derivative{};
+							std::array<double, 3> fine_velocity_derivative{};
+							for (int component = 0; component < 3; ++component) {
+								for (int direction = 0; direction < 3; ++direction)
+									strong_residual_derivative[component] += delta_velocity[direction]*gradient[component][direction]
+										+ state[direction]*(field == component ? gb[direction] : 0.0);
+								if (parameters.dt > 0.0 && field == component)
+									strong_residual_derivative[component] += nb/parameters.dt;
+								strong_residual_derivative[component] += delta_pressure_gradient[component]/density
+									- kinematic_viscosity*delta_laplacian[component];
+								const double strong_residual = time_derivative[component]+state[0]*gradient[component][0]
+									+ state[1]*gradient[component][1]+state[2]*gradient[component][2]
+									+ gradient[3][component]/density-kinematic_viscosity
+									*(hessian[component][0][0]+hessian[component][1][1]+hessian[component][2][2])
+									- force[component]/density;
+								fine_velocity_derivative[component] = -delta_tau_m*strong_residual
+									- tau_m*strong_residual_derivative[component];
+							}
+							const double delta_fine_pressure = -density*(delta_tau_c
+								*(gradient[0][0]+gradient[1][1]+gradient[2][2])+tau_c*delta_divergence);
+							for (int i = 0; i < 3; ++i) {
+								double tangent = density*na*(parameters.dt > 0.0 && field == i ? nb/parameters.dt : 0.0)
+									- ga[i]*delta_pressure-ga[i]*delta_fine_pressure;
+								for (int direction = 0; direction < 3; ++direction) {
+									tangent += viscosity*ga[direction]*((field == i ? gb[direction] : 0.0)
+										+ (field == direction ? gb[i] : 0.0));
+									tangent += density*na*((delta_velocity[direction]+fine_velocity_derivative[direction])
+										*gradient[i][direction]+(state[direction]+fine_velocity[direction])
+										*(field == i ? gb[direction] : 0.0));
+									tangent -= density*ga[direction]*(fine_velocity_derivative[i]
+										*(state[direction]+fine_velocity[direction])+fine_velocity[i]
+										*(delta_velocity[direction]+fine_velocity_derivative[direction]));
+								}
+								system.jacobian[(4*a+i)*ndof+4*b+field] += tangent*measure;
+							}
+							double continuity_tangent = na*delta_divergence;
+							for (int direction = 0; direction < 3; ++direction)
+								continuity_tangent -= ga[direction]*fine_velocity_derivative[direction];
+							system.jacobian[(4*a+3)*ndof+4*b+field] += continuity_tangent*measure;
 						}
-						tangent[3][3] = (tau_m/density)*(ga[0]*gb[0]+ga[1]*gb[1]+ga[2]*gb[2]);
-						for (int i = 0; i < 4; ++i)
-							for (int j = 0; j < 4; ++j)
-								system.jacobian[(4*a+i)*ndof + 4*b+j] += tangent[i][j]*measure;
 					}
 				}
 			});
