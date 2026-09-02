@@ -222,6 +222,61 @@ sliver/global-patch spectra, integration of this pair operator into the
 distributed global flow/PSPG assembly, and three-level manufactured Stokes
 convergence evidence; none is fabricated by this bounded element/catalog PR.
 
+## PR 5.8: compact cut-volume retention
+
+`CutCellVolumeQuadratureCatalog` now has an explicit storage mode.  Expanded
+rules remain the default and preserve the existing point-vector API and
+ordering.  Compact mode stores certified material as exact integer boxes on a
+`2^max_depth` reference lattice and retains unresolved terminal leaves as a
+dyadic key/depth plus a 64-bit inside-sample mask.  It never expands those
+records during catalog construction; `ForEachVolumePoint` emits the same
+qz/qy/qx 4x4x4 Gauss rule on demand.
+
+The compact builder uses deterministic x-fast octree recursion.  Uniform
+children collapse to their parent, while mixed terminal leaves remain sample
+records even for all-zero or all-one masks.  Certified boxes then undergo
+fixed x/y/z face-adjacent coalescing to a fixed point.  The catalogue exposes
+logical emitted-point, final record, monotone record-attempt, rollback-record,
+and retained-byte diagnostics separately from the legacy expanded
+`output_points` count.  Logical-point, record, and byte caps are checked
+before publication.  Bound callers must use
+`UsableCompactRule`; the expanded and compact accessors intentionally reject
+the opposite storage mode.
+
+`max_points` deliberately retains its legacy expanded-storage meaning.  Compact
+rules instead apply the separately configurable, checked `max_logical_points`
+cap after block/mask compression (default 64 Mi logical points); node, leaf,
+sample, record, and retained-byte caps still bound construction work.  The
+compact recursion appends into per-cell shared scratch in Morton child order;
+all-full/all-empty rollback releases speculative records, is counted
+separately, and cannot bypass the monotone record cap.  Scratch vectors use
+deterministic 1.5x planned capacity growth.  `retained_bytes` is the portable,
+checked peak accounting model for those planned capacities, including old plus
+replacement plans during a reserve.  `std::vector::reserve` may overallocate,
+so `max_retained_bytes` deliberately does not claim a strict allocator-byte or
+transient-allocation bound.  `observed_retained_bytes` reports only final
+published vector capacity for diagnosis; it is not capped and is not an
+allocator peak.  Final records and logical emissions are checked before
+publication.
+
+Compact validation audits lattice keys, strict block/Morton ordering, sample
+prefix intervals, block BVH overlap, every lazily emitted reference point and
+weight, and (at bound access) every mapped physical Jacobian and physical
+diagnostic sum without materializing an expanded vector.
+
+Focused evidence is build *and* run:
+`make -C solvers/cpu cut_cell_volume_quadrature_test && ./solvers/cpu/cut_cell_volume_quadrature_test`.
+It covers all 512 degree-0..7 tensor moments for shallow cube/tetra compact
+versus expanded rules with operation-scaled tolerances, depth-zero mask-order
+bitwise emission, repeat/permutation/translation/scale compact records,
+coalescing plus a deterministic shared-helper rollback probe with exact and
+cap-minus-one monotone append checks, exact planned-byte-cap boundaries,
+transactional work-cap rejection,
+dyadic 3^3 slivers through depth eight, and oblique tetrahedral depth-seven/
+depth-eight brackets.  It does not claim bitwise equivalence for unresolved
+non-polynomial rules beyond the depth-zero mask-order evidence; the existing
+deterministic expanded regression suite remains covered.
+
 ## PR 5.1: cubic Cartesian background
 
 The CPU backend now has a dependency-light immutable cubic Cartesian background

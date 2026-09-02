@@ -8,6 +8,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace {
 
@@ -20,6 +21,15 @@ iga::RawSurfaceSoup Cube(double lower, double upper)
 	iga::RawSurfaceSoup result;
 	result.vertices = {{{{lower,lower,lower}}, {{upper,lower,lower}}, {{upper,upper,lower}}, {{lower,upper,lower}},
 		{{lower,lower,upper}}, {{upper,lower,upper}}, {{upper,upper,upper}}, {{lower,upper,upper}}}};
+	result.triangles = {Face(0,2,1), Face(0,3,2), Face(4,5,6), Face(4,6,7), Face(0,1,5), Face(0,5,4),
+		Face(1,2,6), Face(1,6,5), Face(2,3,7), Face(2,7,6), Face(3,0,4), Face(3,4,7)};
+	return result;
+}
+iga::RawSurfaceSoup Box(const std::array<double, 3>& lower, const std::array<double, 3>& upper)
+{
+	iga::RawSurfaceSoup result;
+	result.vertices = {{{{lower[0],lower[1],lower[2]}}, {{upper[0],lower[1],lower[2]}}, {{upper[0],upper[1],lower[2]}}, {{lower[0],upper[1],lower[2]}},
+		{{lower[0],lower[1],upper[2]}}, {{upper[0],lower[1],upper[2]}}, {{upper[0],upper[1],upper[2]}}, {{lower[0],upper[1],upper[2]}}}};
 	result.triangles = {Face(0,2,1), Face(0,3,2), Face(4,5,6), Face(4,6,7), Face(0,1,5), Face(0,5,4),
 		Face(1,2,6), Face(1,6,5), Face(2,3,7), Face(2,7,6), Face(3,0,4), Face(3,4,7)};
 	return result;
@@ -68,9 +78,32 @@ bool Near(double left, double right, double tolerance = 2.0e-12)
 {
 	return std::abs(left-right) <= tolerance*std::max({1.0, std::abs(left), std::abs(right)});
 }
+bool MomentNear(double left, double right, std::size_t operations)
+{
+	const double scale = std::max(std::numeric_limits<double>::min(), std::abs(left)+std::abs(right));
+	const double tolerance = 64.0*std::numeric_limits<double>::epsilon()
+		*(1.0+std::log2(static_cast<double>(operations)+1.0))*scale;
+	return std::abs(left-right) <= tolerance;
+}
 template <class Function> void Reject(Function&& function)
 {
 	bool rejected = false; try { function(); } catch (const std::exception&) { rejected = true; } assert(rejected);
+}
+template <class Function> void RejectWithMessage(Function&& function, const char* message)
+{
+	bool rejected = false;
+	try { function(); }
+	catch (const std::exception& error) { rejected = std::string(error.what()).find(message) != std::string::npos; }
+	assert(rejected);
+}
+std::size_t CompactRuleCapacityBytes(const iga::CompactCutCellVolumeRule& rule)
+{
+	assert(rule.certified_blocks.capacity() <= std::numeric_limits<std::size_t>::max()/sizeof(iga::CompactCutCellVolumeBlock));
+	assert(rule.sample_leaves.capacity() <= std::numeric_limits<std::size_t>::max()/sizeof(iga::CompactCutCellVolumeSampleLeaf));
+	const std::size_t block_bytes = rule.certified_blocks.capacity()*sizeof(iga::CompactCutCellVolumeBlock);
+	const std::size_t sample_bytes = rule.sample_leaves.capacity()*sizeof(iga::CompactCutCellVolumeSampleLeaf);
+	assert(sample_bytes <= std::numeric_limits<std::size_t>::max()-block_bytes);
+	return block_bytes+sample_bytes;
 }
 double Moment(const iga::VolumeQuadratureRule& rule, int x, int y, int z)
 {
@@ -83,6 +116,10 @@ double WeightSum(const iga::VolumeQuadratureRule& rule)
 	double result = 0.0;
 	for (const auto& point : rule.Points()) result += point.weight;
 	return result;
+}
+double CompactMoment(const iga::CompactCutCellVolumeRule& rule, int x, int y, int z)
+{
+	return iga::CompactCutCellVolumeMoment(rule, x, y, z);
 }
 double PhysicalWeightSum(const iga::Element& element, const iga::VolumeQuadratureRule& rule)
 {
@@ -100,6 +137,18 @@ void RequireSameReferenceRule(const iga::CutCellVolumeQuadratureCatalog& first,
 	for (std::size_t i = 0; i < left.rule.Points().size(); ++i)
 		assert(left.rule.Points()[i].parametric == right.rule.Points()[i].parametric
 			&& left.rule.Points()[i].weight == right.rule.Points()[i].weight);
+}
+void RequireSameCompactRule(const iga::CompactCutCellVolumeRule& left, const iga::CompactCutCellVolumeRule& right)
+{
+	assert(left.max_depth == right.max_depth);
+	assert(left.certified_blocks.size() == right.certified_blocks.size());
+	assert(left.sample_leaves.size() == right.sample_leaves.size());
+	for (std::size_t i = 0; i < left.certified_blocks.size(); ++i)
+		assert(left.certified_blocks[i].lower == right.certified_blocks[i].lower
+			&& left.certified_blocks[i].upper == right.certified_blocks[i].upper);
+	for (std::size_t i = 0; i < left.sample_leaves.size(); ++i)
+		assert(left.sample_leaves[i].key == right.sample_leaves[i].key && left.sample_leaves[i].depth == right.sample_leaves[i].depth
+			&& left.sample_leaves[i].inside_mask == right.sample_leaves[i].inside_mask);
 }
 
 } // namespace
@@ -124,6 +173,20 @@ int main()
 	assert(Near(WeightSum(cube_cell.rule), cube_cell.diagnostics.estimated_reference_volume));
 	assert(cube_repeat.Cell(0).diagnostics.nodes == cube_cell.diagnostics.nodes);
 	assert(cube_repeat.Cell(0).rule.Points().size() == cube_cell.rule.Points().size());
+	const iga::CutCellVolumeQuadratureCatalog compact_cube(cube_domain, {4,10000,10000,100000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(compact_cube.Cell(0).rule.Points().empty());
+	const auto& compact_cube_rule = compact_cube.UsableCompactRule(cube_domain, 0);
+	assert(compact_cube_rule.certified_blocks.size() == 1 && compact_cube_rule.sample_leaves.empty());
+	assert(compact_cube.Cell(0).diagnostics.output_points == 0);
+	assert(compact_cube.Cell(0).diagnostics.logical_output_points == 64);
+	assert(Near(iga::CompactCutCellVolumeWeightSum(compact_cube_rule), 1.0));
+	assert(Near(CompactMoment(compact_cube_rule, 1, 1, 1), .125));
+	for (int x = 0; x <= 7; ++x) for (int y = 0; y <= 7; ++y) for (int z = 0; z <= 7; ++z)
+		assert(MomentNear(CompactMoment(compact_cube_rule, x, y, z), Moment(cube_cell.rule, x, y, z), cube_cell.rule.Points().size()));
+	Reject([&] { compact_cube.UsableRule(cube_domain, 0); });
+	Reject([&] { cube.UsableCompactRule(cube_domain, 0); });
+	compact_cube.ValidateUsableCompactRule(cube_domain, 0);
 
 	const auto inner_domain = Domain(Cube(.25, .75), root);
 	const iga::CutCellVolumeQuadratureCatalog inner(inner_domain, iga::OctreeCutQuadratureOptions{5,500000,500000,3000000});
@@ -133,6 +196,44 @@ int main()
 	assert(Near(Moment(inner.Cell(0).rule, 2, 0, 0), 13.0/384.0));
 	assert(Near(Moment(inner.Cell(0).rule, 1, 1, 1), 1.0/64.0));
 	assert(Near(WeightSum(inner.Cell(0).rule), inner.Cell(0).diagnostics.estimated_reference_volume));
+	const iga::CutCellVolumeQuadratureCatalog compact_inner(inner_domain, iga::OctreeCutQuadratureOptions{5,500000,500000,3000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	const auto& compact_inner_rule = compact_inner.UsableCompactRule(inner_domain, 0);
+	assert(compact_inner_rule.certified_blocks.size() == 1 && compact_inner_rule.sample_leaves.empty());
+	assert(Near(iga::CompactCutCellVolumeWeightSum(compact_inner_rule), 1.0/8.0));
+	for (int x = 0; x <= 7; ++x) for (int y = 0; y <= 7; ++y) for (int z = 0; z <= 7; ++z)
+		assert(MomentNear(CompactMoment(compact_inner_rule, x, y, z), Moment(inner.Cell(0).rule, x, y, z),
+			compact_inner_rule.certified_blocks.size()*64+compact_inner_rule.sample_leaves.size()*64));
+	// The dyadic inner cube appends eight full children, then coalesces them to
+	// one block.  Its diagnostics retain monotone work and deterministic planned
+	// capacity accounting rather than reporting packed size or allocator bytes.
+	const auto& inner_diag = compact_inner.Cell(0).diagnostics;
+	const std::size_t inner_records = compact_inner_rule.certified_blocks.size()+compact_inner_rule.sample_leaves.size();
+	assert(inner_diag.record_attempts > 1 && inner_diag.record_attempts > inner_records);
+	assert(inner_diag.observed_retained_bytes >= CompactRuleCapacityBytes(compact_inner_rule));
+	const iga::OctreeCutQuadratureOptions exact_inner_caps{5,500000,500000,3000000,
+		inner_diag.record_attempts,inner_diag.retained_bytes,inner_diag.logical_output_points};
+	const iga::CutCellVolumeQuadratureCatalog exact_inner(inner_domain, exact_inner_caps,
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(exact_inner.Cell(0).diagnostics.record_attempts == inner_diag.record_attempts);
+	assert(exact_inner.Cell(0).diagnostics.retained_bytes == inner_diag.retained_bytes);
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog bad(inner_domain,
+		iga::OctreeCutQuadratureOptions{5,500000,500000,3000000,inner_diag.record_attempts-1,
+			inner_diag.retained_bytes,inner_diag.logical_output_points}, iga::CutCellVolumeQuadratureStorageMode::Compact); },
+		"record cap");
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog bad(inner_domain,
+		iga::OctreeCutQuadratureOptions{5,500000,500000,3000000,inner_diag.record_attempts,
+			inner_diag.retained_bytes-1,inner_diag.logical_output_points}, iga::CutCellVolumeQuadratureStorageMode::Compact); },
+		"retained byte cap");
+
+#ifdef IGA_EXACT_DYADIC_TESTING
+	// This calls the same helper as recursive uniform-subtree collapse: eight
+	// speculative child records roll back before the parent record is appended.
+	const auto rollback_probe = iga::CutCellVolumeQuadratureCatalog::CompactRollbackProbe(9);
+	assert(rollback_probe.record_attempts == 9 && rollback_probe.rolled_back_records == 8
+		&& rollback_probe.certified_blocks == 1);
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog::CompactRollbackProbe(8); }, "record cap");
+#endif
 
 	const iga::CubicCartesianGridSpec six{{{0,0,0}}, {{1,1,1}}, {{6,6,6}}};
 	const auto mixed_domain = Domain(Cube(.25, .75), six);
@@ -178,9 +279,38 @@ int main()
 	assert(final_error < first_error && final_moment_error < first_moment_error);
 	const auto tetra_domain = Domain(Tetrahedron(), root);
 	const iga::CutCellVolumeQuadratureCatalog tetra_reference(tetra_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000});
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra(tetra_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(Near(compact_tetra.Cell(0).diagnostics.lower_reference_volume, tetra_reference.Cell(0).diagnostics.lower_reference_volume));
+	assert(Near(compact_tetra.Cell(0).diagnostics.upper_reference_volume, tetra_reference.Cell(0).diagnostics.upper_reference_volume));
+	assert(Near(compact_tetra.Cell(0).diagnostics.estimated_reference_volume, tetra_reference.Cell(0).diagnostics.estimated_reference_volume));
+	for (int x = 0; x <= 7; ++x) for (int y = 0; y <= 7; ++y) for (int z = 0; z <= 7; ++z)
+		assert(MomentNear(CompactMoment(compact_tetra.UsableCompactRule(tetra_domain, 0), x, y, z), Moment(tetra_reference.Cell(0).rule, x, y, z),
+			tetra_reference.Cell(0).rule.Points().size()));
+	compact_tetra.ValidateUsableCompactRule(tetra_domain, 0);
+	// At depth zero no certified block exists for the oblique tetrahedron.  The
+	// compact mask must consequently preserve the expanded qx-fast emission
+	// sequence bit-for-bit, rather than merely agreeing in volume.
+	const iga::CutCellVolumeQuadratureCatalog tetra_zero(tetra_domain, {0,100,100,10000});
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra_zero(tetra_domain, {0,100,100,10000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(compact_tetra_zero.Cell(0).compact_rule.certified_blocks.empty());
+	std::size_t zero_point = 0;
+	iga::ForEachVolumePoint(compact_tetra_zero.UsableCompactRule(tetra_domain, 0), [&](const iga::VolumeQuadraturePoint& point) {
+		assert(point.parametric == tetra_zero.Cell(0).rule.Points()[zero_point].parametric
+			&& point.weight == tetra_zero.Cell(0).rule.Points()[zero_point].weight); ++zero_point;
+	});
+	assert(zero_point == tetra_zero.Cell(0).rule.Points().size());
+	Reject([&] { iga::CutCellVolumeQuadratureCatalog bad(tetra_domain,
+		iga::OctreeCutQuadratureOptions{1,1,10000,10000}, iga::CutCellVolumeQuadratureStorageMode::Compact); });
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra_repeat(tetra_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	RequireSameCompactRule(compact_tetra.UsableCompactRule(tetra_domain, 0), compact_tetra_repeat.UsableCompactRule(tetra_domain, 0));
 	const iga::CutCellVolumeQuadratureCatalog tetra_repeat(tetra_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000});
 	const auto tetra_permuted_domain = Domain(PermuteTetrahedron(), root);
 	const iga::CutCellVolumeQuadratureCatalog tetra_permuted(tetra_permuted_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000});
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra_permuted(tetra_permuted_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
 	RequireSameReferenceRule(tetra_reference, tetra_repeat);
 	RequireSameReferenceRule(tetra_reference, tetra_permuted);
 	assert(tetra_reference.SurfaceCanonicalHash() == tetra_permuted.SurfaceCanonicalHash());
@@ -190,8 +320,15 @@ int main()
 	const iga::CubicCartesianGridSpec tetra_scaled_grid{{{0,0,0}}, {{2,2,2}}, {{1,1,1}}};
 	const auto tetra_scaled_domain = Domain(Affine(Tetrahedron(), std::array<double,3>{{0,0,0}}, std::array<double,3>{{2,2,2}}), tetra_scaled_grid);
 	const iga::CutCellVolumeQuadratureCatalog tetra_scaled(tetra_scaled_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000});
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra_translated(tetra_translated_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	const iga::CutCellVolumeQuadratureCatalog compact_tetra_scaled(tetra_scaled_domain, iga::OctreeCutQuadratureOptions{5,200000,200000,2000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
 	RequireSameReferenceRule(tetra_reference, tetra_translated);
 	RequireSameReferenceRule(tetra_reference, tetra_scaled);
+	RequireSameCompactRule(compact_tetra.UsableCompactRule(tetra_domain, 0), compact_tetra_permuted.UsableCompactRule(tetra_permuted_domain, 0));
+	RequireSameCompactRule(compact_tetra.UsableCompactRule(tetra_domain, 0), compact_tetra_translated.UsableCompactRule(tetra_translated_domain, 0));
+	RequireSameCompactRule(compact_tetra.UsableCompactRule(tetra_domain, 0), compact_tetra_scaled.UsableCompactRule(tetra_scaled_domain, 0));
 	const auto& tetra_diagnostics = tetra_reference.Cell(0).diagnostics;
 	const auto& tetra_translated_diagnostics = tetra_translated.Cell(0).diagnostics;
 	const auto& tetra_scaled_diagnostics = tetra_scaled.Cell(0).diagnostics;
@@ -208,6 +345,45 @@ int main()
 	for (const auto& point : tetra_anisotropic.Cell(0).rule.Points())
 		assert(tetra_anisotropic_domain.SurfaceIndex().LocatePoint(iga::EvaluateElementGeometry(anisotropic_element, point.parametric).physical) == iga::PointLocation::Inside);
 	assert(Near(PhysicalWeightSum(anisotropic_element, tetra_anisotropic.Cell(0).rule), tetra_anisotropic.Cell(0).diagnostics.estimated_physical_volume));
+
+	// Genuine oblique cut rules at the closure depths retain records, never an
+	// expanded point vector.  Their certified/unresolved brackets enclose the
+	// analytical tetrahedron volume and contract with refinement.
+	double oblique_previous_width = std::numeric_limits<double>::infinity();
+	for (const std::uint32_t depth : {7u, 8u}) {
+		const iga::OctreeCutQuadratureOptions oblique_options{depth,3000000,1500000,1,1000000,64u*1024u*1024u,64u*1024u*1024u};
+		const iga::CutCellVolumeQuadratureCatalog oblique(tetra_domain, oblique_options,
+			iga::CutCellVolumeQuadratureStorageMode::Compact);
+		const auto& d = oblique.Cell(0).diagnostics;
+		assert(d.lower_reference_volume <= 1.0/6.0 && d.upper_reference_volume >= 1.0/6.0);
+		const double width = d.upper_reference_volume-d.lower_reference_volume;
+		assert(width <= oblique_previous_width);
+		if (oblique_previous_width != std::numeric_limits<double>::infinity() && oblique_previous_width > 0.0) assert(width < oblique_previous_width);
+		assert(d.retained_bytes <= oblique_options.max_retained_bytes && d.logical_output_points <= oblique_options.max_logical_points);
+		oblique.ValidateUsableCompactRule(tetra_domain, 0);
+		oblique_previous_width = width;
+	}
+
+	// Fully dyadic faces isolate the central 3^3-grid sliver.  Every m has a
+	// known central fraction 2^-m and must remain compact at depth eight.
+	const iga::CubicCartesianGridSpec sliver_grid{{{0,0,0}}, {{3,3,3}}, {{3,3,3}}};
+	for (std::uint32_t m = 1; m <= 8; ++m) {
+		const double epsilon = std::ldexp(1.0, -static_cast<int>(m));
+		const auto sliver_domain = Domain(Box({{0.125,0.125,0.125}}, {{2.0+epsilon,2.875,2.875}}), sliver_grid);
+		const iga::OctreeCutQuadratureOptions sliver_options{8};
+		const iga::CutCellVolumeQuadratureCatalog sliver(sliver_domain, sliver_options,
+			iga::CutCellVolumeQuadratureStorageMode::Compact);
+		const auto& central = sliver.Cell(14); // x=2, y=z=1: the intended x sliver.
+		assert(Near(central.diagnostics.estimated_reference_volume, epsilon, 4.0e-12));
+		assert(central.diagnostics.retained_bytes <= sliver_options.max_retained_bytes
+			&& central.diagnostics.logical_output_points <= sliver_options.max_logical_points);
+		assert(central.diagnostics.certified_blocks <= 16 && central.diagnostics.logical_output_points < 4096);
+		if (m == 8) {
+			const iga::CutCellVolumeQuadratureCatalog repeat(sliver_domain, sliver_options,
+				iga::CutCellVolumeQuadratureStorageMode::Compact);
+			RequireSameCompactRule(sliver.UsableCompactRule(sliver_domain, 14), repeat.UsableCompactRule(sliver_domain, 14));
+		}
+	}
 
 	const iga::CubicCartesianGridSpec twice{{{0,0,0}}, {{2,2,2}}, {{1,1,1}}};
 	const auto scaled_domain = Domain(Cube(0.0, 2.0), twice);
