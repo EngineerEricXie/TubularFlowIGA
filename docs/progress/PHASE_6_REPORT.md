@@ -110,3 +110,52 @@ prepare-failure recovery; exact adapter/backend rollback, prepare, finalize,
 and abort counter deltas; stable idempotent finalization; invalid transitions;
 traction-target forwarding, nontrivial traction output, and gauge suppression;
 output-subset visibility; and registry-kind matching.
+
+## PR6.4 — Production immersed-case factory integration
+
+Status: complete (validated 2026-09-02).
+
+`ImmersedFlowCase` is itself the registry-owned `CoupledDomainRuntime` and
+owns the production serial immersed dependency chain in its required lifetime
+order: classified closed VTP surface, compact cut-cell volume quadrature,
+surface quadrature, ghost catalog, static runtime, then the internal
+`ThreeDImmersedFlowDomain` adapter.  Thus the adapter never borrows a runtime
+owned by a separate container.  It reads a contained
+`simulation_config.json` and `immersed_geometry.json`, rejects non-contained
+assets, requires MPI size one, and accepts only `steady` backend
+configurations for flow-only 3D Navier--Stokes.  Coupling still advances
+quasi-static 3D load samples; this is not a `quasi_static` backend config
+value.  Transport/species, body-fitted
+mesh/profile/gauge assumptions, total pressure, and outlet models are
+rejected.  The loader requires the VTP reader's closed, connected surface and
+canonical hash, exact graph/runtime port ID-label-control agreement, and an
+exact label partition between Nitsche walls and graph ports.
+
+All JSON-to-integral conversions are finite, integral, and target-range
+checked before conversion (including grid, quadrature/ghost limits,
+`max_depth`, and PETSc nonlinear/KSP iteration caps).  Runtime density and
+viscosity have one canonical source: the Navier--Stokes system configuration;
+geometry-side physics overrides are rejected.  Floating-point manifest fields
+are emitted with precision 17.
+
+The generic multidomain runner now creates immersed cases through this factory
+while preserving the existing body-fitted preflight and adapter path.  The
+coupling executor is unchanged.  Balance checks derive 3D participation from
+the graph kind/dimension and accepted `PortState` values rather than
+body-fitted-native maps.  The generic binding manifest records immersed kind,
+surface hash, Cartesian grid, and compact volume/surface/ghost catalog audit.
+Schema-v6 transport remains an explicit rejected gate for immersed domains.
+
+Focused validation from `solvers/coupling` used system PETSc 3.15
+(`PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`):
+
+- `make PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real immersed_case_factory_test multidomain_config_test pressure_flow_executor_test iga_multidomain_flow multidomain_flow_smoke_test` — succeeded; all five targets were current.
+- `./immersed_case_factory_test && ./multidomain_config_test && ./pressure_flow_executor_test && ./multidomain_flow_smoke_test` — succeeded (exit status 0).  The final smoke command invokes `iga_multidomain_flow` from its executable directory, exercising the generic immersed graph there.
+- `git diff --check` — succeeded with no whitespace errors.
+
+The factory fixture uses a tiny closed labelled VTP and covers registry-owned
+lifetime binding, contained paths, topology, transport/species, outlet,
+profile/gauge, total-pressure, grid/quadrature/ghost/runtime range, physics
+override, and exact port ID/label/control negatives.  The generic-runner smoke
+also executes an immersed fixture and audits kind, hash, grid, and catalogs;
+the existing body-fitted generic smoke remains in that target.

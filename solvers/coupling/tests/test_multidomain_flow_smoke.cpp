@@ -30,6 +30,7 @@ struct SpeciesResidualMaxima {
 };
 
 SpeciesResidualMaxima species_residual_maxima;
+fs::path executable_directory;
 
 void WriteOneDDomain(std::ostream& output, const std::string& id,
 	const std::string& case_directory, bool coupled_root, bool coupled_terminal,
@@ -130,6 +131,47 @@ void WriteMultiIslandGraph(const fs::path& root, const std::string& execution,
 	}
 	output << "  ]\n}\n";
 	if (!output) throw std::runtime_error("cannot write multi-island graph");
+}
+
+void WriteImmersedCase(const fs::path& directory)
+{
+	std::ofstream surface(directory/"surface.vtp");
+	surface << R"xml(<?xml version="1.0"?><VTKFile type="PolyData" version="1.0" byte_order="LittleEndian"><PolyData><Piece NumberOfPoints="8" NumberOfPolys="12"><Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">.1 .1 .1 .9 .1 .1 .9 .9 .1 .1 .9 .1 .1 .1 .9 .9 .1 .9 .9 .9 .9 .1 .9 .9</DataArray></Points><Polys><DataArray type="Int32" Name="connectivity" format="ascii">0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7</DataArray><DataArray type="Int32" Name="offsets" format="ascii">3 6 9 12 15 18 21 24 27 30 33 36</DataArray></Polys><CellData Scalars="boundary_id"><DataArray type="UInt32" Name="boundary_id" format="ascii">1 1 2 2 0 0 0 0 0 0 0 0</DataArray></CellData></Piece></PolyData></VTKFile>)xml";
+	std::ofstream config(directory/"simulation_config.json");
+	config << "{\"schema_version\":3,\"dimension\":\"3d\",\"fields\":[{\"name\":\"velocity\",\"kind\":\"vector3\"},{\"name\":\"pressure\",\"kind\":\"pressure\"}],\"time\":{\"dt\":" << Number(kDt) << ",\"steps\":" << kSteps << "},\"equation_systems\":[{\"name\":\"flow\",\"kind\":\"navier_stokes\",\"unknowns\":[\"velocity\",\"pressure\"],\"viscosity\":" << Number(kViscosity) << ",\"density\":" << Number(kDensity) << ",\"time_integration\":\"steady\"}],\"boundaries\":[]}";
+	std::ofstream geometry(directory/"immersed_geometry.json");
+	geometry << R"json({"surface":"surface.vtp","grid":{"lower_m":[0.012345678901234567,0.012345678901234567,0.012345678901234567],"upper_m":[0.98765432109876543,0.98765432109876543,0.98765432109876543],"cells":[3,3,3]},"volume_quadrature":{"storage":"compact","max_depth":4,"max_nodes":500000,"max_leaves":500000,"max_points":3000000,"max_records":3000000,"max_retained_bytes":30000000,"max_logical_points":3000000},"surface_quadrature":{"max_candidates":500000,"max_fragments":500000,"max_points":3000000,"max_exact_limbs":512},"ghost_penalty":{"gamma_u":0.01,"gamma_p":0.01,"max_faces":500000,"max_quadrature_points":3000000,"max_trace_entries":128},"wall_labels":[0],"runtime":{"lu_pivot_shift":1e-12,"ports":[{"id":"inlet","boundary_label":1,"control_mode":"flow_rate","value":-0.001},{"id":"outlet","boundary_label":2,"control_mode":"pressure","value":0}]}})json";
+	if (!surface || !config || !geometry) throw std::runtime_error("cannot write immersed fixture");
+}
+
+void WriteImmersedGraph(const fs::path& root)
+{
+	std::ofstream output(root/"simulation_config.json", std::ios::trunc);
+	output << "{\"schema_version\":5,\"time\":{\"dt\":" << Number(kDt)
+		<< ",\"steps\":" << kSteps << "},\"start_domain\":\"source\",\"execution\":{\"kind\":\"explicit\",\"maximum_iterations\":1,\"pressure_relative_tolerance\":1e-6,\"pressure_reference_pa\":1,\"flow_relative_tolerance\":1e-10,\"relaxation_factor\":0.5,\"minimum_relaxation\":0.05,\"maximum_relaxation\":0.999},\"domains\":[";
+	WriteOneDDomain(output, "source", "immersed_source", false, true, true);
+	output << "{\"id\":\"immersed\",\"dimension\":\"3d\",\"kind\":\"three_d_immersed_flow\",\"case\":\"immersed\",\"ports\":[{\"id\":\"inlet\",\"locator_kind\":\"boundary_label\",\"locator\":\"1\",\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"flow_rate\"]},{\"id\":\"outlet\",\"locator_kind\":\"boundary_label\",\"locator\":\"2\",\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"mean_pressure\"]}]},";
+	WriteOneDDomain(output, "sink", "immersed_sink", true, false, false);
+	output << "],\"couplings\":[{\"id\":\"in\",\"a\":{\"domain\":\"source\",\"port\":\"terminal\"},\"b\":{\"domain\":\"immersed\",\"port\":\"inlet\"},\"mode\":\"pressure_flow\",\"initial_pressure_pa\":0},{\"id\":\"out\",\"a\":{\"domain\":\"immersed\",\"port\":\"outlet\"},\"b\":{\"domain\":\"sink\",\"port\":\"root\"},\"mode\":\"pressure_flow\",\"initial_pressure_pa\":0}]}";
+	if (!output) throw std::runtime_error("cannot write immersed graph");
+}
+
+void ValidateImmersedManifest(const fs::path& output)
+{
+	const std::string manifest = ReadFile(output/"graph_binding_manifest.json");
+	const std::string hash_key = "\"surface_hash\":\"";
+	const auto hash_begin = manifest.find(hash_key);
+	if (hash_begin == std::string::npos)
+		throw std::runtime_error("immersed manifest is missing the surface hash");
+	const auto hash_end = manifest.find('"', hash_begin+hash_key.size());
+	if (hash_end == std::string::npos || hash_end-(hash_begin+hash_key.size()) != 64)
+		throw std::runtime_error("immersed manifest surface hash is invalid");
+	for (const auto& text : {"\"kind\":\"three_d_immersed_flow\"",
+		"\"grid\":{\"lower_m\":[0.012345678901234567,0.012345678901234567,0.012345678901234567],\"upper_m\":[0.98765432109876543,0.98765432109876543,0.98765432109876543],\"cells\":[3,3,3]}",
+		"\"catalog_audit\":{\"active_cells\":", "\"volume_points\":",
+		"\"surface_points\":", "\"ghost_faces\":"})
+		if (manifest.find(text) == std::string::npos)
+			throw std::runtime_error("immersed manifest audit is incomplete");
 }
 
 void WriteOneDTransportCase(const fs::path& directory, double inlet_flow,
@@ -350,7 +392,7 @@ int RunMultidomain(const fs::path& root, const fs::path& output,
 		: (launcher.empty()
 		? " -ksp_type preonly -pc_type lu"
 		: " -ksp_type gmres -pc_type bjacobi -sub_pc_type lu -ksp_rtol 1e-12");
-	return std::system((prefix+launcher+"./iga_multidomain_flow --graph-case "+Quote(root)
+	return std::system((prefix+launcher+Quote(executable_directory/"iga_multidomain_flow")+" --graph-case "+Quote(root)
 		+" --output-dir "+Quote(output)+linear_solver+">"
 		+Quote(log)+" 2>&1").c_str());
 }
@@ -358,7 +400,7 @@ int RunMultidomain(const fs::path& root, const fs::path& output,
 int RunBifurcation(const fs::path& root, const fs::path& output)
 {
 	const auto log = root/(output.filename().string()+".log");
-	return std::system(("./iga_1d_3d_bifurcation --graph-case "+Quote(root)
+	return std::system((Quote(executable_directory/"iga_1d_3d_bifurcation")+" --graph-case "+Quote(root)
 		+" --output-dir "+Quote(output)+" -ksp_type preonly -pc_type lu >"
 		+Quote(log)+" 2>&1").c_str());
 }
@@ -557,15 +599,25 @@ void ValidateSpeciesMultidomain(const fs::path& output)
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
 	try {
+		if (argc < 1) throw std::runtime_error("missing test executable path");
+		executable_directory = fs::absolute(argv[0]).parent_path();
 		const auto root = fs::temp_directory_path()
 			/("tubularflowiga_multidomain_"+std::to_string(static_cast<long long>(getpid())));
 		for (const auto& directory : {"three_a", "three_b", "source", "bridge",
 			"leaf_a", "leaf_b", "leaf_c", "junction", "species_source",
-			"species_leaf_a", "species_leaf_b"})
+			"species_leaf_a", "species_leaf_b", "immersed", "immersed_source",
+			"immersed_sink"})
 			fs::create_directories(root/directory);
+		WriteOneDCase(root/"immersed_source", 1.0e-3);
+		WriteOneDCase(root/"immersed_sink", 1.0e-3);
+		WriteImmersedCase(root/"immersed");
+		WriteImmersedGraph(root);
+		if (RunMultidomain(root, root/"immersed_one") != 0)
+			throw std::runtime_error("one-rank generic immersed multidomain run failed");
+		ValidateImmersedManifest(root/"immersed_one");
 		WriteThreeDCase(root/"three_a");
 		WriteThreeDCase(root/"three_b");
 		WriteOneDCase(root/"source", 1.0e-3);

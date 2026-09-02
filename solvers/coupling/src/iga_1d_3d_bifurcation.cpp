@@ -3,6 +3,7 @@
 #include "DomainRuntimeRegistry.hpp"
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
+#include "ImmersedFlowCase.hpp"
 #include "OneDFlowDomainAdapter.hpp"
 #include "OneDImplicit.hpp"
 #include "OneDRuntime.hpp"
@@ -10,6 +11,7 @@
 #include "SpeciesPressureFlowComponentExecutor.hpp"
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "ThreeDBodyFittedFlowTransportDomainAdapter.hpp"
+#include "ThreeDImmersedFlowDomain.hpp"
 #include "ThreeDFlowCoupling.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -218,6 +220,26 @@ struct NativeThreeD {
 	std::unique_ptr<iga::TransientTransportRuntime> transport_runtime;
 	std::optional<iga::CompiledLinearSystem> transport_system;
 };
+
+// The immersed production owner is itself a CoupledDomainRuntime and retains
+// every catalog, runtime, and internal adapter needed by the registry.
+using NativeImmersed = iga::ImmersedFlowCase;
+
+std::size_t CountThreeDDomains(const iga::SimulationGraph& graph)
+{
+	std::size_t count = 0;
+	for (const auto& domain : graph.Domains())
+		if (iga::DomainDimensionOf(domain.second.kind) == 3) ++count;
+	return count;
+}
+
+const char* ManifestDomainKind(iga::DomainKind kind)
+{
+	if (kind == iga::DomainKind::OneDFlow) return "network_flow";
+	if (kind == iga::DomainKind::ThreeDBodyFittedFlow) return "body_fitted_iga_flow";
+	if (kind == iga::DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
+	throw std::runtime_error("unknown domain kind in output manifest");
+}
 
 void RequireOneDStagedTransport(const iga::OneDConfiguration& configuration,
 	const std::map<std::string, std::string>& bindings)
@@ -431,7 +453,7 @@ void WriteOutputs(const fs::path& directory,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
 	const std::optional<iga::OneDThreeDBifurcationDefinition>& bifurcation,
 	const std::map<std::string, NativeOneD>& one_d,
-	const std::map<std::string, std::unique_ptr<NativeThreeD>>& three_d,
+	const std::map<std::string, const NativeImmersed*>& immersed,
 	const std::vector<AcceptedStep>& steps)
 {
 	if (!fs::create_directories(directory))
@@ -507,6 +529,7 @@ void WriteOutputs(const fs::path& directory,
 		throw std::runtime_error("cannot finalize bifurcation long-form output");
 	std::ofstream marker(directory/"graph_binding_manifest.json.tmp");
 	if (!marker) throw std::runtime_error("cannot create bifurcation completion marker");
+	marker << std::setprecision(17);
 	if (bifurcation) {
 		marker << "{\n  \"schema_version\": 5,\n  \"benchmark\": \"one_d_three_d_bifurcation\",\n"
 			<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id) << "\",\n"
@@ -519,18 +542,35 @@ void WriteOutputs(const fs::path& directory,
 			<< "  \"start_domain\": \"" << JsonEscape(configuration.start_domain_id) << "\",\n"
 			<< "  \"execution\": \"" << ExecutionName(configuration.execution.kind) << "\",\n"
 			<< "  \"domain_count\": " << configuration.graph.Domains().size() << ",\n"
-			<< "  \"three_d_domain_count\": " << three_d.size() << ",\n"
+			<< "  \"three_d_domain_count\": " << CountThreeDDomains(configuration.graph) << ",\n"
 			<< "  \"completed_steps\": " << steps.size() << ",\n  \"domains\": [\n";
 		std::size_t domain_index = 0;
 		for (const auto& domain : configuration.graph.Domains()) {
 			const auto& resolved = assets.at(domain.first);
 			marker << "    {\"id\":\"" << JsonEscape(domain.first) << "\",\"kind\":\""
-				<< (domain.second.kind == iga::DomainKind::OneDFlow
-					? "network_flow" : "body_fitted_iga_flow") << "\",\"case\":\""
+				<< ManifestDomainKind(domain.second.kind) << "\",\"case\":\""
 				<< JsonEscape(resolved.case_directory.generic_string()) << "\"";
 			if (domain.second.kind == iga::DomainKind::ThreeDBodyFittedFlow)
 				marker << ",\"database\":\""
-					<< JsonEscape(resolved.database.generic_string()) << "\"";
+				<< JsonEscape(resolved.database.generic_string()) << "\"";
+			if (domain.second.kind == iga::DomainKind::ThreeDImmersedFlow) {
+				const auto& native = *immersed.at(domain.first);
+				const auto& grid = native.Grid();
+				const auto& classification = native.ClassificationDiagnostics();
+				const auto& volume = native.VolumeDiagnostics();
+				const auto& surface = native.SurfaceDiagnostics();
+				const auto& ghost = native.GhostDiagnostics();
+				marker << ",\"surface_hash\":\"" << JsonEscape(native.SurfaceHash())
+					<< "\",\"grid\":{\"lower_m\":[" << grid.lower_m[0] << ','
+					<< grid.lower_m[1] << ',' << grid.lower_m[2] << "],\"upper_m\":["
+					<< grid.upper_m[0] << ',' << grid.upper_m[1] << ',' << grid.upper_m[2]
+					<< "],\"cells\":[" << grid.cells[0] << ',' << grid.cells[1] << ','
+					<< grid.cells[2] << "]},\"catalog_audit\":{\"active_cells\":"
+					<< classification.inside_count+classification.cut_count
+					<< ",\"volume_points\":" << volume.output_points
+					<< ",\"surface_points\":" << surface.output_points
+					<< ",\"ghost_faces\":" << ghost.selected_faces << '}';
+			}
 			marker << '}'
 				<< (++domain_index == configuration.graph.Domains().size() ? "\n" : ",\n");
 		}
@@ -652,6 +692,7 @@ void WriteSpeciesOutputs(const fs::path& directory,
 		throw std::runtime_error("cannot finalize schema-v6 multidomain long-form output");
 	std::ofstream marker(directory/"graph_binding_manifest.json.tmp");
 	if (!marker) throw std::runtime_error("cannot create schema-v6 completion marker");
+	marker << std::setprecision(17);
 	marker << "{\n  \"schema_version\": " << configuration.schema_version
 		<< ",\n  \"benchmark\": \"acyclic_multidomain_flow\",\n"
 		<< "  \"species_mode\": true,\n  \"graph_root\": \""
@@ -717,7 +758,9 @@ int main(int argc, char** argv)
 	PetscInitialize(&argc, &argv, nullptr,
 		"TubularFlowIGA schema-v5 1D--3D bifurcation coupling\n");
 	int rank = 0;
+	int mpi_size = 1;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+	MPI_Comm_size(PETSC_COMM_WORLD, &mpi_size);
 	int status = 0;
 	try {
 		const auto options = ParseOptions(argc, argv);
@@ -727,6 +770,8 @@ int main(int argc, char** argv)
 		std::map<std::string, iga::ResolvedGraphDomainAssets> assets;
 		std::map<std::string, NativeOneD> one_d;
 		std::map<std::string, std::unique_ptr<NativeThreeD>> three_d;
+		std::map<std::string, std::unique_ptr<NativeImmersed>> immersed;
+		std::map<std::string, const NativeImmersed*> immersed_audit;
 		fs::path graph_root;
 		std::string local_error;
 		try {
@@ -791,12 +836,30 @@ int main(int argc, char** argv)
 					three_d.emplace(domain_id, BuildThreeDPreflight(
 						configuration, plan, assets, domain_id, rank,
 						configuration.schema_version == 6));
+			for (const auto& domain_id : plan.domain_order)
+				if (configuration.graph.Domain(domain_id).kind
+					== iga::DomainKind::ThreeDImmersedFlow) {
+					if (configuration.schema_version == 6)
+						throw std::runtime_error(
+							"schema-v6 transport is unsupported by the immersed flow backend");
+					immersed.emplace(domain_id, iga::ImmersedFlowCase::Load(
+						assets.at(domain_id).case_directory, domain_id,
+						configuration.graph.Domain(domain_id).ports, mpi_size));
+				}
 			for (const auto& volume : three_d)
 				for (const auto& line : one_d)
 					if (line.second.runtime->FlowSystem().density
 							!= iga::FirstNavierStokesSystem(volume.second->configuration).density
 						|| line.second.runtime->FlowSystem().dynamic_viscosity
 							!= iga::FirstNavierStokesSystem(volume.second->configuration).viscosity)
+						throw std::runtime_error(
+							"multidomain flow requires identical density and viscosity");
+			for (const auto& volume : immersed)
+				for (const auto& line : one_d)
+					if (line.second.runtime->FlowSystem().density
+							!= volume.second->RuntimeParameters().density
+						|| line.second.runtime->FlowSystem().dynamic_viscosity
+							!= volume.second->RuntimeParameters().dynamic_viscosity)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
 		} catch (const std::exception& error) {
@@ -882,7 +945,7 @@ int main(int argc, char** argv)
 				else runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(domain_id,
 					*native.runtime, configuration.graph.Domain(domain_id).ports,
 					native.inlet_policy));
-			} else {
+			} else if (three_d.count(domain_id)) {
 				auto& native = *three_d.at(domain_id);
 				if (configuration.schema_version == 6) {
 					iga::ThreeDFlowTransportDomainControls species_controls;
@@ -900,6 +963,10 @@ int main(int argc, char** argv)
 					domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
 					native.configuration, native.case_directory,
 					native.reference_outward_flow_m3_s, controls));
+			} else {
+				auto native = std::move(immersed.at(domain_id));
+				immersed_audit.emplace(domain_id, native.get());
+				runtimes.push_back(std::move(native));
 			}
 		}
 		iga::DomainRuntimeRegistry registry(configuration.graph, std::move(runtimes));
@@ -925,10 +992,11 @@ int main(int argc, char** argv)
 		auto VerifyHydraulicBalance = [&](const auto& trial,
 			std::map<std::string, std::pair<double, double>>& pending_balance,
 			double& pending_mass, double& pending_external) {
-			for (const auto& volume : three_d) {
+			for (const auto& volume : configuration.graph.Domains()) {
+				if (iga::DomainDimensionOf(volume.second.kind) != 3) continue;
 				double sum = 0.0;
 				double absolute_sum = 0.0;
-				for (const auto& port : configuration.graph.Domain(volume.first).ports) {
+				for (const auto& port : volume.second.ports) {
 					const double flow = RequireValue(trial.accepted_ports.at(
 						{volume.first, port.id}).outward_flow_m3_s, "3D boundary flow");
 					sum += flow;
@@ -999,7 +1067,7 @@ int main(int argc, char** argv)
 				WriteSpeciesOutputs(options.output_directory, configuration, graph_root, assets,
 					one_d, three_d, accepted_species);
 			else WriteOutputs(options.output_directory, configuration, graph_root, assets,
-				bifurcation_holder, one_d, three_d, accepted);
+				bifurcation_holder, one_d, immersed_audit, accepted);
 		} catch (const std::exception& error) {
 			output_failed = 1;
 			output_error = error.what();
