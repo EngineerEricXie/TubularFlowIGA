@@ -95,6 +95,44 @@ int main()
 		volume.UsableRule(domain, 0));
 	assert(without_wall.system.jacobian == direct_volume.jacobian);
 	assert(without_wall.system.negative_residual == direct_volume.negative_residual);
+	// Materializing this exact compact emitted stream is an independent check of
+	// the visitor path used by global assembly; it intentionally does not compare
+	// against a separately generated expanded catalog.
+	const iga::CutCellVolumeQuadratureCatalog compact_volume(domain, {5,500000,500000,3000000},
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	std::vector<iga::VolumeQuadraturePoint> compact_points;
+	const auto& compact_rule = compact_volume.UsableCompactRule(domain, 0);
+	iga::ForEachVolumePoint(compact_rule, [&](const iga::VolumeQuadraturePoint& point) { compact_points.push_back(point); });
+	const auto compact_visitor = iga::BuildNavierStokesElementFromPoints(element, zero, {}, parameters,
+		[&compact_rule](const auto& consume) { iga::ForEachVolumePoint(compact_rule, consume); },
+		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0,0.0,0.0}}; });
+	const auto compact_materialized = iga::BuildNavierStokesElement(element, zero, {}, parameters,
+		iga::VolumeQuadratureRule(compact_points));
+	assert(compact_visitor.jacobian == compact_materialized.jacobian);
+	assert(compact_visitor.negative_residual == compact_materialized.negative_residual);
+	const auto streamed_wall = iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume,
+		surface, 0, zero, {}, parameters, {7,8}, compact_visitor, 2.0);
+	assert(streamed_wall.system.jacobian.size() == compact_visitor.jacobian.size());
+	assert(streamed_wall.system.negative_residual.size() == compact_visitor.negative_residual.size());
+	iga::NavierStokesSystem malformed = compact_visitor;
+	malformed.negative_residual.pop_back();
+	Reject([&] { iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume, surface, 0,
+		zero, {}, parameters, {7}, malformed); });
+	malformed = compact_visitor; malformed.jacobian.pop_back();
+	Reject([&] { iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume, surface, 0,
+		zero, {}, parameters, {7}, malformed); });
+	malformed = compact_visitor; malformed.negative_residual.push_back(0.0);
+	Reject([&] { iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume, surface, 0,
+		zero, {}, parameters, {7}, malformed); });
+	malformed = compact_visitor; malformed.jacobian[0] = std::numeric_limits<double>::infinity();
+	Reject([&] { iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume, surface, 0,
+		zero, {}, parameters, {7}, malformed); });
+	for (const auto bad : {iga::NavierStokesParameters{0.0, .25, 0.0},
+		iga::NavierStokesParameters{1.0, std::numeric_limits<double>::infinity(), 0.0},
+		iga::NavierStokesParameters{1.0, .25, -1.0},
+		iga::NavierStokesParameters{1.0, .25, std::numeric_limits<double>::quiet_NaN()}})
+		Reject([&] { iga::BuildImmersedNitscheWallElementFromVolumeSystem(domain, compact_volume, surface, 0,
+			zero, {}, bad, {7}, compact_visitor); });
 	const auto rigid = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
 		zero, {}, parameters, {7,8}, 2.0);
 	assert(MaxAbs(Difference(rigid.system.negative_residual, without_wall.system.negative_residual)) < 2e-13);

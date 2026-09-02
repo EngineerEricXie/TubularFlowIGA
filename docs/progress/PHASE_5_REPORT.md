@@ -2,6 +2,42 @@
 
 Status: **in progress**.
 
+## PR 5.9: serial global immersed static flow
+
+`ImmersedStaticFlowRuntime.hpp` provides a deliberately serial PETSc global
+assembly/runtime over the Phase 5 catalog APIs.  It certifies every classified
+Inside/Cut volume rule before eligibility filtering (only a usable,
+certified-empty Cut cell may be skipped), then compacts nodes used by
+positive-volume cells into sorted dense four-field rows, checks every
+cell/face mapping, and appends one pressure-gauge scalar.  Cells,
+surface cells, and ghost faces are scattered in their catalog order using only
+the existing bounded element/face blocks.  Expanded rules are consumed directly;
+Compact rules stream through `ForEachVolumePoint(UsableCompactRule(...))` and
+never form a logical-point temporary.  The Nitsche adapter accepts a supplied
+streamed volume base before adding its surface terms, and ghost residuals use a
+bounded face-local state accessor rather than a background-sized expansion.
+Cut walls require the matching,
+covered ghost catalog; mismatched bindings and uncovered cut cells fail before
+assembly.  A second deterministic lazy volume pass forms one gauge weight per
+active pressure node; the gauge is `R=[F+g lambda; g^T p]`, with positive
+matrix blocks and negative-residual signs in both pressure and gauge rows.
+The constant-pressure defect is measured before gauge insertion.
+
+The static Newton trial starts from an immutable committed vector, requires a
+finite converged PETSc KSP step, and accepts a damped update only if the
+assembled residual strictly decreases (halving through `1/128`), including the
+candidate after the final allowed Newton update.  Exceptions,
+KSP failure, and iteration/backtracking caps restore the exact committed vector;
+only `Commit()` publishes a successful trial.  Diagnostics distinguish trial
+and committed state and report active rows, volume/wall/ghost counts, gauge
+measure/defect, nonlinear/KSP status, damping, commits, and rollbacks.
+
+`NavierStokesElement.hpp` now has a backward-compatible physical body-force
+density (N/m^3) evaluator overload.  It contributes to both the weak momentum residual and
+the strong residual driving VMS/PSPG; its tangent remains zero for a
+state-independent callback.  Focused coverage is
+`make -C solvers/cpu immersed_static_flow_test PETSC_DIR=…`.
+
 ## PR 5.6: static immersed Nitsche wall
 
 `ImmersedNitscheWall.hpp` is a catalog-bound element adapter: it obtains both

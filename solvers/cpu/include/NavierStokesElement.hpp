@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 #include <vector>
 
@@ -22,6 +23,12 @@ struct NavierStokesParameters {
 	double dynamic_viscosity = 0.0;
 	double dt = 0.0;
 };
+
+// Physical body-force density per unit volume (N/m^3).  Keeping it as a
+// point evaluator makes manufactured loads and spatially varying gravity
+// unambiguous, while the zero evaluator preserves the established API.
+using NavierStokesBodyForceEvaluator = std::function<std::array<double, 3>(
+	const std::array<double, 3>& physical)>;
 
 inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_jacobian,
 	const std::array<double, 4>& state, double kinematic_viscosity, double dt,
@@ -48,10 +55,14 @@ inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_ja
 	tau_c = 1.0 / (tau_m * direction_norm);
 }
 
-inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
+// The point visitor lets cut-cell callers stream compact quadrature without
+// materializing its logical points.  The callback receives one point at a
+// time and must invoke the supplied consumer in canonical rule order.
+template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElementFromPoints(const Element& element,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
-	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature)
+	const NavierStokesParameters& parameters, PointVisitor&& visit_points,
+	const NavierStokesBodyForceEvaluator& body_force)
 {
 	if (!(parameters.density > 0.0) || !(parameters.dynamic_viscosity > 0.0) || parameters.dt < 0.0)
 		throw std::runtime_error("invalid Navier-Stokes density, dynamic viscosity, or time step");
@@ -59,18 +70,21 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 		throw std::runtime_error("Navier-Stokes nodal-state size does not match element connectivity");
 	if (parameters.dt > 0.0 && previous_nodal_state.size() != element.connectivity.size())
 		throw std::runtime_error("transient Navier-Stokes requires a matching previous nodal state");
+	if (!body_force) throw std::invalid_argument("Navier-Stokes body-force evaluator is required");
 	const auto density = parameters.density;
 	const auto viscosity = parameters.dynamic_viscosity;
 	const auto kinematic_viscosity = viscosity/density;
-	ValidateVolumeQuadratureRule(element, quadrature);
 	const auto nen = element.connectivity.size();
 	const auto ndof = 4 * nen;
 	NavierStokesSystem system{std::vector<PetscScalar>(ndof*ndof, 0.0), std::vector<PetscScalar>(ndof, 0.0)};
-	for (const auto& point : quadrature.Points()) {
+	visit_points([&](const VolumeQuadraturePoint& point) {
 				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
 					point.parametric[2], true);
 				const auto measure = point.weight*basis.raw_determinant;
 				std::array<double, 4> state{};
+				const auto force = body_force(EvaluateElementGeometry(element, point.parametric).physical);
+				for (const double value : force)
+					if (!std::isfinite(value)) throw std::runtime_error("Navier-Stokes body force is not finite");
 				std::array<double, 3> previous_velocity{};
 				double gradient[4][3]{};
 				double hessian[4][3][3]{};
@@ -99,7 +113,7 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 					const auto pressure_gradient = gradient[3][component];
 					const auto laplacian = hessian[component][0][0] + hessian[component][1][1] + hessian[component][2][2];
 					fine_velocity[component] = -tau_m * (time_derivative[component] + convection
-						+ pressure_gradient/density - kinematic_viscosity*laplacian);
+						+ pressure_gradient/density - kinematic_viscosity*laplacian-force[component]/density);
 				}
 				const auto fine_pressure = -density*tau_c
 					* (gradient[0][0] + gradient[1][1] + gradient[2][2]);
@@ -109,7 +123,7 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 					const auto& ga = basis.gradient[a];
 					std::array<double, 4> residual{};
 					for (int component = 0; component < 3; ++component) {
-						residual[component] = density*na*time_derivative[component]
+						residual[component] = density*na*time_derivative[component]-na*force[component]
 							- ga[component]*state[3] - ga[component]*fine_pressure;
 						for (int direction = 0; direction < 3; ++direction) {
 							residual[component] += viscosity * ga[direction] * (gradient[component][direction] + gradient[direction][component]);
@@ -146,8 +160,28 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 								system.jacobian[(4*a+i)*ndof + 4*b+j] += tangent[i][j]*measure;
 					}
 				}
-			}
+			});
 	return system;
+}
+
+inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature,
+	const NavierStokesBodyForceEvaluator& body_force)
+{
+	ValidateVolumeQuadratureRule(element, quadrature);
+	return BuildNavierStokesElementFromPoints(element, nodal_state, previous_nodal_state, parameters,
+		[&quadrature](const auto& consume) { for (const auto& point : quadrature.Points()) consume(point); }, body_force);
+}
+
+inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature)
+{
+	return BuildNavierStokesElement(element, nodal_state, previous_nodal_state, parameters, quadrature,
+		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0,0.0,0.0}}; });
 }
 
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,

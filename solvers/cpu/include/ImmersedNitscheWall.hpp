@@ -115,6 +115,31 @@ inline void AccumulateImmersedNitscheWallDiagnostic(double& entry, double contri
 	entry = updated;
 }
 
+inline void ValidateImmersedNitscheWallPreassembledVolumeSystem(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const NavierStokesSystem& system)
+{
+	if (!std::isfinite(parameters.density) || !(parameters.density > 0.0)
+		|| !std::isfinite(parameters.dynamic_viscosity) || !(parameters.dynamic_viscosity > 0.0)
+		|| !std::isfinite(parameters.dt) || parameters.dt < 0.0)
+		throw std::invalid_argument("immersed Nitsche wall Navier-Stokes parameters are invalid");
+	const std::size_t nen = element.connectivity.size();
+	if (nen > std::numeric_limits<std::size_t>::max()/4)
+		throw std::overflow_error("immersed Nitsche wall local degree-of-freedom count overflows");
+	const std::size_t ndof = 4*nen;
+	if (ndof != 0 && ndof > std::numeric_limits<std::size_t>::max()/ndof)
+		throw std::overflow_error("immersed Nitsche wall local Jacobian count overflows");
+	if (nodal_state.size() != nen || (parameters.dt > 0.0 && previous_nodal_state.size() != nen))
+		throw std::invalid_argument("immersed Nitsche wall preassembled state size does not match Navier-Stokes element");
+	if (system.negative_residual.size() != ndof || system.jacobian.size() != ndof*ndof)
+		throw std::invalid_argument("immersed Nitsche wall preassembled volume-system block size is invalid");
+	for (const auto value : system.negative_residual)
+		if (!std::isfinite(PetscRealPart(value))) throw std::invalid_argument("immersed Nitsche wall preassembled volume residual is not finite");
+	for (const auto value : system.jacobian)
+		if (!std::isfinite(PetscRealPart(value))) throw std::invalid_argument("immersed Nitsche wall preassembled volume Jacobian is not finite");
+}
+
 inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	const CartesianDomainClassification& domain,
 	const CutCellVolumeQuadratureCatalog& volume_catalog,
@@ -123,12 +148,14 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
 	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity,
-	const CutCellGhostPenaltyCatalog* ghost_catalog)
+	const CutCellGhostPenaltyCatalog* ghost_catalog, const NavierStokesSystem* volume_system = nullptr)
 {
 	if (!std::isfinite(gamma0) || !(gamma0 > 0.0))
 		throw std::invalid_argument("immersed Nitsche wall gamma0 must be finite and positive");
-	if (!std::isfinite(parameters.dynamic_viscosity) || !(parameters.dynamic_viscosity > 0.0))
-		throw std::invalid_argument("immersed Nitsche wall dynamic viscosity must be finite and positive");
+	if (!std::isfinite(parameters.density) || !(parameters.density > 0.0)
+		|| !std::isfinite(parameters.dynamic_viscosity) || !(parameters.dynamic_viscosity > 0.0)
+		|| !std::isfinite(parameters.dt) || parameters.dt < 0.0)
+		throw std::invalid_argument("immersed Nitsche wall Navier-Stokes parameters are invalid");
 	if (!wall_velocity) throw std::invalid_argument("immersed Nitsche wall velocity evaluator is required");
 	ValidateImmersedNitscheWallLabels(selected_boundary_labels);
 	if (ghost_catalog) {
@@ -137,9 +164,13 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 			throw std::runtime_error("covered immersed Nitsche policy requires ghost-covered cut cell");
 	}
 
-	// These calls both validate the exact domain/grid/surface bindings and are
-	// the only source of rules for this adapter.
-	const auto& volume_rule = volume_catalog.UsableRule(domain, cell_id);
+	// Validate exact domain/grid/surface bindings.  A caller that streamed a
+	// compact volume rule may supply its already assembled volume base; this
+	// adapter then adds only the surface terms.
+	if (volume_catalog.StorageMode() == CutCellVolumeQuadratureStorageMode::Expanded)
+		volume_catalog.ValidateUsableRule(domain, cell_id);
+	else
+		volume_catalog.ValidateUsableCompactRule(domain, cell_id);
 	const auto& surface_rule = surface_catalog.UsableRule(domain, cell_id);
 	const auto element = domain.Background().MaterializeElement(cell_id);
 	if (!selected_boundary_labels.empty()) {
@@ -150,8 +181,17 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 				if (!std::isfinite(value)) throw std::runtime_error("immersed Nitsche wall nodal state is not finite");
 	}
 	ImmersedNitscheWallAssembly result;
-	result.system = BuildNavierStokesElement(element, nodal_state, previous_nodal_state,
-		parameters, volume_rule);
+	if (volume_system) {
+		ValidateImmersedNitscheWallPreassembledVolumeSystem(element, nodal_state, previous_nodal_state,
+			parameters, *volume_system);
+		result.system = *volume_system;
+	}
+	else {
+		if (volume_catalog.StorageMode() != CutCellVolumeQuadratureStorageMode::Expanded)
+			throw std::invalid_argument("compact immersed Nitsche wall assembly requires a preassembled volume system");
+		result.system = BuildNavierStokesElement(element, nodal_state, previous_nodal_state,
+			parameters, volume_catalog.UsableRule(domain, cell_id));
+	}
 	if (selected_boundary_labels.empty()) return result;
 	for (const auto value : result.system.jacobian)
 		if (!std::isfinite(PetscRealPart(value)))
@@ -325,6 +365,40 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
 		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity, &ghost_catalog);
+}
+
+// Streaming callers retain their pointwise volume system and hand it to the
+// wall adapter.  This avoids an expanded-only catalog lookup while preserving
+// the established overloads above.
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSystem(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	const NavierStokesSystem& volume_system, double gamma0 = 2.0,
+	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity,
+		nullptr, &volume_system);
+}
+
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSystem(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	const NavierStokesSystem& volume_system, const CutCellGhostPenaltyCatalog& ghost_catalog,
+	double gamma0 = 2.0,
+	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity,
+		&ghost_catalog, &volume_system);
 }
 
 } // namespace iga

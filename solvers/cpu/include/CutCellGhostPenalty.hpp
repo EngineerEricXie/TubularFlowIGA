@@ -88,15 +88,20 @@ public:
 		ValidateBinding(d,v); if(fi>=faces_.size())throw std::out_of_range("ghost penalty face index is out of range"); if(order>3||!std::isfinite(t0)||!std::isfinite(t1)||t0<0.||t0>1.||t1<0.||t1>1.)throw std::invalid_argument("ghost penalty trace evaluation arguments are invalid");
 		CutCellGhostPenaltyTrace r; r.connectivity=FaceConnectivity(d,faces_[fi]); if(r.connectivity.size()>options_.max_trace_entries)throw std::runtime_error("ghost penalty trace-entry cap exceeded"); const auto& f=faces_[fi]; r.coefficients=TraceJump(d.Background().MaterializeElement(f.minus_cell),d.Background().MaterializeElement(f.plus_cell),f.axis,order,t0,t1,f.h_normal_m,r.connectivity); return r;
 	}
-	CutCellGhostPenaltyAssembly AssembleFace(std::size_t fi,const CartesianDomainClassification& d,const CutCellVolumeQuadratureCatalog& v,const std::vector<std::array<double,4>>& state,double mu) const {
-		ValidateBinding(d,v); if(fi>=faces_.size())throw std::out_of_range("ghost penalty face index is out of range"); if(!std::isfinite(mu)||!(mu>0.))throw std::invalid_argument("ghost penalty viscosity must be finite and positive"); if(state.size()!=d.Background().NodeCount())throw std::invalid_argument("ghost penalty state must contain four fields for every background node"); for(const auto& q:state)for(double x:q)if(!std::isfinite(x))throw std::invalid_argument("ghost penalty state is not finite");
+	template <class StateAt> CutCellGhostPenaltyAssembly AssembleFaceLocal(std::size_t fi,const CartesianDomainClassification& d,const CutCellVolumeQuadratureCatalog& v,StateAt&& state_at,double mu) const {
+		ValidateBinding(d,v); if(fi>=faces_.size())throw std::out_of_range("ghost penalty face index is out of range"); if(!std::isfinite(mu)||!(mu>0.))throw std::invalid_argument("ghost penalty viscosity must be finite and positive");
 		CutCellGhostPenaltyAssembly r; r.connectivity=FaceConnectivity(d,faces_[fi]); const auto n=r.connectivity.size(); if(n>80||n>options_.max_trace_entries)throw std::runtime_error("ghost penalty face trace union exceeds configured bound"); const auto ndof=Mul(4,n,"ghost penalty face dof count overflows"), entries=Mul(ndof,ndof,"ghost penalty face dense allocation overflows"); r.jacobian.assign(entries,PetscScalar(0));r.negative_residual.assign(ndof,PetscScalar(0)); const auto& f=faces_[fi]; const double ku=options_.gamma_u*mu*std::pow(f.h_normal_m,5),kp=options_.gamma_p/mu*std::pow(f.h_normal_m,7);if(!std::isfinite(ku)||!(ku>0.)||!std::isfinite(kp)||!(kp>0.))throw std::overflow_error("ghost penalty coefficient is not finite and positive");
 		static constexpr std::array<double,4> x{{-.8611363115940526,-.3399810435848563,.3399810435848563,.8611363115940526}},w{{.3478548451374538,.6521451548625461,.6521451548625461,.3478548451374538}};
 		for(std::size_t q0=0;q0<4;++q0)for(std::size_t q1=0;q1<4;++q1){const double wt=w[q0]*w[q1]*f.area_m2/4.;if(!std::isfinite(wt)||!(wt>0.))throw std::overflow_error("ghost penalty face weight is invalid");const auto j=EvaluateFaceJump(fi,3,(x[q0]+1.)/2.,(x[q1]+1.)/2.,d,v).coefficients;for(std::size_t a=0;a<n;++a)for(std::size_t b=0;b<n;++b){const double uv=ku*wt*j[a]*j[b],pp=kp*wt*j[a]*j[b];if(!std::isfinite(uv)||!std::isfinite(pp))throw std::overflow_error("ghost penalty contribution is not finite");r.maximum_abs_contribution=std::max(r.maximum_abs_contribution,std::max(std::abs(uv),std::abs(pp)));for(int c=0;c<3;++c)Add(r.jacobian[(4*a+c)*ndof+4*b+c],uv);Add(r.jacobian[(4*a+3)*ndof+4*b+3],pp);}}
 		for(std::size_t a=0;a<ndof;++a)
 			for(std::size_t b=0;b<ndof;++b)
-				Add(r.negative_residual[a],-PetscRealPart(r.jacobian[a*ndof+b])*state[static_cast<std::size_t>(r.connectivity[b/4])][b%4]);
+				Add(r.negative_residual[a],-PetscRealPart(r.jacobian[a*ndof+b])*state_at(r.connectivity[b/4],static_cast<int>(b%4)));
 		return r;
+	}
+	CutCellGhostPenaltyAssembly AssembleFace(std::size_t fi,const CartesianDomainClassification& d,const CutCellVolumeQuadratureCatalog& v,const std::vector<std::array<double,4>>& state,double mu) const {
+		if(state.size()!=d.Background().NodeCount()) throw std::invalid_argument("ghost penalty state must contain four fields for every background node");
+		for(const auto& q:state) for(double x:q) if(!std::isfinite(x)) throw std::invalid_argument("ghost penalty state is not finite");
+		return AssembleFaceLocal(fi,d,v,[&state](std::int32_t node,int field) { return state[static_cast<std::size_t>(node)][field]; },mu);
 	}
 private:
 	static bool SameGrid(const CubicCartesianGridSpec&a,const CubicCartesianGridSpec&b)noexcept{return a.lower_m==b.lower_m&&a.upper_m==b.upper_m&&a.cells==b.cells;}
