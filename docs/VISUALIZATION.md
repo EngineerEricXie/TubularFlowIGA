@@ -18,6 +18,17 @@ initialized state is timestep zero.
 
 ## Temporal Bézier VTKHDF
 
+![Relationship between the control mesh, optional legacy linear Bézier preview, packed database, and cubic Bézier VTKHDF visualization](images/bezier-mesh-pipeline.png)
+
+The drawing is schematic. The actual control mesh sweeps the repository's
+201-point, all-quadrilateral disk template along the centerline to form
+hexahedral cells. It is not a tetrahedral mesh: there are no triangular surface
+faces or diagonal front-to-back layer connections. The control mesh is the
+required spline input. `bzmesh.vtk` is an optional eight-corner linear-HEX
+preview and is not consumed downstream; the default cubic `bzmesh.vtkhdf`
+visualization is reconstructed from the packed `.ntiga` database using all 64
+Bézier points per element.
+
 The VTKHDF file contains cubic `VTK_BEZIER_HEXAHEDRON` cells. Points,
 connectivity, cell types, element IDs, partition owners, and higher-order
 degrees are stored once. Each timestep appends only compressed point arrays and
