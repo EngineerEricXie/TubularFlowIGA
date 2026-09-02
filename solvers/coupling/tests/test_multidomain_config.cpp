@@ -138,6 +138,15 @@ std::string InsertBeforeLast(std::string text, const std::string& marker,
 	return text;
 }
 
+std::string ImmersedConfiguration()
+{
+	auto text = Replace(ValidConfiguration(),
+		"\"kind\": \"body_fitted_iga_flow\"", "\"kind\": \"three_d_immersed_flow\"");
+	text = Replace(text, "\"case\": \"domains/roi\", \"database\": \"domains/roi/roi.ntiga\",",
+		"\"case\": \"domains/roi\",");
+	return Replace(text, "\"native_to_outward_sign\":-1,\n         ", "");
+}
+
 } // namespace
 
 int main()
@@ -234,6 +243,41 @@ int main()
 	assert(iga::MakeSequentialPressureFlowPlan(configuration.graph,
 		configuration.start_domain_id).domain_ids == plan.domain_ids);
 	assert(configuration.graph.Port({"roi", "wall"}).requires.empty());
+	{
+		const auto immersed = iga::ParseMultidomainConfiguration(ImmersedConfiguration());
+		assert(immersed.schema_version == 5);
+		assert(immersed.domains[1].kind == iga::DomainKind::ThreeDImmersedFlow);
+		assert(immersed.domains[1].case_directory == "domains/roi");
+		assert(immersed.domains[1].database.empty());
+		assert(std::string(iga::DomainKindName(immersed.domains[1].kind))
+			== "three_d_immersed_flow");
+		assert(iga::DomainDimensionOf(immersed.domains[1].kind) == 3);
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"kind\": \"three_d_immersed_flow\"", "\"kind\": \"immersed_flow\""));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"case\": \"domains/roi\",", "\"case\": \"domains/roi\", \"database\": \"roi.ntiga\","));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"id\":\"inlet\",\"locator_kind\":\"boundary_label\",\"locator\":\"1\",",
+				"\"id\":\"inlet\",\"locator_kind\":\"boundary_label\","));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"locator\":\"1\"", "\"locator\":\"01\""));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"locator\":\"1\",", "\"locator\":\"1\",\"native_to_outward_sign\":-1,"));
+		});
+		RequireRejected([] {
+			iga::ParseMultidomainConfiguration(Replace(ImmersedConfiguration(),
+				"\"requires\":[\"flow_rate\"]", "\"requires\":[\"total_pressure\"]"));
+		});
+	}
 	const auto resolved = iga::ResolveSequentialOneDThreeDOneD(configuration);
 	assert(resolved.upstream_domain_id == "upstream");
 	assert(resolved.three_d_domain_id == "roi");

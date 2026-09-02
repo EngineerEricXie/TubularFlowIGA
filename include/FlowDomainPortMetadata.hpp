@@ -120,6 +120,46 @@ inline void ValidateThreeDBodyFittedFlowDomainMetadata(const std::string& domain
 	}
 }
 
+inline int ParseThreeDImmersedFlowBoundaryLabel(const CouplingPort& port)
+{
+	const int label = ParseThreeDFlowBoundaryLabel(port);
+	if (port.locator != std::to_string(label))
+		throw std::runtime_error(
+			"immersed 3D flow boundary_label locator must use a canonical nonnegative integer");
+	return label;
+}
+
+inline void ValidateThreeDImmersedFlowDomainMetadata(const std::string& domain_id,
+	const std::vector<CouplingPort>& ports)
+{
+	if (domain_id.empty()) throw std::runtime_error("immersed 3D flow domain id must be nonempty");
+	ValidateCouplingPorts(ports);
+	const std::set<PortQuantity> supported_provides = {PortQuantity::Area,
+		PortQuantity::FlowRate, PortQuantity::MeanPressure};
+	const std::set<PortQuantity> supported_requires = {PortQuantity::FlowRate,
+		PortQuantity::MeanPressure};
+	for (const auto& port : ports) {
+		if (port.subsystem_id != domain_id)
+			throw std::runtime_error(
+				"immersed 3D flow port metadata has a mismatched domain id");
+		(void)ParseThreeDImmersedFlowBoundaryLabel(port);
+		if (port.orientation.native_to_outward_sign != 1)
+			throw std::runtime_error(
+				"immersed 3D boundary_label metadata must use outward orientation +1");
+		for (const auto quantity : port.provides)
+			if (!supported_provides.count(quantity))
+				throw std::runtime_error(
+					"immersed 3D flow port declares an unsupported output quantity");
+		for (const auto quantity : port.requires)
+			if (!supported_requires.count(quantity))
+				throw std::runtime_error(
+					"immersed 3D flow port declares an unsupported input quantity");
+		if (port.requires.size() > 1)
+			throw std::runtime_error(
+				"immersed 3D flow port may receive at most one hydraulic input quantity");
+	}
+}
+
 } // namespace iga
 
 #endif

@@ -36,11 +36,11 @@ iga::CouplingPort Port(const std::string& domain, const std::string& id,
 	return port;
 }
 
-iga::SimulationGraph Chain()
+iga::SimulationGraph Chain(iga::DomainKind middle_kind = iga::DomainKind::ThreeDBodyFittedFlow)
 {
 	auto upstream = iga::DomainNode{"up", iga::DomainKind::OneDFlow,
 		{Port("up", "terminal", {iga::PortQuantity::MeanPressure})}};
-	auto middle = iga::DomainNode{"mid", iga::DomainKind::ThreeDBodyFittedFlow,
+	auto middle = iga::DomainNode{"mid", middle_kind,
 		{Port("mid", "inlet", {iga::PortQuantity::FlowRate}),
 		 Port("mid", "outlet", {iga::PortQuantity::MeanPressure})}};
 	auto downstream = iga::DomainNode{"down", iga::DomainKind::OneDFlow,
@@ -79,8 +79,9 @@ iga::SimulationGraph Branch(bool permuted = false)
 
 class FakeRuntime : public iga::CoupledDomainRuntime {
 public:
-	FakeRuntime(std::string id, iga::DomainKind kind, std::vector<iga::CouplingPort> ports)
-		: id_(std::move(id)), kind_(kind), ports_(std::move(ports)) {}
+	FakeRuntime(std::string id, iga::DomainKind kind, std::vector<iga::CouplingPort> ports,
+		std::vector<std::string>* event_trace = nullptr)
+		: id_(std::move(id)), kind_(kind), ports_(std::move(ports)), event_trace_(event_trace) {}
 
 	const std::string& DomainId() const noexcept override { return id_; }
 	iga::DomainKind Kind() const noexcept override { return kind_; }
@@ -94,6 +95,7 @@ public:
 		inputs_.clear();
 		phase_ = Phase::Open;
 		++begins;
+		Event("begin");
 	}
 
 	void SetPortInput(const std::string& port_id,
@@ -102,6 +104,7 @@ public:
 		if (phase_ != Phase::Open) throw std::runtime_error("fake SetPortInput phase");
 		iga::ValidatePortBoundaryData(input);
 		inputs_[port_id] = input;
+		Event("input:"+port_id);
 	}
 
 	void SolveTrial() override
@@ -141,11 +144,13 @@ public:
 		}
 		phase_ = Phase::Solved;
 		++solves;
+		Event("solve");
 	}
 
 	iga::PortState GetPortState(const std::string& port_id) const override
 	{
 		if (phase_ != Phase::Solved) throw std::runtime_error("fake GetPortState phase");
+		Event("state:"+port_id);
 		return states_.at(port_id);
 	}
 
@@ -156,6 +161,7 @@ public:
 		states_.clear();
 		phase_ = Phase::Open;
 		++rollbacks;
+		Event("rollback");
 	}
 
 	void AbortStep() override
@@ -165,6 +171,7 @@ public:
 		states_.clear();
 		phase_ = Phase::Ready;
 		++aborts;
+		Event("abort");
 		if (fail_abort) throw std::runtime_error("injected fake abort failure");
 	}
 
@@ -173,6 +180,7 @@ public:
 		if (phase_ != Phase::Solved) throw std::runtime_error("fake prepare phase");
 		if (fail_prepare) throw std::runtime_error("injected fake prepare failure");
 		phase_ = Phase::Prepared;
+		Event("prepare");
 	}
 
 	void FinalizeCommitStep() noexcept override
@@ -180,6 +188,7 @@ public:
 		if (phase_ != Phase::Prepared) std::terminate();
 		phase_ = Phase::Ready;
 		++commits;
+		Event("commit");
 	}
 
 	bool fail_solve = false;
@@ -216,6 +225,11 @@ private:
 			throw std::runtime_error("fake missing pressure input");
 	}
 
+	void Event(const std::string& event) const
+	{
+		if (event_trace_) event_trace_->push_back(id_+":"+event);
+	}
+
 	std::string id_;
 	iga::DomainKind kind_;
 	std::vector<iga::CouplingPort> ports_;
@@ -223,17 +237,18 @@ private:
 	double end_time_ = 0.0;
 	std::map<std::string, iga::PortBoundaryData> inputs_;
 	std::map<std::string, iga::PortState> states_;
+	std::vector<std::string>* event_trace_ = nullptr;
 };
 
 struct Fixture {
 	explicit Fixture(const iga::SimulationGraph& graph)
 	{
 		auto upstream = std::make_unique<FakeRuntime>("up", iga::DomainKind::OneDFlow,
-			graph.Domain("up").ports);
+			graph.Domain("up").ports, &trace);
 		auto middle = std::make_unique<FakeRuntime>("mid",
-			iga::DomainKind::ThreeDBodyFittedFlow, graph.Domain("mid").ports);
+			graph.Domain("mid").kind, graph.Domain("mid").ports, &trace);
 		auto downstream = std::make_unique<FakeRuntime>("down", iga::DomainKind::OneDFlow,
-			graph.Domain("down").ports);
+			graph.Domain("down").ports, &trace);
 		up = upstream.get();
 		mid = middle.get();
 		down = downstream.get();
@@ -247,8 +262,45 @@ struct Fixture {
 	FakeRuntime* up = nullptr;
 	FakeRuntime* mid = nullptr;
 	FakeRuntime* down = nullptr;
+	std::vector<std::string> trace;
 	std::unique_ptr<iga::DomainRuntimeRegistry> registry;
 };
+
+void RequireSameStepResult(const iga::PressureFlowStepResult& first,
+	const iga::PressureFlowStepResult& second)
+{
+	assert(first.iterations.size() == second.iterations.size());
+	for (std::size_t i = 0; i < first.iterations.size(); ++i) {
+		const auto& left = first.iterations[i];
+		const auto& right = second.iterations[i];
+		assert(left.iteration == right.iteration
+			&& left.applied_relaxation == right.applied_relaxation
+			&& left.converged == right.converged && left.edges.size() == right.edges.size());
+		for (std::size_t edge = 0; edge < left.edges.size(); ++edge) {
+			const auto& a = left.edges[edge];
+			const auto& b = right.edges[edge];
+			assert(a.edge_id == b.edge_id && a.applied_pressure_pa == b.applied_pressure_pa
+				&& a.measured_pressure_pa == b.measured_pressure_pa
+				&& a.pressure_residual_pa == b.pressure_residual_pa
+				&& a.normalized_pressure_residual == b.normalized_pressure_residual
+				&& a.first_outward_flow_m3_s == b.first_outward_flow_m3_s
+				&& a.second_outward_flow_m3_s == b.second_outward_flow_m3_s
+				&& a.flow_residual_m3_s == b.flow_residual_m3_s
+				&& a.normalized_flow_residual == b.normalized_flow_residual);
+		}
+	}
+	assert(first.accepted_ports.size() == second.accepted_ports.size());
+	for (const auto& entry : first.accepted_ports) {
+		const auto& other = second.accepted_ports.at(entry.first);
+		assert(entry.second.time_s == other.time_s && entry.second.area_m2 == other.area_m2
+			&& entry.second.outward_flow_m3_s == other.outward_flow_m3_s
+			&& entry.second.mean_pressure_pa == other.mean_pressure_pa
+			&& entry.second.mean_normal_traction_pa == other.mean_normal_traction_pa
+			&& entry.second.total_pressure_pa == other.total_pressure_pa
+			&& entry.second.concentration == other.concentration
+			&& entry.second.outward_species_flux == other.outward_species_flux);
+	}
+}
 
 struct BranchFixture {
 	explicit BranchFixture(const iga::SimulationGraph& graph)
@@ -299,6 +351,22 @@ int main()
 			&& fixture.down->commits == 1);
 		for (const auto& edge : result.iterations.front().edges)
 			assert(edge.flow_residual_m3_s == 0.0);
+	}
+	{
+		const auto body_fitted_graph = Chain(iga::DomainKind::ThreeDBodyFittedFlow);
+		const auto immersed_graph = Chain(iga::DomainKind::ThreeDImmersedFlow);
+		Fixture body_fitted(body_fitted_graph);
+		Fixture immersed(immersed_graph);
+		iga::PressureFlowExecutionControls controls;
+		iga::PressureFlowComponentExecutor body_fitted_executor(*body_fitted.registry, "up",
+			controls);
+		iga::PressureFlowComponentExecutor immersed_executor(*immersed.registry, "up", controls);
+		const auto body_fitted_result = body_fitted_executor.Advance(step,
+			{{"left", 0.0}, {"right", 0.0}});
+		const auto immersed_result = immersed_executor.Advance(step,
+			{{"left", 0.0}, {"right", 0.0}});
+		assert(body_fitted.trace == immersed.trace);
+		RequireSameStepResult(body_fitted_result, immersed_result);
 	}
 	{
 		Fixture fixture(graph);
@@ -517,6 +585,14 @@ int main()
 		auto runtimes = RuntimeSet(graph, iga::DomainKind::ThreeDBodyFittedFlow,
 			graph.Domain("up").ports);
 		RequireRejected([&] { iga::DomainRuntimeRegistry registry(graph, std::move(runtimes)); });
+	}
+	{
+		const auto immersed_graph = Chain(iga::DomainKind::ThreeDImmersedFlow);
+		auto runtimes = RuntimeSet(immersed_graph, iga::DomainKind::OneDFlow,
+			immersed_graph.Domain("up").ports);
+		RequireRejected([&] {
+			iga::DomainRuntimeRegistry registry(immersed_graph, std::move(runtimes));
+		});
 	}
 	{
 		auto ports = graph.Domain("up").ports;

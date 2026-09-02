@@ -171,7 +171,7 @@ inline SequentialCouplingPlan MakeSequentialPlan(const SimulationGraph& graph,
 	for (const auto& edge : graph.Edges()) {
 		const auto& first = graph.Domain(edge.first.domain_id);
 		const auto& second = graph.Domain(edge.second.domain_id);
-		if (first.kind == second.kind)
+		if (DomainDimensionOf(first.kind) == DomainDimensionOf(second.kind))
 			throw std::runtime_error("sequential coupling plan requires heterogeneous neighboring domains");
 		adjacency.at(first.id).emplace_back(second.id, edge.id);
 		adjacency.at(second.id).emplace_back(first.id, edge.id);
@@ -268,8 +268,8 @@ inline PressureFlowComponentPlan MakeAcyclicPressureFlowPlan(
 		downstream.emplace(domain.first, std::vector<std::string>{});
 	}
 	for (const auto& edge : graph.Edges()) {
-		if (graph.Domain(edge.first.domain_id).kind
-			== graph.Domain(edge.second.domain_id).kind)
+		if (DomainDimensionOf(graph.Domain(edge.first.domain_id).kind)
+			== DomainDimensionOf(graph.Domain(edge.second.domain_id).kind))
 			throw std::runtime_error(
 				"pressure-flow component requires heterogeneous neighboring domains");
 		const auto& first = graph.Port(edge.first);

@@ -13,19 +13,30 @@ namespace iga {
 
 enum class DomainKind {
 	OneDFlow,
-	ThreeDBodyFittedFlow
+	ThreeDBodyFittedFlow,
+	ThreeDImmersedFlow
 };
 
 inline const char* DomainKindName(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return "one_d_flow";
 	if (kind == DomainKind::ThreeDBodyFittedFlow) return "three_d_body_fitted_flow";
+	if (kind == DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
 	return "unknown";
 }
 
 inline bool IsKnownDomainKind(DomainKind kind)
 {
-	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow;
+	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
+		|| kind == DomainKind::ThreeDImmersedFlow;
+}
+
+inline int DomainDimensionOf(DomainKind kind)
+{
+	if (kind == DomainKind::OneDFlow) return 1;
+	if (kind == DomainKind::ThreeDBodyFittedFlow
+		|| kind == DomainKind::ThreeDImmersedFlow) return 3;
+	throw std::runtime_error("domain kind has no semantic dimension");
 }
 
 struct PortRef {

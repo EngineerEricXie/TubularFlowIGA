@@ -146,6 +146,9 @@ int main()
 	assert(graph.Port({"roi", "inlet"}).requires.count(iga::PortQuantity::FlowRate));
 	assert(graph.Port({"roi", "inlet"}).provides.count(iga::PortQuantity::FlowRate));
 	assert(graph.Edge("upstream_to_roi").law == iga::CouplingLaw::PressureFlow);
+	assert(iga::DomainDimensionOf(iga::DomainKind::OneDFlow) == 1);
+	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDBodyFittedFlow) == 3);
+	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDImmersedFlow) == 3);
 	const auto plan = iga::MakeSequentialPlan(graph, "upstream");
 	assert((plan.domain_ids == std::vector<std::string>{"upstream", "roi", "downstream"}));
 	assert((plan.edge_ids == std::vector<std::string>{"upstream_to_roi", "roi_to_downstream"}));
@@ -159,6 +162,34 @@ int main()
 	RequireRejected([&graph] {
 		(void)iga::MakeSequentialPressureFlowPlan(graph, "downstream");
 	});
+	{
+		auto upstream = Domain("upstream", iga::DomainKind::OneDFlow,
+			{LogicalPort("upstream", "terminal", "outlet:2", iga::PortQuantity::MeanPressure)});
+		auto immersed = Domain("immersed", iga::DomainKind::ThreeDImmersedFlow,
+			{LogicalPort("immersed", "inlet", "1", iga::PortQuantity::FlowRate),
+			 LogicalPort("immersed", "outlet", "2", iga::PortQuantity::MeanPressure)});
+		auto downstream = Domain("downstream", iga::DomainKind::OneDFlow,
+			{LogicalPort("downstream", "root", "root", iga::PortQuantity::FlowRate)});
+		const iga::SimulationGraph immersed_chain({std::move(upstream), std::move(immersed),
+			std::move(downstream)}, {{"left", {"upstream", "terminal"}, {"immersed", "inlet"},
+				iga::CouplingLaw::PressureFlow}, {"right", {"immersed", "outlet"},
+				{"downstream", "root"}, iga::CouplingLaw::PressureFlow}});
+		assert((iga::MakeSequentialPlan(immersed_chain, "upstream").domain_ids
+			== std::vector<std::string>{"upstream", "immersed", "downstream"}));
+		auto body = Domain("body", iga::DomainKind::ThreeDBodyFittedFlow,
+			{LogicalPort("body", "outlet", "1", iga::PortQuantity::MeanPressure)});
+		auto immersed_neighbor = Domain("immersed", iga::DomainKind::ThreeDImmersedFlow,
+			{LogicalPort("immersed", "inlet", "1", iga::PortQuantity::FlowRate)});
+		const iga::SimulationGraph adjacent_three_d({std::move(body),
+			std::move(immersed_neighbor)}, {{"bad", {"body", "outlet"},
+				{"immersed", "inlet"}, iga::CouplingLaw::PressureFlow}});
+		RequireRejected([&adjacent_three_d] {
+			(void)iga::MakeSequentialPlan(adjacent_three_d, "body");
+		});
+		RequireRejected([&adjacent_three_d] {
+			(void)iga::MakeAcyclicPressureFlowPlan(adjacent_three_d, "body");
+		});
+	}
 	{
 		std::vector<iga::DomainNode> copied_domains;
 		for (const auto& domain : graph.Domains()) copied_domains.push_back(domain.second);

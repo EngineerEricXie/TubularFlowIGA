@@ -220,6 +220,14 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 				+" 3D domain does not accept inlet_policy");
 		domain.database = RelativePath(Required(object, "database", context),
 			context+".database");
+	} else if (dimension == "3d" && kind == "three_d_immersed_flow") {
+		domain.kind = DomainKind::ThreeDImmersedFlow;
+		if (Find(object, "inlet_policy"))
+			throw std::runtime_error("simulation_config.json: "+context
+				+" immersed 3D domain does not accept inlet_policy");
+		if (Find(object, "database"))
+			throw std::runtime_error("simulation_config.json: "+context
+				+" immersed 3D domain does not accept body-fitted database");
 	} else throw std::runtime_error("simulation_config.json: "+context
 		+" has an inconsistent or unsupported dimension/kind");
 	domain.case_directory = RelativePath(Required(object, "case", context), context+".case");
@@ -240,7 +248,9 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 	}
 	if (domain.kind == DomainKind::OneDFlow)
 		ValidateOneDFlowDomainMetadata(domain.id, domain.ports, domain.one_d_inlet_policy);
-	else ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
+	else if (domain.kind == DomainKind::ThreeDBodyFittedFlow)
+		ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
+	else ValidateThreeDImmersedFlowDomainMetadata(domain.id, domain.ports);
 	return domain;
 }
 
