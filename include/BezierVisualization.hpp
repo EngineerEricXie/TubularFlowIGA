@@ -633,6 +633,32 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 	return mesh;
 }
 
+inline void TransformBezierVisualizationToSourceCoordinates(
+	BezierVisualizationMesh& mesh, const GeometryTransform& transform)
+{
+	const auto scale = transform.source_units_per_normalized_unit;
+	if (!(scale > 0.0) || !std::isfinite(scale)
+		|| !std::all_of(transform.source_origin.begin(), transform.source_origin.end(),
+			[](double value) { return std::isfinite(value); }))
+		throw std::runtime_error("invalid Bezier visualization geometry transform");
+	for (auto& point : mesh.points)
+		for (int direction = 0; direction < 3; ++direction)
+			point[direction] = transform.source_origin[direction]+scale*point[direction];
+	mesh.validation.maximum_signature_coordinate_difference *= scale;
+	if (std::isfinite(mesh.validation.minimum_jacobian))
+		mesh.validation.minimum_jacobian *= scale*scale*scale;
+}
+
+inline BezierVisualizationMesh BuildSourceCoordinateBezierVisualizationMesh(
+	Database& database, bool require_valid_geometry = true)
+{
+	auto mesh = BuildBezierVisualizationMesh(database, false);
+	TransformBezierVisualizationToSourceCoordinates(
+		mesh, database.header().geometry_transform);
+	if (require_valid_geometry) RequireValidBezierGeometry(mesh.validation);
+	return mesh;
+}
+
 inline std::vector<VtkPointArray> ExtractBezierPointArrays(
 	const BezierVisualizationMesh& mesh,
 	const std::vector<VtkPointArray>& control_arrays)

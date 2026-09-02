@@ -425,7 +425,7 @@ int main(int argc, char** argv)
 			if (rank == 0) {
 				try {
 					bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
-						iga::BuildBezierVisualizationMesh(database, false));
+						iga::BuildSourceCoordinateBezierVisualizationMesh(database, false));
 					const auto report = iga::BezierGeometryReportPath(options.output);
 					iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
 					iga::RequireValidBezierGeometry(bezier_mesh->validation);

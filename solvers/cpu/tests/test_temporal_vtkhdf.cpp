@@ -76,6 +76,7 @@ int main()
 	const auto directory = fs::temp_directory_path()/"tubularflowiga-temporal-vtkhdf-test";
 	fs::create_directories(directory);
 	const auto path = directory/"bezier.vtkhdf";
+	const auto geometry_path = directory/"geometry.vtkhdf";
 	const auto mesh = MakeMesh();
 	std::vector<double> scalar(64);
 	std::vector<double> velocity(64*3);
@@ -130,8 +131,22 @@ int main()
 	const auto values = Read<double>(file, "/VTKHDF/PointData/scalar", H5T_NATIVE_DOUBLE);
 	assert(values[0] == 0.0 && values[64] == 10.0 && values[128] == 20.0);
 	H5Fclose(file);
+	{
+		iga::TemporalVtkHdfWriter writer(geometry_path, mesh);
+		writer.Append(0.0, {});
+	}
+	const auto geometry_file = H5Fopen(geometry_path.string().c_str(), H5F_ACC_RDONLY,
+		H5P_DEFAULT);
+	assert(geometry_file >= 0);
+	assert((Dimensions(geometry_file, "/VTKHDF/Points")
+		== std::vector<hsize_t>{64, 3}));
+	assert((Read<std::uint8_t>(geometry_file, "/VTKHDF/Types", H5T_NATIVE_UINT8)
+		== std::vector<std::uint8_t>{iga::kVtkBezierHexahedron}));
+	assert((Read<double>(geometry_file, "/VTKHDF/Steps/Values", H5T_NATIVE_DOUBLE)
+		== std::vector<double>{0.0}));
+	H5Fclose(geometry_file);
 	if (std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT"))
-		std::cout << path << '\n';
+		std::cout << path << '\n' << geometry_path << '\n';
 	else
 		fs::remove_all(directory);
 }

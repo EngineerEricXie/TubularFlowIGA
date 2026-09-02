@@ -54,7 +54,7 @@ struct BezierVtkHdfOutput {
 	void Initialize(iga::Database& database, const fs::path& output, bool resume)
 	{
 		mesh = std::make_unique<iga::BezierVisualizationMesh>(
-			iga::BuildBezierVisualizationMesh(database, false));
+			iga::BuildSourceCoordinateBezierVisualizationMesh(database, false));
 		const auto report = iga::BezierGeometryReportPath(output);
 		iga::WriteBezierGeometryReport(report, mesh->validation);
 		iga::RequireValidBezierGeometry(mesh->validation);

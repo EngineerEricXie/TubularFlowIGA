@@ -131,13 +131,13 @@ string BezierPointRecord(const BezierElement3D& element)
 
 }
 
-void kernel::run(string fn_in, bool legacy_text)
+void kernel::run(string fn_in, bool legacy_text, bool legacy_vtk)
 {
 	InitializeMesh(fn_in);
-	ExtractAndOutput(fn_in, legacy_text);
+	ExtractAndOutput(fn_in, legacy_text, legacy_vtk);
 }
 
-void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
+void kernel::ExtractAndOutput(const string& fn, bool legacy_text, bool legacy_vtk)
 {
 	if (tmesh.size() > static_cast<size_t>(numeric_limits<int>::max()))
 	{
@@ -155,12 +155,12 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 	vector<char> vtk_buffer(buffer_size), info_buffer(buffer_size), cache_buffer(buffer_size);
 	vector<char> cmat_buffer(buffer_size), point_buffer(buffer_size);
 	ofstream vtk, info, cmat, bzpt, cache;
-	vtk.rdbuf()->pubsetbuf(vtk_buffer.data(), vtk_buffer.size());
+	if (legacy_vtk) vtk.rdbuf()->pubsetbuf(vtk_buffer.data(), vtk_buffer.size());
 	info.rdbuf()->pubsetbuf(info_buffer.data(), info_buffer.size());
 	cache.rdbuf()->pubsetbuf(cache_buffer.data(), cache_buffer.size());
 	cmat.rdbuf()->pubsetbuf(cmat_buffer.data(), cmat_buffer.size());
 	bzpt.rdbuf()->pubsetbuf(point_buffer.data(), point_buffer.size());
-	vtk.open((fn + "bzmesh.vtk").c_str());
+	if (legacy_vtk) vtk.open((fn + "bzmesh.vtk").c_str());
 	info.open((fn + "bzmeshinfo.txt").c_str());
 	cache.open((fn + "spline_cache.igacache").c_str(), ios::binary | ios::trunc);
 	if (legacy_text)
@@ -168,14 +168,17 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 		cmat.open((fn + "cmat.txt").c_str());
 		bzpt.open((fn + "bzpt.txt").c_str());
 	}
-	if (!vtk || !info || !cache || (legacy_text && (!cmat || !bzpt)))
+	if ((legacy_vtk && !vtk) || !info || !cache || (legacy_text && (!cmat || !bzpt)))
 	{
 		throw runtime_error("cannot create spline output files under " + fn);
 	}
 
 	const size_t elements = tmesh.size();
-	vtk << "# vtk DataFile Version 2.0\nBezier mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
-	vtk << "POINTS " << 8 * elements << " float\n";
+	if (legacy_vtk)
+	{
+		vtk << "# vtk DataFile Version 2.0\nBezier mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
+		vtk << "POINTS " << 8 * elements << " float\n";
+	}
 	info << elements << "\n";
 	igacache::WriteHeader(
 		cache, elements, cp.size(), igacache::HashFile(fn + "controlmesh.vtk"));
@@ -242,7 +245,7 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 				}
 			}
 			const size_t local = static_cast<size_t>(eid - begin);
-			vtk_records[local] = VtkPointRecord(output);
+			if (legacy_vtk) vtk_records[local] = VtkPointRecord(output);
 			info_records[local] = ConnectivityRecord(output);
 			cache_records[local] = CacheRecord(static_cast<std::uint64_t>(eid), output);
 			if (legacy_text)
@@ -255,7 +258,7 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 		for (int eid = begin; eid < end; eid++)
 		{
 			const size_t local = static_cast<size_t>(eid - begin);
-			vtk << vtk_records[local];
+			if (legacy_vtk) vtk << vtk_records[local];
 			info << info_records[local];
 			cache.write(cache_records[local].data(), cache_records[local].size());
 			if (legacy_text)
@@ -270,18 +273,21 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 		}
 	}
 
-	vtk << "\nCELLS " << elements << " " << 9 * elements << "\n";
-	for (size_t eid = 0; eid < elements; eid++)
+	if (legacy_vtk)
 	{
-		vtk << "8 " << 8 * eid << " " << 8 * eid + 1 << " " << 8 * eid + 2 << " " << 8 * eid + 3
-			<< " " << 8 * eid + 4 << " " << 8 * eid + 5 << " " << 8 * eid + 6 << " " << 8 * eid + 7 << "\n";
+		vtk << "\nCELLS " << elements << " " << 9 * elements << "\n";
+		for (size_t eid = 0; eid < elements; eid++)
+		{
+			vtk << "8 " << 8 * eid << " " << 8 * eid + 1 << " " << 8 * eid + 2 << " " << 8 * eid + 3
+				<< " " << 8 * eid + 4 << " " << 8 * eid + 5 << " " << 8 * eid + 6 << " " << 8 * eid + 7 << "\n";
+		}
+		vtk << "\nCELL_TYPES " << elements << "\n";
+		for (size_t eid = 0; eid < elements; eid++) vtk << "12\n";
+		vtk << "\nCELL_DATA " << elements << "\nSCALARS Error float 1\nLOOKUP_TABLE default\n";
+		for (size_t eid = 0; eid < elements; eid++) vtk << tmesh[eid].type << "\n";
 	}
-	vtk << "\nCELL_TYPES " << elements << "\n";
-	for (size_t eid = 0; eid < elements; eid++) vtk << "12\n";
-	vtk << "\nCELL_DATA " << elements << "\nSCALARS Error float 1\nLOOKUP_TABLE default\n";
-	for (size_t eid = 0; eid < elements; eid++) vtk << tmesh[eid].type << "\n";
 
-	vtk.close();
+	if (legacy_vtk) vtk.close();
 	info.close();
 	cache.close();
 	if (legacy_text)
@@ -289,7 +295,7 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text)
 		cmat.close();
 		bzpt.close();
 	}
-	if (!vtk || !info || !cache || (legacy_text && (!cmat || !bzpt)))
+	if ((legacy_vtk && !vtk) || !info || !cache || (legacy_text && (!cmat || !bzpt)))
 	{
 		throw runtime_error("failed while writing spline output files under " + fn);
 	}

@@ -13,20 +13,25 @@ make spline EIGEN_DIR=/path/to/eigen3
 OMP_NUM_THREADS=8 ./preprocessing/spline/spline /path/to/case/
 OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
   /path/to/case/ --no-legacy-text
+OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
+  /path/to/case/ --no-legacy-text --legacy-vtk
 ```
 
 The trailing slash is required because the argument is a directory prefix.
 Run large cases on an allocated compute resource and choose a thread count that
 matches the allocated CPU cores.
 
-The case directory must contain `controlmesh.vtk`. Both modes write:
+The case directory must contain `controlmesh.vtk`. All invocations write:
 
 - `bzmeshinfo.txt`: element basis connectivity used by METIS;
 - `spline_cache.igacache`: sparse coefficients and 64 Bezier points per element;
-- `bzmesh.vtk`: eight-corner visualization mesh.
+- `geometry_transform.json`: source origin and normalization scale.
 
 The first command also writes dense `cmat.txt` and `bzpt.txt` for legacy tools.
 The second is recommended for the native pipeline and avoids those large files.
+Add `--legacy-vtk` only when the historical eight-corner linear
+`bzmesh.vtk` preview is needed. It is not consumed by METIS, `iga_pack`, the
+solvers, or the cubic VTKHDF exporter.
 
 ## Resource Design
 

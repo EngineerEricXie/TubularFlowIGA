@@ -7,21 +7,28 @@ using namespace std;
 
 int main(int argc, char **argv)
 {
-	if (argc < 2 || argc > 3)
+	if (argc < 2)
 	{
-		cerr << "usage: spline CASE_DIR/ [--no-legacy-text]\n";
+		cerr << "usage: spline CASE_DIR/ [--no-legacy-text] [--legacy-vtk]\n";
 		return 2;
 	}
 	try
 	{
-		const bool legacy_text = argc == 2;
-		if (!legacy_text && string(argv[2]) != "--no-legacy-text")
+		bool legacy_text = true;
+		bool legacy_vtk = false;
+		for (int argument = 2; argument < argc; ++argument)
 		{
-			cerr << "usage: spline CASE_DIR/ [--no-legacy-text]\n";
-			return 2;
+			const string option(argv[argument]);
+			if (option == "--no-legacy-text") legacy_text = false;
+			else if (option == "--legacy-vtk") legacy_vtk = true;
+			else
+			{
+				cerr << "usage: spline CASE_DIR/ [--no-legacy-text] [--legacy-vtk]\n";
+				return 2;
+			}
 		}
 		kernel app;
-		app.run(argv[1], legacy_text);
+		app.run(argv[1], legacy_text, legacy_vtk);
 		cout << "DONE!\n";
 		return 0;
 	}

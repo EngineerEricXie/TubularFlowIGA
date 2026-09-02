@@ -24,7 +24,7 @@ endif
 
 .PHONY: all petsc petsc-test test vtkhdf-paraview-test clean
 
-all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference
+all: iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_womersley_reference
 
 petsc: iga_assembly_smoke iga_solve iga_transport iga_navier_stokes iga_mesh_check
 
@@ -33,6 +33,9 @@ iga_pack: src/iga_pack.cpp include/IgaDatabase.hpp ../../include/IgaPreprocessCa
 
 iga_inspect: src/iga_inspect.cpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+iga_bezier_export: src/iga_bezier_export.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp ../../include/VtkOutput.hpp
+	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ $(HDF5_LIBS) $(LDLIBS)
 
 iga_case_check: src/iga_case_check.cpp include/IgaDatabase.hpp include/CaseInput.hpp include/GenericCaseInput.hpp ../../include/CaseConfig.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/OutletModel.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -88,6 +91,7 @@ PVPYTHON ?= pvpython
 vtkhdf-paraview-test: temporal_vtkhdf_test
 	TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./temporal_vtkhdf_test
 	$(PVPYTHON) tests/validate_temporal_vtkhdf.py
+	$(PVPYTHON) tests/validate_temporal_vtkhdf.py /tmp/tubularflowiga-temporal-vtkhdf-test/geometry.vtkhdf --times none --arrays none --value none
 
 flow_checkpoint_test: tests/test_flow_checkpoint.cpp ../../include/FlowCheckpoint.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -139,4 +143,4 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 clean:
-	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check

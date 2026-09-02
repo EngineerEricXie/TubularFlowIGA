@@ -102,6 +102,10 @@ case "$component" in
 		check_base
 		check_preprocessing
 		;;
+	vtkhdf)
+		check_base
+		check_hdf5
+		;;
 	cpu)
 		check_base
 		check_preprocessing
@@ -126,7 +130,7 @@ case "$component" in
 		check_hdf5
 		;;
 	*)
-		printf 'usage: %s preprocessing|cpu|one-d|cuda|all\n' "$0" >&2
+		printf 'usage: %s preprocessing|vtkhdf|cpu|one-d|cuda|all\n' "$0" >&2
 		exit 2
 		;;
 esac
