@@ -5,6 +5,7 @@
 // dA values supplied by ImmersedSurfaceQuadratureCatalog; this deliberately
 // does not use body-fitted face utilities or a surface Jacobian.
 #include "CutCellVolumeQuadrature.hpp"
+#include "CutCellGhostPenalty.hpp"
 #include "ImmersedSurfaceQuadrature.hpp"
 #include "NavierStokesElement.hpp"
 
@@ -43,6 +44,7 @@ struct ImmersedNitscheWallDiagnostics {
 	double maximum_eta = 0.0;
 	double maximum_eta_h_n_over_mu = 0.0;
 	double maximum_gap_norm = 0.0;
+	bool ghost_covered_policy = false;
 };
 
 struct ImmersedNitscheWallAssembly {
@@ -113,14 +115,15 @@ inline void AccumulateImmersedNitscheWallDiagnostic(double& entry, double contri
 	entry = updated;
 }
 
-inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	const CartesianDomainClassification& domain,
 	const CutCellVolumeQuadratureCatalog& volume_catalog,
 	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
-	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity)
+	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity,
+	const CutCellGhostPenaltyCatalog* ghost_catalog)
 {
 	if (!std::isfinite(gamma0) || !(gamma0 > 0.0))
 		throw std::invalid_argument("immersed Nitsche wall gamma0 must be finite and positive");
@@ -128,6 +131,11 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 		throw std::invalid_argument("immersed Nitsche wall dynamic viscosity must be finite and positive");
 	if (!wall_velocity) throw std::invalid_argument("immersed Nitsche wall velocity evaluator is required");
 	ValidateImmersedNitscheWallLabels(selected_boundary_labels);
+	if (ghost_catalog) {
+		ghost_catalog->ValidateBinding(domain, volume_catalog);
+		if (!ghost_catalog->Covered(cell_id))
+			throw std::runtime_error("covered immersed Nitsche policy requires ghost-covered cut cell");
+	}
 
 	// These calls both validate the exact domain/grid/surface bindings and are
 	// the only source of rules for this adapter.
@@ -152,6 +160,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 		if (!std::isfinite(PetscRealPart(value)))
 			throw std::overflow_error("immersed Nitsche wall volume residual is not finite");
 	const auto alpha = ImmersedNitscheWallFraction(volume_catalog, cell_id, result.diagnostics);
+	result.diagnostics.ghost_covered_policy = ghost_catalog != nullptr;
 
 	const auto& surface_diagnostics = surface_catalog.Diagnostics();
 	for (int label : selected_boundary_labels) {
@@ -190,7 +199,8 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 		if (!std::isfinite(inverse_normal_norm) || !(inverse_normal_norm > 0.0))
 			throw std::runtime_error("immersed Nitsche wall normal length is not finite and positive");
 		const double h_n = 1.0/inverse_normal_norm;
-		const double eta = 16.0*gamma0*parameters.dynamic_viscosity/(alpha*h_n);
+		const double eta = ghost_catalog ? 16.0*gamma0*parameters.dynamic_viscosity/h_n
+			: 16.0*gamma0*parameters.dynamic_viscosity/(alpha*h_n);
 		if (!std::isfinite(h_n) || !(h_n > 0.0) || !std::isfinite(eta) || !(eta > 0.0))
 			throw std::overflow_error("immersed Nitsche wall penalty is not finite and positive");
 		const double eta_h_n_over_mu = eta*h_n/parameters.dynamic_viscosity;
@@ -282,9 +292,39 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
 	double gamma0 = 2.0)
 {
-	return BuildImmersedNitscheWallElement(domain, volume_catalog, surface_catalog, cell_id,
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
 		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0,
-		[](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; });
+		[](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; }, nullptr);
+}
+
+// Existing velocity-evaluator overload, retained bit-for-bit in its legacy
+// path.  The ghost-covered overload below is explicit so callers cannot
+// accidentally switch the penalty rule.
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity)
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity, nullptr);
+}
+
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	const CutCellGhostPenaltyCatalog& ghost_catalog, double gamma0 = 2.0,
+	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity, &ghost_catalog);
 }
 
 } // namespace iga

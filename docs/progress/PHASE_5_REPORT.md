@@ -157,6 +157,71 @@ included in the dependency-free aggregate `make -C solvers/cpu test`.
 Strict STL and bounded VTP readers are complete; classification and cut
 quadrature remain pending work.
 
+## PR 5.7: Cartesian cubic ghost penalty
+
+`CutCellGhostPenaltyCatalog` is an immutable, exact-domain/volume-bound
+catalog for uniform Cartesian degree-three, C2 B-splines.  It selects each
+active lower-to-plus neighbor face at most once in x/y/z cell order when at
+least one usable positive-volume Cut cell is present.  The static form is
+\(s_u=\gamma_u\mu\sum_F h_F^5\int_F[\partial_n^3u]\cdot[\partial_n^3v]\)
+and \(s_p=\gamma_p/\mu\sum_F h_F^7\int_F[\partial_n^3p][\partial_n^3q]\),
+with positive default gammas 0.01.  There are deliberately no mass or
+convection ghost terms.
+
+The face trace uses current Bezier extraction, physical `h_axis^-order`
+derivatives, the cubic Bernstein third derivative `{-6,18,-18,6}`, a
+same-`+axis` lower-minus-upper jump, and a 4x4 Gauss tangent rule.  Assembly
+is deliberately bounded and face-local: `AssembleFace(face_index, ...)`
+returns only that face's sorted unique adjacent-cell union (at most 80
+background nodes), dense four-field pair tangent, and `-A*x` residual.  There
+is no domain-wide dense aggregate API.  `EvaluateFaceJump` exposes the same
+bounded trace coefficients for derivative orders zero through three.
+
+Catalog binding is O(1): it records immutable caller-owned domain and volume
+object identities plus construction grid/hash/count/options metadata.  Those
+objects must remain alive and immutable for the catalog lifetime; validation
+compares identities without dereferencing stored pointers.  Diagnostics
+precompute nonzero normalized (`mu=1`) trace-jump and coefficient extrema;
+selected-face catalogs reject non-representable normalized coefficients before
+publication.
+A usable positive-volume classified-Cut cell selects faces even when its
+volume is certified full; certification only makes it a coverage anchor.
+The catalog audits selected-face reachability to a certified-full/Inside
+anchor and publishes uncovered cells and components.
+
+The wall adapter now has an explicit catalog-covered overload.  Only a
+matching, covered catalog cell may use it; its penalty is
+`eta=16*gamma0*mu/h_n`, independent of the cut fraction (the legacy overload
+is unchanged at `16*gamma0*mu/(alpha*h_n)`).  Diagnostics state which policy
+was used and retain observed alpha bounds.
+
+Focused PETSc coverage is `make -C solvers/cpu ghost_penalty_test PETSC_DIR=…`
+and is part of `petsc-test`. It verifies deterministic unique lower-to-plus
+face ownership, bounded connectivity, x/y/z trace continuity through order
+two and nonzero third jumps, nonzero velocity and pressure blocks, relative
+symmetry, Jacobi PSD spectra, constant-pressure nullspace, and central
+finite-difference residual linearization. It also checks independent gamma
+and viscosity factors, uniform `K_u~s` and `K_p~s^3` scaling, anisotropic
+`area/h_n` and `area*h_n` scaling, pure classified-Cut selection semantics,
+coverage, caps, nonfinite input, and exact object-identity rejection.
+
+Real retained-rule dyadic sliver evidence currently covers `m=1..4` at octree
+depth four for the stated 3x3x3 box, including the selected certified-full
+anchor face, nonzero velocity/pressure ghost blocks, covered-wall
+`eta*h_n/mu=32`, legacy `32/alpha`, and the diagnostics policy flag. The
+requested `m=1..8` at depth eight is not claimed: with the present global
+retained 4x4x4 rule catalog it reaches the explicit point cap before
+publication (raising it entails tens of millions of retained points).
+Likewise, the existing Cartesian domain contract rejects a closed surface
+whose bounds enclose the background, so an all-Inside exterior-surface
+catalog cannot be formed without changing PR5.3/domain semantics. These are
+precise bounded-integration blockers, not substituted evidence.
+
+The remaining Phase 5 closure blockers are the depth-eight `m=1..8`
+sliver/global-patch spectra, integration of this pair operator into the
+distributed global flow/PSPG assembly, and three-level manufactured Stokes
+convergence evidence; none is fabricated by this bounded element/catalog PR.
+
 ## PR 5.1: cubic Cartesian background
 
 The CPU backend now has a dependency-light immutable cubic Cartesian background
