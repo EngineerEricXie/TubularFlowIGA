@@ -246,6 +246,25 @@ int main(int argc, char** argv)
 	const auto y_mesh=GenerateControlMesh(y,y_parameters,std::filesystem::path(argv[1]));
 	Require(y_mesh.quality.bad_elements==0,"Y integration generated invalid elements");
 	Require(y_mesh.surface_intersections.intersections==0,"Y integration self-intersected");
+	SwcGraph nonplanar_y=y;
+	nonplanar_y.nodes[3].position={6,2,1};
+	nonplanar_y.nodes[4].position={6,-2,-0.25};
+	nonplanar_y.RebuildChildren();nonplanar_y.Validate();
+	const auto nonplanar_mesh=GenerateControlMesh(
+		nonplanar_y,y_parameters,std::filesystem::path(argv[1]));
+	Require(nonplanar_mesh.quality.bad_elements==0,
+		"nonplanar Y integration generated invalid elements");
+	const std::size_t child_terminal_offset=294+201;
+	const Vec3 terminal_axis0=nonplanar_mesh.points.at(child_terminal_offset+1)
+		-nonplanar_mesh.points.at(child_terminal_offset);
+	const Vec3 terminal_axis1=nonplanar_mesh.points.at(child_terminal_offset+2)
+		-nonplanar_mesh.points.at(child_terminal_offset);
+	const Vec3 terminal_normal=Normalized(Cross(terminal_axis0,terminal_axis1),
+		"nonplanar Y terminal normal");
+	const Vec3 child_tangent=Normalized(nonplanar_y.nodes[3].position-nonplanar_y.nodes[2].position,
+		"nonplanar Y child tangent");
+	Require(std::abs(Dot(terminal_normal,child_tangent))>1.0-1.0e-12,
+		"nonplanar bifurcation terminal is not perpendicular to its child tangent");
 	const auto quality_path=std::filesystem::temp_directory_path()/"tubularflowiga-mesh-quality.json";
 	WriteMeshQualityJson(y_mesh,y_parameters.minimum_scaled_jacobian,quality_path);
 	{
