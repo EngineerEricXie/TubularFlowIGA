@@ -83,7 +83,9 @@ struct ImmersedStaticFlowDiagnostics {
 	KSPConvergedReason ksp_reason = KSP_CONVERGED_ITERATING;
 	double residual_norm = 0.0, damping = 0.0;
 	bool committed = true, trial_active = false, converged = false;
-	std::size_t commit_count = 0, rollback_count = 0;
+	bool prepared = false;
+	std::size_t commit_count = 0, rollback_count = 0, prepare_count = 0,
+		finalize_count = 0;
 	struct Port {
 		std::string id;
 		int boundary_label = -1;
@@ -179,7 +181,7 @@ public:
 			AuditAppendedScalarDiagonals();
 			Check(MatSetOption(jacobian_, MAT_IGNORE_ZERO_ENTRIES, PETSC_TRUE), "MatSetOption ignore zero entries");
 			Check(VecCreateSeq(PETSC_COMM_SELF, n, &state_), "VecCreateSeq");
-			Check(VecDuplicate(state_, &committed_), "VecDuplicate committed"); Check(VecDuplicate(state_, &rhs_), "VecDuplicate rhs"); Check(VecDuplicate(state_, &update_), "VecDuplicate update");
+			Check(VecDuplicate(state_, &committed_), "VecDuplicate committed"); Check(VecDuplicate(state_, &prepared_), "VecDuplicate prepared"); Check(VecDuplicate(state_, &rhs_), "VecDuplicate rhs"); Check(VecDuplicate(state_, &update_), "VecDuplicate update");
 			Check(VecDuplicate(state_, &action_input_), "VecDuplicate Jacobian input"); Check(VecDuplicate(state_, &action_output_), "VecDuplicate Jacobian output");
 			Check(VecDuplicate(state_, &constant_pressure_), "VecDuplicate pressure constant"); Check(VecDuplicate(state_, &pressure_defect_), "VecDuplicate pressure defect");
 			Check(VecSet(state_, 0.0), "VecSet state"); Check(VecSet(committed_, 0.0), "VecSet committed");
@@ -207,6 +209,10 @@ public:
 
 	const std::vector<std::int32_t>& ActiveNodes() const noexcept { return active_nodes_; }
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
+	const std::vector<ImmersedFlowPortDefinition>& PortDefinitions() const noexcept { return options_.ports; }
+	// Focused transactional tests can prove that an adapter leaves its published
+	// image untouched when backend preparation fails before publication.
+	void FailNextPrepareForTesting() noexcept { fail_next_prepare_for_testing_ = true; }
 	bool ScalarDiagonalStructureVerified() const noexcept { return diagnostics_.scalar_diagonal_structure_verified; }
 	bool HasGauge() const noexcept { return diagnostics_.gauge_present; }
 	PetscInt GaugeDof() const noexcept { return diagnostics_.gauge_row; }
@@ -373,12 +379,38 @@ public:
 	}
 	void Commit()
 	{
-		if (!diagnostics_.trial_active || !diagnostics_.converged) throw std::logic_error("cannot commit an unconverged static-flow trial");
-		Check(VecCopy(state_, committed_), "VecCopy commit"); diagnostics_.trial_active = false; diagnostics_.committed = true; ++diagnostics_.commit_count;
+		PrepareCommit(); FinalizeCommit();
+	}
+	// All PETSc work is deliberately completed here.  FinalizeCommit only swaps
+	// already-owned handles and updates scalar bookkeeping, so callers can use
+	// it as the nonthrowing publication half of a coupled transaction.
+	void PrepareCommit()
+	{
+		if (!diagnostics_.trial_active || !diagnostics_.converged || diagnostics_.prepared)
+			throw std::logic_error("cannot prepare an unconverged or already prepared static-flow trial");
+		if (fail_next_prepare_for_testing_) {
+			fail_next_prepare_for_testing_ = false;
+			throw std::runtime_error("injected immersed static-flow prepare failure");
+		}
+		Check(VecCopy(state_, prepared_), "VecCopy prepare commit");
+		diagnostics_.prepared = true; ++diagnostics_.prepare_count;
+	}
+	void FinalizeCommit() noexcept
+	{
+		if (!diagnostics_.prepared) return;
+		std::swap(committed_, prepared_);
+		diagnostics_.prepared = false; diagnostics_.trial_active = false;
+		diagnostics_.committed = true; ++diagnostics_.commit_count;
+		++diagnostics_.finalize_count;
+	}
+	void AbortPrepared() noexcept
+	{
+		diagnostics_.prepared = false;
 	}
 	void Rollback()
 	{
 		if (!diagnostics_.trial_active) return;
+		AbortPrepared();
 		if (state_ && committed_) Check(VecCopy(committed_, state_), "VecCopy rollback");
 		diagnostics_.trial_active = false; diagnostics_.committed = true; diagnostics_.converged = false; ++diagnostics_.rollback_count;
 	}
@@ -421,6 +453,7 @@ private:
 		if (action_output_) VecDestroy(&action_output_);
 		if (action_input_) VecDestroy(&action_input_);
 		if (rhs_) VecDestroy(&rhs_);
+		if (prepared_) VecDestroy(&prepared_);
 		if (committed_) VecDestroy(&committed_);
 		if (state_) VecDestroy(&state_);
 		if (jacobian_) MatDestroy(&jacobian_);
@@ -745,10 +778,11 @@ private:
 
 	const CartesianDomainClassification& domain_; const CutCellVolumeQuadratureCatalog& volume_; const ImmersedSurfaceQuadratureCatalog& surface_; const CutCellGhostPenaltyCatalog& ghost_; ImmersedStaticFlowOptions options_;
 	std::vector<std::int32_t> active_nodes_; std::vector<PetscInt> node_to_active_; std::vector<double> gauge_weights_;
-	Mat jacobian_ = nullptr; Vec state_ = nullptr, committed_ = nullptr, rhs_ = nullptr, update_ = nullptr;
+	Mat jacobian_ = nullptr; Vec state_ = nullptr, committed_ = nullptr, prepared_ = nullptr, rhs_ = nullptr, update_ = nullptr;
 	mutable Vec action_input_ = nullptr, action_output_ = nullptr;
 	Vec constant_pressure_ = nullptr, pressure_defect_ = nullptr;
 	KSP ksp_ = nullptr; ImmersedStaticFlowDiagnostics diagnostics_{};
+	bool fail_next_prepare_for_testing_ = false;
 };
 
 } // namespace iga

@@ -135,9 +135,10 @@ inline void ValidateThreeDImmersedFlowDomainMetadata(const std::string& domain_i
 	if (domain_id.empty()) throw std::runtime_error("immersed 3D flow domain id must be nonempty");
 	ValidateCouplingPorts(ports);
 	const std::set<PortQuantity> supported_provides = {PortQuantity::Area,
-		PortQuantity::FlowRate, PortQuantity::MeanPressure};
+		PortQuantity::FlowRate, PortQuantity::MeanPressure,
+		PortQuantity::MeanNormalTraction};
 	const std::set<PortQuantity> supported_requires = {PortQuantity::FlowRate,
-		PortQuantity::MeanPressure};
+		PortQuantity::MeanPressure, PortQuantity::MeanNormalTraction};
 	for (const auto& port : ports) {
 		if (port.subsystem_id != domain_id)
 			throw std::runtime_error(

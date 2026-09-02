@@ -11,8 +11,9 @@ their case directory and boundary-label ports remain the narrow configuration
 contract for a later runtime factory.
 
 Immersed ports use canonical nonnegative integer `boundary_label` locators,
-outward orientation `+1`, and the current pressure/flow interface quantities.
-Total-pressure and species extensions are not part of PR6.1.
+outward orientation `+1`, and the current pressure/flow/mean-normal-traction
+interface quantities.  Total-pressure and species extensions are not part of
+PR6.1.
 
 The approved first Phase 6 integration target is quasi-static immersed 3D.
 This milestone does not claim backward-Euler equivalence.
@@ -66,3 +67,46 @@ cap area/load auditing, pressure and normal-traction signs, isolated
 controller residual/Jacobian blocks, tiny-target rejection, affine traction
 measurement, overflow rejection, scalar-row gauge cases, and
 compact/expanded determinism.  No volume residual path was changed.
+
+## PR6.3 — Transactional immersed flow-domain runtime
+
+Status: complete (validated 2026-09-02).
+
+`ThreeDImmersedFlowDomain` is the final `CoupledDomainRuntime` adapter for
+the static immersed backend.  It reports exactly
+`DomainKind::ThreeDImmersedFlow`, validates an immutable runtime port catalog
+against canonical boundary-label metadata (including count, ID, parsed label,
+and control mode), and uses the coupling step only to advance interface time;
+the backend remains a `dt=0` steady solve.  Each configured pressure,
+mean-normal-traction, or flow controller receives exactly one finite hydraulic
+input at the end of an active step.  Total pressure and species remain
+rejected.
+
+Trials always restart from the backend committed vector.  Inputs, controls,
+measurements, and committed time/index are staged separately.  A rollback is
+valid only for a solved trial; cancelling an unsolved or prepared step uses
+`AbortStep`, which restores the backend image and leaves no provisional port
+result visible.
+The backend now owns a preallocated prepared `Vec`: `PrepareCommit()` copies
+the solved trial into that buffer, while `FinalizeCommit() noexcept` only
+swaps already-owned vector handles and updates counters.  The adapter stages
+validated port states before that publication and finalizes its own maps and
+clock with non-allocating swaps.  The compatibility `Commit()` API is retained
+as prepare followed by finalize.
+
+Focused real-PETSc validation completed with system PETSc 3.15
+(`PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`):
+
+- `make -B -C solvers/cpu immersed_flow_domain_test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`
+- `./solvers/cpu/immersed_flow_domain_test`
+- `./solvers/cpu/immersed_flow_domain_test`
+- `git diff --check`
+- `make clean`
+
+The domain test uses a nonzero flow-controlled inlet, pressure-controlled
+outlet, and wall label 0.  It checks exact vector/serialized-port replay and
+deterministic Newton/KSP work after rollback; changed-input abort recovery;
+prepare-failure recovery; exact adapter/backend rollback, prepare, finalize,
+and abort counter deltas; stable idempotent finalization; invalid transitions;
+traction-target forwarding, nontrivial traction output, and gauge suppression;
+output-subset visibility; and registry-kind matching.
