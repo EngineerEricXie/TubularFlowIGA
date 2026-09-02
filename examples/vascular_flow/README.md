@@ -47,15 +47,18 @@ first so it writes
 `flow_velocity.series.csv`, then run the named transport system:
 
 ```bash
-RANKS=8 ./scripts/prepare_example.sh \
-  vascular_flow/multispecies_pulse "$MULTISPECIES_WORK"
-DB="$MULTISPECIES_WORK/multispecies_pulse-8.ntiga"
+MULTISPECIES_SOURCE=examples/vascular_flow/multispecies_pulse
+./scripts/generate_case.sh "$MULTISPECIES_SOURCE" --ranks 8
+MULTISPECIES_WORK="$MULTISPECIES_SOURCE/generated"
+CASE="$MULTISPECIES_WORK/preprocessing"
+DB="$MULTISPECIES_WORK/database/multispecies_pulse-8.ntiga"
+RESULTS="$MULTISPECIES_WORK/results"
 
-mpiexec -np 8 ./solvers/cpu/iga_navier_stokes "$DB" "$MULTISPECIES_WORK" \
-  --output "$MULTISPECIES_WORK/flow_velocity.txt" --output-every 1
-mpiexec -np 8 ./solvers/cpu/iga_solve "$DB" "$MULTISPECIES_WORK" \
+mpiexec -np 8 ./solvers/cpu/iga_navier_stokes "$DB" "$CASE" \
+  --output "$RESULTS/flow_velocity.txt" --output-every 1
+mpiexec -np 8 ./solvers/cpu/iga_solve "$DB" "$CASE" \
   --system multispecies_physiology_3d \
-  --output "$MULTISPECIES_WORK/multispecies.txt" --output-every 1
+  --output "$RESULTS/multispecies.txt" --output-every 1
 ```
 
 The resulting `.pvd` files open directly in ParaView. Reproduce the README GIF
@@ -63,8 +66,8 @@ from the repository root with:
 
 ```bash
 pvbatch scripts/render_multiphysics_gif.py --dimension 3d \
-  --flow "$MULTISPECIES_WORK/flow_velocity.pvd" \
-  --transport "$MULTISPECIES_WORK/multispecies.pvd" \
+  --flow "$MULTISPECIES_WORK/results/flow_velocity.pvd" \
+  --transport "$MULTISPECIES_WORK/results/multispecies.pvd" \
   --output docs/images/multispecies-3d-pulse.gif \
   --title "3D pulse multispecies physiology" --frames 9
 ```
@@ -78,20 +81,22 @@ older `0.28` stroke exceeded the local curvature-radius limit and intersected
 non-adjacent strokes.
 
 ```bash
-IGA_WORK="$(mktemp -d /tmp/tubularflowiga-iga-wordmark.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  vascular_flow/iga_wordmark "$IGA_WORK"
-IGA_DB="$IGA_WORK/iga_wordmark-2.ntiga"
+IGA_SOURCE=examples/vascular_flow/iga_wordmark
+./scripts/generate_case.sh "$IGA_SOURCE" --ranks 2
+IGA_WORK="$IGA_SOURCE/generated"
+IGA_CASE="$IGA_WORK/preprocessing"
+IGA_DB="$IGA_WORK/database/iga_wordmark-2.ntiga"
+IGA_RESULTS="$IGA_WORK/results"
 
 PETSC_OPTIONS="-ksp_type fgmres -ksp_gmres_restart 200 \
 -pc_type asm -pc_asm_overlap 2 -sub_pc_type ilu \
 -sub_pc_factor_levels 1" \
 mpiexec -np 2 ./solvers/cpu/iga_navier_stokes \
-  "$IGA_DB" "$IGA_WORK" --max-newton 6 \
-  --output "$IGA_WORK/velocity-cpu.txt"
+  "$IGA_DB" "$IGA_CASE" --max-newton 6 \
+  --output "$IGA_RESULTS/velocity-cpu.txt"
 
 ./solvers/cpu/iga_flow_validate \
-  "$IGA_DB" "$IGA_WORK/velocity-cpu.txt"
+  "$IGA_DB" "$IGA_RESULTS/velocity-cpu.txt"
 ```
 
 The historical 2026-08-25 solver run used 24,924 nodes and 22,140 elements, converged
@@ -109,18 +114,20 @@ viscosity scaling.
 From the repository root:
 
 ```bash
-VASCULAR_WORK="$(mktemp -d /tmp/tubularflowiga-vascular.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  vascular_flow/straight_tube "$VASCULAR_WORK"
-VASCULAR_DB="$VASCULAR_WORK/straight_tube-2.ntiga"
+VASCULAR_SOURCE=examples/vascular_flow/straight_tube
+./scripts/generate_case.sh "$VASCULAR_SOURCE" --ranks 2
+VASCULAR_WORK="$VASCULAR_SOURCE/generated"
+VASCULAR_CASE="$VASCULAR_WORK/preprocessing"
+VASCULAR_DB="$VASCULAR_WORK/database/straight_tube-2.ntiga"
+VASCULAR_RESULTS="$VASCULAR_WORK/results"
 
 mpiexec -np 2 ./solvers/cpu/iga_mesh_check "$VASCULAR_DB"
 mpiexec -np 2 ./solvers/cpu/iga_navier_stokes \
-  "$VASCULAR_DB" "$VASCULAR_WORK" \
-  --output "$VASCULAR_WORK/velocity-cpu.txt"
+  "$VASCULAR_DB" "$VASCULAR_CASE" \
+  --output "$VASCULAR_RESULTS/velocity-cpu.txt"
 
 ./solvers/cpu/iga_flow_validate \
-  "$VASCULAR_DB" "$VASCULAR_WORK/velocity-cpu.txt"
+  "$VASCULAR_DB" "$VASCULAR_RESULTS/velocity-cpu.txt"
 ```
 
 Build the MPI/PETSc solver first if `solvers/cpu/iga_navier_stokes` is absent:
@@ -139,8 +146,8 @@ divergence, and divergence-theorem error.
 ```bash
 ./solvers/cuda/iga_cuda mesh-check "$VASCULAR_DB"
 ./solvers/cuda/iga_cuda navier-stokes \
-  "$VASCULAR_DB" "$VASCULAR_WORK" \
-  --output "$VASCULAR_WORK/velocity-cuda.txt"
+  "$VASCULAR_DB" "$VASCULAR_CASE" \
+  --output "$VASCULAR_RESULTS/velocity-cuda.txt"
 ```
 
 Build with `make cuda CUDA_ARCHS=YOUR_GPU_ARCH` and verify

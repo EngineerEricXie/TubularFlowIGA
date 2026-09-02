@@ -1,5 +1,24 @@
 # Pipeline and Case Preparation
 
+## Recommended case-level command
+
+Run the complete 3D workflow through one command:
+
+```bash
+./scripts/generate_case.sh CASE_DIR --ranks 2
+```
+
+By default it creates `CASE_DIR/generated/{preprocessing,database,visualization,results}`.
+All work is completed and validated in a sibling staging directory before the
+finished tree becomes visible. An existing nonempty output is not overwritten;
+use `--clean` to replace it deliberately. `--output DIR` selects another root,
+and `--legacy-vtk` adds `visualization/bzmesh.vtk`.
+
+Strict geometry preflight remains the default. For reviewed debugging geometry
+only, `--allow-preflight-failure` records the failed preflight in
+`manifest.json` and continues to the mandatory final mesh-quality and Bezier
+geometry gates.
+
 ## 1. Generate the control mesh
 
 A 3D case directory starts with a schema-v4 `simulation_config.json`. Its
@@ -53,6 +72,10 @@ make mesh-test
 ./preprocessing/mesh/tubular_mesh pipeline \
   "$CASE_DIR" meshgeneration/template
 ```
+
+This low-level command writes preprocessing artifacts directly into the path
+it receives. Prefer `generate_case.sh` for normal case generation and use the
+low-level stages for development or regression tests.
 
 After strict parsing and topology validation, it writes
 `skeleton_normalized.swc` and `skeleton.vtp`. OBJ is thereby converted to an
@@ -109,21 +132,26 @@ It reads `controlmesh.vtk` and writes:
 
 - `bzmeshinfo.txt`: Bezier element connectivity;
 - `spline_cache.igacache`: versioned sparse coefficients and Bezier points;
-- `bzmesh.vtk`: legacy preprocessing visualization output (its element-local
-  points may repeat; production temporal visualization uses the packed
-  database and the extraction-signature registry instead);
 - `geometry_transform.json`: source origin and normalization scale.
+
+Pass `--legacy-vtk` to additionally write the historical eight-corner linear
+`bzmesh.vtk`. It is not used by the native packing or solver pipeline;
+production and preprocessing visualization use the packed database and the
+extraction-signature registry instead.
 
 ### Coordinate normalization
 
 Before extraction, the spline code subtracts the minimum coordinate on each
 axis and divides every coordinate by the smallest domain-axis extent. The
-Bezier mesh and packed `.ntiga` geometry therefore use translated, normalized
-coordinates rather than the original SWC coordinate units. The extractor writes
-the affine map to `geometry_transform.json`; version-5 `.ntiga` also stores it
-and the configured source length scale to metres. Transform flow, time,
-material, pressure, and transport parameters consistently. The public examples
-use internally consistent numerical values and are not presented as
+packed `.ntiga` geometry and all numerical assembly therefore use translated,
+normalized coordinates. The extractor writes the affine map to
+`geometry_transform.json`; version-5 `.ntiga` also stores it and the configured
+source length scale to metres. Both preprocessing and simulation VTKHDF output
+apply the inverse affine map, so their displayed points align with
+`controlmesh.vtk` in source coordinates. The optional legacy `bzmesh.vtk`
+retains its historical normalized-coordinate representation. Transform flow,
+time, material, pressure, and transport parameters consistently. The public
+examples use internally consistent numerical values and are not presented as
 patient-specific SI calibrations.
 
 Omit `--no-legacy-text` to additionally reproduce `cmat.txt` and `bzpt.txt`.
@@ -142,6 +170,7 @@ CPU rank count, METIS partition suffix, and `mpiexec -np` must agree.
 RANKS=8
 mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_pack "$CASE_DIR" "$RANKS" "$DATABASE"
+./solvers/cpu/iga_bezier_export "$DATABASE" "$CASE_DIR/bzmesh.vtkhdf"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
 
@@ -155,6 +184,13 @@ transform and configured length scale. Readers remain compatible with versions
 3 and 4; version 3 face labels are unavailable. Repack
 when changing the CPU rank count. CUDA ignores ownership records and may reuse
 any valid packed database.
+
+`iga_bezier_export` creates a solver-independent preview containing cubic
+`VTK_BEZIER_HEXAHEDRON` cells. It writes a geometry-only dataset to
+`bzmesh.vtkhdf` plus `bzmesh.bezier_geometry.json`. The example preparation
+script runs this export automatically, so the true spline geometry can be
+inspected in ParaView before solving. Its source-coordinate placement matches
+`controlmesh.vtk`; the normalized geometry in `.ntiga` remains unchanged.
 
 ## 4. Validate and solve
 

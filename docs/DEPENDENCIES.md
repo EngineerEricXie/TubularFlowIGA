@@ -117,7 +117,7 @@ Verify the preprocessing environment:
 make mesh mesh-test
 make spline EIGEN_DIR="${EIGEN_DIR:-/usr/include/eigen3}"
 make cpu cpu-test
-./scripts/prepare_example.sh vascular_flow/straight_tube
+./scripts/generate_case.sh examples/vascular_flow/straight_tube --ranks 2
 ```
 
 `make cpu` in the last block builds only the PETSc-free packer, inspector, and
@@ -315,17 +315,18 @@ export PETSC_DIR="$PROJECT_ROOT/software/petsc"
 export PETSC_ARCH=arch-linux-c-opt
 export RANKS=2
 
-./scripts/prepare_example.sh vascular_flow/straight_tube "$PROJECT_ROOT/cases/tubular-straight"
+./scripts/generate_case.sh examples/vascular_flow/straight_tube \
+  --output "$PROJECT_ROOT/cases/tubular-straight" --ranks "$RANKS"
 mpiexec -np "$RANKS" ./solvers/cpu/iga_mesh_check \
-  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-$RANKS.ntiga"
+  "$PROJECT_ROOT/cases/tubular-straight/database/straight_tube-$RANKS.ntiga"
 mpiexec -np "$RANKS" ./solvers/cpu/iga_navier_stokes \
-  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-$RANKS.ntiga" \
-  "$PROJECT_ROOT/cases/tubular-straight" \
-  --output "$PROJECT_ROOT/cases/tubular-straight/velocity.txt"
+  "$PROJECT_ROOT/cases/tubular-straight/database/straight_tube-$RANKS.ntiga" \
+  "$PROJECT_ROOT/cases/tubular-straight/preprocessing" \
+  --output "$PROJECT_ROOT/cases/tubular-straight/results/velocity.txt"
 ```
 
-`prepare_example.sh` requires an empty target directory. Choose another path or
-archive an earlier generated case directory before rerunning it.
+The generator preserves a nonempty target directory. Choose another path or
+rerun with `--clean` when replacing an earlier generated case is intentional.
 
 ### GPU build and smoke test
 
@@ -350,7 +351,7 @@ module load cuda/12.4.0
 cd "$PROJECT_ROOT/TubularFlowIGA"
 ./solvers/cuda/iga_cuda device-info
 ./solvers/cuda/iga_cuda mesh-check \
-  "$PROJECT_ROOT/cases/tubular-straight/straight_tube-2.ntiga"
+  "$PROJECT_ROOT/cases/tubular-straight/database/straight_tube-2.ntiga"
 ```
 
 The CUDA reader ignores CPU ownership records, so a database packed for two CPU
@@ -366,7 +367,7 @@ After installation, the expected checks are:
 ```bash
 make mesh-test
 make cpu-test
-./scripts/prepare_example.sh vascular_flow/straight_tube
+./scripts/generate_case.sh examples/vascular_flow/straight_tube --ranks 2
 
 # With MPI/PETSc configured:
 ./scripts/check_dependencies.sh cpu

@@ -13,6 +13,9 @@ if [[ $# -ne 1 ]]; then
 fi
 
 work_dir=$1
+case_dir=$work_dir/preprocessing
+database_dir=$work_dir/database
+results_dir=$work_dir/results
 solver=$repo_dir/solvers/cpu/iga_navier_stokes
 packer=$repo_dir/solvers/cpu/iga_pack
 
@@ -34,7 +37,7 @@ RunCase()
 	local prefix=$3
 	shift 3
 	mkdir -p "$(dirname "$prefix")"
-	mpiexec -np "$ranks" "$solver" "$database" "$work_dir" \
+	mpiexec -np "$ranks" "$solver" "$database" "$case_dir" \
 		--checkpoint "$prefix" --output "$(dirname "$prefix")/flow.txt" "$@"
 }
 
@@ -140,38 +143,39 @@ ValidateManifest()
 	fi
 }
 
-RANKS=2 "$repo_dir/scripts/prepare_example.sh" vascular_flow/vca_bifurcation "$work_dir"
-awk '{print 0}' "$work_dir/bzmeshinfo.txt.epart.2" > "$work_dir/bzmeshinfo.txt.epart.1"
-"$packer" "$work_dir" 1 "$work_dir/vca_bifurcation-1.ntiga"
+"$repo_dir/scripts/generate_case.sh" "$repo_dir/examples/vascular_flow/vca_bifurcation" \
+	--output "$work_dir" --ranks 2
+awk '{print 0}' "$case_dir/bzmeshinfo.txt.epart.2" > "$case_dir/bzmeshinfo.txt.epart.1"
+"$packer" "$case_dir" 1 "$database_dir/vca_bifurcation-1.ntiga"
 
-one_database=$work_dir/vca_bifurcation-1.ntiga
-two_database=$work_dir/vca_bifurcation-2.ntiga
+one_database=$database_dir/vca_bifurcation-1.ntiga
+two_database=$database_dir/vca_bifurcation-2.ntiga
 
-RunCase 1 "$one_database" "$work_dir/one/full/checkpoint"
-RunCase 1 "$one_database" "$work_dir/one/split/checkpoint" --stop-after-step 2
-RunCase 1 "$one_database" "$work_dir/one/resumed/checkpoint" \
-	--restart "$work_dir/one/split/checkpoint"
-RunCase 2 "$two_database" "$work_dir/two/full/checkpoint"
-RunCase 2 "$two_database" "$work_dir/two/split/checkpoint" --stop-after-step 2
-RunCase 2 "$two_database" "$work_dir/two/resumed/checkpoint" \
-	--restart "$work_dir/two/split/checkpoint"
+RunCase 1 "$one_database" "$results_dir/one/full/checkpoint"
+RunCase 1 "$one_database" "$results_dir/one/split/checkpoint" --stop-after-step 2
+RunCase 1 "$one_database" "$results_dir/one/resumed/checkpoint" \
+	--restart "$results_dir/one/split/checkpoint"
+RunCase 2 "$two_database" "$results_dir/two/full/checkpoint"
+RunCase 2 "$two_database" "$results_dir/two/split/checkpoint" --stop-after-step 2
+RunCase 2 "$two_database" "$results_dir/two/resumed/checkpoint" \
+	--restart "$results_dir/two/split/checkpoint"
 
 for ranks in one two; do
-	cmp "$work_dir/$ranks/full/checkpoint.state" "$work_dir/$ranks/resumed/checkpoint.state"
-	cmp "$work_dir/$ranks/full/checkpoint.vca_transport.state" \
-		"$work_dir/$ranks/resumed/checkpoint.vca_transport.state"
+	cmp "$results_dir/$ranks/full/checkpoint.state" "$results_dir/$ranks/resumed/checkpoint.state"
+	cmp "$results_dir/$ranks/full/checkpoint.vca_transport.state" \
+		"$results_dir/$ranks/resumed/checkpoint.vca_transport.state"
 done
 
-RelativeL2 "$work_dir/one/full/flow.txt" "$work_dir/two/full/flow.txt" velocity "$relative_tolerance"
-RelativeL2 "$work_dir/one/full/flow.txt.pressure" "$work_dir/two/full/flow.txt.pressure" pressure "$pressure_relative_tolerance"
+RelativeL2 "$results_dir/one/full/flow.txt" "$results_dir/two/full/flow.txt" velocity "$relative_tolerance"
+RelativeL2 "$results_dir/one/full/flow.txt.pressure" "$results_dir/two/full/flow.txt.pressure" pressure "$pressure_relative_tolerance"
 for key in volume_m3 temperature_c hematocrit_percent oxygen; do
-	CompareReservoirNumber "$key" "$work_dir/one/full/checkpoint.vca.json" \
-		"$work_dir/two/full/checkpoint.vca.json"
+	CompareReservoirNumber "$key" "$results_dir/one/full/checkpoint.vca.json" \
+		"$results_dir/two/full/checkpoint.vca.json"
 done
 for ranks in one two; do
-	ValidateManifest "$work_dir/$ranks/full/coupling_manifest.json" 4
-	ValidateManifest "$work_dir/$ranks/split/coupling_manifest.json" 2
-	ValidateManifest "$work_dir/$ranks/resumed/coupling_manifest.json" 2
+	ValidateManifest "$results_dir/$ranks/full/coupling_manifest.json" 4
+	ValidateManifest "$results_dir/$ranks/split/coupling_manifest.json" 2
+	ValidateManifest "$results_dir/$ranks/resumed/coupling_manifest.json" 2
 done
 
 printf 'VCA bifurcation one-/two-rank validation passed: %s\n' "$work_dir"

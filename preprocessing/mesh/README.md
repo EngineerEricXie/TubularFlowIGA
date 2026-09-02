@@ -57,7 +57,13 @@ Individual stages are also available:
 tubular_mesh smooth INPUT.swc|INPUT.obj mesh_parameter.txt OUTPUT.swc
 tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR \
   controlmesh.vtk initial_velocityfield.txt MIN_SCALED_J
+tubular_mesh pipeline CASE_DIR TEMPLATE_DIR --allow-preflight-failure
 ```
+
+`generate` also writes `mesh_quality.json` beside `controlmesh.vtk`.
+The pipeline override is intended only for explicitly reviewed debug geometry.
+It preserves the failed diagnostics and still enforces the final element-quality
+and surface-intersection gates.
 
 These two commands retain the strictly parsed five-line legacy format for
 regression work. A pipeline case may use either schema v4 or legacy

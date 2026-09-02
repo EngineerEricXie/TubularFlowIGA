@@ -32,15 +32,17 @@ From the repository root:
 ./scripts/check_dependencies.sh cpu
 make cpu-petsc PETSC_DIR="$PETSC_DIR" PETSC_ARCH="${PETSC_ARCH:-}"
 
-NMO_WORK="$(mktemp -d /tmp/tubularflowiga-nmo06840.XXXXXX)"
-OMP_NUM_THREADS=12 RANKS=12 ./scripts/prepare_example.sh \
-  neuron_transport/nmo_06840_bifurcation "$NMO_WORK"
-NMO_DB="$NMO_WORK/nmo_06840_bifurcation-12.ntiga"
+NMO_SOURCE=examples/neuron_transport/nmo_06840_bifurcation
+OMP_NUM_THREADS=12 ./scripts/generate_case.sh "$NMO_SOURCE" --ranks 12
+NMO_WORK="$NMO_SOURCE/generated"
+NMO_CASE="$NMO_WORK/preprocessing"
+NMO_DB="$NMO_WORK/database/nmo_06840_bifurcation-12.ntiga"
+NMO_RESULTS="$NMO_WORK/results"
 
 mpiexec -np 12 ./solvers/cpu/iga_mesh_check "$NMO_DB"
 mpiexec -np 12 ./solvers/cpu/iga_solve \
-  "$NMO_DB" "$NMO_WORK" --system neuron_transport \
-  --output "$NMO_WORK/neuron-cpu.txt" --output-every 1
+  "$NMO_DB" "$NMO_CASE" --system neuron_transport \
+  --output "$NMO_RESULTS/neuron-cpu.txt" --output-every 1
 ```
 
 The CPU MPI process count must equal `RANKS` used during preparation. Do not
@@ -64,8 +66,8 @@ make cuda CUDA_ARCHS=YOUR_GPU_ARCH
 ./solvers/cuda/iga_cuda device-info
 ./solvers/cuda/iga_cuda mesh-check "$NMO_DB"
 ./solvers/cuda/iga_cuda solve \
-  "$NMO_DB" "$NMO_WORK" --system neuron_transport \
-  --output "$NMO_WORK/neuron-cuda.txt" --output-every 1
+  "$NMO_DB" "$NMO_CASE" --system neuron_transport \
+  --output "$NMO_RESULTS/neuron-cuda.txt" --output-every 1
 ```
 
 Do not treat a successful CUDA build as a runtime result. Run `device-info`,

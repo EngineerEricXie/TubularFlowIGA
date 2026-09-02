@@ -11,6 +11,7 @@
 /preprocessing/spline/spline
 /solvers/cpu/iga_pack
 /solvers/cpu/iga_inspect
+/solvers/cpu/iga_bezier_export
 /solvers/cpu/iga_mesh_check
 /solvers/cpu/iga_case_check
 /solvers/cpu/case_config_test
@@ -69,6 +70,7 @@ core.*
 /outputs/
 /build/
 /cmake-build-*/
+/examples/**/generated/
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json

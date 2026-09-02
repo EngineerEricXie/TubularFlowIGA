@@ -65,23 +65,23 @@ Every 3D runnable example contains `skeleton_initial.swc` or
 `skeleton_initial.obj` plus a schema-v4 `simulation_config.json`; its
 `geometry` and `mesh` blocks configure preprocessing in the same validated
 document as the physics. A native 1D example needs only the skeleton and
-schema-v3 configuration. Generated meshes, databases, and results are written
-to a separate work directory.
+schema-v3 configuration. Each 3D case writes reproducible meshes, databases,
+visualization, and results below its ignored `generated/` directory.
 
 | Goal | Recommended case | Command |
 |---|---|---|
-| First vascular run | Straight rigid vessel | `./scripts/prepare_example.sh vascular_flow/straight_tube` |
-| Curved vascular geometry | Planar bend | `./scripts/prepare_example.sh vascular_flow/bent_tube` |
-| Branching vascular flow | Symmetric bifurcation | `./scripts/prepare_example.sh vascular_flow/y_bifurcation` |
-| Large neuron regression | NMO_06840 transport; long-running | `RANKS=12 ./scripts/prepare_example.sh neuron_transport/nmo_06840_bifurcation` |
-| README showcase | Connected IGA wordmark | `./scripts/prepare_example.sh vascular_flow/iga_wordmark` |
-| First neuron run | Straight neurite | `./scripts/prepare_example.sh neuron_transport/straight_neurite` |
-| Branching neuron transport | Branched neurite | `./scripts/prepare_example.sh neuron_transport/branched_neurite` |
+| First vascular run | Straight rigid vessel | `./scripts/generate_case.sh examples/vascular_flow/straight_tube --ranks 2` |
+| Curved vascular geometry | Planar bend | `./scripts/generate_case.sh examples/vascular_flow/bent_tube --ranks 2` |
+| Branching vascular flow | Symmetric bifurcation | `./scripts/generate_case.sh examples/vascular_flow/y_bifurcation --ranks 2` |
+| Large neuron regression | NMO_06840 transport; long-running | `./scripts/generate_case.sh examples/neuron_transport/nmo_06840_bifurcation --ranks 12` |
+| README showcase | Connected IGA wordmark | `./scripts/generate_case.sh examples/vascular_flow/iga_wordmark --ranks 2` |
+| First neuron run | Straight neurite | `./scripts/generate_case.sh examples/neuron_transport/straight_neurite --ranks 2` |
+| Branching neuron transport | Branched neurite | `./scripts/generate_case.sh examples/neuron_transport/branched_neurite --ranks 2` |
 | First native 1D run | Straight Poiseuille vessel | `./solvers/one_d/iga_1d examples/one_d/rigid_straight --check` |
 | Compliant 1D flow | Pulsatile Y-bifurcation | `./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation` |
 | 1D multispecies physiology | Six-species pulse network | `./solvers/one_d/iga_1d examples/one_d/multispecies_physiology` |
-| 3D multispecies pulse | Navier--Stokes plus six species | `./scripts/prepare_example.sh vascular_flow/multispecies_pulse` |
-| 3D VCA closed loop | Two-outlet vascular coupling smoke case | `RANKS=2 ./scripts/prepare_example.sh vascular_flow/vca_bifurcation` |
+| 3D multispecies pulse | Navier--Stokes plus six species | `./scripts/generate_case.sh examples/vascular_flow/multispecies_pulse --ranks 2` |
+| 3D VCA closed loop | Two-outlet vascular coupling smoke case | `./scripts/generate_case.sh examples/vascular_flow/vca_bifurcation --ranks 2` |
 
 See the [examples catalog](examples/README.md) for the input contract and case
 descriptions.
@@ -151,32 +151,39 @@ cd TubularFlowIGA
 
 ./scripts/check_dependencies.sh preprocessing
 
-VASCULAR_WORK="$(mktemp -d /tmp/tubularflowiga-vascular.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  vascular_flow/straight_tube "$VASCULAR_WORK"
+VASCULAR_SOURCE=examples/vascular_flow/straight_tube
+./scripts/generate_case.sh "$VASCULAR_SOURCE" --ranks 2
+VASCULAR_WORK="$VASCULAR_SOURCE/generated"
 ```
 
-The preparation script builds the dependency-free tools and runs mesh
+The case generator builds the dependency-free tools and runs mesh
 generation, spline extraction, two-way METIS partitioning, database packing,
 inspection, configuration validation, and boundary-label validation. A
 successful run prints the work directory, database path, and matching CPU/CUDA
 solver commands.
+Use `--clean` for an explicit full replacement; an existing nonempty
+`generated/` directory is otherwise preserved.
 
-The prepared directory contains, among other generated files:
+The prepared directory groups generated files by role:
 
-- `skeleton_normalized.swc`: validated, rooted canonical skeleton;
-- `skeleton.vtp`: centerline, radius, topology, and branch data for ParaView;
-- `mesh_diagnostics.json` and `skeleton_diagnostics.vtp`: geometry feasibility,
+- `preprocessing/skeleton_normalized.swc`: validated, rooted canonical skeleton;
+- `preprocessing/skeleton.vtp`: centerline, radius, topology, and branch data for ParaView;
+- `preprocessing/mesh_diagnostics.json` and `preprocessing/skeleton_diagnostics.vtp`: geometry feasibility,
   dimensionless quality metrics, and collision candidates;
-- `controlmesh.vtk`: labeled hexahedral control mesh;
-- `mesh_quality.json`: final Jacobian and surface-intersection results;
-- `bzmesh.vtk` and `bzmeshinfo.txt`: Bezier visualization and extraction data;
-- `geometry_transform.json`: the source-to-normalized coordinate transform;
-- `initial_velocityfield.txt`: generated spatial velocity profile;
-- `straight_tube-2.ntiga`: packed solver database.
+- `preprocessing/controlmesh.vtk`: labeled hexahedral control mesh;
+- `preprocessing/mesh_quality.json`: final Jacobian and surface-intersection results;
+- `visualization/bzmesh.vtkhdf`: cubic Bezier geometry preview for ParaView;
+- `visualization/bzmesh.bezier_geometry.json`: preview-geometry validation report;
+- `preprocessing/bzmeshinfo.txt`: Bezier extraction connectivity;
+- `preprocessing/geometry_transform.json`: source-to-normalized coordinate transform;
+- `preprocessing/initial_velocityfield.txt`: generated spatial velocity profile;
+- `database/straight_tube-2.ntiga`: packed solver database;
+- `results/`: destination used by the printed solver commands;
+- `manifest.json`: generation options, validation status, mesh counts, coordinate spaces, and paths.
 
-`prepare_example.sh` requires an empty work directory. Its default `RANKS=2`
-is intentional because `mpmetis` does not create a one-partition output.
+An existing nonempty `generated/` is preserved unless `--clean` is explicit.
+The minimum `--ranks 2` is intentional because `mpmetis` does not create a
+one-partition output.
 
 ## Run on CPU with MPI/PETSc
 
@@ -192,30 +199,34 @@ Run the prepared vascular example with exactly the rank count used during
 packing:
 
 ```bash
-VASCULAR_DB="$VASCULAR_WORK/straight_tube-2.ntiga"
+VASCULAR_CASE="$VASCULAR_WORK/preprocessing"
+VASCULAR_DB="$VASCULAR_WORK/database/straight_tube-2.ntiga"
+VASCULAR_RESULTS="$VASCULAR_WORK/results"
 
 mpiexec -np 2 ./solvers/cpu/iga_mesh_check "$VASCULAR_DB"
 mpiexec -np 2 ./solvers/cpu/iga_navier_stokes \
-  "$VASCULAR_DB" "$VASCULAR_WORK" \
-  --output "$VASCULAR_WORK/velocity-cpu.txt"
+  "$VASCULAR_DB" "$VASCULAR_CASE" \
+  --output "$VASCULAR_RESULTS/velocity-cpu.txt"
 
 ./solvers/cpu/iga_flow_validate \
-  "$VASCULAR_DB" "$VASCULAR_WORK/velocity-cpu.txt"
+  "$VASCULAR_DB" "$VASCULAR_RESULTS/velocity-cpu.txt"
 ```
 
 For neuron transport, prepare the neuron case and run its named equation
 system:
 
 ```bash
-NEURON_WORK="$(mktemp -d /tmp/tubularflowiga-neuron.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  neuron_transport/straight_neurite "$NEURON_WORK"
-NEURON_DB="$NEURON_WORK/straight_neurite-2.ntiga"
+NEURON_SOURCE=examples/neuron_transport/straight_neurite
+./scripts/generate_case.sh "$NEURON_SOURCE" --ranks 2
+NEURON_WORK="$NEURON_SOURCE/generated"
+NEURON_CASE="$NEURON_WORK/preprocessing"
+NEURON_DB="$NEURON_WORK/database/straight_neurite-2.ntiga"
+NEURON_RESULTS="$NEURON_WORK/results"
 
 mpiexec -np 2 ./solvers/cpu/iga_solve \
-  "$NEURON_DB" "$NEURON_WORK" \
+  "$NEURON_DB" "$NEURON_CASE" \
   --system neuron_transport \
-  --output "$NEURON_WORK/neuron-cpu.txt"
+  --output "$NEURON_RESULTS/neuron-cpu.txt"
 ```
 
 The flow solver writes three velocity columns to the requested path and one
@@ -237,13 +248,13 @@ make cuda CUDA_ARCHS=89
 ./solvers/cuda/iga_cuda device-info
 ./solvers/cuda/iga_cuda mesh-check "$VASCULAR_DB"
 ./solvers/cuda/iga_cuda navier-stokes \
-  "$VASCULAR_DB" "$VASCULAR_WORK" \
-  --output "$VASCULAR_WORK/velocity-cuda.txt"
+  "$VASCULAR_DB" "$VASCULAR_CASE" \
+  --output "$VASCULAR_RESULTS/velocity-cuda.txt"
 
 ./solvers/cuda/iga_cuda solve \
-  "$NEURON_DB" "$NEURON_WORK" \
+  "$NEURON_DB" "$NEURON_CASE" \
   --system neuron_transport \
-  --output "$NEURON_WORK/neuron-cuda.txt"
+  --output "$NEURON_RESULTS/neuron-cuda.txt"
 ```
 
 Set `CUDA_ARCHS` to the compute capability of the target GPU. For example,
