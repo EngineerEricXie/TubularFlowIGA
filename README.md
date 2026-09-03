@@ -156,6 +156,13 @@ VASCULAR_SOURCE=examples/vascular_flow/straight_tube
 VASCULAR_WORK="$VASCULAR_SOURCE/generated"
 ```
 
+To generate and optionally solve several cases with one execution profile, use
+`./scripts/run_cases.sh --config execution.conf CaseA CaseB`. The profile
+controls ranks, CPU/CUDA selection, and launch behavior; each case's geometry,
+mesh, physics, and boundary conditions remain in `simulation_config.json`.
+The validated execution plan dispatches native 1D cases directly to `iga_1d`
+and sends 3D cases through mesh generation and the selected CPU/CUDA solver.
+
 The case generator builds the dependency-free tools and runs mesh
 generation, spline extraction, two-way METIS partitioning, database packing,
 inspection, configuration validation, and boundary-label validation. A

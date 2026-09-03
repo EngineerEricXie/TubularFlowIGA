@@ -40,6 +40,7 @@
 /solvers/cpu/temporal_vtkhdf_test
 /solvers/one_d/iga_1d
 /solvers/one_d/one_d_core_test
+/solvers/one_d/one_d_coupling_test
 /solvers/one_d/one_d_petsc_test
 /solvers/cuda/iga_cuda
 
@@ -71,6 +72,8 @@ core.*
 /build/
 /cmake-build-*/
 /examples/**/generated/
+/Input/*
+!/Input/README.md
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json

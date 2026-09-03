@@ -22,6 +22,12 @@ make one-d-test
 ./solvers/one_d/iga_1d CASE_DIR --output-dir OUTPUT_DIR
 ```
 
+For the shared multi-case entry point, set `CASE_ROOT` and `RANKS` in
+`execution.conf` and run `./scripts/run_cases.sh CASE_NAME`. The runner reads
+the validated execution plan, bypasses the 3D mesh/database pipeline, invokes
+`iga_1d`, and writes the completed run below `CASE/generated/` (or the selected
+`OUTPUT_ROOT`). `BACKEND=cuda` is rejected for 1D before launch.
+
 `--check` parses the complete schema, reads and validates the SWC tree, resolves
 topological boundaries, and checks referenced node IDs without advancing time.
 Without `--system`, a case must have exactly one 1D flow system; the solver then
