@@ -115,6 +115,19 @@ binds geometry/publication/layout/state/time/index.
 threshold proxies.  They are not particle or tracer residence time, retained
 blood fraction, a blood-age distribution, or a washout curve.
 
+## Recoverable moving snapshot publication
+
+Publication is a separate, immutable consumer of an already committed field
+snapshot. It emits one `<stem>.epoch%020llu` directory with `fields.vtu` and
+`metrics.json`, then atomically rebuilds the `<stem>.pvd` collection from all
+valid complete epoch directories. The VTU is a quadrature-support point cloud:
+every ordered volume support point is an independent `VTK_VERTEX` cell. It is
+not a boundary-conforming moving volume mesh and must not be interpreted as
+one. The manifest carries identities, hashes, units, thresholds and aggregate
+metrics; a complete orphaned epoch is recoverable after a crash between the
+directory and PVD renames. Static geometry remains on the Bézier VTKHDF
+visualization path.
+
 Wall mismatch reports area, maximum and RMS relative velocity in m/s, plus
 `wall_relative_velocity_squared_area_integral_m4_per_s2`, the dimensionally
 explicit integral of squared relative velocity over wall area.  Each requested
