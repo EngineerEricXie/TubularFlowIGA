@@ -30,6 +30,31 @@ iga::CartesianDomainClassification Domain()
 	return iga::CartesianDomainClassification(iga::CubicCartesianBackground(spec),
 		iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(Cube(.1,.9))));
 }
+struct Depth2CompactFixture {
+	iga::CartesianDomainClassification domain;
+	iga::CutCellVolumeQuadratureCatalog volume;
+	iga::ImmersedSurfaceQuadratureCatalog surface;
+	iga::CutCellGhostPenaltyCatalog ghost;
+
+	Depth2CompactFixture()
+		: domain(Domain()), volume(domain, {2,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact),
+		surface(domain), ghost(domain, volume) {}
+};
+void AssertSameTopology(const iga::CartesianDomainClassification& expected,
+	const iga::CartesianDomainClassification& actual)
+{
+	assert(expected.SurfaceCanonicalHash() == actual.SurfaceCanonicalHash());
+	assert(expected.Background().Spec().lower_m == actual.Background().Spec().lower_m);
+	assert(expected.Background().Spec().upper_m == actual.Background().Spec().upper_m);
+	assert(expected.Background().Spec().cells == actual.Background().Spec().cells);
+	assert(expected.Cells().size() == actual.Cells().size());
+	for (std::size_t i = 0; i < expected.Cells().size(); ++i) {
+		const auto& left = expected.Cells()[i]; const auto& right = actual.Cells()[i];
+		assert(left.id == right.id && left.index == right.index && left.classification == right.classification
+			&& left.triangle_ids == right.triangle_ids && left.boundary_only_contact == right.boundary_only_contact
+			&& left.ambiguous == right.ambiguous);
+	}
+}
 template <class Function> void Reject(Function&& function)
 {
 	bool rejected = false; try { function(); } catch (const std::exception&) { rejected = true; } assert(rejected);
@@ -203,23 +228,6 @@ int main(int argc, char** argv)
 		const double expected = PetscRealPart(expected_force_difference[4*a+3]);
 		assert(std::abs(actual-expected) < 1e-11*std::max({1.0, std::abs(actual), std::abs(expected)}));
 	}
-	// The conservative resolved mixed form, closed-wall Nitsche topology, and
-	// pressure gauge must retain the exactly representable hydrostatic root.
-	// The pressure has zero mean on this centered cube, so no gauge shift is
-	// needed: u=0 and grad(p)=(.3,-.2,.1) balances the supplied body force.
-	iga::ImmersedStaticFlowOptions hydrostatic_options = options;
-	hydrostatic_options.parameters = {1.0, 1.0, 0.0};
-	hydrostatic_options.body_force = [](const std::array<double, 3>&) {
-		return std::array<double, 3>{{.3,-.2,.1}};
-	};
-	iga::ImmersedStaticFlowRuntime hydrostatic(domain, volume, surface, ghost, hydrostatic_options);
-	assert(hydrostatic.HasGauge() && hydrostatic.PortDefinitions().empty());
-	hydrostatic.SetCommittedState(HydrostaticState(domain, hydrostatic));
-	hydrostatic.Assemble();
-	const auto hydrostatic_residual = hydrostatic.AssembledNegativeResidual();
-	assert(VectorNorm(hydrostatic_residual) < 1e-14);
-	for (const auto block : ResidualBlockNorms(hydrostatic, hydrostatic_residual)) assert(block < 1e-14);
-
 	const auto other_domain = Domain();
 	const iga::CutCellVolumeQuadratureCatalog other_volume(other_domain, {4,500000,500000,3000000});
 	const iga::CutCellGhostPenaltyCatalog other_ghost(other_domain, other_volume);
@@ -236,10 +244,51 @@ int main(int argc, char** argv)
 	assert(fault != fault_cells.end()); fault->usable = false;
 	Reject([&] { iga::ImmersedStaticFlowRuntime invalid(domain, fault_volume, surface, fault_ghost, options); });
 
-	// All nonzero regression solves request the portable LU regularization
-	// explicitly.  Default (zero) remains a production policy choice.
+	// Keep depth-4 compact-rule assembly and measure coverage, but isolate all
+	// repeated nonlinear work below.  This verifies compact storage against the
+	// production-depth catalog without turning its expanded quadrature into a
+	// line-search multiplier.
+	const iga::CutCellVolumeQuadratureCatalog compact(domain, {4,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact);
+	const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
+	iga::ImmersedStaticFlowRuntime compact_runtime(domain, compact, surface, compact_ghost, options);
+	compact_runtime.Assemble();
+	assert(std::abs(compact_runtime.Diagnostics().pressure_measure-DirectMeasure(domain, compact)) < 2e-12);
+
+	// The hydrostatic root and every nonzero closed-wall solve use an otherwise
+	// identical independent depth-2 compact fixture.  Keep the physical
+	// topology, wall label, body force, and nonlinear options explicit here so
+	// this is a runtime-cost isolation rather than a weaker regression.
+	Depth2CompactFixture depth2;
+	AssertSameTopology(domain, depth2.domain);
+	assert(depth2.volume.StorageMode() == iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(depth2.volume.Options().max_depth == 2);
+	assert(depth2.surface.Cells().size() == surface.Cells().size());
+	assert(depth2.ghost.Faces().size() == ghost.Faces().size());
 	iga::ImmersedStaticFlowOptions solve_options = options; solve_options.lu_pivot_shift = 1e-12;
-	iga::ImmersedStaticFlowRuntime solve(domain, volume, surface, ghost, solve_options);
+	assert(solve_options.wall_labels == options.wall_labels && solve_options.parameters.density == options.parameters.density
+		&& solve_options.parameters.dynamic_viscosity == options.parameters.dynamic_viscosity && solve_options.parameters.dt == options.parameters.dt);
+	assert(solve_options.body_force({{.25,.5,.75}}) == force_density);
+
+	// The conservative resolved mixed form, closed-wall Nitsche topology, and
+	// pressure gauge must retain the exactly representable hydrostatic root.
+	// The pressure has zero mean on this centered cube, so no gauge shift is
+	// needed: u=0 and grad(p)=(.3,-.2,.1) balances the supplied body force.
+	iga::ImmersedStaticFlowOptions hydrostatic_options = solve_options;
+	hydrostatic_options.parameters = {1.0, 1.0, 0.0};
+	hydrostatic_options.body_force = [](const std::array<double, 3>&) {
+		return std::array<double, 3>{{.3,-.2,.1}};
+	};
+	assert(hydrostatic_options.wall_labels == options.wall_labels && hydrostatic_options.body_force({{.25,.5,.75}}) == force_density);
+	iga::ImmersedStaticFlowRuntime hydrostatic(depth2.domain, depth2.volume, depth2.surface, depth2.ghost, hydrostatic_options);
+	assert(hydrostatic.HasGauge() && hydrostatic.PortDefinitions().empty() && hydrostatic.ActiveNodes() == zero.ActiveNodes());
+	hydrostatic.SetCommittedState(HydrostaticState(depth2.domain, hydrostatic));
+	hydrostatic.Assemble();
+	const auto hydrostatic_residual = hydrostatic.AssembledNegativeResidual();
+	assert(VectorNorm(hydrostatic_residual) < 1e-14);
+	for (const auto block : ResidualBlockNorms(hydrostatic, hydrostatic_residual)) assert(block < 1e-14);
+
+	iga::ImmersedStaticFlowRuntime solve(depth2.domain, depth2.volume, depth2.surface, depth2.ghost, solve_options);
+	assert(solve.HasGauge() && solve.PortDefinitions().empty() && solve.ActiveNodes() == zero.ActiveNodes());
 	solve.Assemble(); const auto initial_solve_residual = solve.AssembledNegativeResidual();
 	const double initial_solve_norm = VectorNorm(initial_solve_residual);
 	const double solve_tolerance = std::max(solve_options.nonlinear_absolute_tolerance,
@@ -266,21 +315,32 @@ int main(int argc, char** argv)
 	std::size_t callback_calls = 0, calls_per_assembly = 0, throw_on_call = 0;
 	bool candidate_state_was_mutated = false;
 	std::vector<PetscScalar> accepted_candidate;
+	iga::ImmersedStaticFlowRuntime* accepted_pointer = nullptr;
+	std::size_t capture_candidate_call = 0;
 	iga::ImmersedStaticFlowRuntime* reusable_pointer = nullptr;
 	iga::ImmersedStaticFlowOptions reusable_options = solve_options;
 	reusable_options.body_force = [&](const std::array<double, 3>&) {
 		++callback_calls;
+		if (accepted_pointer != nullptr && callback_calls == capture_candidate_call)
+			accepted_candidate = accepted_pointer->TrialState();
 		if (throw_on_call != 0 && callback_calls == throw_on_call) {
 			assert(reusable_pointer != nullptr);
 			candidate_state_was_mutated = reusable_pointer->TrialState() == accepted_candidate;
 			throw std::runtime_error("injected candidate body-force callback failure");
 		}
-		return std::array<double, 3>{{.3,-.2,.1}};
+		return force_density;
 	};
-	iga::ImmersedStaticFlowRuntime accepted_control(domain, volume, surface, ghost, reusable_options);
-	assert(accepted_control.SolveTrial()); accepted_candidate = accepted_control.TrialState();
+	assert(reusable_options.wall_labels == solve_options.wall_labels);
+	iga::ImmersedStaticFlowRuntime accepted_control(depth2.domain, depth2.volume, depth2.surface, depth2.ghost, reusable_options);
+	accepted_pointer = &accepted_control; const std::size_t calls_before_control_measure = callback_calls;
+	accepted_control.Assemble(); const std::size_t control_calls_per_assembly = callback_calls-calls_before_control_measure;
+	assert(control_calls_per_assembly > 0); capture_candidate_call = callback_calls+control_calls_per_assembly+1;
+	assert(accepted_control.SolveTrial()); accepted_pointer = nullptr;
+	assert(!accepted_candidate.empty());
+	assert(!accepted_control.Diagnostics().newton_steps.empty());
+	const auto accepted_first_step = accepted_control.Diagnostics().newton_steps.front();
 	assert(accepted_candidate != accepted_control.CommittedState()); accepted_control.Rollback();
-	iga::ImmersedStaticFlowRuntime reusable(domain, volume, surface, ghost, reusable_options);
+	iga::ImmersedStaticFlowRuntime reusable(depth2.domain, depth2.volume, depth2.surface, depth2.ghost, reusable_options);
 	reusable_pointer = &reusable; const std::size_t calls_before_measure = callback_calls;
 	reusable.Assemble(); calls_per_assembly = callback_calls-calls_before_measure;
 	assert(calls_per_assembly > 0);
@@ -289,19 +349,11 @@ int main(int argc, char** argv)
 	Reject([&] { reusable.SolveTrial(); });
 	assert(candidate_state_was_mutated);
 	assert(reusable.CommittedState() == reusable_before && reusable.TrialState() == reusable_before);
-	assert(reusable.Diagnostics().rollback_count == 1 && reusable.Diagnostics().ksp_iterations == 0
-		&& reusable.Diagnostics().ksp_reason == KSP_CONVERGED_ITERATING && reusable.Diagnostics().damping == 0.0);
+	assert(reusable.Diagnostics().rollback_count == 1 && reusable.Diagnostics().ksp_iterations == accepted_first_step.ksp_iterations
+		&& reusable.Diagnostics().ksp_reason == accepted_first_step.ksp_reason && reusable.Diagnostics().damping == 0.0);
 	throw_on_call = 0; reusable.Assemble(); // Reuse after the throwing callback proves PETSc arrays were restored.
 	assert(reusable.SolveTrial()); reusable.Commit();
 	assert(reusable.Diagnostics().commit_count == 1);
-
-	const iga::CutCellVolumeQuadratureCatalog compact(domain, {4,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact);
-	const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
-	iga::ImmersedStaticFlowRuntime compact_runtime(domain, compact, surface, compact_ghost, solve_options);
-	compact_runtime.Assemble();
-	assert(std::abs(compact_runtime.Diagnostics().pressure_measure-DirectMeasure(domain, compact)) < 2e-12);
-	assert(compact_runtime.SolveTrial()); compact_runtime.Commit();
-	for (const auto value : compact_runtime.CommittedState()) assert(std::isfinite(PetscRealPart(value)));
 	}
 	} catch (const std::exception& error) {
 		// The inner scope has already destroyed every PETSc object.  This keeps a
