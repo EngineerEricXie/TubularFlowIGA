@@ -105,7 +105,17 @@ Q-positive volume/fraction and stagnant volume/fraction--are instead
 storage- and quadrature-sampling-dependent estimates.  They must be finite and
 their fractions lie in `[0, 1]`, but are not required to agree across storage
 modes; refinement/convergence evidence is required before interpreting them
-physically.  Snapshot content identity carries the storage mode, so compact and
+physically.  Snapshot requests explicitly carry sorted configured wall labels
+and sorted configured port labels; these disjoint sets cover every retained
+surface boundary label and every label has positive area.  Port labels are not
+inferred from `layout.PortIds()`: that list contains only flow-controller
+multipliers, while pressure-like ports are part of the endpoint boundary too.
+Endpoint port flows are explicitly available or unavailable.  Unavailable is
+never converted to measured zero: turnover availability is false and the
+canonical rate/replacement are zero with no turnover time.  Known zero inflow
+is available (also with zero rate/replacement and no turnover time); positive
+inflow additionally has the usual turnover time.  Snapshot content identity
+carries storage mode, surface partition, and flow availability, so compact and
 expanded content hashes intentionally differ; the separate snapshot identity
 binds geometry/publication/layout/state/time/index.
 
@@ -123,10 +133,16 @@ snapshot. It emits one `<stem>.epoch%020llu` directory with `fields.vtu` and
 valid complete epoch directories. The VTU is a quadrature-support point cloud:
 every ordered volume support point is an independent `VTK_VERTEX` cell. It is
 not a boundary-conforming moving volume mesh and must not be interpreted as
-one. The manifest carries identities, hashes, units, thresholds and aggregate
-metrics; a complete orphaned epoch is recoverable after a crash between the
-directory and PVD renames. Static geometry remains on the Bézier VTKHDF
-visualization path.
+one. The version-3 manifest and VTU field metadata carry identities, hashes,
+units, thresholds and aggregate metrics. The manifest also canonically records
+transition availability and `dt_s`, wall and port label partitions,
+endpoint-flow availability, endpoint-turnover availability, and (only when
+available) label-ordered outward port flows. Thus unavailable flows, measured
+zero flows, and no-port snapshots remain distinct during recovery and
+idempotent retry. A complete orphaned epoch is recoverable after a crash
+between the directory and PVD renames; schema or request-semantic mismatches
+are rejected while rebuilding the unchanged PVD collection. Static geometry
+remains on the Bézier VTKHDF visualization path.
 
 Wall mismatch reports area, maximum and RMS relative velocity in m/s, plus
 `wall_relative_velocity_squared_area_integral_m4_per_s2`, the dimensionally

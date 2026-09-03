@@ -105,7 +105,7 @@ immersed_transient_flow_test: tests/test_immersed_transient_flow.cpp include/Imm
 immersed-transient-flow-test: immersed_transient_flow_test
 	./immersed_transient_flow_test
 
-moving_immersed_transient_flow_test: tests/test_moving_immersed_transient_flow.cpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp
+moving_immersed_transient_flow_test: tests/test_moving_immersed_transient_flow.cpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshot.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving_immersed_transient_flow_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING

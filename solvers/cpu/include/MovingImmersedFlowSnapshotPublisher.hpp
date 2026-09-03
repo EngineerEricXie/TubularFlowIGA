@@ -62,7 +62,10 @@ enum class MovingImmersedFlowSnapshotPublicationFault {
 
 class MovingImmersedFlowSnapshotPublisher {
 public:
-	static constexpr std::uint32_t SchemaVersion() noexcept { return 1; }
+	// Version 3 makes the request-side endpoint semantics recoverable.  In
+	// particular, an unavailable measurement is not interchangeable with a
+	// measured zero flow, even though both have zero-valued proxy metrics.
+	static constexpr std::uint32_t SchemaVersion() noexcept { return 3; }
 
 	static std::filesystem::path EpochDirectory(const std::filesystem::path& stem, std::uint64_t index)
 	{
@@ -88,7 +91,8 @@ public:
 		if (std::filesystem::exists(final_directory)) {
 			const auto published = ValidateEpoch(final_directory, stem, snapshot.Request().index);
 			if (published.snapshot_identity != snapshot.SnapshotIdentitySha256()
-				|| published.content_hash != snapshot.ContentHashSha256())
+				|| published.content_hash != snapshot.ContentHashSha256()
+				|| !SameRequestSemantics(published.request, RequestSemantics::From(snapshot)))
 				throw std::runtime_error("moving snapshot epoch index conflicts with a different identity");
 			const auto manifest = ReadAll(final_directory/"metrics.json");
 			if (JsonString(manifest,"geometry_identity_sha256") != identity.geometry_identity_sha256
@@ -178,7 +182,36 @@ public:
 #endif
 
 private:
-	struct Epoch { std::filesystem::path directory; std::uint64_t index = 0; double time_s = 0.; std::string snapshot_identity, content_hash, vtu_sha256, metrics_sha256; };
+	struct RequestSemantics {
+		bool transition_available = false;
+		double dt_s = 0.0;
+		std::vector<std::uint32_t> wall_labels;
+		std::vector<std::uint32_t> port_labels;
+		bool port_flows_available = false;
+		bool endpoint_turnover_available = false;
+		std::vector<MovingImmersedPortFlow> port_flows;
+
+		static RequestSemantics From(const MovingImmersedFlowSnapshot& snapshot)
+		{
+			const auto& request = snapshot.Request();
+			return {request.transition_available, request.dt_s, request.wall_labels,
+				request.port_labels, request.port_flows_available,
+				snapshot.Metrics().endpoint_turnover_available, request.port_flows};
+		}
+	};
+	struct Epoch { std::filesystem::path directory; std::uint64_t index = 0; double time_s = 0.; std::string snapshot_identity, content_hash, vtu_sha256, metrics_sha256; RequestSemantics request; };
+	static bool SameRequestSemantics(const RequestSemantics& a, const RequestSemantics& b)
+	{
+		if (a.transition_available != b.transition_available || a.dt_s != b.dt_s
+			|| a.wall_labels != b.wall_labels || a.port_labels != b.port_labels
+			|| a.port_flows_available != b.port_flows_available
+			|| a.endpoint_turnover_available != b.endpoint_turnover_available
+			|| a.port_flows.size() != b.port_flows.size()) return false;
+		for (std::size_t i=0; i<a.port_flows.size(); ++i)
+			if (a.port_flows[i].label != b.port_flows[i].label
+				|| a.port_flows[i].outward_flow_m3_s != b.port_flows[i].outward_flow_m3_s) return false;
+		return true;
+	}
 	static bool ValidHash(const std::string& value)
 	{
 		return value.size() == 64 && std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
@@ -216,14 +249,70 @@ private:
 		out<<"      </Cells>\n    </Piece>\n  </UnstructuredGrid>\n</VTKFile>\n"; out.close();if(!out)throw std::runtime_error("cannot write moving snapshot VTU");
 	}
 	static std::string Number(double value) { if(!std::isfinite(value))throw std::invalid_argument("moving snapshot JSON value is nonfinite");std::ostringstream out;out<<std::setprecision(17)<<value;return out.str(); }
+	static void JsonLabels(std::ostream& out, const std::vector<std::uint32_t>& labels)
+	{
+		out << '[';
+		for (std::size_t i=0; i<labels.size(); ++i) { if (i) out << ", "; out << labels[i]; }
+		out << ']';
+	}
+	static void JsonPortFlows(std::ostream& out, const std::vector<MovingImmersedPortFlow>& flows)
+	{
+		out << '[';
+		for (std::size_t i=0; i<flows.size(); ++i) {
+			if (i) out << ", ";
+			out << "{\"label\": " << flows[i].label << ", \"outward_flow_m3_s\": "
+				<< Number(flows[i].outward_flow_m3_s) << '}';
+		}
+		out << ']';
+	}
 	static void WriteMetrics(const std::filesystem::path& path, const MovingImmersedFlowSnapshot& s, const MovingImmersedFlowSnapshotPublicationIdentity& id, const std::optional<MovingImmersedFlowSnapshotTransitionConservation>& c, const std::string& vtu_hash)
 	{
 		std::ofstream out(path,std::ios::binary|std::ios::trunc);if(!out)throw std::runtime_error("cannot create moving snapshot metrics"); const auto& m=s.Metrics(); const auto q=[&](const std::string&x){return std::string("\"")+EscapeJson(x)+"\"";}; const auto n=[](double x){return Number(x);};
-		out<<"{\n  \"schema\": \"MovingImmersedFlowSnapshotPublication\",\n  \"schema_version\": "<<SchemaVersion()<<",\n  \"time_s\": "<<n(s.Request().time_s)<<",\n  \"index\": "<<s.Request().index<<",\n  \"geometry_identity_sha256\": "<<q(id.geometry_identity_sha256)<<",\n  \"publication_identity_sha256\": "<<q(id.publication_identity_sha256)<<",\n  \"layout_identity_sha256\": "<<q(id.layout_identity_sha256)<<",\n  \"state_identity_sha256\": "<<q(id.state_identity_sha256)<<",\n  \"runtime_identity_sha256\": "<<q(id.runtime_identity_sha256)<<",\n  \"content_hash_sha256\": "<<q(s.ContentHashSha256())<<",\n  \"snapshot_identity_sha256\": "<<q(s.SnapshotIdentitySha256())<<",\n  \"vtu_sha256\": "<<q(vtu_hash)<<",\n  \"stagnant_speed_threshold_m_per_s\": "<<n(s.Options().stagnant_speed_threshold_m_per_s)<<",\n  \"units\": {\"length\": \"m\", \"time\": \"s\", \"volume\": \"m3\", \"velocity\": \"m/s\", \"pressure\": \"Pa\"},\n  \"metrics\": {\n";
-		auto metric=[&](const char*name,double value,bool last=false){out<<"    \""<<name<<"\": "<<n(value)<<(last?"\n":" ,\n");}; metric("quadrature_volume_m3",m.quadrature_volume_m3);metric("audited_volume_m3",m.audited_volume_m3);metric("enstrophy_integral_m3_per_s2",m.enstrophy_integral_m3_per_s2);metric("mean_enstrophy_per_s2",m.mean_enstrophy_per_s2);metric("mean_q_criterion_per_s2",m.mean_q_criterion_per_s2);metric("q_positive_volume_m3",m.q_positive_volume_m3);metric("q_positive_volume_fraction",m.q_positive_volume_fraction);metric("stagnant_volume_m3",m.stagnant_volume_m3);metric("stagnant_volume_fraction",m.stagnant_volume_fraction);metric("inlet_flow_m3_s",m.inlet_flow_m3_s);metric("outlet_flow_m3_s",m.outlet_flow_m3_s);metric("endpoint_turnover_rate_per_s",m.endpoint_turnover_rate_per_s);out<<"    \"endpoint_turnover_time_s\": ";if(m.endpoint_turnover_time_s)out<<n(*m.endpoint_turnover_time_s);else out<<"null";out<<",\n";metric("well_mixed_replacement_fraction_over_step",m.well_mixed_replacement_fraction_over_step);metric("wall_relative_velocity_squared_area_integral_m4_per_s2",m.wall_relative_velocity_squared_area_integral_m4_per_s2);metric("wall_relative_velocity_rms_m_per_s",m.wall_relative_velocity_rms_m_per_s);metric("wall_relative_velocity_max_m_per_s",m.wall_relative_velocity_max_m_per_s);metric("wall_area_m2",m.wall_area_m2,true);out<<"  },\n  \"port_label_outward_flow_m3_s\": [";for(std::size_t i=0;i<s.Request().port_flows.size();++i){if(i)out<<", ";out<<"{\"label\": "<<s.Request().port_flows[i].label<<", \"outward_flow_m3_s\": "<<n(s.Request().port_flows[i].outward_flow_m3_s)<<"}";}out<<"]";if(c)out<<",\n  \"transition_conservation\": {\"identity_sha256\": "<<q(c->identity_sha256)<<", \"reynolds_residual_m3_s\": "<<n(c->reynolds_residual_m3_s)<<", \"moving_residual_m3_s\": "<<n(c->moving_residual_m3_s)<<", \"volume_change_rate_m3_s\": "<<n(c->volume_change_rate_m3_s)<<"}";out<<"\n}\n";out.close();if(!out)throw std::runtime_error("cannot write moving snapshot metrics");
+		out<<"{\n  \"schema\": \"MovingImmersedFlowSnapshotPublication\",\n  \"schema_version\": "<<SchemaVersion()<<",\n  \"time_s\": "<<n(s.Request().time_s)<<",\n  \"index\": "<<s.Request().index<<",\n  \"geometry_identity_sha256\": "<<q(id.geometry_identity_sha256)<<",\n  \"publication_identity_sha256\": "<<q(id.publication_identity_sha256)<<",\n  \"layout_identity_sha256\": "<<q(id.layout_identity_sha256)<<",\n  \"state_identity_sha256\": "<<q(id.state_identity_sha256)<<",\n  \"runtime_identity_sha256\": "<<q(id.runtime_identity_sha256)<<",\n  \"content_hash_sha256\": "<<q(s.ContentHashSha256())<<",\n  \"snapshot_identity_sha256\": "<<q(s.SnapshotIdentitySha256())<<",\n  \"vtu_sha256\": "<<q(vtu_hash)<<",\n  \"request\": {\n    \"transition_available\": "<<(s.Request().transition_available?"true":"false")<<",\n    \"dt_s\": "<<n(s.Request().dt_s)<<",\n    \"wall_labels\": ";JsonLabels(out,s.Request().wall_labels);out<<",\n    \"port_labels\": ";JsonLabels(out,s.Request().port_labels);out<<",\n    \"port_flows_available\": "<<(s.Request().port_flows_available?"true":"false")<<",\n    \"endpoint_turnover_available\": "<<(m.endpoint_turnover_available?"true":"false")<<",\n    \"port_label_outward_flow_m3_s\": ";JsonPortFlows(out,s.Request().port_flows);out<<"\n  },\n  \"stagnant_speed_threshold_m_per_s\": "<<n(s.Options().stagnant_speed_threshold_m_per_s)<<",\n  \"units\": {\"length\": \"m\", \"time\": \"s\", \"volume\": \"m3\", \"velocity\": \"m/s\", \"pressure\": \"Pa\"},\n  \"metrics\": {\n";
+		auto metric=[&](const char*name,double value,bool last=false){out<<"    \""<<name<<"\": "<<n(value)<<(last?"\n":" ,\n");}; metric("quadrature_volume_m3",m.quadrature_volume_m3);metric("audited_volume_m3",m.audited_volume_m3);metric("enstrophy_integral_m3_per_s2",m.enstrophy_integral_m3_per_s2);metric("mean_enstrophy_per_s2",m.mean_enstrophy_per_s2);metric("mean_q_criterion_per_s2",m.mean_q_criterion_per_s2);metric("q_positive_volume_m3",m.q_positive_volume_m3);metric("q_positive_volume_fraction",m.q_positive_volume_fraction);metric("stagnant_volume_m3",m.stagnant_volume_m3);metric("stagnant_volume_fraction",m.stagnant_volume_fraction);metric("inlet_flow_m3_s",m.inlet_flow_m3_s);metric("outlet_flow_m3_s",m.outlet_flow_m3_s);metric("endpoint_turnover_rate_per_s",m.endpoint_turnover_rate_per_s);out<<"    \"endpoint_turnover_time_s\": ";if(m.endpoint_turnover_time_s)out<<n(*m.endpoint_turnover_time_s);else out<<"null";out<<",\n";metric("well_mixed_replacement_fraction_over_step",m.well_mixed_replacement_fraction_over_step);metric("wall_relative_velocity_squared_area_integral_m4_per_s2",m.wall_relative_velocity_squared_area_integral_m4_per_s2);metric("wall_relative_velocity_rms_m_per_s",m.wall_relative_velocity_rms_m_per_s);metric("wall_relative_velocity_max_m_per_s",m.wall_relative_velocity_max_m_per_s);metric("wall_area_m2",m.wall_area_m2,true);out<<"  }";if(c)out<<",\n  \"transition_conservation\": {\"identity_sha256\": "<<q(c->identity_sha256)<<", \"reynolds_residual_m3_s\": "<<n(c->reynolds_residual_m3_s)<<", \"moving_residual_m3_s\": "<<n(c->moving_residual_m3_s)<<", \"volume_change_rate_m3_s\": "<<n(c->volume_change_rate_m3_s)<<"}";out<<"\n}\n";out.close();if(!out)throw std::runtime_error("cannot write moving snapshot metrics");
 	}
 	static std::string ReadAll(const std::filesystem::path&p){std::ifstream in(p,std::ios::binary);if(!in)throw std::runtime_error("moving snapshot epoch file is missing");std::ostringstream out;out<<in.rdbuf();if(!in)throw std::runtime_error("cannot read moving snapshot epoch file");return out.str();}
 	static std::string JsonString(const std::string& text,const std::string& key){const auto needle="\""+key+"\": \"";const auto pos=text.find(needle);if(pos==std::string::npos)throw std::runtime_error("moving snapshot metrics field is missing: "+key);const auto begin=pos+needle.size(),end=text.find('"',begin);if(end==std::string::npos)throw std::runtime_error("moving snapshot metrics string is truncated");return text.substr(begin,end-begin);}
+	static std::size_t JsonValue(const std::string& text, const std::string& key)
+	{
+		const auto pos=text.find("\""+key+"\": ");if(pos==std::string::npos)throw std::runtime_error("moving snapshot metrics field is missing: "+key);return pos+key.size()+4;
+	}
+	static std::string JsonToken(const std::string& text, const std::string& key)
+	{
+		const auto begin=JsonValue(text,key),end=text.find_first_of(",}]\n\r \t",begin);if(end==std::string::npos||end==begin)throw std::runtime_error("moving snapshot metrics token is truncated: "+key);return text.substr(begin,end-begin);
+	}
+	static bool JsonBool(const std::string& text,const std::string& key){const auto token=JsonToken(text,key);if(token=="true")return true;if(token=="false")return false;throw std::runtime_error("moving snapshot metrics boolean is invalid: "+key);}
+	static std::uint64_t JsonCanonicalUnsigned(const std::string& text,const std::string& key)
+	{
+		const auto token=JsonToken(text,key);if(token.empty()||!std::all_of(token.begin(),token.end(),[](unsigned char c){return std::isdigit(c)!=0;}))throw std::runtime_error("moving snapshot metrics integer is invalid: "+key);try{const auto value=std::stoull(token);if(std::to_string(value)!=token)throw std::runtime_error("x");return value;}catch(...){throw std::runtime_error("moving snapshot metrics integer is invalid: "+key);}
+	}
+	static double JsonCanonicalNumber(const std::string& text,const std::string& key)
+	{
+		const auto token=JsonToken(text,key);std::size_t used=0;try{const double value=std::stod(token,&used);if(used!=token.size()||!std::isfinite(value)||Number(value)!=token)throw std::runtime_error("x");return value;}catch(...){throw std::runtime_error("moving snapshot metrics number is invalid: "+key);}
+	}
+	static std::string JsonArray(const std::string& text,const std::string& key)
+	{
+		const auto begin=JsonValue(text,key);if(begin>=text.size()||text[begin]!='[')throw std::runtime_error("moving snapshot metrics array is invalid: "+key);unsigned depth=0;for(std::size_t i=begin;i<text.size();++i){if(text[i]=='[')++depth;else if(text[i]==']'&&!--depth)return text.substr(begin+1,i-begin-1);}throw std::runtime_error("moving snapshot metrics array is truncated: "+key);
+	}
+	static std::uint32_t ParseLabel(const std::string& token,const std::string& key)
+	{
+		if(token.empty()||!std::all_of(token.begin(),token.end(),[](unsigned char c){return std::isdigit(c)!=0;}))
+			throw std::runtime_error("moving snapshot metrics label is invalid: "+key);
+		try { const auto value=std::stoull(token); if(value>std::numeric_limits<std::uint32_t>::max()||std::to_string(value)!=token)throw std::runtime_error("x"); return static_cast<std::uint32_t>(value); }
+		catch(...) { throw std::runtime_error("moving snapshot metrics label is invalid: "+key); }
+	}
+	static std::vector<std::uint32_t> JsonLabels(const std::string& text,const std::string& key)
+	{
+		const auto body=JsonArray(text,key);std::vector<std::uint32_t> result;if(body.empty())return result;std::size_t begin=0;while(begin<body.size()){const auto end=body.find(',',begin);result.push_back(ParseLabel(body.substr(begin,end==std::string::npos?std::string::npos:end-begin),key));if(end==std::string::npos)break;begin=end+1;if(begin>=body.size()||body[begin]!=' ')throw std::runtime_error("moving snapshot metrics labels are not canonical: "+key);++begin;}return result;
+	}
+	static std::vector<MovingImmersedPortFlow> JsonPortFlows(const std::string& text)
+	{
+		const auto body=JsonArray(text,"port_label_outward_flow_m3_s");std::vector<MovingImmersedPortFlow> result;if(body.empty())return result;std::size_t begin=0;while(begin<body.size()){const auto end=body.find('}',begin);if(begin>=body.size()||body[begin]!='{'||end==std::string::npos)throw std::runtime_error("moving snapshot metrics port flows are truncated");const auto item=body.substr(begin,end-begin+1);const auto label=JsonCanonicalUnsigned(item,"label");if(label>std::numeric_limits<std::uint32_t>::max())throw std::runtime_error("moving snapshot metrics port label is invalid");result.push_back({label,JsonCanonicalNumber(item,"outward_flow_m3_s")});begin=end+1;if(begin==body.size())break;if(begin+2>body.size()||body.compare(begin,2,", ")!=0)throw std::runtime_error("moving snapshot metrics port flows are not canonical");begin+=2;}return result;
+	}
+	static RequestSemantics JsonRequest(const std::string& text)
+	{
+		RequestSemantics result;result.transition_available=JsonBool(text,"transition_available");result.dt_s=JsonCanonicalNumber(text,"dt_s");result.wall_labels=JsonLabels(text,"wall_labels");result.port_labels=JsonLabels(text,"port_labels");result.port_flows_available=JsonBool(text,"port_flows_available");result.endpoint_turnover_available=JsonBool(text,"endpoint_turnover_available");result.port_flows=JsonPortFlows(text);if((!result.transition_available&&result.dt_s!=0.0)||(result.transition_available&&!(result.dt_s>0.0))||!std::is_sorted(result.wall_labels.begin(),result.wall_labels.end())||std::adjacent_find(result.wall_labels.begin(),result.wall_labels.end())!=result.wall_labels.end()||!std::is_sorted(result.port_labels.begin(),result.port_labels.end())||std::adjacent_find(result.port_labels.begin(),result.port_labels.end())!=result.port_labels.end())throw std::runtime_error("moving snapshot epoch request semantics are invalid");std::vector<std::uint32_t> partition=result.wall_labels;partition.insert(partition.end(),result.port_labels.begin(),result.port_labels.end());std::sort(partition.begin(),partition.end());if(std::adjacent_find(partition.begin(),partition.end())!=partition.end()||(!result.port_flows_available&&!result.port_flows.empty())||(result.port_flows_available&&result.port_flows.size()!=result.port_labels.size())||result.endpoint_turnover_available!=result.port_flows_available)throw std::runtime_error("moving snapshot epoch request semantics are invalid");for(std::size_t i=0;i<result.port_flows.size();++i)if(result.port_flows[i].label!=result.port_labels[i]||!std::isfinite(result.port_flows[i].outward_flow_m3_s)||(i&&result.port_flows[i-1].label>=result.port_flows[i].label))throw std::runtime_error("moving snapshot epoch request semantics are invalid");return result;
+	}
 	static std::string XmlField(const std::string& text, const std::string& name)
 	{
 		const auto marker = "Name=\""+name+"\""; const auto field = text.find(marker);
@@ -251,6 +340,7 @@ private:
 			|| XmlField(xml,"moving_snapshot_schema")!="MovingImmersedFlowSnapshotPublication"
 			|| XmlField(xml,"moving_snapshot_schema_version")!=std::to_string(SchemaVersion()))
 			throw std::runtime_error("moving snapshot epoch schema is invalid");
+		const auto request=JsonRequest(json);
 		const auto index=JsonIndex(json); std::uint64_t xml_index=0;
 		try { xml_index=std::stoull(XmlField(xml,"index")); }
 		catch (...) { throw std::runtime_error("moving snapshot VTU index is invalid"); }
@@ -277,7 +367,7 @@ private:
 		if (xml.find("NumberOfPoints=\"")==std::string::npos || xml.find("Name=\"types\"")==std::string::npos)
 			throw std::runtime_error("moving snapshot VTU is incomplete");
 		(void)stem;
-		return {directory,index,time,JsonString(json,"snapshot_identity_sha256"),JsonString(json,"content_hash_sha256"),vtu_hash,FileHash(metrics)};
+		return {directory,index,time,JsonString(json,"snapshot_identity_sha256"),JsonString(json,"content_hash_sha256"),vtu_hash,FileHash(metrics),request};
 	}
 	static MovingImmersedFlowSnapshotPublication Result(const std::filesystem::path& dir,const std::filesystem::path&pvd,const std::string&vtu,const std::string&metrics){return {dir,dir/"fields.vtu",dir/"metrics.json",pvd,vtu,metrics};}
 	static std::string Nonce(){std::ostringstream out;out<<std::chrono::steady_clock::now().time_since_epoch().count()<<'.'<<std::random_device{}();return out.str();}

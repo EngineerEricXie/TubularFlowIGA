@@ -88,6 +88,8 @@ public:
 	const ImmersedActiveLayout& CommittedLayout() const noexcept { return committed_->runtime->Layout(); }
 	const ImmersedGlobalFlowState& CommittedGlobalState() const { return committed_->runtime->CommittedGlobalState(); }
 	std::vector<PetscScalar> CommittedState() const { return committed_->runtime->CommittedState(); }
+	const std::vector<int>& ConfiguredWallLabels() const noexcept { return committed_->runtime->ConfiguredWallLabels(); }
+	const std::vector<ImmersedFlowPortDefinition>& ConfiguredPorts() const noexcept { return committed_->runtime->ConfiguredPorts(); }
 	const ImmersedTransientFlowDiagnostics& CommittedDiagnostics() const noexcept { return committed_->runtime->Diagnostics(); }
 	const MovingImmersedTransientFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
 	bool Idle() const noexcept { return !trial_; }
@@ -108,7 +110,7 @@ public:
 
 	void SetCommittedGlobalState(const ImmersedGlobalFlowState& value)
 	{
-		RequireIdle("set committed state"); committed_->runtime->SetCommittedGlobalState(value); RefreshCommittedDiagnostics();
+		RequireIdle("set committed state"); committed_->runtime->SetCommittedGlobalState(value); committed_conservation_.reset(); RefreshCommittedDiagnostics();
 	}
 	void InitializeCommittedGlobalState(const ImmersedGlobalFlowState& value) { SetCommittedGlobalState(value); }
 	void SetPortControlValue(const std::string& id, double value)
@@ -117,7 +119,7 @@ public:
 		// Validate/mutate the live runtime first.  Its mutation is transactional;
 		// only then persist the same option for every future epoch.
 		committed_->runtime->SetPortControlValue(id, value);
-		for (auto& port : options_.flow.ports) if (port.id == id) { port.value = value; return; }
+		for (auto& port : options_.flow.ports) if (port.id == id) { port.value = value; committed_conservation_.reset(); return; }
 		throw std::logic_error("moving immersed transient port option is absent");
 	}
 

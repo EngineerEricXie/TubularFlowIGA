@@ -113,6 +113,8 @@ public:
 	ImmersedTransientFlowRuntime& operator=(const ImmersedTransientFlowRuntime&) = delete;
 
 	const ImmersedActiveLayout& Layout() const noexcept { return layout_; }
+	const std::vector<int>& ConfiguredWallLabels() const noexcept { return options_.wall_labels; }
+	const std::vector<ImmersedFlowPortDefinition>& ConfiguredPorts() const noexcept { return options_.ports; }
 	const ImmersedTransientFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
 	const ImmersedGlobalFlowState& CommittedGlobalState() const { return *committed_global_; }
 	std::vector<PetscScalar> CommittedState() const { return Copy(committed_); }

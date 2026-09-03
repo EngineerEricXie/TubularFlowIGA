@@ -40,6 +40,12 @@ struct MovingImmersedFlowSnapshotRequest {
 	// no transition dt must be canonical zero and that proxy is zero.
 	bool transition_available = false;
 	double dt_s = 0.0;
+	// These are the complete configured open-boundary labels, independent of
+	// flow-controller rows (which exist only for flow-rate-controlled ports).
+	std::vector<std::uint32_t> port_labels;
+	// False means the endpoint port measurements are unavailable, not zero.
+	// In that case port_flows must be empty.
+	bool port_flows_available = false;
 	std::vector<MovingImmersedPortFlow> port_flows;
 	std::vector<std::uint32_t> wall_labels;
 };
@@ -74,6 +80,7 @@ struct MovingImmersedFlowSnapshotMetrics {
 	double stagnant_volume_fraction = 0.0;
 	double inlet_flow_m3_s = 0.0;
 	double outlet_flow_m3_s = 0.0;
+	bool endpoint_turnover_available = false;
 	double endpoint_turnover_rate_per_s = 0.0;
 	std::optional<double> endpoint_turnover_time_s;
 	double well_mixed_replacement_fraction_over_step = 0.0;
@@ -200,38 +207,45 @@ private:
 			throw std::invalid_argument("moving immersed snapshot options are invalid");
 		if (!std::isfinite(request.dt_s) || request.dt_s < 0.0 || (request.transition_available && !(request.dt_s > 0.0)) || (!request.transition_available && request.dt_s != 0.0))
 			throw std::invalid_argument("moving immersed snapshot transition is invalid");
-		if (request.port_flows.size() != layout.PortIds().size()) throw std::invalid_argument("moving immersed snapshot port flow coverage is invalid");
+		if (!std::is_sorted(request.port_labels.begin(), request.port_labels.end())
+			|| std::adjacent_find(request.port_labels.begin(), request.port_labels.end()) != request.port_labels.end())
+			throw std::invalid_argument("moving immersed snapshot port labels must be sorted and unique");
+		if ((!request.port_flows_available && !request.port_flows.empty())
+			|| (request.port_flows_available && request.port_flows.size() != request.port_labels.size()))
+			throw std::invalid_argument("moving immersed snapshot port flow availability is invalid");
 		for (std::size_t i = 0; i < request.port_flows.size(); ++i) {
-			if (request.port_flows[i].label != layout.PortIds()[i] || !std::isfinite(request.port_flows[i].outward_flow_m3_s)
+			if (request.port_flows[i].label != request.port_labels[i] || !std::isfinite(request.port_flows[i].outward_flow_m3_s)
 				|| (i && request.port_flows[i-1].label >= request.port_flows[i].label))
 				throw std::invalid_argument("moving immersed snapshot port labels are invalid");
 		}
 		if (!std::is_sorted(request.wall_labels.begin(), request.wall_labels.end())
 			|| std::adjacent_find(request.wall_labels.begin(), request.wall_labels.end()) != request.wall_labels.end())
 			throw std::invalid_argument("moving immersed snapshot wall labels must be sorted and unique");
-		ValidateRequestedWallLabels(geometry, request.wall_labels);
+		ValidateSurfacePartition(geometry, request.wall_labels, request.port_labels);
 	}
-	static void ValidateRequestedWallLabels(const MovingCutGeometry& geometry, const std::vector<std::uint32_t>& labels)
+	static void ValidateSurfacePartition(const MovingCutGeometry& geometry, const std::vector<std::uint32_t>& walls,
+		const std::vector<std::uint32_t>& ports)
 	{
-		if (labels.empty()) return;
-		std::vector<long double> areas(labels.size(), 0.0L);
+		std::vector<std::uint32_t> all;
+		std::vector<long double> areas;
 		for (std::uint64_t id = 0; id < geometry.Surface().Cells().size(); ++id) {
 			const auto& rule = geometry.Surface().UsableRule(geometry.Domain(), id);
 			for (const auto& point : rule.Points()) {
-				if (point.boundary_id < 0 || static_cast<std::uint64_t>(point.boundary_id) > std::numeric_limits<std::uint32_t>::max()) continue;
+				if (point.boundary_id <= 0 || static_cast<std::uint64_t>(point.boundary_id) > std::numeric_limits<std::uint32_t>::max())
+					throw std::invalid_argument("moving immersed snapshot surface boundary label is invalid");
 				const auto boundary_id = static_cast<std::uint32_t>(point.boundary_id);
-				const auto found = std::lower_bound(labels.begin(), labels.end(), boundary_id);
-				if (found == labels.end() || *found != boundary_id) continue;
 				RequireFinitePositive(point.weight, "moving immersed snapshot wall weight is invalid");
-				AddFinite(areas[static_cast<std::size_t>(found-labels.begin())], point.weight,
-					"moving immersed snapshot wall area is nonfinite");
+				const auto found = std::lower_bound(all.begin(), all.end(), boundary_id);
+				const auto offset = static_cast<std::size_t>(found-all.begin());
+				if (found == all.end() || *found != boundary_id) { all.insert(found, boundary_id); areas.insert(areas.begin()+static_cast<std::ptrdiff_t>(offset), 0.0L); }
+				AddFinite(areas[offset], point.weight, "moving immersed snapshot surface area is nonfinite");
 			}
 		}
-		for (const auto area : areas) {
-			const double finite_area = FiniteCast(area, "moving immersed snapshot wall area is nonfinite");
-			if (!(finite_area > 0.0))
-				throw std::invalid_argument("moving immersed snapshot requested wall label has no finite positive surface area");
-		}
+		std::vector<std::uint32_t> requested=walls; requested.insert(requested.end(),ports.begin(),ports.end()); std::sort(requested.begin(),requested.end());
+		if (std::adjacent_find(requested.begin(),requested.end()) != requested.end() || requested != all)
+			throw std::invalid_argument("moving immersed snapshot wall and port labels must partition surface boundary labels");
+		for (const auto area : areas) if (!(FiniteCast(area, "moving immersed snapshot surface area is nonfinite") > 0.0))
+			throw std::invalid_argument("moving immersed snapshot requested surface label has no finite positive surface area");
 	}
 	static std::size_t CountPoints(const MovingCutGeometry& geometry, const ImmersedActiveLayout& layout, const MovingImmersedFlowSnapshotOptions& options)
 	{
@@ -265,6 +279,8 @@ private:
 	static double Divide(double top, double bottom, const char* message) { const double value=top/bottom; if (!std::isfinite(value)) throw std::runtime_error(message); return value; }
 	static void SetFlows(MovingImmersedFlowSnapshotMetrics& metrics, const MovingImmersedFlowSnapshotRequest& request, double volume)
 	{
+		if (!request.port_flows_available) return;
+		metrics.endpoint_turnover_available = true;
 		for (const auto& port : request.port_flows) { metrics.inlet_flow_m3_s += std::max(0.0, -port.outward_flow_m3_s); metrics.outlet_flow_m3_s += std::max(0.0, port.outward_flow_m3_s); }
 		if (!std::isfinite(metrics.inlet_flow_m3_s) || !std::isfinite(metrics.outlet_flow_m3_s)) throw std::runtime_error("moving immersed snapshot endpoint flow is nonfinite");
 		metrics.endpoint_turnover_rate_per_s = Divide(metrics.inlet_flow_m3_s, volume, "moving immersed snapshot turnover rate is nonfinite");
@@ -291,10 +307,10 @@ private:
 	}
 	std::string ContentHash() const
 	{
-		Sha256 hash; immersed_transient_detail::AppendString(hash,"MovingImmersedFlowSnapshot/content/v2"); hash.AppendNormalizedDouble(options_.stagnant_speed_threshold_m_per_s); hash.AppendLittleEndian64(options_.maximum_points); hash.AppendLittleEndian64(options_.maximum_output_bytes); hash.AppendLittleEndian32(static_cast<std::uint32_t>(storage_mode_)); hash.AppendLittleEndian32(request_.transition_available?1u:0u); hash.AppendNormalizedDouble(request_.dt_s);
-		for(const auto& port:request_.port_flows){hash.AppendLittleEndian64(port.label);hash.AppendNormalizedDouble(port.outward_flow_m3_s);} hash.AppendLittleEndian64(request_.wall_labels.size());for(auto label:request_.wall_labels)hash.AppendLittleEndian32(label);hash.AppendLittleEndian32(static_cast<std::uint32_t>(request_.port_flows.size()));
+		Sha256 hash; immersed_transient_detail::AppendString(hash,"MovingImmersedFlowSnapshot/content/v3"); hash.AppendNormalizedDouble(options_.stagnant_speed_threshold_m_per_s); hash.AppendLittleEndian64(options_.maximum_points); hash.AppendLittleEndian64(options_.maximum_output_bytes); hash.AppendLittleEndian32(static_cast<std::uint32_t>(storage_mode_)); hash.AppendLittleEndian32(request_.transition_available?1u:0u); hash.AppendNormalizedDouble(request_.dt_s); hash.AppendLittleEndian32(request_.port_flows_available?1u:0u);
+		hash.AppendLittleEndian64(request_.port_labels.size()); for(auto label:request_.port_labels)hash.AppendLittleEndian32(label); hash.AppendLittleEndian64(request_.port_flows.size()); for(const auto& port:request_.port_flows){hash.AppendLittleEndian64(port.label);hash.AppendNormalizedDouble(port.outward_flow_m3_s);} hash.AppendLittleEndian64(request_.wall_labels.size());for(auto label:request_.wall_labels)hash.AppendLittleEndian32(label);
 		for(const auto& point:points_){for(double x:point.physical_m)hash.AppendNormalizedDouble(x);for(double x:point.parametric)hash.AppendNormalizedDouble(x);for(double x:point.velocity_m_per_s)hash.AppendNormalizedDouble(x);for(double x:point.vorticity_per_s)hash.AppendNormalizedDouble(x);for(double x:{point.pressure,point.speed_m_per_s,point.q_criterion_per_s2,point.enstrophy_density_per_s2,point.physical_integration_weight_m3})hash.AppendNormalizedDouble(x);hash.AppendLittleEndian64(point.background_cell_id);hash.AppendLittleEndian64(point.cell_quadrature_ordinal);hash.AppendLittleEndian32(static_cast<std::uint32_t>(point.cell_kind));hash.AppendLittleEndian32(point.stagnant?1u:0u);}
-		const auto& m=metrics_;for(double x:{m.quadrature_volume_m3,m.audited_volume_m3,m.enstrophy_integral_m3_per_s2,m.mean_enstrophy_per_s2,m.mean_q_criterion_per_s2,m.q_positive_volume_m3,m.q_positive_volume_fraction,m.stagnant_volume_m3,m.stagnant_volume_fraction,m.inlet_flow_m3_s,m.outlet_flow_m3_s,m.endpoint_turnover_rate_per_s,m.well_mixed_replacement_fraction_over_step,m.wall_relative_velocity_squared_area_integral_m4_per_s2,m.wall_relative_velocity_rms_m_per_s,m.wall_relative_velocity_max_m_per_s,m.wall_area_m2})hash.AppendNormalizedDouble(x);hash.AppendLittleEndian32(m.endpoint_turnover_time_s?1u:0u);if(m.endpoint_turnover_time_s)hash.AppendNormalizedDouble(*m.endpoint_turnover_time_s);return hash.Hex();
+		const auto& m=metrics_;for(double x:{m.quadrature_volume_m3,m.audited_volume_m3,m.enstrophy_integral_m3_per_s2,m.mean_enstrophy_per_s2,m.mean_q_criterion_per_s2,m.q_positive_volume_m3,m.q_positive_volume_fraction,m.stagnant_volume_m3,m.stagnant_volume_fraction,m.inlet_flow_m3_s,m.outlet_flow_m3_s,m.endpoint_turnover_rate_per_s,m.well_mixed_replacement_fraction_over_step,m.wall_relative_velocity_squared_area_integral_m4_per_s2,m.wall_relative_velocity_rms_m_per_s,m.wall_relative_velocity_max_m_per_s,m.wall_area_m2})hash.AppendNormalizedDouble(x);hash.AppendLittleEndian32(m.endpoint_turnover_available?1u:0u);hash.AppendLittleEndian32(m.endpoint_turnover_time_s?1u:0u);if(m.endpoint_turnover_time_s)hash.AppendNormalizedDouble(*m.endpoint_turnover_time_s);return hash.Hex();
 	}
 	std::string SnapshotIdentity(const MovingCutGeometry& geometry, const ImmersedActiveLayout& layout, const ImmersedGlobalFlowState& state) const
 	{ Sha256 hash; immersed_transient_detail::AppendString(hash,"MovingImmersedFlowSnapshot/identity/v1"); immersed_transient_detail::AppendString(hash,content_hash_sha256_); immersed_transient_detail::AppendString(hash,geometry.GeometryIdentitySha256()); immersed_transient_detail::AppendString(hash,geometry.PublicationIdentitySha256()); immersed_transient_detail::AppendString(hash,layout.HashSha256()); immersed_transient_detail::AppendString(hash,state.HashSha256()); hash.AppendNormalizedDouble(request_.time_s); hash.AppendLittleEndian64(request_.index); return hash.Hex(); }
