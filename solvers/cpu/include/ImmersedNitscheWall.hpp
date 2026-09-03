@@ -25,6 +25,16 @@ namespace iga {
 
 using ImmersedWallVelocityEvaluator = std::function<std::array<double, 3>(
 	const std::array<double, 3>& physical, int boundary_id)>;
+using ImmersedMaterialWallVelocityEvaluator = std::function<std::array<double, 3>(
+	const SurfaceQuadraturePoint& point, const ImmersedSurfaceQuadraturePointProvenance& provenance)>;
+
+inline ImmersedMaterialWallVelocityEvaluator AdaptImmersedWallVelocityEvaluator(
+	const ImmersedWallVelocityEvaluator& evaluator)
+{
+	if (!evaluator) return {};
+	return [&evaluator](const SurfaceQuadraturePoint& point,
+		const ImmersedSurfaceQuadraturePointProvenance&) { return evaluator(point.physical, point.boundary_id); };
+}
 
 struct ImmersedNitscheWallLabelDiagnostics {
 	std::size_t selected_points = 0;
@@ -59,6 +69,22 @@ inline void ValidateImmersedNitscheWallLabels(const std::vector<int>& labels)
 		if (i && labels[i-1] >= labels[i])
 			throw std::invalid_argument("immersed Nitsche wall boundary labels must be sorted and unique");
 	}
+}
+
+inline void ValidateImmersedNitscheWallProvenance(const CartesianDomainClassification& domain,
+	const ImmersedSurfaceQuadraturePointProvenance& provenance)
+{
+	if (provenance.canonical_triangle >= domain.SurfaceIndex().Surface().Triangles().size())
+		throw std::invalid_argument("immersed Nitsche wall provenance is not bound to this domain surface");
+	const double tolerance = 64.0*std::numeric_limits<double>::epsilon();
+	double barycentric_sum = 0.0;
+	for (const double value : provenance.canonical_barycentric) {
+		if (!std::isfinite(value) || value < -tolerance || value > 1.0+tolerance)
+			throw std::invalid_argument("immersed Nitsche wall provenance is outside the simplex");
+		barycentric_sum += value;
+	}
+	if (!std::isfinite(barycentric_sum) || std::abs(barycentric_sum-1.0) > tolerance)
+		throw std::invalid_argument("immersed Nitsche wall provenance does not sum to one");
 }
 
 inline double ImmersedNitscheWallFraction(const CutCellVolumeQuadratureCatalog& volume_catalog,
@@ -147,7 +173,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
-	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity,
+	double gamma0, const ImmersedMaterialWallVelocityEvaluator& wall_velocity,
 	const CutCellGhostPenaltyCatalog* ghost_catalog, const NavierStokesSystem* volume_system = nullptr)
 {
 	if (!std::isfinite(gamma0) || !(gamma0 > 0.0))
@@ -172,6 +198,15 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	else
 		volume_catalog.ValidateUsableCompactRule(domain, cell_id);
 	const auto& surface_rule = surface_catalog.UsableRule(domain, cell_id);
+	const auto& surface_provenance = surface_catalog.UsableProvenance(domain, cell_id);
+	if (surface_provenance.size() != surface_rule.Points().size())
+		throw std::runtime_error("immersed Nitsche wall provenance must be one-to-one with surface quadrature");
+	for (std::size_t point_index = 0; point_index < surface_rule.Points().size(); ++point_index) {
+		const auto& point = surface_rule.Points()[point_index];
+		if (!std::isfinite(point.weight) || !(point.weight > 0.0))
+			throw std::invalid_argument("immersed Nitsche wall surface quadrature weight is invalid");
+		ValidateImmersedNitscheWallProvenance(domain, surface_provenance[point_index]);
+	}
 	const auto element = domain.Background().MaterializeElement(cell_id);
 	if (!selected_boundary_labels.empty()) {
 		if (nodal_state.size() != element.connectivity.size())
@@ -219,7 +254,9 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 	const auto nen = element.connectivity.size();
 	const auto ndof = 4*nen;
 	bool selected_any = false;
-	for (const auto& point : surface_rule.Points()) {
+	for (std::size_t point_index = 0; point_index < surface_rule.Points().size(); ++point_index) {
+		const auto& point = surface_rule.Points()[point_index];
+		const auto& provenance = surface_provenance[point_index];
 		auto& label_diagnostics = result.diagnostics.by_boundary_id[point.boundary_id];
 		if (!selected(point.boundary_id)) {
 			++label_diagnostics.skipped_points;
@@ -246,7 +283,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 		const double eta_h_n_over_mu = eta*h_n/parameters.dynamic_viscosity;
 		if (!std::isfinite(eta_h_n_over_mu) || !(eta_h_n_over_mu > 0.0))
 			throw std::overflow_error("immersed Nitsche wall penalty diagnostic overflows");
-		const auto g = wall_velocity(point.physical, point.boundary_id);
+		const auto g = wall_velocity(point, provenance);
 		if (!QuadratureFinite(g)) throw std::runtime_error("immersed Nitsche wall velocity is not finite");
 		std::array<double, 4> state{};
 		double gradient[3][3]{};
@@ -334,7 +371,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
 		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0,
-		[](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; }, nullptr);
+		AdaptImmersedWallVelocityEvaluator([](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; }), nullptr);
 }
 
 // Existing velocity-evaluator overload, retained bit-for-bit in its legacy
@@ -348,6 +385,19 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
 	double gamma0, const ImmersedWallVelocityEvaluator& wall_velocity)
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, AdaptImmersedWallVelocityEvaluator(wall_velocity), nullptr);
+}
+
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementMaterialAware(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	double gamma0, const ImmersedMaterialWallVelocityEvaluator& wall_velocity)
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
 		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity, nullptr);
@@ -364,7 +414,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElement(
 	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
-		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity, &ghost_catalog);
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, AdaptImmersedWallVelocityEvaluator(wall_velocity), &ghost_catalog);
 }
 
 // Streaming callers retain their pointwise volume system and hand it to the
@@ -381,7 +431,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSyst
 	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
-		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, AdaptImmersedWallVelocityEvaluator(wall_velocity),
 		nullptr, &volume_system);
 }
 
@@ -397,7 +447,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSyst
 	const ImmersedWallVelocityEvaluator& wall_velocity = [](const std::array<double, 3>&, int) { return std::array<double, 3>{{0.0,0.0,0.0}}; })
 {
 	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
-		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, AdaptImmersedWallVelocityEvaluator(wall_velocity),
 		&ghost_catalog, &volume_system);
 }
 

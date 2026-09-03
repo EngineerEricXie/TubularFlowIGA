@@ -19,5 +19,8 @@ its evaluated time.  `GeometryIdentitySha256()` names only current immutable
 geometry, while `PublicationIdentitySha256()` additionally names compatible
 predecessor and transition context used for publication/retry decisions.
 
-Transient extension and any time-slab formulation remain gated by Sol S7-A;
-this geometry oracle does not implement transient flow or FSI coupling.
+S7-A is GO only for PR7.3a's fixed-geometry foundation: Eulerian backward
+Euler uses current velocity for convection and a velocity-only history; it has
+no ALE terms.  Its state is keyed by global Cartesian node ID.  The moving
+extension remains NO-GO and unimplemented: it is the face-jump energy
+minimization over a time-slab band, pending its own tests and Sol review.

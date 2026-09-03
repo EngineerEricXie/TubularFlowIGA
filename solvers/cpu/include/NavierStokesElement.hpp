@@ -2,6 +2,7 @@
 #define NAVIER_STOKES_ELEMENT_HPP
 
 #include "IgaDatabase.hpp"
+#include "ImmersedTransientState.hpp"
 #include "Quadrature.hpp"
 #include "TransportElement.hpp"
 
@@ -23,6 +24,55 @@ struct NavierStokesParameters {
 	double dynamic_viscosity = 0.0;
 	double dt = 0.0;
 };
+
+// Explicitly velocity-only: pressure is never accepted as previous-time data.
+using NavierStokesVelocityHistory = std::vector<std::array<double, 3>>;
+
+inline double TransientNavierStokesTemporalScale(double dt)
+{
+	if (!std::isfinite(dt) || !(dt > 0.0))
+		throw std::invalid_argument("transient Navier-Stokes time step must be finite and positive");
+	const double inverse_dt = 1.0/dt;
+	if (!std::isfinite(inverse_dt) || !(inverse_dt > 0.0))
+		throw std::invalid_argument("transient Navier-Stokes reciprocal time step is not representable");
+	const double temporal_scale = 4.0*inverse_dt*inverse_dt;
+	if (!std::isfinite(temporal_scale) || !(temporal_scale > 0.0))
+		throw std::invalid_argument("transient Navier-Stokes temporal scale is not representable");
+	return temporal_scale;
+}
+
+inline void ValidateTransientNavierStokesPreflight(const NavierStokesParameters& parameters)
+{
+	if (!std::isfinite(parameters.density) || !(parameters.density > 0.0))
+		throw std::invalid_argument("transient Navier-Stokes density must be finite and positive");
+	const double inverse_dt = 1.0/parameters.dt;
+	const double temporal_scale = TransientNavierStokesTemporalScale(parameters.dt);
+	(void)temporal_scale;
+	const double mass_coefficient = parameters.density*inverse_dt;
+	if (!std::isfinite(mass_coefficient) || !(mass_coefficient > 0.0))
+		throw std::invalid_argument("transient Navier-Stokes mass coefficient is not representable");
+}
+
+inline void ValidateTransientNavierStokesHistory(const Element& element,
+	const NavierStokesVelocityHistory& previous_velocity, const NavierStokesParameters& parameters)
+{
+	ValidateTransientNavierStokesPreflight(parameters);
+	if (previous_velocity.size() != element.connectivity.size())
+		throw std::invalid_argument("transient Navier-Stokes velocity history does not match element connectivity");
+	for (const auto& node : previous_velocity)
+		for (const double value : node)
+			if (!std::isfinite(value)) throw std::invalid_argument("transient Navier-Stokes velocity history is not finite");
+}
+
+inline double CheckedTransientTargetTime(double source_time_s, double dt)
+{
+	if (!std::isfinite(source_time_s) || source_time_s < 0.0)
+		throw std::invalid_argument("immersed velocity history source time is invalid");
+	const double expected_target = source_time_s+dt;
+	if (!std::isfinite(expected_target) || !(expected_target > source_time_s))
+		throw std::invalid_argument("immersed velocity history time step does not advance source time");
+	return expected_target;
+}
 
 // The established body-fitted weak form integrates the resolved mixed pair by
 // parts in the volume.  Immersed cut cells can instead retain the resolved
@@ -58,7 +108,7 @@ inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_ja
 				velocity_metric += state[i] * metric[i][j] * state[j];
 			}
 	}
-	const auto temporal_scale = dt > 0.0 ? 4.0/(dt*dt) : 0.0;
+	const auto temporal_scale = dt > 0.0 ? TransientNavierStokesTemporalScale(dt) : 0.0;
 	tau_m = 1.0 / std::sqrt(temporal_scale + velocity_metric
 		+ (1.0/12.0) * kinematic_viscosity * kinematic_viscosity * metric_norm);
 	tau_c = 1.0 / (tau_m * direction_norm);
@@ -74,8 +124,11 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 	const NavierStokesBodyForceEvaluator& body_force,
 	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
 {
-	if (!(parameters.density > 0.0) || !(parameters.dynamic_viscosity > 0.0) || parameters.dt < 0.0)
+	if (!std::isfinite(parameters.density) || !(parameters.density > 0.0)
+		|| !std::isfinite(parameters.dynamic_viscosity) || !(parameters.dynamic_viscosity > 0.0)
+		|| !std::isfinite(parameters.dt) || parameters.dt < 0.0)
 		throw std::runtime_error("invalid Navier-Stokes density, dynamic viscosity, or time step");
+	if (parameters.dt > 0.0) ValidateTransientNavierStokesPreflight(parameters);
 	if (nodal_state.size() != element.connectivity.size())
 		throw std::runtime_error("Navier-Stokes nodal-state size does not match element connectivity");
 	if (parameters.dt > 0.0 && previous_nodal_state.size() != element.connectivity.size())
@@ -242,6 +295,67 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 	ValidateVolumeQuadratureRule(element, quadrature);
 	return BuildNavierStokesElementFromPoints(element, nodal_state, previous_nodal_state, parameters,
 		[&quadrature](const auto& consume) { for (const auto& point : quadrature.Points()) consume(point); }, body_force);
+}
+
+// Low-level callers that already own element-local data retain this explicit
+// path.  Immersed assembly must use the global-ID keyed named path below.
+inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const NavierStokesVelocityHistory& previous_velocity,
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature,
+	const NavierStokesBodyForceEvaluator& body_force)
+{
+	ValidateTransientNavierStokesHistory(element, previous_velocity, parameters);
+	std::vector<std::array<double, 4>> legacy(previous_velocity.size());
+	for (std::size_t i = 0; i < previous_velocity.size(); ++i)
+		for (int c = 0; c < 3; ++c) legacy[i][c] = previous_velocity[i][c];
+	return BuildNavierStokesElement(element, nodal_state, legacy, parameters, quadrature, body_force);
+}
+
+inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const NavierStokesVelocityHistory& previous_velocity,
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature)
+{
+	return BuildNavierStokesElementFromLocalVelocityHistory(element, nodal_state, previous_velocity, parameters, quadrature,
+		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; });
+}
+
+// The public immersed transient entry point accepts only global-ID keyed
+// history.  It localizes through element.connectivity after proving fixed
+// layout/geometry/time identity, so a different cell's 64-entry vector cannot
+// be mistaken for this element's history.
+inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const ImmersedVelocityHistory& previous_velocity, const ImmersedActiveLayout& layout,
+	double target_time_s, const NavierStokesParameters& parameters,
+	const VolumeQuadratureRule& quadrature, const NavierStokesBodyForceEvaluator& body_force)
+{
+	ValidateTransientNavierStokesPreflight(parameters);
+	if (!previous_velocity.Valid() || !layout.Valid()
+		|| previous_velocity.SourceGeometryIdentity() != layout.GeometryIdentity()
+		|| previous_velocity.TargetGeometryIdentity() != layout.GeometryIdentity())
+		throw std::invalid_argument("immersed velocity history does not match fixed geometry layout");
+	for (const auto provenance : previous_velocity.Provenance())
+		if (provenance != ImmersedVelocityHistoryProvenance::Committed)
+			throw std::invalid_argument("fixed-geometry immersed velocity history must be committed");
+	const double expected_target = CheckedTransientTargetTime(previous_velocity.SourceTimeS(), parameters.dt);
+	if (previous_velocity.TargetTimeS() != expected_target)
+		throw std::invalid_argument("immersed velocity history target time does not match transient time step");
+	if (target_time_s != expected_target)
+		throw std::invalid_argument("immersed velocity history target time does not match assembly time");
+	return BuildNavierStokesElementFromLocalVelocityHistory(element, nodal_state,
+		LocalizeImmersedVelocityHistory(element, layout, previous_velocity, target_time_s), parameters, quadrature, body_force);
+}
+
+inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const ImmersedVelocityHistory& previous_velocity, const ImmersedActiveLayout& layout,
+	double target_time_s, const NavierStokesParameters& parameters,
+	const VolumeQuadratureRule& quadrature)
+{
+	return BuildTransientNavierStokesElement(element, nodal_state, previous_velocity, layout, target_time_s,
+		parameters, quadrature, [](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; });
 }
 
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,

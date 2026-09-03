@@ -1,4 +1,5 @@
 #include "ImmersedNitscheWall.hpp"
+#include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
 #include <array>
@@ -71,6 +72,32 @@ std::vector<std::array<double, 4>> State(const iga::Element& element, double she
 	}
 	return state;
 }
+std::vector<iga::PrescribedSurfaceFrame> DistinctVelocityFrames()
+{
+	auto end = Cube(.25, .75);
+	for (std::size_t vertex = 0; vertex < end.vertices.size(); ++vertex) {
+		const double scale = static_cast<double>(vertex+1);
+		end.vertices[vertex][0] += .004*scale;
+		end.vertices[vertex][1] -= .003*scale;
+		end.vertices[vertex][2] += .002*scale;
+	}
+	return {{0.0, Cube(.25, .75)}, {1.0, std::move(end)}};
+}
+void AssertSameSurfacePoint(const iga::SurfaceQuadraturePoint& actual,
+	const iga::SurfaceQuadraturePoint& expected)
+{
+	assert(actual.parametric == expected.parametric);
+	assert(actual.physical == expected.physical);
+	assert(actual.normal == expected.normal);
+	assert(actual.weight == expected.weight);
+	assert(actual.boundary_id == expected.boundary_id);
+}
+void AssertSameSurfaceProvenance(const iga::ImmersedSurfaceQuadraturePointProvenance& actual,
+	const iga::ImmersedSurfaceQuadraturePointProvenance& expected)
+{
+	assert(actual.canonical_triangle == expected.canonical_triangle);
+	assert(actual.canonical_barycentric == expected.canonical_barycentric);
+}
 
 } // namespace
 
@@ -83,6 +110,103 @@ int main()
 	const auto element = domain.Background().MaterializeElement(0);
 	const iga::NavierStokesParameters parameters{1.0, 0.25, 0.0};
 	const auto zero = State(element);
+
+	// Material-aware wall evaluation receives the catalog's canonical triangle
+	// and barycentric provenance, not a reconstructed physical-point lookup.
+	// This motion deliberately gives every source vertex a distinct analytic
+	// velocity, so the canonical/source-corner permutation is observable.
+	const iga::PrescribedSurfaceMotion material_motion(DistinctVelocityFrames());
+	const auto material_evaluation = material_motion.Evaluate(.5, 0.0, .5);
+	std::size_t cyclic_triangle = material_evaluation.Surface().Triangles().size();
+	for (std::size_t triangle = 0; triangle < material_evaluation.CanonicalTriangleProvenance().size(); ++triangle) {
+		const auto& permutation = material_evaluation.CanonicalTriangleProvenance()[triangle]
+			.canonical_corner_to_source_corner;
+		if (permutation == std::array<std::uint32_t, 3>{{1, 2, 0}}
+			|| permutation == std::array<std::uint32_t, 3>{{2, 0, 1}}) {
+			cyclic_triangle = triangle;
+			break;
+		}
+	}
+	assert(cyclic_triangle < material_evaluation.Surface().Triangles().size());
+	const auto& cyclic_provenance = material_evaluation.CanonicalTriangleProvenance()[cyclic_triangle];
+	for (std::size_t left = 0; left < 3; ++left)
+		for (std::size_t right = left+1; right < 3; ++right)
+			assert(material_evaluation.SourceVertexVelocitiesMPerS()[cyclic_provenance.source_vertex_indices[left]]
+				!= material_evaluation.SourceVertexVelocitiesMPerS()[cyclic_provenance.source_vertex_indices[right]]);
+	const iga::CartesianDomainClassification material_domain(iga::CubicCartesianBackground(one),
+		iga::SurfaceSpatialIndex(material_evaluation.Surface()));
+	const iga::CutCellVolumeQuadratureCatalog material_volume(material_domain, {5,500000,500000,3000000});
+	iga::ImmersedSurfaceQuadratureCatalog material_surface(material_domain);
+	const auto material_element = material_domain.Background().MaterializeElement(0);
+	const auto material_zero = State(material_element);
+	const auto& material_points = material_surface.UsableRule(material_domain, 0).Points();
+	const auto& material_provenance = material_surface.UsableProvenance(material_domain, 0);
+	assert(!material_points.empty() && material_points.size() == material_provenance.size());
+	std::vector<std::array<double, 3>> expected_material_velocity;
+	expected_material_velocity.reserve(material_points.size());
+	bool saw_cyclic_provenance = false;
+	for (std::size_t point = 0; point < material_points.size(); ++point) {
+		const auto& provenance = material_provenance[point];
+		assert(provenance.canonical_triangle < material_evaluation.Surface().Triangles().size());
+		for (double weight : provenance.canonical_barycentric) assert(weight > 0.0 && weight < 1.0);
+		if (provenance.canonical_triangle == cyclic_triangle) saw_cyclic_provenance = true;
+		expected_material_velocity.push_back(material_evaluation.WallVelocity(provenance.canonical_triangle,
+			provenance.canonical_barycentric));
+	}
+	assert(saw_cyclic_provenance);
+	std::size_t material_callback_count = 0;
+	const auto material_wall = iga::BuildImmersedNitscheWallElementMaterialAware(material_domain, material_volume,
+		material_surface, 0, material_zero, {}, parameters, {7}, 2.0,
+		[&](const iga::SurfaceQuadraturePoint& point,
+			const iga::ImmersedSurfaceQuadraturePointProvenance& provenance) {
+			assert(material_callback_count < material_points.size());
+			AssertSameSurfacePoint(point, material_points[material_callback_count]);
+			AssertSameSurfaceProvenance(provenance, material_provenance[material_callback_count]);
+			const auto velocity = material_evaluation.WallVelocity(provenance.canonical_triangle,
+				provenance.canonical_barycentric);
+			for (std::size_t axis = 0; axis < 3; ++axis)
+				assert(std::abs(velocity[axis]-expected_material_velocity[material_callback_count][axis]) < 1e-12);
+			++material_callback_count;
+			return velocity;
+		});
+	assert(material_callback_count == material_points.size());
+	const auto legacy_material_wall = iga::BuildImmersedNitscheWallElement(material_domain, material_volume,
+		material_surface, 0, material_zero, {}, parameters, {7}, 2.0,
+		[&](const std::array<double, 3>& physical, int boundary_id) {
+			for (std::size_t point = 0; point < material_points.size(); ++point)
+				if (boundary_id == material_points[point].boundary_id && physical == material_points[point].physical)
+					return expected_material_velocity[point];
+			throw std::runtime_error("legacy material comparison point is absent from surface quadrature");
+		});
+	const auto zero_material_wall = iga::BuildImmersedNitscheWallElement(material_domain, material_volume,
+		material_surface, 0, material_zero, {}, parameters, {7}, 2.0);
+	assert(MaxAbs(Difference(material_wall.system.jacobian, legacy_material_wall.system.jacobian)) < 2e-12);
+	assert(MaxAbs(Difference(material_wall.system.negative_residual,
+		legacy_material_wall.system.negative_residual)) < 2e-12);
+	assert(MaxAbs(Difference(material_wall.system.negative_residual,
+		zero_material_wall.system.negative_residual)) > 1e-5);
+	// Malformed catalog provenance is rejected structurally before dispatching
+	// the material callback.  This non-const catalog is deliberately mutated
+	// through its const-only accessor for the focused negative test.
+	auto& injected_provenance=const_cast<iga::ImmersedSurfaceQuadraturePointProvenance&>(
+		material_surface.UsableProvenance(material_domain,0).front());
+	const auto saved_provenance=injected_provenance;
+	injected_provenance.canonical_barycentric[0]=1.5;
+	std::size_t malformed_callback_count=0;
+	Reject([&] { iga::BuildImmersedNitscheWallElementMaterialAware(material_domain, material_volume,
+		material_surface, 0, material_zero, {}, parameters, {7}, 2.0,
+		[&](const iga::SurfaceQuadraturePoint&, const iga::ImmersedSurfaceQuadraturePointProvenance&) {
+			++malformed_callback_count;
+			return std::array<double,3>{{0.0,0.0,0.0}};
+		}); });
+	assert(malformed_callback_count==0);
+	injected_provenance=saved_provenance;
+	std::size_t legacy_callback_count=0;
+	const auto stateful_legacy_wall=iga::BuildImmersedNitscheWallElement(material_domain, material_volume,
+		material_surface, 0, material_zero, {}, parameters, {7}, 2.0,
+		[&](const std::array<double,3>&, int) { ++legacy_callback_count; return std::array<double,3>{{0.0,0.0,0.0}}; });
+	assert(legacy_callback_count==material_points.size());
+	assert(stateful_legacy_wall.system.jacobian.size()==zero_material_wall.system.jacobian.size());
 
 	// The immersed rule is genuinely interior to the Cartesian reference cell;
 	// assembly must not route it through a body-fitted face assumption.

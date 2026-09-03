@@ -12,6 +12,13 @@
 
 namespace {
 
+template <class Function> void Reject(Function&& function)
+{
+	bool rejected = false;
+	try { function(); } catch (const std::exception&) { rejected = true; }
+	assert(rejected);
+}
+
 iga::Element UnitElement()
 {
 	iga::Element element;
@@ -329,6 +336,26 @@ int main()
 		element, state, previous_state, {density, 0.17, dt});
 	const auto transient_explicit = iga::BuildNavierStokesElement(
 		element, state, previous_state, {density, 0.17, dt}, unit_quadrature.Rule());
+	iga::NavierStokesVelocityHistory velocity_history(64);
+	for (std::size_t a = 0; a < velocity_history.size(); ++a)
+		for (int component = 0; component < 3; ++component)
+			velocity_history[a][component] = previous_state[a][component];
+	const auto transient_velocity_only = iga::BuildNavierStokesElementFromLocalVelocityHistory(
+		element, state, velocity_history, {density, 0.17, dt}, unit_quadrature.Rule());
+	RequireEqual(transient_explicit.jacobian, transient_velocity_only.jacobian,
+		"velocity-only transient Jacobian");
+	RequireEqual(transient_explicit.negative_residual, transient_velocity_only.negative_residual,
+		"velocity-only transient residual");
+	Reject([&] { iga::BuildNavierStokesElementFromLocalVelocityHistory(element, state, {}, {density,.17,dt}, unit_quadrature.Rule()); });
+	velocity_history[0][0] = std::numeric_limits<double>::quiet_NaN();
+	Reject([&] { iga::BuildNavierStokesElementFromLocalVelocityHistory(element, state, velocity_history, {density,.17,dt}, unit_quadrature.Rule()); });
+	velocity_history[0][0] = previous_state[0][0];
+	for (double bad_dt : {0.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), std::numeric_limits<double>::denorm_min()})
+		Reject([&] { iga::BuildNavierStokesElementFromLocalVelocityHistory(element, state, velocity_history, {density,.17,bad_dt}, unit_quadrature.Rule()); });
+	Reject([&] { iga::BuildNavierStokesElementFromLocalVelocityHistory(element, state, velocity_history,
+		{density,.17,std::numeric_limits<double>::max()}, unit_quadrature.Rule()); });
+	Reject([&] { iga::BuildNavierStokesElementFromLocalVelocityHistory(element, state, velocity_history,
+		{std::numeric_limits<double>::max(),.17,0.5}, unit_quadrature.Rule()); });
 	const auto frozen_transient = LegacyTensorNavierStokesElement(element, state,
 		previous_state, {density, 0.17, dt});
 	RequireEqual(frozen_transient.negative_residual, transient_explicit.negative_residual,
