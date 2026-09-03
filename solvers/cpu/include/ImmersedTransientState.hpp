@@ -222,6 +222,83 @@ private:
 	double source_time_s_,target_time_s_;std::string source_geometry_identity_,target_geometry_identity_,hash_;std::vector<std::int32_t>node_ids_;std::vector<std::array<double,3>>velocities_;std::vector<ImmersedVelocityHistoryProvenance>provenance_;
 };
 
+// Immutable audit identity for one old-layout to target-layout warm-start map.
+// The moving runtime consumes this value but never constructs or mutates it:
+// continuation remains a separate PR7.4a concern.
+class ImmersedMovingTrialMapIdentity {
+public:
+	static ImmersedMovingTrialMapIdentity Create(std::string old_state_hash,
+		std::string old_geometry_identity, std::string new_geometry_identity,
+		std::string target_publication_identity, std::string old_layout_hash,
+		std::string new_layout_hash, std::string velocity_extension_hash,
+		std::string velocity_operator_hash, std::string velocity_history_hash,
+		std::string scalar_extension_hash, std::vector<std::uint64_t> controller_ids,
+		std::vector<double> controller_values, bool reset_gauge_to_canonical_zero,
+		double source_time_s, std::uint64_t source_index, double target_time_s,
+		std::uint64_t target_index, double dt_s)
+	{
+		ImmersedMovingTrialMapIdentity value;
+		value.old_state_hash_=std::move(old_state_hash); value.old_geometry_identity_=std::move(old_geometry_identity);
+		value.new_geometry_identity_=std::move(new_geometry_identity); value.target_publication_identity_=std::move(target_publication_identity);
+		value.old_layout_hash_=std::move(old_layout_hash); value.new_layout_hash_=std::move(new_layout_hash);
+		value.velocity_extension_hash_=std::move(velocity_extension_hash); value.velocity_operator_hash_=std::move(velocity_operator_hash);
+		value.velocity_history_hash_=std::move(velocity_history_hash); value.scalar_extension_hash_=std::move(scalar_extension_hash);
+		value.controller_ids_=std::move(controller_ids); value.controller_values_=std::move(controller_values);
+		value.reset_gauge_to_canonical_zero_=reset_gauge_to_canonical_zero; value.source_time_s_=source_time_s;
+		value.source_index_=source_index; value.target_time_s_=target_time_s; value.target_index_=target_index; value.dt_s_=dt_s;
+		value.Validate(); value.hash_=value.ComputeHash(); return value;
+	}
+	bool Valid() const noexcept { try { Validate(); return !hash_.empty() && hash_==ComputeHash(); } catch (...) { return false; } }
+	const std::string& HashSha256() const noexcept { return hash_; }
+	const std::string& OldStateHashSha256() const noexcept { return old_state_hash_; }
+	const std::string& OldGeometryIdentity() const noexcept { return old_geometry_identity_; }
+	const std::string& NewGeometryIdentity() const noexcept { return new_geometry_identity_; }
+	const std::string& TargetPublicationIdentity() const noexcept { return target_publication_identity_; }
+	const std::string& OldLayoutHashSha256() const noexcept { return old_layout_hash_; }
+	const std::string& NewLayoutHashSha256() const noexcept { return new_layout_hash_; }
+	const std::string& VelocityExtensionHashSha256() const noexcept { return velocity_extension_hash_; }
+	const std::string& VelocityOperatorHashSha256() const noexcept { return velocity_operator_hash_; }
+	const std::string& VelocityHistoryHashSha256() const noexcept { return velocity_history_hash_; }
+	const std::string& ScalarExtensionHashSha256() const noexcept { return scalar_extension_hash_; }
+	const std::vector<std::uint64_t>& ControllerIds() const noexcept { return controller_ids_; }
+	const std::vector<double>& ControllerValues() const noexcept { return controller_values_; }
+	bool ResetsGaugeToCanonicalZero() const noexcept { return reset_gauge_to_canonical_zero_; }
+	double SourceTimeS() const noexcept { return source_time_s_; }
+	std::uint64_t SourceIndex() const noexcept { return source_index_; }
+	double TargetTimeS() const noexcept { return target_time_s_; }
+	std::uint64_t TargetIndex() const noexcept { return target_index_; }
+	double DtS() const noexcept { return dt_s_; }
+
+private:
+	void Validate() const
+	{
+		for (const auto* text : {&old_state_hash_, &old_geometry_identity_, &new_geometry_identity_, &target_publication_identity_,
+			&old_layout_hash_, &new_layout_hash_, &velocity_extension_hash_, &velocity_operator_hash_, &velocity_history_hash_, &scalar_extension_hash_})
+			if (text->empty()) throw std::invalid_argument("immersed moving trial map identity is incomplete");
+		if (controller_ids_.size()!=controller_values_.size() || !std::is_sorted(controller_ids_.begin(),controller_ids_.end())
+			|| std::adjacent_find(controller_ids_.begin(),controller_ids_.end())!=controller_ids_.end())
+			throw std::invalid_argument("immersed moving trial map controller identity is invalid");
+		for (const double value : controller_values_) immersed_transient_detail::RequireFinite(value,"immersed moving trial map controller value is not finite");
+		if (!reset_gauge_to_canonical_zero_ || !std::isfinite(source_time_s_) || source_time_s_<0.0 || !std::isfinite(target_time_s_)
+			|| target_time_s_<0.0 || !std::isfinite(dt_s_) || !(dt_s_>0.0) || target_index_!=source_index_+1)
+			throw std::invalid_argument("immersed moving trial map transition is invalid");
+		if (source_index_==std::numeric_limits<std::uint64_t>::max() || target_time_s_!=source_time_s_+dt_s_)
+			throw std::invalid_argument("immersed moving trial map time/index is invalid");
+	}
+	std::string ComputeHash() const
+	{
+		Sha256 hash; immersed_transient_detail::AppendString(hash,"ImmersedMovingTrialMap/v1");
+		for (const auto* text : {&old_state_hash_, &old_geometry_identity_, &new_geometry_identity_, &target_publication_identity_,
+			&old_layout_hash_, &new_layout_hash_, &velocity_extension_hash_, &velocity_operator_hash_, &velocity_history_hash_, &scalar_extension_hash_}) immersed_transient_detail::AppendString(hash,*text);
+		hash.AppendLittleEndian64(controller_ids_.size()); for (std::size_t i=0;i<controller_ids_.size();++i) { hash.AppendLittleEndian64(controller_ids_[i]); hash.AppendNormalizedDouble(controller_values_[i]); }
+		hash.AppendLittleEndian32(reset_gauge_to_canonical_zero_?1u:0u); hash.AppendNormalizedDouble(source_time_s_); hash.AppendLittleEndian64(source_index_);
+		hash.AppendNormalizedDouble(target_time_s_); hash.AppendLittleEndian64(target_index_); hash.AppendNormalizedDouble(dt_s_); return hash.Hex();
+	}
+	std::string old_state_hash_,old_geometry_identity_,new_geometry_identity_,target_publication_identity_,old_layout_hash_,new_layout_hash_,velocity_extension_hash_,velocity_operator_hash_,velocity_history_hash_,scalar_extension_hash_,hash_;
+	std::vector<std::uint64_t> controller_ids_; std::vector<double> controller_values_; bool reset_gauge_to_canonical_zero_=false;
+	double source_time_s_=0.0,target_time_s_=0.0,dt_s_=0.0; std::uint64_t source_index_=0,target_index_=0;
+};
+
 // The element's connectivity is global.  Localizing by it here prevents a
 // same-sized positional vector from being silently applied to another cell.
 inline std::vector<std::array<double, 3>> LocalizeImmersedVelocityHistory(

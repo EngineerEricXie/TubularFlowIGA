@@ -1,4 +1,5 @@
 #include "ImmersedTransientFlowRuntime.hpp"
+#include "ImmersedVelocityExtension.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,7 +85,7 @@ bool SameDiagnosticsPublic(const iga::ImmersedTransientFlowDiagnostics& a, const
 		&& a.nonlinear_iterations==b.nonlinear_iterations && a.ksp_iterations==b.ksp_iterations && a.ksp_reason==b.ksp_reason && a.identity_history_nodes==b.identity_history_nodes && a.committed_history_nodes==b.committed_history_nodes && a.extended_history_nodes==b.extended_history_nodes && a.missing_history_nodes==b.missing_history_nodes
 		&& a.idle==b.idle && a.trial_active==b.trial_active && a.converged==b.converged && a.prepared==b.prepared && a.committed==b.committed && a.scalar_diagonal_structure_verified==b.scalar_diagonal_structure_verified
 		&& a.attempt_count==b.attempt_count && a.abort_count==b.abort_count && a.rollback_count==b.rollback_count && a.prepare_count==b.prepare_count && a.finalize_count==b.finalize_count && a.commit_count==b.commit_count && SameBits(a.last_assembly_seconds,b.last_assembly_seconds) && SameBits(a.last_linear_solve_seconds,b.last_linear_solve_seconds)
-		&& a.geometry_identity_sha256==b.geometry_identity_sha256 && a.layout_hash_sha256==b.layout_hash_sha256 && a.committed_state_hash_sha256==b.committed_state_hash_sha256 && a.trial_state_hash_sha256==b.trial_state_hash_sha256 && a.history_hash_sha256==b.history_hash_sha256 && a.input_hash_sha256==b.input_hash_sha256 && a.solved_state_hash_sha256==b.solved_state_hash_sha256 && a.prepared_hash_sha256==b.prepared_hash_sha256 && a.attempt_hash_sha256==b.attempt_hash_sha256
+		&& a.geometry_identity_sha256==b.geometry_identity_sha256 && a.layout_hash_sha256==b.layout_hash_sha256 && a.committed_state_hash_sha256==b.committed_state_hash_sha256 && a.trial_state_hash_sha256==b.trial_state_hash_sha256 && a.history_hash_sha256==b.history_hash_sha256 && a.moving_map_identity_sha256==b.moving_map_identity_sha256 && a.input_hash_sha256==b.input_hash_sha256 && a.solved_state_hash_sha256==b.solved_state_hash_sha256 && a.prepared_hash_sha256==b.prepared_hash_sha256 && a.attempt_hash_sha256==b.attempt_hash_sha256
 		&& a.attempt_assembly_count==b.attempt_assembly_count && SamePortsBitwise(a.ports,b.ports) && SameNewtonRecords(a.newton_steps,b.newton_steps);
 }
 
@@ -206,6 +207,64 @@ void CheckAbortPublication(const iga::MovingCutGeometry& geometry)
 	runtime.BeginTrial(1.0,1,1.0); runtime.SetTrialState(NonconstantTrial(runtime)); runtime.Assemble(); assert(SamePorts(ports,runtime.Diagnostics().ports));
 	assert(!runtime.Diagnostics().input_hash_sha256.empty() && !runtime.Diagnostics().history_hash_sha256.empty());
 	runtime.AbortTrial(); assert(runtime.TrialState()==committed && runtime.Diagnostics().idle && runtime.CommittedState()==committed && runtime.CommittedGlobalState().HashSha256()==hash && SamePortsBitwise(ports,runtime.Diagnostics().ports) && runtime.Diagnostics().input_hash_sha256.empty() && runtime.Diagnostics().trial_state_hash_sha256.empty() && runtime.Diagnostics().history_hash_sha256.empty() && runtime.Diagnostics().prepared_hash_sha256.empty());
+}
+
+void CheckMovingInnerTrial(const iga::CubicCartesianGridSpec& grid, iga::MovingCutGeometryOptions options)
+{
+	const auto old_soup=Cube(.18,.45), new_soup=Cube(.18,.95);
+	iga::PrescribedSurfaceMotion motion({{0.0,old_soup},{1.0,new_soup}});
+	auto old_geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(0.0,0.0,1.0),options);
+	auto target_geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),options,old_geometry.get());
+	const auto old_layout=iga::ImmersedActiveLayout::Build(old_geometry->Domain(),old_geometry->Volume(),old_geometry->GeometryIdentitySha256(),{1,2},true);
+	iga::ImmersedGlobalFlowState old_state(0.0,0,old_layout,NonconstantFields(old_layout),{0.0,0.0},true,0.0);
+	iga::ImmersedTransientFlowRuntime runtime(*target_geometry,Options());
+	const auto extension=iga::ImmersedVelocityExtension::Build(*old_geometry,old_layout,old_state,*target_geometry,runtime.Layout(),3);
+	std::vector<double> old_pressure(old_state.Coefficients().size());
+	for(std::size_t i=0;i<old_pressure.size();++i) old_pressure[i]=old_state.Coefficients()[i][3];
+	const auto scalar=extension.ExtendScalar(old_pressure);
+	std::vector<std::array<double,4>> seed_fields(runtime.Layout().NodeIds().size());
+	for(std::size_t i=0;i<seed_fields.size();++i) { for(int c=0;c<3;++c) seed_fields[i][c]=extension.TargetHistory().Velocities()[i][c]; seed_fields[i][3]=scalar.target_values[i]; }
+	const std::vector<double> seed_multipliers{{.021,-.034}};
+	const iga::ImmersedGlobalFlowState seed(0.0,0,runtime.Layout(),seed_fields,seed_multipliers,true,0.0);
+	const auto map=iga::ImmersedMovingTrialMapIdentity::Create(old_state.HashSha256(),old_geometry->GeometryIdentitySha256(),target_geometry->GeometryIdentitySha256(),target_geometry->PublicationIdentitySha256(),old_layout.HashSha256(),runtime.Layout().HashSha256(),extension.HashSha256(),extension.OperatorHashSha256(),extension.TargetHistory().HashSha256(),scalar.hash_sha256,runtime.Layout().PortIds(),seed_multipliers,true,0.0,0,1.0,1,1.0);
+	std::vector<PetscScalar> expected_seed(runtime.Layout().Rows(),0.0);
+	for(std::size_t i=0;i<seed.Coefficients().size();++i) for(int field=0;field<4;++field) expected_seed[static_cast<std::size_t>(runtime.Dof(runtime.Layout().NodeIds()[i],field))]=seed.Coefficients()[i][field];
+	for(std::size_t i=0;i<seed.PortIds().size();++i) expected_seed[static_cast<std::size_t>(runtime.Layout().ControllerRow(seed.PortIds()[i]))]=seed.PortMultipliers()[i];
+	expected_seed[static_cast<std::size_t>(runtime.GaugeDof())]=seed.GaugeMultiplier();
+	assert(SameBits(seed.GaugeMultiplier(),0.0) && SameBits(PetscRealPart(expected_seed[static_cast<std::size_t>(runtime.GaugeDof())]),0.0));
+	const auto before=runtime.Diagnostics(); const auto before_committed=runtime.CommittedState(); const auto before_trial=runtime.TrialState();
+	auto bad_history=iga::ImmersedVelocityHistory(0.0,1.0,old_geometry->GeometryIdentitySha256(),"wrong",extension.TargetHistory().NodeIds(),extension.TargetHistory().Velocities(),extension.TargetHistory().Provenance());
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,bad_history,seed,map); });
+	auto short_ids=extension.TargetHistory().NodeIds(); auto short_velocities=extension.TargetHistory().Velocities(); auto short_provenance=extension.TargetHistory().Provenance(); short_ids.pop_back(); short_velocities.pop_back(); short_provenance.pop_back();
+	const auto short_history=iga::ImmersedVelocityHistory(0.0,1.0,old_geometry->GeometryIdentitySha256(),target_geometry->GeometryIdentitySha256(),short_ids,short_velocities,short_provenance);
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,short_history,seed,map); });
+	const auto late_history=iga::ImmersedVelocityHistory(0.0,2.0,old_geometry->GeometryIdentitySha256(),target_geometry->GeometryIdentitySha256(),extension.TargetHistory().NodeIds(),extension.TargetHistory().Velocities(),extension.TargetHistory().Provenance());
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,late_history,seed,map); });
+	const iga::ImmersedGlobalFlowState bad_time(1.0,0,runtime.Layout(),seed_fields,seed_multipliers,true,0.0);
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),bad_time,map); });
+	const iga::ImmersedGlobalFlowState bad_controller(0.0,0,runtime.Layout(),seed_fields,{.1,seed_multipliers[1]},true,0.0);
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),bad_controller,map); });
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),old_state,map); });
+	const iga::ImmersedGlobalFlowState bad_gauge(0.0,0,runtime.Layout(),seed_fields,seed_multipliers,true,-0.0);
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),bad_gauge,map); });
+	const auto stale=iga::ImmersedMovingTrialMapIdentity::Create(old_state.HashSha256(),old_geometry->GeometryIdentitySha256(),"stale",target_geometry->PublicationIdentitySha256(),old_layout.HashSha256(),runtime.Layout().HashSha256(),extension.HashSha256(),extension.OperatorHashSha256(),extension.TargetHistory().HashSha256(),scalar.hash_sha256,runtime.Layout().PortIds(),seed_multipliers,true,0.0,0,1.0,1,1.0);
+	Reject([&] { runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),seed,stale); });
+	assert(runtime.CommittedState()==before_committed && runtime.TrialState()==before_trial && SameDiagnosticsPublic(before,runtime.Diagnostics()));
+	runtime.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),seed,map);
+	const auto trial_seed=runtime.TrialState(); assert(trial_seed.size()==expected_seed.size());
+	for(std::size_t i=0;i<trial_seed.size();++i) assert(SameBits(trial_seed[i],expected_seed[i]));
+	assert(SameBits(PetscRealPart(trial_seed[static_cast<std::size_t>(runtime.GaugeDof())]),0.0));
+	assert(runtime.Diagnostics().history_hash_sha256==extension.TargetHistory().HashSha256() && runtime.Diagnostics().moving_map_identity_sha256==map.HashSha256());
+	assert(runtime.Diagnostics().identity_history_nodes==runtime.Layout().NodeIds().size() && runtime.Diagnostics().extended_history_nodes>0 && runtime.Diagnostics().missing_history_nodes==0);
+	const auto frozen=runtime.TrialState(); const auto input=runtime.Diagnostics().input_hash_sha256;
+	runtime.Assemble(); assert(runtime.Diagnostics().surface_cells>0);
+	runtime.SetTrialState(GenericTrial(runtime)); runtime.Rollback();
+	assert(runtime.TrialState()==frozen && runtime.Diagnostics().input_hash_sha256==input && runtime.Diagnostics().history_hash_sha256==extension.TargetHistory().HashSha256() && runtime.Diagnostics().moving_map_identity_sha256==map.HashSha256());
+	runtime.AbortTrial();
+	auto throwing_options=Options(); throwing_options.body_force=[](const std::array<double,3>&) -> std::array<double,3> { throw std::runtime_error("moving body force"); };
+	iga::ImmersedTransientFlowRuntime throwing(*target_geometry,throwing_options); const auto throwing_before=throwing.Diagnostics(); const auto throwing_state=throwing.CommittedState();
+	Reject([&] { throwing.BeginMovingTrial(1.0,1,1.0,extension.TargetHistory(),seed,map); });
+	assert(throwing.CommittedState()==throwing_state && throwing.TrialState()==throwing_state && SameDiagnosticsPublic(throwing_before,throwing.Diagnostics()));
 }
 
 void CheckFrozenBodyForce(const iga::MovingCutGeometry& geometry)
@@ -335,6 +394,7 @@ int main(int argc,char** argv)
 		CheckSolverConfigurationIdentity(*branch_geometry);
 		CheckBeginTrialExceptionTransaction(*branch_geometry);
 		CheckCompactRuntime(*branch_geometry,*compact_branch_geometry);
+		CheckMovingInnerTrial(branch_grid,branch_go);
 		Reject([&] { auto bad=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.1); bad.ports[0].boundary_label=0; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		Reject([&] { auto bad=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.1); bad.ports[0].boundary_label=99; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		for(const double invalid:{std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()}) {

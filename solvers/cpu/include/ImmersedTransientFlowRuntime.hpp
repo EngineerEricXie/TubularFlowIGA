@@ -2,8 +2,8 @@
 #define IGA_IMMERSED_TRANSIENT_FLOW_RUNTIME_HPP
 
 // Fixed-geometry backward-Euler immersed flow transaction.  This is purposefully
-// separate from ImmersedStaticFlowRuntime: a moving evaluation is an immutable
-// input and this PR accepts only an identity transition.
+// separate from ImmersedStaticFlowRuntime: the fixed entry accepts only an
+// identity transition, while the supplied moving entry is target-epoch-local.
 #include "MovingCutGeometry.hpp"
 #include "ImmersedFlowPort.hpp"
 #include "ImmersedNitscheWall.hpp"
@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
@@ -65,7 +66,7 @@ struct ImmersedTransientFlowDiagnostics {
 	std::string geometry_identity_sha256, layout_hash_sha256, committed_state_hash_sha256, trial_state_hash_sha256, history_hash_sha256;
 	// Deterministic publication identities deliberately exclude timing and lifetime
 	// attempt/abort counters.  They make an exact retry auditable.
-	std::string input_hash_sha256, solved_state_hash_sha256, prepared_hash_sha256, attempt_hash_sha256;
+	std::string input_hash_sha256, solved_state_hash_sha256, prepared_hash_sha256, attempt_hash_sha256, moving_map_identity_sha256;
 	std::size_t attempt_assembly_count = 0;
 	// Measurements describe a particular published state.  Idle mutation clears
 	// them instead of allowing a previous committed state to leak into an input.
@@ -176,7 +177,41 @@ public:
 		options_.parameters=candidate_parameters; history_.swap(candidate_history);
 		frozen_body_force_.swap(candidate_forces); frozen_seed_.swap(candidate_seed);
 		trial_ports_.swap(candidate_trial_ports); frozen_ports_.swap(candidate_frozen_ports);
-		std::swap(state_,prepared_); target_time_s_=target_time_s; target_index_=target_index;
+		std::swap(state_,prepared_); target_time_s_=target_time_s; target_index_=target_index; moving_trial_=false; moving_map_.reset();
+		std::swap(diagnostics_,candidate_diagnostics);
+	}
+	// A target-geometry runtime owns only target-layout PETSc objects.  The
+	// caller supplies the immutable old-to-target continuation and pressure seed;
+	// no old-layout vector is ever copied into this runtime.
+	void BeginMovingTrial(double target_time_s, std::uint64_t target_index, double dt_s,
+		const ImmersedVelocityHistory& supplied_history, const ImmersedGlobalFlowState& supplied_seed,
+		const ImmersedMovingTrialMapIdentity& map_identity)
+	{
+		RequireIdle("begin moving trial");
+		auto candidate_parameters=options_.parameters; candidate_parameters.dt=dt_s; ValidateTransientNavierStokesPreflight(candidate_parameters);
+		ValidateAllFlowCompatibility(); ValidateMovingInputs(target_time_s,target_index,dt_s,supplied_history,supplied_seed,map_identity);
+		CertifyFiniteMaterialWallVelocity();
+		std::unique_ptr<ImmersedVelocityHistory> candidate_history(new ImmersedVelocityHistory(supplied_history));
+		std::unique_ptr<ImmersedMovingTrialMapIdentity> candidate_map(new ImmersedMovingTrialMapIdentity(map_identity));
+		auto candidate_trial_ports=diagnostics_.ports, candidate_frozen_ports=diagnostics_.ports;
+		auto candidate_forces=FreezeBodyForceCandidate();
+		// The exact supplied target-layout seed is copied while publication is
+		// still idle.  prepared_ is the target-sized staging vector.
+		SetVectorFromGlobal(supplied_seed,prepared_);
+		auto candidate_seed=Copy(prepared_);
+		auto candidate_diagnostics=diagnostics_;
+		SetHistoryDiagnostics(candidate_diagnostics,candidate_history.get());
+		candidate_diagnostics.target_time_s=target_time_s; candidate_diagnostics.dt_s=dt_s;
+		candidate_diagnostics.idle=false; candidate_diagnostics.trial_active=true; candidate_diagnostics.committed=false;
+		candidate_diagnostics.converged=false; candidate_diagnostics.prepared=false;
+		ResetAttemptWork(candidate_diagnostics); ++candidate_diagnostics.attempt_count;
+		candidate_diagnostics.trial_state_hash_sha256=HashVector(prepared_);
+		candidate_diagnostics.moving_map_identity_sha256=map_identity.HashSha256();
+		candidate_diagnostics.input_hash_sha256=MovingInputHash(candidate_parameters,*candidate_history,target_time_s,target_index,candidate_frozen_ports,candidate_forces,candidate_seed,map_identity);
+		options_.parameters=candidate_parameters; history_.swap(candidate_history); moving_map_.swap(candidate_map);
+		frozen_body_force_.swap(candidate_forces); frozen_seed_.swap(candidate_seed);
+		trial_ports_.swap(candidate_trial_ports); frozen_ports_.swap(candidate_frozen_ports);
+		std::swap(state_,prepared_); target_time_s_=target_time_s; target_index_=target_index; moving_trial_=true;
 		std::swap(diagnostics_,candidate_diagnostics);
 	}
 	void Assemble()
@@ -238,7 +273,7 @@ public:
 		if(!diagnostics_.prepared) return;
 		std::swap(committed_,prepared_); committed_global_.swap(prepared_global_); diagnostics_.ports.swap(prepared_ports_);
 		diagnostics_.committed_state_hash_sha256.swap(prepared_global_hash_); // already allocated in PrepareCommit
-		history_.reset(); frozen_body_force_.clear(); frozen_seed_.clear(); trial_ports_.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.prepared=false; diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; diagnostics_.converged=false; ++diagnostics_.finalize_count; ++diagnostics_.commit_count;
+		history_.reset(); moving_map_.reset(); moving_trial_=false; frozen_body_force_.clear(); frozen_seed_.clear(); trial_ports_.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); diagnostics_.prepared=false; diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; diagnostics_.converged=false; ++diagnostics_.finalize_count; ++diagnostics_.commit_count;
 	}
 	void Commit() { PrepareCommit(); FinalizeCommit(); }
 	void Rollback()
@@ -250,7 +285,7 @@ public:
 	{
 		if(!diagnostics_.trial_active && !diagnostics_.prepared) return;
 		Check(VecCopy(committed_,state_),"VecCopy abort committed state");
-		diagnostics_.prepared=false; prepared_global_.reset(); prepared_ports_.clear(); prepared_global_hash_.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.input_hash_sha256.clear(); trial_ports_.clear(); history_.reset(); frozen_body_force_.clear(); frozen_seed_.clear(); diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; ResetAttemptWork(); ++diagnostics_.abort_count; RefreshHashes();
+		diagnostics_.prepared=false; prepared_global_.reset(); prepared_ports_.clear(); prepared_global_hash_.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.input_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); trial_ports_.clear(); history_.reset(); moving_map_.reset(); moving_trial_=false; frozen_body_force_.clear(); frozen_seed_.clear(); diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; ResetAttemptWork(); ++diagnostics_.abort_count; RefreshHashes();
 	}
 	void AbortPrepared() { AbortTrial(); }
 	std::vector<PetscScalar> AssembledNegativeResidual() const { return Copy(rhs_); }
@@ -284,6 +319,36 @@ private:
 	void RequireIdle(const char* what) const { if(!diagnostics_.idle||diagnostics_.trial_active||diagnostics_.prepared) throw std::logic_error(std::string("cannot ")+what+" outside idle state"); }
 	void RequireTrial(const char* what) const { if(!diagnostics_.trial_active||diagnostics_.prepared||!history_) throw std::logic_error(std::string("cannot ")+what+" without active transient trial"); }
 	void ValidateGlobal(const ImmersedGlobalFlowState& x) const { if(!x.Valid()||x.GeometryIdentity()!=layout_.GeometryIdentity()||x.NodeIds()!=layout_.NodeIds()||x.PortIds()!=layout_.PortIds()||x.HasGaugeMultiplier()!=HasGauge()) throw std::invalid_argument("immersed transient committed global state layout mismatch"); }
+	static bool IsCanonicalPositiveZero(double value) noexcept { const double zero=0.0; return std::memcmp(&value,&zero,sizeof(double))==0; }
+	void ValidateMovingInputs(double target_time_s, std::uint64_t target_index, double dt_s,
+		const ImmersedVelocityHistory& history, const ImmersedGlobalFlowState& seed,
+		const ImmersedMovingTrialMapIdentity& map) const
+	{
+		if (!map.Valid() || !history.Valid() || !seed.Valid()) throw std::invalid_argument("immersed moving trial input identity is invalid");
+		if (seed.GeometryIdentity()!=layout_.GeometryIdentity() || seed.NodeIds()!=layout_.NodeIds()
+			|| seed.PortIds()!=layout_.PortIds() || seed.HasGaugeMultiplier()!=HasGauge())
+			throw std::invalid_argument("immersed moving trial seed does not match target layout");
+		if (seed.Index()==std::numeric_limits<std::uint64_t>::max() || target_index!=seed.Index()+1
+			|| seed.TimeS()!=history.SourceTimeS() || target_time_s!=CheckedTransientTargetTime(seed.TimeS(),dt_s)
+			|| target_time_s!=geometry_.Evaluation().EvaluatedTimeS())
+			throw std::invalid_argument("immersed moving trial seed time/index is inconsistent");
+		if (!IsCanonicalPositiveZero(seed.GaugeMultiplier()))
+			throw std::invalid_argument("immersed moving trial seed gauge must be canonical positive zero");
+		if (history.TargetGeometryIdentity()!=layout_.GeometryIdentity() || history.TargetTimeS()!=target_time_s
+			|| history.NodeIds()!=layout_.NodeIds()) throw std::invalid_argument("immersed moving trial history does not exactly cover target geometry/layout/time");
+		if (map.OldStateHashSha256().empty() || map.OldGeometryIdentity()!=history.SourceGeometryIdentity()
+			|| map.NewGeometryIdentity()!=geometry_.GeometryIdentitySha256()
+			|| map.TargetPublicationIdentity()!=geometry_.PublicationIdentitySha256()
+			|| map.NewLayoutHashSha256()!=layout_.HashSha256() || map.VelocityHistoryHashSha256()!=history.HashSha256()
+			|| map.SourceTimeS()!=seed.TimeS() || map.SourceIndex()!=seed.Index()
+			|| map.TargetTimeS()!=target_time_s || map.TargetIndex()!=target_index || map.DtS()!=dt_s
+			|| !map.ResetsGaugeToCanonicalZero()) throw std::invalid_argument("immersed moving trial map identity does not bind supplied inputs");
+		if (map.ControllerIds()!=layout_.PortIds() || map.ControllerValues().size()!=seed.PortMultipliers().size())
+			throw std::invalid_argument("immersed moving trial map controller binding is invalid");
+		for (std::size_t i=0;i<map.ControllerValues().size();++i)
+			if (std::memcmp(&map.ControllerValues()[i],&seed.PortMultipliers()[i],sizeof(double))!=0)
+				throw std::invalid_argument("immersed moving trial seed controller values are not map-bound");
+	}
 	std::size_t VolumePointCount(std::uint64_t cell) const { if(volume_.StorageMode()==CutCellVolumeQuadratureStorageMode::Expanded) return volume_.Cell(cell).rule.Points().size(); return CompactCutCellVolumeLogicalPointCount(volume_.Cell(cell).compact_rule); }
 	template<class Callback> void ForEachUsableVolumePoint(std::uint64_t cell,Callback&& callback) const { if(volume_.StorageMode()==CutCellVolumeQuadratureStorageMode::Expanded) for(const auto& point:volume_.UsableRule(domain_,cell).Points()) callback(point); else ForEachVolumePoint(volume_.UsableCompactRule(domain_,cell),std::forward<Callback>(callback)); }
 	bool Usable(std::uint64_t cell) const { const auto& q=volume_.Cell(cell); const auto c=domain_.Cells()[cell].classification; return q.usable&&(c==CellClassification::Inside||c==CellClassification::Cut)&&VolumePointCount(cell)!=0; }
@@ -291,6 +356,7 @@ private:
 	bool HasWallPoint(const SurfaceQuadratureRule&r) const {return std::any_of(r.Points().begin(),r.Points().end(),[this](const auto&p){return std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),p.boundary_id);});}
 	ImmersedMaterialWallVelocityEvaluator MaterialVelocity() const { return [this](const SurfaceQuadraturePoint&,const ImmersedSurfaceQuadraturePointProvenance& p){return geometry_.Evaluation().WallVelocity(p.canonical_triangle,p.canonical_barycentric);}; }
 	void CertifyZeroMaterialWallVelocity() const { for(std::uint64_t c=0;c<surface_.Cells().size();++c){const auto&r=surface_.UsableRule(domain_,c);const auto&v=surface_.UsableProvenance(domain_,c);for(std::size_t i=0;i<r.Points().size();++i)if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),r.Points()[i].boundary_id)){const auto w=geometry_.Evaluation().WallVelocity(v[i].canonical_triangle,v[i].canonical_barycentric);for(double x:w)if(!std::isfinite(x)||x!=0.0)throw std::invalid_argument("immersed transient fixed geometry requires exactly zero material wall velocity");}} }
+	void CertifyFiniteMaterialWallVelocity() const { for(std::uint64_t c=0;c<surface_.Cells().size();++c){const auto&r=surface_.UsableRule(domain_,c);const auto&v=surface_.UsableProvenance(domain_,c);for(std::size_t i=0;i<r.Points().size();++i)if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),r.Points()[i].boundary_id)){const auto w=geometry_.Evaluation().WallVelocity(v[i].canonical_triangle,v[i].canonical_barycentric);for(double x:w)if(!std::isfinite(x))throw std::invalid_argument("immersed transient moving material wall velocity is not finite");}} }
 	// This transaction intentionally has no PETSc command-line override path:
 	// every effective solver setting below is fixed or an explicit option and is
 	// included in InputHash.  In particular, no untracked options prefix exists.
@@ -310,10 +376,21 @@ private:
 		const auto& forces=frozen_body_force_.at(cell); std::size_t point=0;
 		const NavierStokesBodyForceEvaluator frozen=[&forces,&point](const std::array<double,3>&){if(point>=forces.size())throw std::logic_error("immersed transient frozen body-force point count is invalid");return forces[point++];};
 		ValidateTransientNavierStokesPreflight(options_.parameters);
-		if(!history_||!history_->Valid()||!layout_.Valid()||history_->SourceGeometryIdentity()!=layout_.GeometryIdentity()||history_->TargetGeometryIdentity()!=layout_.GeometryIdentity()) throw std::invalid_argument("immersed velocity history does not match fixed geometry layout");
-		for(const auto provenance:history_->Provenance()) if(provenance!=ImmersedVelocityHistoryProvenance::Committed) throw std::invalid_argument("fixed-geometry immersed velocity history must be committed");
-		const double expected_target=CheckedTransientTargetTime(history_->SourceTimeS(),options_.parameters.dt);
-		if(history_->TargetTimeS()!=expected_target||target_time_s_!=expected_target) throw std::invalid_argument("immersed velocity history target time does not match assembly time");
+		if (!moving_trial_) {
+			if(!history_||!history_->Valid()||!layout_.Valid()||history_->SourceGeometryIdentity()!=layout_.GeometryIdentity()||history_->TargetGeometryIdentity()!=layout_.GeometryIdentity()) throw std::invalid_argument("immersed velocity history does not match fixed geometry layout");
+			for(const auto provenance:history_->Provenance()) if(provenance!=ImmersedVelocityHistoryProvenance::Committed) throw std::invalid_argument("fixed-geometry immersed velocity history must be committed");
+			const double expected_target=CheckedTransientTargetTime(history_->SourceTimeS(),options_.parameters.dt);
+			if(history_->TargetTimeS()!=expected_target||target_time_s_!=expected_target) throw std::invalid_argument("immersed velocity history target time does not match assembly time");
+		} else {
+			if (!moving_map_ || !moving_map_->Valid() || !history_ || !history_->Valid() || !layout_.Valid()
+				|| history_->TargetGeometryIdentity()!=layout_.GeometryIdentity() || history_->TargetTimeS()!=target_time_s_
+				|| history_->NodeIds()!=layout_.NodeIds() || moving_map_->VelocityHistoryHashSha256()!=history_->HashSha256()
+				|| moving_map_->NewGeometryIdentity()!=geometry_.GeometryIdentitySha256()
+				|| moving_map_->TargetPublicationIdentity()!=geometry_.PublicationIdentitySha256()
+				|| moving_map_->NewLayoutHashSha256()!=layout_.HashSha256()
+				|| target_time_s_!=CheckedTransientTargetTime(history_->SourceTimeS(),options_.parameters.dt))
+				throw std::invalid_argument("immersed moving velocity history does not match target geometry/layout/time");
+		}
 		const auto local=LocalizeImmersedVelocityHistory(e,layout_,*history_,target_time_s_);
 		std::vector<std::array<double,4>> old(local.size()); for(std::size_t i=0;i<old.size();++i) for(int q=0;q<3;++q) old[i][q]=local[i][q];
 		const auto result=BuildNavierStokesElementFromPoints(e,n,old,options_.parameters,[this,cell](const auto& consume){ForEachUsableVolumePoint(cell,consume);},frozen,NavierStokesResolvedMixedForm::Conservative);
@@ -341,7 +418,7 @@ private:
 	static void ResetAttemptWork(ImmersedTransientFlowDiagnostics& diagnostics) noexcept { diagnostics.converged=false; diagnostics.solved_state_hash_sha256.clear(); diagnostics.attempt_hash_sha256.clear(); diagnostics.residual_norm=0.0; diagnostics.true_linear_relative_residual=0.0; diagnostics.nonlinear_iterations=0; diagnostics.ksp_iterations=0; diagnostics.ksp_reason=KSP_CONVERGED_ITERATING; diagnostics.last_assembly_seconds=0.0; diagnostics.last_linear_solve_seconds=0.0; diagnostics.attempt_assembly_count=0; diagnostics.volume_cells=diagnostics.surface_cells=diagnostics.ghost_faces=0; diagnostics.newton_steps.clear(); }
 	void ResetAttemptWork() noexcept { ResetAttemptWork(diagnostics_); }
 	void InvalidateSolved() noexcept { ResetAttemptWork(); }
-	void ClearIdlePublicationDiagnostics() noexcept { diagnostics_.input_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.history_hash_sha256.clear(); diagnostics_.target_time_s=diagnostics_.dt_s=diagnostics_.pressure_gauge_defect=0.0; diagnostics_.prepared=false; ResetAttemptWork(); }
+	void ClearIdlePublicationDiagnostics() noexcept { diagnostics_.input_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.history_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); diagnostics_.target_time_s=diagnostics_.dt_s=diagnostics_.pressure_gauge_defect=0.0; diagnostics_.prepared=false; ResetAttemptWork(); }
 	void MarkSolved() { RefreshHashes(); diagnostics_.solved_state_hash_sha256=diagnostics_.trial_state_hash_sha256; diagnostics_.converged=true; diagnostics_.attempt_hash_sha256=AttemptHash(); }
 	static void AppendPorts(Sha256& h,const std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) { h.AppendLittleEndian64(ports.size()); for(const auto&p:ports){immersed_transient_detail::AppendString(h,p.id);h.AppendLittleEndian32(static_cast<std::uint32_t>(p.boundary_label));h.AppendLittleEndian32(static_cast<std::uint32_t>(p.control_mode));h.AppendNormalizedDouble(p.target);h.AppendNormalizedDouble(p.multiplier);h.AppendNormalizedDouble(p.controller_error);h.AppendLittleEndian64(static_cast<std::uint64_t>(p.multiplier_row));h.AppendNormalizedDouble(p.measurement.area_m2);h.AppendNormalizedDouble(p.measurement.outward_flow_m3_s);h.AppendNormalizedDouble(p.measurement.mean_pressure_pa);h.AppendNormalizedDouble(p.measurement.mean_normal_traction_pa);h.AppendNormalizedDouble(p.measurement.mean_velocity_squared_m2_s2);h.AppendLittleEndian32(p.measurement_valid?1:0);}}
 	static void AppendFrozenBodyForce(Sha256& h,const std::vector<std::vector<std::array<double,3>>>& forces) { h.AppendLittleEndian64(forces.size()); for(const auto& cell:forces) { h.AppendLittleEndian64(cell.size()); for(const auto& force:cell) for(double value:force) h.AppendNormalizedDouble(value); } }
@@ -350,10 +427,11 @@ private:
 	std::array<double,3> ResidualBlockNorms(const std::vector<PetscScalar>& residual) const { if(residual.size()!=diagnostics_.total_dofs) throw std::invalid_argument("immersed transient residual block vector size is invalid"); std::array<double,3> norms{{0.0,0.0,0.0}}; for(std::size_t row=0;row<residual.size();++row){const double value=PetscRealPart(residual[row]);const std::size_t block=row>=diagnostics_.physical_dofs?2:((row%4)==3?1:0);norms[block]+=value*value;}for(auto& value:norms)value=std::sqrt(value);return norms; }
 	bool BlockReductionSatisfied(const std::array<double,3>& initial,const std::vector<PetscScalar>& residual,double global_initial) const { if(options_.nonlinear_block_reduction==0.0)return true; const auto current=ResidualBlockNorms(residual); const double zero_block_tolerance=options_.nonlinear_absolute_tolerance+options_.nonlinear_relative_tolerance*global_initial; for(std::size_t block=0;block<current.size();++block)if(initial[block]>0.0?current[block]>initial[block]/options_.nonlinear_block_reduction:current[block]>zero_block_tolerance)return false;return true; }
 	std::string InputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientInput/v4"); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(committed_global_->TimeS());h.AppendLittleEndian64(committed_global_->Index());h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
+	std::string MovingInputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed,const ImmersedMovingTrialMapIdentity& map) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientMovingInput/v1"); immersed_transient_detail::AppendString(h,map.HashSha256()); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); immersed_transient_detail::AppendString(h,geometry_.PublicationIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
 	std::string InputHash() const { if(!history_) return {}; return InputHash(options_.parameters,*history_,target_time_s_,target_index_,frozen_ports_,frozen_body_force_,frozen_seed_); }
 	std::string AttemptHash() const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientAttempt/v2"); immersed_transient_detail::AppendString(h,diagnostics_.input_hash_sha256); immersed_transient_detail::AppendString(h,HashVector(state_)); AppendPorts(h,trial_ports_); h.AppendLittleEndian64(diagnostics_.attempt_assembly_count);h.AppendLittleEndian64(diagnostics_.newton_steps.size());for(const auto&s:diagnostics_.newton_steps){h.AppendLittleEndian64(s.iteration);h.AppendLittleEndian64(s.ksp_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(s.ksp_reason));h.AppendNormalizedDouble(s.residual_norm);h.AppendNormalizedDouble(s.update_norm);h.AppendNormalizedDouble(s.linear_relative_residual);h.AppendNormalizedDouble(s.damping);} h.AppendLittleEndian64(diagnostics_.ksp_iterations);h.AppendLittleEndian64(diagnostics_.nonlinear_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(diagnostics_.ksp_reason));h.AppendNormalizedDouble(diagnostics_.residual_norm);h.AppendNormalizedDouble(diagnostics_.true_linear_relative_residual);return h.Hex(); }
 	std::string PreparedHash(const ImmersedGlobalFlowState& global,const std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientPrepared/v2"); immersed_transient_detail::AppendString(h,diagnostics_.attempt_hash_sha256); immersed_transient_detail::AppendString(h,global.HashSha256());AppendPorts(h,ports);return h.Hex(); }
-	const MovingCutGeometry& geometry_; const CartesianDomainClassification& domain_; const CutCellVolumeQuadratureCatalog& volume_; const ImmersedSurfaceQuadratureCatalog& surface_; const CutCellGhostPenaltyCatalog& ghost_; ImmersedTransientFlowOptions options_; ImmersedActiveLayout layout_; std::vector<double> gauge_weights_; std::unique_ptr<ImmersedGlobalFlowState> committed_global_,prepared_global_; std::unique_ptr<ImmersedVelocityHistory> history_; std::vector<PetscScalar> frozen_seed_; std::vector<std::vector<std::array<double,3>>> frozen_body_force_; std::vector<ImmersedTransientFlowDiagnostics::Port> frozen_ports_,trial_ports_,prepared_ports_; std::string prepared_global_hash_; double target_time_s_=0; std::uint64_t target_index_=0; Mat jacobian_=nullptr;Vec state_=nullptr,committed_=nullptr,prepared_=nullptr,base_=nullptr,rhs_=nullptr,update_=nullptr,action_input_=nullptr,action_output_=nullptr;KSP ksp_=nullptr;ImmersedTransientFlowDiagnostics diagnostics_{};bool fail_next_prepare_=false;
+	const MovingCutGeometry& geometry_; const CartesianDomainClassification& domain_; const CutCellVolumeQuadratureCatalog& volume_; const ImmersedSurfaceQuadratureCatalog& surface_; const CutCellGhostPenaltyCatalog& ghost_; ImmersedTransientFlowOptions options_; ImmersedActiveLayout layout_; std::vector<double> gauge_weights_; std::unique_ptr<ImmersedGlobalFlowState> committed_global_,prepared_global_; std::unique_ptr<ImmersedVelocityHistory> history_; std::unique_ptr<ImmersedMovingTrialMapIdentity> moving_map_; std::vector<PetscScalar> frozen_seed_; std::vector<std::vector<std::array<double,3>>> frozen_body_force_; std::vector<ImmersedTransientFlowDiagnostics::Port> frozen_ports_,trial_ports_,prepared_ports_; std::string prepared_global_hash_; double target_time_s_=0; std::uint64_t target_index_=0; Mat jacobian_=nullptr;Vec state_=nullptr,committed_=nullptr,prepared_=nullptr,base_=nullptr,rhs_=nullptr,update_=nullptr,action_input_=nullptr,action_output_=nullptr;KSP ksp_=nullptr;ImmersedTransientFlowDiagnostics diagnostics_{};bool moving_trial_=false,fail_next_prepare_=false;
 };
 
 } // namespace iga

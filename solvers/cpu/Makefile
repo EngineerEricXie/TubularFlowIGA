@@ -99,7 +99,7 @@ immersed-velocity-extension-test: immersed_velocity_extension_test
 immersed_static_flow_test: tests/test_immersed_static_flow.cpp include/ImmersedStaticFlowRuntime.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/NavierStokesElement.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/ElementGeometry.hpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-immersed_transient_flow_test: tests/test_immersed_transient_flow.cpp include/ImmersedTransientFlowRuntime.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/NavierStokesElement.hpp
+immersed_transient_flow_test: tests/test_immersed_transient_flow.cpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/NavierStokesElement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed-transient-flow-test: immersed_transient_flow_test
