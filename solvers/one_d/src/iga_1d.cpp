@@ -51,7 +51,11 @@ Options ParseOptions(int argc, char** argv)
 	options.case_directory = argv[1];
 	for (int i = 2; i < argc; ++i) {
 		const std::string argument(argv[i]);
-		if (argument == "--check") { options.check = true; continue; }
+		if (argument == "--check") {
+			options.check = true;
+			PetscOptionsClearValue(nullptr, argument.c_str());
+			continue;
+		}
 		if (argument == "--system" || argument == "--output-dir"
 			|| argument == "--checkpoint" || argument == "--checkpoint-every"
 			|| argument == "--restart" || argument == "--stop-after-step") {
@@ -63,6 +67,7 @@ Options ParseOptions(int argc, char** argv)
 			else if (argument == "--checkpoint-every") options.checkpoint_every = PositiveInteger(value, argument);
 			else if (argument == "--restart") options.restart = value;
 			else options.stop_after_step = PositiveInteger(value, argument);
+			PetscOptionsClearValue(nullptr, argument.c_str());
 			continue;
 		}
 		if (!argument.empty() && argument[0] == '-') continue;

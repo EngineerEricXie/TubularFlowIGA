@@ -173,13 +173,15 @@ export DATABASE=/path/to/work/case.ntiga
 
 "$IGA_CUDA_ROOT/iga_cuda" mesh-check "$DATABASE"
 "$IGA_CUDA_ROOT/iga_cuda" navier-stokes \
-  "$DATABASE" "$CASE_DIR" --max-newton 12 --output velocity.txt
+  "$DATABASE" "$CASE_DIR" --system blood_flow --max-newton 12 --output velocity.txt
 "$IGA_CUDA_ROOT/iga_cuda" solve \
   "$DATABASE" "$CASE_DIR" --system neuron_transport --output neuron.txt
 ~~~
 
 Use the Navier--Stokes command with a prepared `vascular_flow/*` case and the
-transport command with a prepared `neuron_transport/*` case. See the
+transport command with a prepared `neuron_transport/*` case. `--system` makes
+the selected equation system explicit and is required when the choice is
+ambiguous. See the
 [examples catalog](../../examples/README.md) for the source inputs and
 preparation command. Each public configuration intentionally contains only its
 matching application system except `vascular_flow/multispecies_pulse`, which

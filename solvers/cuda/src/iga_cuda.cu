@@ -382,6 +382,7 @@ void WriteNavierStokes(const fs::path& path, const std::vector<double>& values)
 struct CudaFlowOptions {
 	fs::path database;
 	fs::path case_dir;
+	std::string system;
 	int maximum_newton = 12;
 	double nonlinear_relative_tolerance = 1e-5;
 	double nonlinear_absolute_tolerance = 1e-10;
@@ -427,7 +428,7 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 {
 	if (argc < 4) throw std::runtime_error(
 		"usage: iga_cuda navier-stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
-		"[--max-newton N] [--output PATH] [--output-every N] "
+		"[--system NAME] [--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] "
 		"[--mass-rtol R] [--visualization-format auto|vtu|vtkhdf]");
@@ -447,7 +448,8 @@ CudaFlowOptions ParseCudaFlowOptions(int argc, char** argv)
 		}
 		if (i+1 >= argc) throw std::runtime_error(argument+" requires a value");
 		const std::string value(argv[++i]);
-		if (argument == "--max-newton")
+		if (argument == "--system") options.system = value;
+		else if (argument == "--max-newton")
 			options.maximum_newton = ParsePositiveInteger(value, argument);
 		else if (argument == "--output") options.output = value;
 		else if (argument == "--output-every")
@@ -722,7 +724,7 @@ int NavierStokes(int argc, char** argv)
 			simulation_configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
 			iga::RequireFlowOnlyCoupling(simulation_configuration.coupling,
 				"CUDA Navier-Stokes");
-			const auto& flow = iga::FirstNavierStokesSystem(simulation_configuration);
+			const auto& flow = iga::FindNavierStokesSystem(simulation_configuration, options.system);
 		configured = true;
 		transient = flow.time_integration == "backward_euler";
 		viscosity = flow.viscosity;
@@ -736,9 +738,11 @@ int NavierStokes(int argc, char** argv)
 		const auto initial_configuration = iga::MaterializeOutletPressures(
 			waveform_configuration, outlet_models);
 		pressure_tractions = iga::ExtractPressureTractions(
-			initial_configuration, iga::FirstNavierStokesSystem(initial_configuration));
+			initial_configuration,
+			iga::FindNavierStokesSystem(initial_configuration, options.system));
 		boundaries = iga::ResolveFlowBoundaries(initial_configuration,
-			iga::FirstNavierStokesSystem(initial_configuration), labels, boundary_velocity_host);
+			iga::FindNavierStokesSystem(initial_configuration, options.system), labels,
+			boundary_velocity_host);
 		boundary_config = "simulation_config.json";
 	} else {
 		const auto parameters = iga::ReadTransportParameters((case_dir/"simulation_parameter.txt").string());
@@ -884,9 +888,9 @@ int NavierStokes(int argc, char** argv)
 					step_configuration, outlet_models);
 				pressure_tractions = iga::ExtractPressureTractions(
 					boundary_configuration,
-					iga::FirstNavierStokesSystem(boundary_configuration));
+					iga::FindNavierStokesSystem(boundary_configuration, options.system));
 				boundaries = iga::ResolveFlowBoundaries(boundary_configuration,
-					iga::FirstNavierStokesSystem(boundary_configuration), labels,
+					iga::FindNavierStokesSystem(boundary_configuration, options.system), labels,
 					boundary_velocity_host);
 				boundary_velocity.CopyFromHost(
 					reinterpret_cast<const double*>(boundaries.velocity.data()), host.nodes*3);

@@ -109,6 +109,11 @@ int main()
 	assert(configuration.equation_systems.size() == 2);
 	assert(configuration.equation_systems[0].density == 1060.0);
 	assert(configuration.equation_systems[0].time_integration == "backward_euler");
+	assert(iga::FindNavierStokesSystem(configuration, "flow").name == "flow");
+	bool named_flow_rejected = false;
+	try { iga::FindNavierStokesSystem(configuration, "species"); }
+	catch (const std::runtime_error&) { named_flow_rejected = true; }
+	assert(named_flow_rejected);
 	assert(configuration.boundaries[0].name == "vessel_wall");
 	assert(configuration.temporal_functions.size() == 4);
 	assert(configuration.velocity_sources.size() == 1);

@@ -33,6 +33,7 @@ namespace {
 struct FlowOptions {
 	fs::path database;
 	fs::path case_dir;
+	std::string system;
 	int max_newton = 12;
 	fs::path output;
 	fs::path checkpoint;
@@ -78,7 +79,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 {
 	if (argc < 3) throw std::runtime_error(
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
-		"[--max-newton N] [--output PATH] [--output-every N] "
+		"[--system NAME] [--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
 		"[--visualization-format auto|vtu|vtkhdf]");
@@ -97,7 +98,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		}
 		if (i+1 >= argc) throw std::runtime_error(argument+" requires a value");
 		const std::string value(argv[++i]);
-		if (argument == "--max-newton") options.max_newton = ParsePositiveInteger(value, argument);
+		if (argument == "--system") options.system = value;
+		else if (argument == "--max-newton") options.max_newton = ParsePositiveInteger(value, argument);
 		else if (argument == "--output") options.output = value;
 		else if (argument == "--output-every") options.output_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--checkpoint") options.checkpoint = value;
@@ -245,7 +247,7 @@ int main(int argc, char** argv)
 		if (fs::exists(options.case_dir/"simulation_config.json")) {
 			configuration = iga::ReadSimulationConfiguration(
 				(options.case_dir/"simulation_config.json").string());
-			const auto& flow = iga::FirstNavierStokesSystem(configuration);
+			const auto& flow = iga::FindNavierStokesSystem(configuration, options.system);
 			configured = true;
 			transient = flow.time_integration == "backward_euler";
 			if (configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly) {
@@ -266,7 +268,8 @@ int main(int argc, char** argv)
 				: configuration;
 			outlet_models = iga::InitializeOutletModels(configuration, flow);
 			const auto initial = iga::MaterializeOutletPressures(waveform, outlet_models);
-			boundaries = iga::ResolveFlowBoundaries(initial, iga::FirstNavierStokesSystem(initial),
+			boundaries = iga::ResolveFlowBoundaries(initial,
+				iga::FindNavierStokesSystem(initial, options.system),
 				labels, boundary_velocity);
 			boundary_config = "simulation_config.json";
 		} else {
@@ -336,7 +339,7 @@ int main(int argc, char** argv)
 			const auto traction_configuration = iga::MaterializeOutletPressures(
 				configuration, flow.OutletModels());
 			const auto tractions = iga::ExtractPressureTractions(traction_configuration,
-				iga::FirstNavierStokesSystem(traction_configuration));
+				iga::FindNavierStokesSystem(traction_configuration, options.system));
 			for (const auto& traction : tractions) {
 				long long local_faces = 0;
 				for (const auto& element : flow.OwnedElements())
@@ -408,7 +411,7 @@ int main(int argc, char** argv)
 					options.case_dir.string(), 0.0);
 				const auto initial_inlet = vca_circuit->InletState(0.0);
 				iga::ApplyThreeDVascularInlet(initial_configuration,
-					iga::FirstNavierStokesSystem(initial_configuration), initial_inlet,
+					iga::FindNavierStokesSystem(initial_configuration, options.system), initial_inlet,
 					vca_reference_inlet_flow);
 				if (vca_transport)
 					iga::ApplyThreeDVascularSpeciesInlet(initial_configuration,
@@ -470,7 +473,8 @@ int main(int argc, char** argv)
 			if (vca_circuit) {
 				inlet = vca_circuit->InletState(step*parameters.dt);
 				iga::ApplyThreeDVascularInlet(step_configuration,
-					iga::FirstNavierStokesSystem(step_configuration), inlet, vca_reference_inlet_flow);
+					iga::FindNavierStokesSystem(step_configuration, options.system), inlet,
+					vca_reference_inlet_flow);
 				if (vca_transport)
 					iga::ApplyThreeDVascularSpeciesInlet(step_configuration,
 						vca_transport->System(), inlet);
