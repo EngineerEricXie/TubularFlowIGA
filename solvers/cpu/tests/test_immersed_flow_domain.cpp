@@ -100,7 +100,11 @@ int main(int argc, char** argv)
 {
 	PetscInitialize(&argc, &argv, nullptr, nullptr); int status = 0;
 	try {
-		const auto domain = Domain(); const iga::CutCellVolumeQuadratureCatalog volume(domain, {4,500000,500000,3000000}); const iga::ImmersedSurfaceQuadratureCatalog surface(domain); const iga::CutCellGhostPenaltyCatalog ghost(domain, volume);
+		const auto domain = Domain();
+		// Transactional adapter semantics do not require deep cut-cell refinement;
+		// dedicated aneurysm regressions retain that physical-refinement coverage.
+		const iga::CutCellVolumeQuadratureCatalog volume(domain, {2,500000,500000,3000000});
+		const iga::ImmersedSurfaceQuadratureCatalog surface(domain); const iga::CutCellGhostPenaltyCatalog ghost(domain, volume);
 		const std::vector<iga::CouplingPort> metadata = {Port("inlet", 1, iga::PortQuantity::FlowRate), Port("outlet", 2, iga::PortQuantity::MeanPressure)};
 		auto normal_metadata = Port("normal", 1, iga::PortQuantity::MeanNormalTraction);
 		iga::ValidateThreeDImmersedFlowDomainMetadata("immersed", {normal_metadata});

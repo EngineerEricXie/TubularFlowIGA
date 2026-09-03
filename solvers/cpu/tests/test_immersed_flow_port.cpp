@@ -65,8 +65,10 @@ int main(int argc, char** argv)
 		Reject([&] { (void)iga::CheckedImmersedStaticFlowRowCount(std::numeric_limits<std::size_t>::max()/4+1, 0, false); });
 
 		const auto domain = Domain();
-		const iga::CutCellVolumeQuadratureCatalog expanded(domain, {4,500000,500000,3000000});
-		const iga::CutCellVolumeQuadratureCatalog compact(domain, {4,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact);
+		// Port algebra is insensitive to octree refinement; the dedicated aneurysm
+		// regressions cover the deeper physical-refinement path.
+		const iga::CutCellVolumeQuadratureCatalog expanded(domain, {2,500000,500000,3000000});
+		const iga::CutCellVolumeQuadratureCatalog compact(domain, {2,500000,500000,3000000}, iga::CutCellVolumeQuadratureStorageMode::Compact);
 		const iga::ImmersedSurfaceQuadratureCatalog surface(domain);
 		const iga::CutCellGhostPenaltyCatalog expanded_ghost(domain, expanded);
 		const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
