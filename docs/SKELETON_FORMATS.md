@@ -51,6 +51,21 @@ can explicitly select a different vertex:
 `obj_network`. If omitted, root inference is deterministic. The original liver
 file selects vertex 1 by inference.
 
+### Convert a VTK centerline
+
+The optional converter uses PyVista to turn VTK PolyData lines and a positive
+point-radius array into the radius-annotated OBJ convention:
+
+```bash
+python3 -m pip install pyvista
+python3 scripts/vtk_centerline_to_obj.py centerline.vtk skeleton_initial.obj \
+  --radius-array radius --scale 0.001
+```
+
+`--scale` is applied to both coordinates and radii. The converter rejects a
+missing radius array, nonpositive radii, malformed polylines, and out-of-range
+point indices instead of creating an unusable skeleton.
+
 ## 1D and 3D use
 
 Every successful 1D simulation and 3D preparation writes:
