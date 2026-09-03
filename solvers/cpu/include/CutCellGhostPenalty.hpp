@@ -74,7 +74,7 @@ public:
 			throw std::overflow_error("ghost penalty selected-face coefficient diagnostic is not finite and positive");
 		std::sort(active_nodes_.begin(),active_nodes_.end()); active_nodes_.erase(std::unique(active_nodes_.begin(),active_nodes_.end()),active_nodes_.end()); diagnostics_.active_nodes=active_nodes_.size(); AuditCoverage(active,sensitive,full); usable_=true;
 	}
-	const std::vector<CutCellGhostPenaltyFace>& Faces() const noexcept{return faces_;} const CutCellGhostPenaltyDiagnostics& Diagnostics() const noexcept{return diagnostics_;} const CutCellGhostPenaltyOptions& Options() const noexcept{return options_;} const std::vector<std::uint64_t>& UncoveredCells() const noexcept{return uncovered_cells_;} bool Usable() const noexcept{return usable_;} std::uint32_t Version() const noexcept{return kCatalogVersion;}
+	const std::vector<CutCellGhostPenaltyFace>& Faces() const noexcept{return faces_;} const CutCellGhostPenaltyDiagnostics& Diagnostics() const noexcept{return diagnostics_;} const CutCellGhostPenaltyOptions& Options() const noexcept{return options_;} const std::vector<std::int32_t>& ActiveNodes() const noexcept{return active_nodes_;} const std::vector<std::uint64_t>& UncoveredCells() const noexcept{return uncovered_cells_;} bool Usable() const noexcept{return usable_;} std::uint32_t Version() const noexcept{return kCatalogVersion;}
 	// Kept separately testable because a classified Cut can be certified full:
 	// full status establishes coverage, never suppresses its selected face.
 	static bool SelectFace(bool positive_cut_minus, bool positive_cut_plus) noexcept

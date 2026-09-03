@@ -99,6 +99,14 @@ struct ImmersedSurfaceQuadratureCell {
 	std::size_t point_count = 0;
 };
 
+// Kept parallel to SurfaceQuadratureRule so body-fitted users retain the
+// generic point type and its aggregate construction.  The triangle index is
+// the canonical index in the bound ClosedTriangulatedSurface.
+struct ImmersedSurfaceQuadraturePointProvenance {
+	std::uint32_t canonical_triangle = 0;
+	std::array<double, 3> canonical_barycentric{{0.0, 0.0, 0.0}};
+};
+
 class ImmersedSurfaceQuadratureCatalog {
 public:
 	ImmersedSurfaceQuadratureCatalog(const ImmersedSurfaceQuadratureCatalog&) = delete;
@@ -119,6 +127,7 @@ public:
 		diagnostics_.triangle_area_absolute_residual_m2.assign(surface.Triangles().size(), 0.0);
 		triangle_area_accumulated_.assign(surface.Triangles().size(), {});
 		triangle_fragment_counts_.assign(surface.Triangles().size(), 0);
+		provenance_.resize(source_cells.size());
 		cells_.reserve(source_cells.size());
 		for (const auto& source : source_cells) {
 			if (source.id != cells_.size()) throw std::runtime_error("Cartesian domain cell ids are not x-fast");
@@ -150,6 +159,15 @@ public:
 		if (!diagnostics_.catalog_usable || !cell.usable) throw std::runtime_error("immersed surface quadrature catalog is unusable");
 		return rules_[static_cast<std::size_t>(id)];
 	}
+	const std::vector<ImmersedSurfaceQuadraturePointProvenance>& UsableProvenance(
+		const CartesianDomainClassification& domain, std::uint64_t id) const
+	{
+		const auto& rule = UsableRule(domain, id);
+		const auto& provenance = provenance_[static_cast<std::size_t>(id)];
+		if (provenance.size() != rule.Points().size())
+			throw std::runtime_error("immersed surface quadrature provenance point count does not match rule");
+		return provenance;
+	}
 	void ValidateUsableRule(const CartesianDomainClassification& domain, std::uint64_t id) const
 	{
 		const auto& rule = UsableRule(domain, id);
@@ -172,6 +190,7 @@ private:
 	};
 	struct HomogeneousPoint {
 		std::array<Number, 4> value{};
+		std::array<Number, 4> material{};
 		std::uint16_t active = 0;
 	};
 	struct BoxPlane { std::size_t axis = 0; double value = 0.0; };
@@ -232,9 +251,9 @@ private:
 		return static_cast<double>(result);
 	}
 	HomogeneousPoint Point(const std::array<double,3>& point, const std::array<std::array<double,3>,3>& original,
-		const std::array<BoxPlane,6>& planes)
+		const std::array<BoxPlane,6>& planes, std::size_t corner)
 	{
-		HomogeneousPoint result; for(std::size_t a=0;a<3;++a) result.value[a]=D(point[a]); result.value[3]=D(1.0); RecomputeActive(result,original,planes); return result;
+		HomogeneousPoint result; for(std::size_t a=0;a<3;++a) { result.value[a]=D(point[a]); result.material[a]=D(a==corner ? 1.0 : 0.0); } result.value[3]=D(1.0); result.material[3]=D(1.0); RecomputeActive(result,original,planes); return result;
 	}
 	std::array<Number,3> TriangleNormal(const std::array<std::array<double,3>,3>& original)
 	{
@@ -258,16 +277,18 @@ private:
 		const std::array<std::array<double,3>,3>& original, const std::array<BoxPlane,6>& planes)
 	{
 		const auto axis=planes[new_plane].axis; const Number p=D(planes[new_plane].value); const auto common=static_cast<std::uint16_t>(left.active&right.active);
+		const Number left_plane=PlaneValue(left,axis,planes[new_plane].value), right_plane=PlaneValue(right,axis,planes[new_plane].value);
+		auto material_intersection = [&]() { const Number left_scale=M(left_plane,right.value[3]), right_scale=M(right_plane,left.value[3]); std::array<Number,4> material{}; for (std::size_t i=0;i<3;++i) material[i]=S(M(M(left_scale,right.material[i]),left.material[3]),M(M(right_scale,left.material[i]),right.material[3])); material[3]=S(M(M(left_scale,right.material[3]),left.material[3]),M(M(right_scale,left.material[3]),right.material[3])); if (Sign(material[3]) < 0) for (auto& value : material) value=Negate(std::move(value)); if (Sign(material[3]) <= 0) throw std::runtime_error("surface clipping material intersection has invalid weight"); return material; };
 		for(std::size_t edge=0;edge<3;++edge) if(common&(1u<<edge)) {
 			const auto begin=EdgeStart(edge),end=EdgeEnd(edge); const Number d=S(D(original[end][axis]),D(original[begin][axis])); const int sign=Sign(d); if(!sign) continue;
 			HomogeneousPoint result; result.value[3]=sign>0?d:Negate(d); result.value[axis]=M(p,result.value[3]);
 			for(std::size_t coordinate=0;coordinate<3;++coordinate) if(coordinate!=axis) { const Number term=A(M(D(original[begin][coordinate]),d),M(S(p,D(original[begin][axis])),S(D(original[end][coordinate]),D(original[begin][coordinate])))); result.value[coordinate]=sign>0?term:Negate(term); }
-			RecomputeActive(result,original,planes); return result;
+			result.material=material_intersection(); RecomputeActive(result,original,planes); return result;
 		}
 		const auto normal=TriangleNormal(original); Number k{}; for(std::size_t a=0;a<3;++a) k=A(k,M(normal[a],D(original[0][a])));
 		for(std::size_t old=0;old<6;++old) if((common&(1u<<(3+old)))&&old!=new_plane) {
 			const auto old_axis=planes[old].axis; if(old_axis==axis) continue; std::size_t remaining=0; while(remaining==axis||remaining==old_axis) ++remaining; const int sign=Sign(normal[remaining]); if(!sign) continue;
-			HomogeneousPoint result; result.value[3]=sign>0?normal[remaining]:Negate(normal[remaining]); for(std::size_t coordinate=0;coordinate<3;++coordinate) result.value[coordinate]=D(0.0); result.value[axis]=M(p,result.value[3]); result.value[old_axis]=M(D(planes[old].value),result.value[3]); Number remainder=k; remainder=S(remainder,M(normal[axis],p)); remainder=S(remainder,M(normal[old_axis],D(planes[old].value))); result.value[remaining]=sign>0?remainder:Negate(remainder); RecomputeActive(result,original,planes); return result;
+			HomogeneousPoint result; result.value[3]=sign>0?normal[remaining]:Negate(normal[remaining]); for(std::size_t coordinate=0;coordinate<3;++coordinate) result.value[coordinate]=D(0.0); result.value[axis]=M(p,result.value[3]); result.value[old_axis]=M(D(planes[old].value),result.value[3]); Number remainder=k; remainder=S(remainder,M(normal[axis],p)); remainder=S(remainder,M(normal[old_axis],D(planes[old].value))); result.value[remaining]=sign>0?remainder:Negate(remainder); result.material=material_intersection(); RecomputeActive(result,original,planes); return result;
 		}
 		throw std::runtime_error("surface clipping intersection lacks unique constraint provenance");
 	}
@@ -408,6 +429,7 @@ private:
 		if (source.ambiguous) { result.usable = false; result.ambiguous = true; ++diagnostics_.predicate_ambiguities; return; }
 		const auto& background = domain.Background(); const auto cell = background.Cell(source.id);
 		const auto& surface = domain.SurfaceIndex().Surface(); std::vector<SurfaceQuadraturePoint> points;
+		std::vector<ImmersedSurfaceQuadraturePointProvenance> provenance;
 		const ImmersedSurfaceQuadratureDiagnostics diagnostics_before = diagnostics_;
 		const auto triangle_area_before = triangle_area_accumulated_; const auto label_area_before = label_area_accumulated_; const auto triangle_counts_before = triangle_fragment_counts_; const auto label_counts_before = label_fragment_counts_;
 		const CompensatedArea total_area_before = total_area_accumulated_;
@@ -421,7 +443,7 @@ private:
 					if (ownership == CoplanarDecision::Invalid) throw std::runtime_error("coplanar surface triangle has no outward boundary owner");
 					if (ownership == CoplanarDecision::Skip) { ++diagnostics_.coplanar_owner_skips; continue; }
 					const std::array<BoxPlane,6> planes{{{0,cell.lower_m[0]},{0,cell.upper_m[0]},{1,cell.lower_m[1]},{1,cell.upper_m[1]},{2,cell.lower_m[2]},{2,cell.upper_m[2]}}};
-					std::vector<HomogeneousPoint> polygon{{Point(original[0],original,planes),Point(original[1],original,planes),Point(original[2],original,planes)}};
+					std::vector<HomogeneousPoint> polygon{{Point(original[0],original,planes,0),Point(original[1],original,planes,1),Point(original[2],original,planes,2)}};
 					for (std::size_t plane=0; plane<planes.size(); ++plane) polygon=ClipPlane(polygon,plane,(plane%2)==0,original,planes);
 					if (polygon.empty()) continue;
 					++diagnostics_.clipped_polygons;
@@ -488,19 +510,46 @@ private:
 							physical[a]=cell.lower_m[a]+local_point[a];
 						}
 						const double weight=area*q[3]; if (!std::isfinite(weight) || !(weight>0.0)) throw std::runtime_error("immersed surface quadrature weight is not representable");
-						points.push_back({parametric,physical,triangle.outward_unit_normal,weight,static_cast<int>(triangle.boundary_id)}); ++diagnostics_.output_points;
+						std::array<double,3> barycentric{{0.0,0.0,0.0}};
+						for (std::size_t corner=0; corner<3; ++corner)
+							barycentric[corner]=q[0]*ToDouble(vertices[0]->material[corner],vertices[0]->material[3])
+								+q[1]*ToDouble(vertices[1]->material[corner],vertices[1]->material[3])
+								+q[2]*ToDouble(vertices[2]->material[corner],vertices[2]->material[3]);
+						ValidateProvenancePoint(surface, triangle_id, triangle, cell.lower_m, local_point, barycentric);
+						points.push_back({parametric,physical,triangle.outward_unit_normal,weight,static_cast<int>(triangle.boundary_id)});
+						provenance.push_back({static_cast<std::uint32_t>(triangle_id), barycentric}); ++diagnostics_.output_points;
 					}
 				}
 			}
 			const Element element=background.MaterializeElement(source.id);
 				rule=SurfaceQuadratureRule(std::move(points)); result.point_count=rule.Points().size();
+				if (provenance.size() != result.point_count) throw std::runtime_error("immersed surface provenance is not one-to-one");
+				provenance_[static_cast<std::size_t>(source.id)] = std::move(provenance);
 				ValidateCellRule(element,result,rule);
-		} catch (const std::overflow_error&) { rule=SurfaceQuadratureRule{}; RollbackCell(diagnostics_before,triangle_area_before,label_area_before,triangle_counts_before,label_counts_before,total_area_before,result,true); return; }
+		} catch (const std::overflow_error&) { provenance_[static_cast<std::size_t>(source.id)].clear(); rule=SurfaceQuadratureRule{}; RollbackCell(diagnostics_before,triangle_area_before,label_area_before,triangle_counts_before,label_counts_before,total_area_before,result,true); return; }
 		catch (const std::exception& error) {
 			const std::string message(error.what());
 			if (message.find("cap reached") != std::string::npos) throw;
-			rule=SurfaceQuadratureRule{}; RollbackCell(diagnostics_before,triangle_area_before,label_area_before,triangle_counts_before,label_counts_before,total_area_before,result,false,message); return;
+			provenance_[static_cast<std::size_t>(source.id)].clear(); rule=SurfaceQuadratureRule{}; RollbackCell(diagnostics_before,triangle_area_before,label_area_before,triangle_counts_before,label_counts_before,total_area_before,result,false,message); return;
 		}
+	}
+	static void ValidateProvenancePoint(const ClosedTriangulatedSurface& surface, std::size_t triangle_id,
+		const ClosedSurfaceTriangle& triangle, const std::array<double,3>& cell_lower,
+		const std::array<double,3>& local_point, const std::array<double, 3>& barycentric)
+	{
+		if (triangle_id >= surface.Triangles().size() || triangle_id > std::numeric_limits<std::uint32_t>::max()) throw std::out_of_range("immersed surface provenance triangle is out of range");
+		double sum = 0.0, scale = 0.0, residual = 0.0;
+		std::array<double, 3> reconstruction{{0.0, 0.0, 0.0}};
+		for (std::size_t corner = 0; corner < 3; ++corner) {
+			if (!std::isfinite(barycentric[corner]) || barycentric[corner] < -1.0e-10 || barycentric[corner] > 1.0+1.0e-10) throw std::runtime_error("immersed surface provenance barycentric coordinate is outside simplex");
+			sum += barycentric[corner];
+			const auto& vertex = surface.Vertices()[triangle.indices[corner]];
+			for (std::size_t axis = 0; axis < 3; ++axis) { const double local_vertex=vertex[axis]-cell_lower[axis]; reconstruction[axis] += barycentric[corner]*local_vertex; scale = std::max(scale, std::abs(local_vertex)); }
+		}
+		for (std::size_t axis = 0; axis < 3; ++axis) residual = std::max(residual, std::abs(reconstruction[axis]-local_point[axis]));
+		if (!std::isfinite(sum) || std::abs(sum-1.0) > 2.0e-10 || residual > 2.0e-10*std::max(std::numeric_limits<double>::min(), scale)
+			|| triangle.boundary_id > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
+			throw std::runtime_error("immersed surface provenance reconstruction or label is inconsistent");
 	}
 	void ValidateCellRule(const Element& element, const ImmersedSurfaceQuadratureCell& cell, const SurfaceQuadratureRule& rule)
 	{
@@ -562,7 +611,7 @@ private:
 	}
 
 	CubicCartesianGridSpec grid_spec_{}; std::string surface_canonical_hash_; ImmersedSurfaceQuadratureOptions options_{};
-	std::vector<ImmersedSurfaceQuadratureCell> cells_; std::vector<SurfaceQuadratureRule> rules_; ImmersedSurfaceQuadratureDiagnostics diagnostics_;
+	std::vector<ImmersedSurfaceQuadratureCell> cells_; std::vector<SurfaceQuadratureRule> rules_; std::vector<std::vector<ImmersedSurfaceQuadraturePointProvenance>> provenance_; ImmersedSurfaceQuadratureDiagnostics diagnostics_;
 	std::vector<CompensatedArea> triangle_area_accumulated_; std::map<std::uint32_t,CompensatedArea> label_area_accumulated_; std::vector<std::size_t> triangle_fragment_counts_; std::map<std::uint32_t,std::size_t> label_fragment_counts_; CompensatedArea total_area_accumulated_;
 };
 

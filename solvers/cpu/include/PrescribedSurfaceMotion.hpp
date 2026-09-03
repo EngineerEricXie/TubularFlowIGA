@@ -70,6 +70,7 @@ public:
 		const std::vector<SourceTriangleProvenance>& CanonicalTriangleProvenance() const noexcept
 		{ return canonical_triangle_provenance_; }
 		const std::string& IdentitySha256() const noexcept { return identity_sha256_; }
+		double EvaluatedTimeS() const noexcept { return evaluated_time_s_; }
 
 		// The input triangle and barycentric weights use the canonical surface
 		// triangle order returned by Surface().
@@ -117,6 +118,7 @@ public:
 	private:
 		friend class PrescribedSurfaceMotion;
 		explicit Evaluation(ClosedTriangulatedSurface checked) : surface_(std::move(checked)) {}
+		double evaluated_time_s_ = 0.0;
 		ClosedTriangulatedSurface surface_;
 		std::vector<std::array<double, 3>> source_vertices_m_;
 		std::vector<std::array<double, 3>> source_vertex_velocities_m_per_s_;
@@ -196,12 +198,13 @@ public:
 		soup.vertices = positions;
 		soup.triangles = frames_.front().surface.triangles;
 		Evaluation result(BuildValidated(soup));
+		result.evaluated_time_s_ = time_s;
 		result.source_vertices_m_ = std::move(positions);
 		result.source_vertex_velocities_m_per_s_ = std::move(velocities);
 		ValidateContainment(result.source_vertices_m_);
 		result.canonical_triangle_provenance_ = CanonicalProvenance(soup, result.surface_);
 		result.source_triangles_ = source_triangles_;
-		result.identity_sha256_ = HashEvaluation(time_s, result);
+		result.identity_sha256_ = HashEvaluation(result);
 		return result;
 	}
 
@@ -425,12 +428,12 @@ private:
 		hash.Append(value.data(), value.size());
 	}
 
-	std::string HashEvaluation(double time_s, const Evaluation& evaluation) const
+	std::string HashEvaluation(const Evaluation& evaluation) const
 	{
 		Sha256 hash;
 		static constexpr char domain[] = "iga-prescribed-surface-motion-v2";
 		hash.Append(domain, sizeof(domain)-1);
-		hash.AppendNormalizedDouble(time_s);
+		hash.AppendNormalizedDouble(evaluation.evaluated_time_s_);
 		AppendCount(hash, evaluation.source_vertices_m_.size());
 		for (const auto& vertex : evaluation.source_vertices_m_)
 			for (double value : vertex) hash.AppendNormalizedDouble(value);

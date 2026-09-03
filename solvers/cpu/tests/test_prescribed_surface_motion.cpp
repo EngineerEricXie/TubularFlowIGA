@@ -105,6 +105,7 @@ int main()
 {
 	const iga::PrescribedSurfaceMotion motion(ThreeFrames());
 	const auto midpoint = motion.Evaluate(0.5, 0.0, 0.5);
+	assert(Near(midpoint.EvaluatedTimeS(), 0.5));
 	assert(Near(midpoint.SourceVerticesM()[0][0], 0.5));
 	assert(Near(midpoint.SourceVerticesM()[1][0], 1.5));
 	assert(Near(midpoint.SourceVertexVelocitiesMPerS()[0][0], 1.0));
