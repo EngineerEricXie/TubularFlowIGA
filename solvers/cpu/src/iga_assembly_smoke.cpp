@@ -32,7 +32,7 @@ int main(int argc, char** argv)
 		IS zero_diagonals = nullptr;
 		MatFindZeroDiagonals(matrix, &zero_diagonals);
 		PetscInt zero_diagonal_count = 0;
-		ISGetLocalSize(zero_diagonals, &zero_diagonal_count);
+		ISGetSize(zero_diagonals, &zero_diagonal_count);
 		missing = zero_diagonal_count > 0 ? PETSC_TRUE : PETSC_FALSE;
 		ISDestroy(&zero_diagonals);
 	#endif
