@@ -366,6 +366,9 @@ void CheckCompactRuntime(const iga::MovingCutGeometry& expanded_geometry, const 
 	for(std::size_t i=0;i<er.size();++i) { assert(std::abs(PetscRealPart(er[i]-cr[i]))<=2e-10); assert(std::abs(PetscRealPart(ej[i]-cj[i]))<=2e-10); }
 	const auto ec=expanded.ConservationDiagnostics(), cc=compact.ConservationDiagnostics();
 	assert(std::abs(ec.endpoint_volume_divergence_m3_s-cc.endpoint_volume_divergence_m3_s)<=2e-11 && std::abs(ec.total_surface_outward_flow_m3_s-cc.total_surface_outward_flow_m3_s)<=2e-11);
+	assert(ec.surface_flow_by_boundary_label_m3_s==cc.surface_flow_by_boundary_label_m3_s && ec.material_surface_outward_flow_by_boundary_label_m3_s==cc.material_surface_outward_flow_by_boundary_label_m3_s && ec.material_wall_outward_flow_by_boundary_label_m3_s==cc.material_wall_outward_flow_by_boundary_label_m3_s);
+	assert(std::abs(ec.total_material_surface_outward_flow_m3_s-cc.total_material_surface_outward_flow_m3_s)<=2e-11 && std::abs(ec.total_material_wall_outward_flow_m3_s-cc.total_material_wall_outward_flow_m3_s)<=2e-11 && std::abs(ec.wall_relative_leakage_m3_s-cc.wall_relative_leakage_m3_s)<=2e-11);
+	assert(std::abs(ec.divergence_theorem_defect_m3_s-cc.divergence_theorem_defect_m3_s)<=2e-11 && std::abs(ec.normalized_open_balance-cc.normalized_open_balance)<=2e-11 && std::abs(ec.normalized_wall_leakage-cc.normalized_wall_leakage)<=2e-11);
 	expanded.Assemble(); compact.Assemble(); assert(expanded_calls==expanded_points && compact_calls==compact_points);
 	expanded.AbortTrial(); compact.AbortTrial(); compact.BeginTrial(1.0,1,1.0);
 	assert(compact.Diagnostics().input_hash_sha256==compact_input && compact_calls==2*compact_points); compact.AbortTrial();
@@ -490,7 +493,13 @@ int main(int argc,char** argv)
 		iga::ImmersedTransientFlowRuntime conservation_runtime(*geometry,Options()); conservation_runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,conservation_runtime.Layout(),NonconstantFields(conservation_runtime.Layout()),{0.0,0.0},true,0.0)); conservation_runtime.BeginTrial(1.0,1,1.0); const auto nondivergent=GenericTrial(conservation_runtime); conservation_runtime.SetTrialState(nondivergent); conservation_runtime.Assemble(); const auto nondivergence=conservation_runtime.ConservationDiagnostics();
 		double signed_sum=0.0; for(const auto& item:nondivergence.surface_flow_by_boundary_label_m3_s) signed_sum+=item.second;
 		assert(SameBits(signed_sum,nondivergence.total_surface_outward_flow_m3_s));
+		double material_sum=0.0; for(const auto& item:nondivergence.material_surface_outward_flow_by_boundary_label_m3_s) material_sum+=item.second;
+		assert(std::abs(material_sum-nondivergence.total_material_surface_outward_flow_m3_s)<=2e-11);
+		double material_wall_sum=0.0; for(const auto& item:nondivergence.material_wall_outward_flow_by_boundary_label_m3_s) material_wall_sum+=item.second;
+		assert(std::abs(material_wall_sum-nondivergence.total_material_wall_outward_flow_m3_s)<=2e-11);
+		assert(std::abs(nondivergence.total_material_wall_outward_flow_m3_s)<=2e-11);
 		assert(SameBits(nondivergence.wall_relative_leakage_m3_s,nondivergence.wall_outward_flow_m3_s));
+		assert(SameBits(nondivergence.divergence_theorem_defect_m3_s,nondivergence.endpoint_volume_divergence_m3_s-nondivergence.total_surface_outward_flow_m3_s));
 		const double corrected=std::abs(nondivergence.endpoint_volume_divergence_m3_s-nondivergence.total_surface_outward_flow_m3_s), old_plus=std::abs(nondivergence.endpoint_volume_divergence_m3_s+nondivergence.total_surface_outward_flow_m3_s);
 		assert(corrected<old_plus);
 		conservation_runtime.AbortTrial();

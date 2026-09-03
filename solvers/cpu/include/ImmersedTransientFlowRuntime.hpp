@@ -48,8 +48,18 @@ struct ImmersedTransientFlowNewtonStep {
 
 struct ImmersedTransientFlowConservationDiagnostics {
 	std::map<int,double> surface_flow_by_boundary_label_m3_s;
+	// Material velocities are sampled through immutable canonical provenance on
+	// every target surface label.  Q_w is therefore a closed-boundary quantity;
+	// the wall-only view is retained solely for u-w leakage reporting.
+	std::map<int,double> material_surface_outward_flow_by_boundary_label_m3_s;
+	std::map<int,double> material_wall_outward_flow_by_boundary_label_m3_s;
 	double endpoint_volume_divergence_m3_s = 0.0, total_surface_outward_flow_m3_s = 0.0;
-	double open_port_outward_flow_m3_s = 0.0, wall_outward_flow_m3_s = 0.0, wall_relative_leakage_m3_s = 0.0;
+	double open_port_outward_flow_m3_s = 0.0, wall_outward_flow_m3_s = 0.0;
+	double total_material_surface_outward_flow_m3_s = 0.0;
+	double total_material_wall_outward_flow_m3_s = 0.0, wall_relative_leakage_m3_s = 0.0;
+	// R_div = int_Omega div(u) - int_boundary u.n.  The historical normalized
+	// open balance remains this same quantity and scale for stationary walls.
+	double divergence_theorem_defect_m3_s = 0.0;
 	double normalized_open_balance = 0.0, normalized_wall_leakage = 0.0;
 };
 
@@ -111,6 +121,26 @@ public:
 	PetscInt PortMultiplierDof(const std::string& id) const { for(const auto& p:diagnostics_.ports) if(p.id==id) return p.multiplier_row; throw std::out_of_range("immersed transient port id is absent"); }
 	PetscInt GaugeDof() const { if(!HasGauge()) throw std::logic_error("immersed transient gauge is absent"); return static_cast<PetscInt>(layout_.GaugeRow()); }
 	void FailNextPrepareForTesting() noexcept { fail_next_prepare_ = true; }
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+	// This fault injector exists only in the moving-runtime focused test build.
+	// It changes no production code path and is deliberately not a publication
+	// or convergence bypass.
+	class NonfiniteMaterialVelocityScopeForTesting {
+	public:
+		NonfiniteMaterialVelocityScopeForTesting() noexcept { InjectNonfiniteMaterialVelocityForTesting()=true; }
+		~NonfiniteMaterialVelocityScopeForTesting() { InjectNonfiniteMaterialVelocityForTesting()=false; }
+		NonfiniteMaterialVelocityScopeForTesting(const NonfiniteMaterialVelocityScopeForTesting&) = delete;
+		NonfiniteMaterialVelocityScopeForTesting& operator=(const NonfiniteMaterialVelocityScopeForTesting&) = delete;
+	};
+	class FiniteConservationDefectScopeForTesting {
+	public:
+		FiniteConservationDefectScopeForTesting() noexcept { InjectFiniteConservationDefectForTesting()=true; }
+		~FiniteConservationDefectScopeForTesting() { InjectFiniteConservationDefectForTesting()=false; }
+		FiniteConservationDefectScopeForTesting(const FiniteConservationDefectScopeForTesting&) = delete;
+		FiniteConservationDefectScopeForTesting& operator=(const FiniteConservationDefectScopeForTesting&) = delete;
+	};
+	double MaxSurfaceRelativeVelocityNormForTesting() const { return MaxSurfaceRelativeVelocityNorm(); }
+#endif
 	// A trial-only warm start for finite-difference and restart workflows.  It
 	// deliberately cannot alter the frozen committed state, identity history, or
 	// rollback seed.
@@ -190,7 +220,7 @@ public:
 		RequireIdle("begin moving trial");
 		auto candidate_parameters=options_.parameters; candidate_parameters.dt=dt_s; ValidateTransientNavierStokesPreflight(candidate_parameters);
 		ValidateAllFlowCompatibility(); ValidateMovingInputs(target_time_s,target_index,dt_s,supplied_history,supplied_seed,map_identity);
-		CertifyFiniteMaterialWallVelocity();
+		CertifyFiniteMaterialSurfaceVelocity();
 		std::unique_ptr<ImmersedVelocityHistory> candidate_history(new ImmersedVelocityHistory(supplied_history));
 		std::unique_ptr<ImmersedMovingTrialMapIdentity> candidate_map(new ImmersedMovingTrialMapIdentity(map_identity));
 		auto candidate_trial_ports=diagnostics_.ports, candidate_frozen_ports=diagnostics_.ports;
@@ -354,9 +384,21 @@ private:
 	bool Usable(std::uint64_t cell) const { const auto& q=volume_.Cell(cell); const auto c=domain_.Cells()[cell].classification; return q.usable&&(c==CellClassification::Inside||c==CellClassification::Cut)&&VolumePointCount(cell)!=0; }
 	static bool RuleHasLabel(const SurfaceQuadratureRule&r,int label){return std::any_of(r.Points().begin(),r.Points().end(),[&](const auto&p){return p.boundary_id==label;});}
 	bool HasWallPoint(const SurfaceQuadratureRule&r) const {return std::any_of(r.Points().begin(),r.Points().end(),[this](const auto&p){return std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),p.boundary_id);});}
-	ImmersedMaterialWallVelocityEvaluator MaterialVelocity() const { return [this](const SurfaceQuadraturePoint&,const ImmersedSurfaceQuadraturePointProvenance& p){return geometry_.Evaluation().WallVelocity(p.canonical_triangle,p.canonical_barycentric);}; }
+	std::array<double,3> MaterialVelocityAt(const ImmersedSurfaceQuadraturePointProvenance& provenance) const
+	{
+		auto value=geometry_.Evaluation().WallVelocity(provenance.canonical_triangle,provenance.canonical_barycentric);
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+		if (InjectNonfiniteMaterialVelocityForTesting()) value[0]=std::numeric_limits<double>::quiet_NaN();
+#endif
+		return value;
+	}
+	ImmersedMaterialWallVelocityEvaluator MaterialVelocity() const { return [this](const SurfaceQuadraturePoint&,const ImmersedSurfaceQuadraturePointProvenance& p){return MaterialVelocityAt(p);}; }
 	void CertifyZeroMaterialWallVelocity() const { for(std::uint64_t c=0;c<surface_.Cells().size();++c){const auto&r=surface_.UsableRule(domain_,c);const auto&v=surface_.UsableProvenance(domain_,c);for(std::size_t i=0;i<r.Points().size();++i)if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),r.Points()[i].boundary_id)){const auto w=geometry_.Evaluation().WallVelocity(v[i].canonical_triangle,v[i].canonical_barycentric);for(double x:w)if(!std::isfinite(x)||x!=0.0)throw std::invalid_argument("immersed transient fixed geometry requires exactly zero material wall velocity");}} }
-	void CertifyFiniteMaterialWallVelocity() const { for(std::uint64_t c=0;c<surface_.Cells().size();++c){const auto&r=surface_.UsableRule(domain_,c);const auto&v=surface_.UsableProvenance(domain_,c);for(std::size_t i=0;i<r.Points().size();++i)if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),r.Points()[i].boundary_id)){const auto w=geometry_.Evaluation().WallVelocity(v[i].canonical_triangle,v[i].canonical_barycentric);for(double x:w)if(!std::isfinite(x))throw std::invalid_argument("immersed transient moving material wall velocity is not finite");}} }
+	void CertifyFiniteMaterialSurfaceVelocity() const { for(std::uint64_t c=0;c<surface_.Cells().size();++c){const auto&r=surface_.UsableRule(domain_,c);const auto&v=surface_.UsableProvenance(domain_,c);if(r.Points().size()!=v.size())throw std::logic_error("immersed transient material surface provenance size is invalid");for(std::size_t i=0;i<r.Points().size();++i){const auto w=MaterialVelocityAt(v[i]);for(double x:w)if(!std::isfinite(x))throw std::invalid_argument("immersed transient moving material surface velocity is not finite");}} }
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+	static bool& InjectNonfiniteMaterialVelocityForTesting() noexcept { static bool value=false; return value; }
+	static bool& InjectFiniteConservationDefectForTesting() noexcept { static bool value=false; return value; }
+#endif
 	// This transaction intentionally has no PETSc command-line override path:
 	// every effective solver setting below is fixed or an explicit option and is
 	// included in InputHash.  In particular, no untracked options prefix exists.
@@ -407,7 +449,75 @@ private:
 	void SetHistoryDiagnostics(ImmersedTransientFlowDiagnostics& diagnostics,const ImmersedVelocityHistory* history) const {diagnostics.identity_history_nodes=history?history->NodeIds().size():0;diagnostics.committed_history_nodes=0;diagnostics.extended_history_nodes=0;diagnostics.missing_history_nodes=layout_.NodeIds().size();diagnostics.history_hash_sha256.clear();if(!history)return;diagnostics.history_hash_sha256=history->HashSha256();for(const auto p:history->Provenance())if(p==ImmersedVelocityHistoryProvenance::Committed)++diagnostics.committed_history_nodes;else if(p==ImmersedVelocityHistoryProvenance::Extended)++diagnostics.extended_history_nodes;diagnostics.missing_history_nodes=layout_.NodeIds().size()-diagnostics.identity_history_nodes;}
 	void RefreshHistoryDiagnostics(){SetHistoryDiagnostics(diagnostics_,history_.get());}
 	void InsertGauge(){const PetscInt q=GaugeDof();double g=0;for(std::size_t i=0;i<gauge_weights_.size();++i){const double w=gauge_weights_[i];g+=w*Value(state_,static_cast<PetscInt>(4*i+3));Check(MatSetValue(jacobian_,static_cast<PetscInt>(4*i+3),q,w,ADD_VALUES),"MatSetValue gauge");Check(MatSetValue(jacobian_,q,static_cast<PetscInt>(4*i+3),w,ADD_VALUES),"MatSetValue gauge");Check(VecSetValue(rhs_,static_cast<PetscInt>(4*i+3),-w*Value(state_,q),ADD_VALUES),"VecSetValue gauge");}Check(VecSetValue(rhs_,q,-g,ADD_VALUES),"VecSetValue gauge");diagnostics_.pressure_gauge_defect=std::abs(g);}
-	ImmersedTransientFlowConservationDiagnostics MeasureConservation()const{ImmersedTransientFlowConservationDiagnostics d;for(std::uint64_t c=0;c<domain_.Cells().size();++c)if(Usable(c)){const auto e=domain_.Background().MaterializeElement(c);const auto n=Gather(e);ForEachUsableVolumePoint(c,[&](const VolumeQuadraturePoint&p){const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false);double div=0;for(std::size_t a=0;a<n.size();++a)for(int q=0;q<3;++q)div+=n[a][q]*b.gradient[a][q];d.endpoint_volume_divergence_m3_s+=p.weight*b.raw_determinant*div;});if(domain_.Cells()[c].classification==CellClassification::Cut)for(const auto&p:surface_.UsableRule(domain_,c).Points()){const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false);double f=0;for(std::size_t a=0;a<n.size();++a)for(int q=0;q<3;++q)f+=n[a][q]*b.value[a]*p.normal[q]*p.weight;d.surface_flow_by_boundary_label_m3_s[p.boundary_id]+=f;d.total_surface_outward_flow_m3_s+=f;if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),p.boundary_id))d.wall_outward_flow_m3_s+=f;else if(std::any_of(options_.ports.begin(),options_.ports.end(),[&](const auto&port){return port.boundary_label==p.boundary_id;}))d.open_port_outward_flow_m3_s+=f;else throw std::runtime_error("immersed transient conservation found an unconfigured surface label");}}const double scale=std::max(options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s));d.wall_relative_leakage_m3_s=d.wall_outward_flow_m3_s;d.normalized_wall_leakage=std::abs(d.wall_outward_flow_m3_s)/scale;d.normalized_open_balance=std::abs(d.endpoint_volume_divergence_m3_s-d.total_surface_outward_flow_m3_s)/scale;return d;}
+	double MaxSurfaceRelativeVelocityNorm() const
+	{
+		double maximum=0.0;
+		for(std::uint64_t c=0;c<domain_.Cells().size();++c) {
+			if(!Usable(c) || domain_.Cells()[c].classification!=CellClassification::Cut) continue;
+			const auto e=domain_.Background().MaterializeElement(c); const auto n=Gather(e);
+			const auto& rule=surface_.UsableRule(domain_,c); const auto& provenance=surface_.UsableProvenance(domain_,c);
+			if(rule.Points().size()!=provenance.size()) throw std::logic_error("immersed transient relative-velocity surface provenance size is invalid");
+			for(std::size_t i=0;i<rule.Points().size();++i) {
+				const auto& p=rule.Points()[i]; const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false);
+				const auto w=MaterialVelocityAt(provenance[i]); double squared=0.0;
+				for(int q=0;q<3;++q) { if(!std::isfinite(w[q])) throw std::runtime_error("immersed transient relative-velocity material surface velocity is not finite"); double u=0.0; for(std::size_t a=0;a<n.size();++a)u+=n[a][q]*b.value[a]; if(!std::isfinite(u))throw std::runtime_error("immersed transient relative-velocity fluid value is not finite"); const double difference=u-w[q]; squared+=difference*difference; }
+				if(!std::isfinite(squared)) throw std::runtime_error("immersed transient relative-velocity norm is not finite");
+				maximum=std::max(maximum,std::sqrt(squared));
+			}
+		}
+		return maximum;
+	}
+	ImmersedTransientFlowConservationDiagnostics MeasureConservation()const
+	{
+		ImmersedTransientFlowConservationDiagnostics d;
+		auto add=[](double& total,double value,const char* what) {
+			if(!std::isfinite(value) || !std::isfinite(total) || !std::isfinite(total+value))
+				throw std::runtime_error(std::string("immersed transient conservation ")+what+" is nonfinite");
+			total+=value;
+		};
+		for(std::uint64_t c=0;c<domain_.Cells().size();++c) if(Usable(c)) {
+			const auto e=domain_.Background().MaterializeElement(c); const auto n=Gather(e);
+			ForEachUsableVolumePoint(c,[&](const VolumeQuadraturePoint& p) {
+				const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false); double div=0;
+				for(std::size_t a=0;a<n.size();++a) for(int q=0;q<3;++q) div+=n[a][q]*b.gradient[a][q];
+				add(d.endpoint_volume_divergence_m3_s,p.weight*b.raw_determinant*div,"volume divergence");
+			});
+			if(domain_.Cells()[c].classification!=CellClassification::Cut) continue;
+			const auto& rule=surface_.UsableRule(domain_,c); const auto& provenance=surface_.UsableProvenance(domain_,c);
+			if(rule.Points().size()!=provenance.size()) throw std::logic_error("immersed transient conservation surface provenance size is invalid");
+			for(std::size_t i=0;i<rule.Points().size();++i) {
+				const auto& p=rule.Points()[i]; const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false); double fluid=0;
+				for(std::size_t a=0;a<n.size();++a) for(int q=0;q<3;++q) fluid+=n[a][q]*b.value[a]*p.normal[q]*p.weight;
+				add(d.surface_flow_by_boundary_label_m3_s[p.boundary_id],fluid,"fluid boundary flux"); add(d.total_surface_outward_flow_m3_s,fluid,"total fluid boundary flux");
+				const auto w=MaterialVelocityAt(provenance[i]); double material=0;
+				for(int q=0;q<3;++q) { if(!std::isfinite(w[q])) throw std::runtime_error("immersed transient conservation material surface velocity is not finite"); material+=w[q]*p.normal[q]*p.weight; }
+				add(d.material_surface_outward_flow_by_boundary_label_m3_s[p.boundary_id],material,"material surface flux"); add(d.total_material_surface_outward_flow_m3_s,material,"total material surface flux");
+				if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),p.boundary_id)) {
+					add(d.wall_outward_flow_m3_s,fluid,"wall fluid flux");
+					add(d.material_wall_outward_flow_by_boundary_label_m3_s[p.boundary_id],material,"material wall flux"); add(d.total_material_wall_outward_flow_m3_s,material,"total material wall flux");
+				} else if(std::any_of(options_.ports.begin(),options_.ports.end(),[&](const auto& port){return port.boundary_label==p.boundary_id;})) add(d.open_port_outward_flow_m3_s,fluid,"open port flux");
+				else throw std::runtime_error("immersed transient conservation found an unconfigured surface label");
+			}
+		}
+		const double scale=std::max(options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s));
+		d.wall_relative_leakage_m3_s=d.wall_outward_flow_m3_s-d.total_material_wall_outward_flow_m3_s;
+		d.divergence_theorem_defect_m3_s=d.endpoint_volume_divergence_m3_s-d.total_surface_outward_flow_m3_s;
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+		if(InjectFiniteConservationDefectForTesting()) d.divergence_theorem_defect_m3_s=1.0;
+#endif
+		if(!std::isfinite(d.total_material_surface_outward_flow_m3_s)||!std::isfinite(d.wall_relative_leakage_m3_s)||!std::isfinite(d.divergence_theorem_defect_m3_s)) throw std::runtime_error("immersed transient conservation defect is nonfinite");
+		auto validate_map=[](const std::map<int,double>& values,double total,const char* what) {
+			double sum=0.0; for(const auto& value:values) { if(!std::isfinite(value.second)||!std::isfinite(sum+value.second)) throw std::runtime_error(std::string("immersed transient conservation ")+what+" label flux is nonfinite"); sum+=value.second; }
+			if(std::abs(sum-total)>128.0*std::numeric_limits<double>::epsilon()*std::max(1.0,std::abs(total))*std::max<std::size_t>(1,values.size())) throw std::logic_error(std::string("immersed transient conservation ")+what+" label fluxes do not reconcile with total");
+		};
+		validate_map(d.surface_flow_by_boundary_label_m3_s,d.total_surface_outward_flow_m3_s,"fluid surface");
+		validate_map(d.material_surface_outward_flow_by_boundary_label_m3_s,d.total_material_surface_outward_flow_m3_s,"material surface");
+		validate_map(d.material_wall_outward_flow_by_boundary_label_m3_s,d.total_material_wall_outward_flow_m3_s,"material wall");
+		d.normalized_wall_leakage=std::abs(d.wall_relative_leakage_m3_s)/scale;
+		d.normalized_open_balance=std::abs(d.divergence_theorem_defect_m3_s)/scale;
+		if(!std::isfinite(d.normalized_wall_leakage)||!std::isfinite(d.normalized_open_balance)) throw std::runtime_error("immersed transient normalized conservation quotient is nonfinite");
+		return d;
+	}
 	void RefreshHashes(){diagnostics_.committed_state_hash_sha256=committed_global_->HashSha256();diagnostics_.trial_state_hash_sha256=diagnostics_.trial_active?HashVector(state_):std::string{};if(!history_){diagnostics_.identity_history_nodes=diagnostics_.committed_history_nodes=diagnostics_.extended_history_nodes=0;diagnostics_.missing_history_nodes=layout_.NodeIds().size();diagnostics_.history_hash_sha256.clear();}}
 	void RefreshHashesNoexcept()noexcept{try{RefreshHashes();}catch(...){}}
 	std::string HashVector(Vec v)const{Sha256 h;immersed_transient_detail::AppendString(h,"ImmersedTransientTrial/v1");for(auto x:Copy(v))h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex();}
