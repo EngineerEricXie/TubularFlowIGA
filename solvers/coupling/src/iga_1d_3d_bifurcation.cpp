@@ -736,7 +736,13 @@ void WriteSpeciesOutputs(const fs::path& directory,
 
 int FailureInjectionStep()
 {
-	const char* value = std::getenv("TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP");
+	// Share the explicit-coupling injection knob with the generic graph runner
+	// so a Phase-6 closure test can exercise the same precommit-failure
+	// contract through its production 1D--immersed--3D--1D entry point.
+	const char* value = std::getenv("TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP");
+	if (value) return PositiveInteger(value,
+		"TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP");
+	value = std::getenv("TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP");
 	return value ? PositiveInteger(value,
 		"TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP") : 0;
 }

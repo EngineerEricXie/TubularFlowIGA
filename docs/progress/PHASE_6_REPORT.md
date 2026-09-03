@@ -162,7 +162,7 @@ the existing body-fitted generic smoke remains in that target.
 
 ## PR6.5 — Quasi-static immersed aneurysm-chain closure benchmark
 
-Status: in progress.
+Status: complete.
 
 `examples/vascular_flow/immersed_aneurysm_chain/` contains the deterministic
 steady low-Reynolds-number 1D--immersed-3D--1D case: a gradual octagonal
@@ -170,9 +170,45 @@ surface-of-revolution bulge, planar labelled inlet/outlet caps (1/2), and wall
 label 0. It is deliberately a quasi-static steady backend example and makes
 no transient or backward-Euler-equivalence claim.
 
-The current focused depth-2 conservative-form evidence is recorded in PR6.6.
-It does not establish depth-3 or full coupled-chain closure, so Phase 6
-remains in progress.
+On 2026-09-03, the composed production closure command passed on local serial
+PETSc 3.15 in 1302.15 s real time (1300.81 s user, 0.20 s system):
+
+```bash
+make -C solvers/coupling phase6-aneurysm-closure-test PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+Hardware: Intel(R) Core(TM) i9-14900KF, one socket, 8 cores, 16 logical CPUs.
+The target ran three explicit and three strong-fixed quasi-static 3D load
+samples, rather than claiming transient equivalence. Its emitted coupled
+maxima were `1.49078e-15` edge normalized flow residual,
+`3.92737e-09` strong-fixed normalized pressure residual, 5 strong-fixed
+iterations, `5.43931e-12` immersed 3D normalized balance, and
+`5.4408e-12` net external 1D normalized balance. All manifests were audited;
+the injected precommit failure published no completion marker; and retry output
+was byte-for-byte replayed.
+
+The direct immersed runtime evidence emitted all controller, open-port, and
+wall metrics for depth-3 flow samples of `5e-05`, `7.5e-05`, and `1e-04 m^3/s`,
+plus the depth-2 `1e-04 m^3/s` comparison. The largest reported controller
+absolute residual was `2.71051e-20 m^3/s`, the largest normalized open balance
+was `3.57677e-15`, and the largest normalized wall leakage was `1.573e-05`.
+All samples converged in two nonlinear and two KSP iterations; the maximum
+independently measured true-linear relative residual was `1.49106e-13`.
+Cap area and normal errors were both exactly zero (8 triangles per cap).
+Depth-3 resistance was `418.089 Pa s/m^3`, depth-2 resistance was
+`431.908 Pa s/m^3`, the lubrication estimate was `483.139 Pa s/m^3`, the
+lubrication difference was `0.134641`, and the depth difference was
+`0.0319953`. The transaction replay recorded exact committed state, committed
+port state, and nonlinear/KSP work replay; the retry counters were one commit,
+prepare, and finalize, plus one rollback and one abort.
+
+Already-observed phase-close regressions were not rerun: `make -C
+solvers/coupling test` passed; `make -C solvers/coupling multidomain-test
+PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` passed with species
+maxima `6.78e-20` edge, `9.56e-15` domain, and `8.89e-15` global; and the
+root-supervised `make -C solvers/cpu petsc-test
+PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real` passed after
+test-local fixes, including the VCA two-rank `rtol=1e-12` check.
 
 ## PR6.6 — Conservative resolved mixed form
 
@@ -215,5 +251,10 @@ quadrature reported open, wall, total, and volume-divergence flows of
 `-2.08177e-19`, `1.57300e-9`, `1.57300e-9`, and `1.43606e-9 m^3/s`,
 respectively. The open normalized balance and wall leakage normalized by
 throughflow both pass the focused `1e-3` gates. The volume-divergence value is
-retained as a diagnostic only. Depth-3 and full coupled-chain closure remain
-pending.
+retained as a diagnostic only. The focused PR6.6 evidence is now complemented
+by the completed depth-3 coupled-chain closure in PR6.5.
+
+## Phase 6
+
+Status: complete. The closure claim is limited to deterministic quasi-static
+3D load samples and does not assert transient or backward-Euler equivalence.

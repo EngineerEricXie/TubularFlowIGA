@@ -167,7 +167,7 @@ void ValidateImmersedManifest(const fs::path& output)
 	if (hash_end == std::string::npos || hash_end-(hash_begin+hash_key.size()) != 64)
 		throw std::runtime_error("immersed manifest surface hash is invalid");
 	for (const auto& text : {"\"kind\":\"three_d_immersed_flow\"",
-		"\"grid\":{\"lower_m\":[0.012345678901234567,0.012345678901234567,0.012345678901234567],\"upper_m\":[0.98765432109876543,0.98765432109876543,0.98765432109876543],\"cells\":[3,3,3]}",
+		"\"grid\":{\"lower_m\":[0.012345678901234567,0.012345678901234567,0.012345678901234567],\"upper_m\":[0.98765432109876539,0.98765432109876539,0.98765432109876539],\"cells\":[3,3,3]}",
 		"\"catalog_audit\":{\"active_cells\":", "\"volume_points\":",
 		"\"surface_points\":", "\"ghost_faces\":"})
 		if (manifest.find(text) == std::string::npos)

@@ -16,4 +16,7 @@ make phase6-aneurysm-depth2-regression PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86
 
 This target makes an isolated depth-2 copy of `immersed/` and runs the
 aneurysm Jacobian plus conservation regression. It is not a full coupled-chain
-closure target; the checked-in depth-3 fixture remains pending closure.
+closure target. The checked-in depth-3 fixture is the completed Phase 6
+closure benchmark; its composed closure target evaluates three quasi-static
+3D load samples for each coupling mode, rather than transient time
+integration.
