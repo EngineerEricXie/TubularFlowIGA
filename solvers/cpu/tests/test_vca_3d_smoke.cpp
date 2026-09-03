@@ -190,7 +190,8 @@ void Run(const fs::path& database, const fs::path& directory, const fs::path& ch
 	const std::string& extra, const std::string& launcher = {})
 {
 	fs::create_directories(checkpoint.parent_path());
-	const std::string command = launcher+"./iga_navier_stokes "+Quote(database)+" "+Quote(directory)
+	const std::string command = "PETSC_OPTIONS=\"${PETSC_OPTIONS:+${PETSC_OPTIONS} }-ksp_rtol 1e-12\" "
+		+launcher+"./iga_navier_stokes "+Quote(database)+" "+Quote(directory)
 		+" --max-newton 12 --checkpoint "+Quote(checkpoint)
 		+" --output "+Quote(checkpoint.parent_path()/"flow.txt")+extra;
 	if (std::system(command.c_str()) != 0)
