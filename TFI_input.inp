@@ -1,0 +1,49 @@
+# TubularFlowIGA global run parameters.
+#
+# Format: KEY=VALUE. Blank lines and lines beginning with '#' are ignored.
+# Relative paths are resolved from the repository root. Quote values only when
+# they contain spaces. All immediate subdirectories of INPUT_DIR are run unless
+# case names are supplied on the run_input_cases.sh command line.
+
+# MPI ranks used for both mesh partitioning and solver execution (minimum: 2).
+PROCESSORS=8
+
+# Case inputs and generated outputs.
+INPUT_DIR=Input
+OUTPUT_DIR=Output
+
+# Build the PETSc solvers before running: 1=yes, 0=no.
+BUILD_SOLVERS=1
+
+# Replace a case's existing generated output: 1=yes, 0=preserve and stop.
+CLEAN_OUTPUT=1
+
+# Run the packed-mesh consistency check before each solver.
+RUN_MESH_CHECK=1
+
+# Run the solver after preprocessing. Set to 0 for preparation only.
+RUN_SOLVER=1
+
+# auto: use iga_navier_stokes when the case contains a Navier-Stokes system,
+#       otherwise use iga_solve for the first linear-transport system.
+# Other accepted values: navier_stokes, transport.
+SOLVER=auto
+
+# MPI launcher and OpenMP threads used during spline preprocessing.
+MPIEXEC=mpiexec
+OMP_NUM_THREADS=2
+
+# Optional space-separated arguments appended to the selected solver command.
+SOLVER_ARGS=
+
+# Print commands without building, preparing, or running them: 1=yes, 0=no.
+DRY_RUN=0
+
+# PETSc may instead be exported in the calling shell. Uncomment and edit these
+# when it is not already configured in the environment.
+# PETSC_DIR=/path/to/petsc
+# PETSC_ARCH=arch-linux-c-opt
+
+# Optional Makefile overrides, useful when HDF5 is not visible to pkg-config.
+# HDF5_CFLAGS=-I/path/to/hdf5/include
+# HDF5_LIBS=-L/path/to/hdf5/lib -lhdf5

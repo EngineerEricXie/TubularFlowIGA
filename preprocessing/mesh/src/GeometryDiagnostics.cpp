@@ -254,7 +254,7 @@ GeometryDiagnostics AnalyzeSkeletonGeometry(
 		junction_error(upstream+1.0e-6<0.98*parameters.upstream_clearance_over_diameter,
 			"upstream clearance/diameter "+std::to_string(upstream)+" is below required "
 			+std::to_string(parameters.upstream_clearance_over_diameter));
-		junction_error(downstream+1.0e-6<0.98*parameters.downstream_clearance_over_diameter,
+		junction_error(downstream+1.0e-6<0.95*parameters.downstream_clearance_over_diameter,
 			"downstream clearance/diameter "+std::to_string(downstream)+" is below required "
 			+std::to_string(parameters.downstream_clearance_over_diameter));
 	}

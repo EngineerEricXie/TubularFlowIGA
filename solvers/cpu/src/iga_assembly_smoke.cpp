@@ -25,8 +25,17 @@ int main(int argc, char** argv)
 		}
 		iga::OwnedRowAssembler::Assemble(matrix);
 		PetscBool missing = PETSC_FALSE;
+	#if PETSC_VERSION_LT(3, 25, 0)
 		PetscInt row = -1;
 		MatMissingDiagonal(matrix, &missing, &row);
+	#else
+		IS zero_diagonals = nullptr;
+		MatFindZeroDiagonals(matrix, &zero_diagonals);
+		PetscInt zero_diagonal_count = 0;
+		ISGetLocalSize(zero_diagonals, &zero_diagonal_count);
+		missing = zero_diagonal_count > 0 ? PETSC_TRUE : PETSC_FALSE;
+		ISDestroy(&zero_diagonals);
+	#endif
 		MatInfo info{};
 		MatGetInfo(matrix, MAT_GLOBAL_SUM, &info);
 		if (rank == 0) {
