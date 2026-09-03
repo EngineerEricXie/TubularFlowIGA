@@ -23,6 +23,7 @@ iga::BezierVisualizationMesh MakeMesh()
 		for (int j = 0; j < 4; ++j)
 			for (int i = 0; i < 4; ++i, ++point) {
 				mesh.points.push_back({{i/3.0, j/3.0, k/3.0}});
+				mesh.point_boundary_labels.push_back(k == 0 ? 2 : -1);
 				mesh.signature_nodes.push_back(static_cast<std::int32_t>(point));
 				mesh.signature_coefficients.push_back(1.0);
 				mesh.signature_offsets.push_back(point+1);
@@ -34,6 +35,8 @@ iga::BezierVisualizationMesh MakeMesh()
 	mesh.higher_order_degrees = {{{3, 3, 3}}};
 	mesh.element_ids = {17};
 	mesh.element_owners = {0};
+	mesh.element_boundary_labels = {2};
+	mesh.element_boundary_face_labels = {{{2, -1, -1, -1, -1, -1}}};
 	mesh.validation.elements = 1;
 	mesh.validation.local_points = 64;
 	mesh.validation.unique_points = 64;
@@ -119,6 +122,14 @@ int main()
 	assert((Dimensions(file, "/VTKHDF/Points") == std::vector<hsize_t>{64, 3}));
 	assert((Dimensions(file, "/VTKHDF/Connectivity") == std::vector<hsize_t>{64}));
 	assert((Dimensions(file, "/VTKHDF/PointData/scalar") == std::vector<hsize_t>{192}));
+	assert((Dimensions(file, "/VTKHDF/PointData/boundary_label")
+		== std::vector<hsize_t>{64}));
+	assert((Read<std::int32_t>(file, "/VTKHDF/PointData/boundary_label",
+		H5T_NATIVE_INT32)[0] == 2));
+	assert((Dimensions(file, "/VTKHDF/CellData/boundary_label")
+		== std::vector<hsize_t>{1}));
+	assert((Read<std::int32_t>(file, "/VTKHDF/CellData/boundary_face_labels",
+		H5T_NATIVE_INT32) == std::vector<std::int32_t>{2, -1, -1, -1, -1, -1}));
 	assert((Dimensions(file, "/VTKHDF/PointData/velocity") == std::vector<hsize_t>{192, 3}));
 	assert((Dimensions(file, "/VTKHDF/Steps/CellOffsets") == std::vector<hsize_t>{3, 1}));
 	const auto types = Read<std::uint8_t>(file, "/VTKHDF/Types", H5T_NATIVE_UINT8);

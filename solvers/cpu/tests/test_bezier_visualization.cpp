@@ -18,6 +18,8 @@ iga::Element MakeElement(std::uint64_t id, double x_offset,
 	iga::Element element;
 	element.id = id;
 	element.owner = 0;
+	element.boundary_labels[0] = 2;
+	element.boundary_labels[1] = 0;
 	element.connectivity.resize(64);
 	element.extraction.resize(64);
 	std::size_t point = 0;
@@ -118,6 +120,14 @@ int main()
 	assert(mesh.connectivity[0] == 0);
 	assert(mesh.connectivity[1] == 3);
 	assert(mesh.connectivity[2] == 15);
+	assert(mesh.element_boundary_labels == std::vector<std::int32_t>({-2, -2}));
+	assert(mesh.element_boundary_face_labels.size() == 2);
+	assert(mesh.element_boundary_face_labels[0][0] == 2);
+	assert(mesh.element_boundary_face_labels[0][1] == 0);
+	assert(mesh.point_boundary_labels[0] == 0);
+	assert(mesh.point_boundary_labels[17] == 0);
+	assert(mesh.point_boundary_labels[20] == -1);
+	assert(mesh.point_boundary_labels[5] == 2);
 	const auto source_mesh = iga::BuildSourceCoordinateBezierVisualizationMesh(
 		conforming_database);
 	assert(source_mesh.points.size() == mesh.points.size());
@@ -128,6 +138,10 @@ int main()
 				== source_origin[direction]
 					+2.5*mesh.points[point][direction]);
 	assert(source_mesh.connectivity == mesh.connectivity);
+	assert(source_mesh.point_boundary_labels == mesh.point_boundary_labels);
+	assert(source_mesh.element_boundary_labels == mesh.element_boundary_labels);
+	assert(source_mesh.element_boundary_face_labels
+		== mesh.element_boundary_face_labels);
 	const auto expected_source_jacobian
 		= mesh.validation.minimum_jacobian*2.5*2.5*2.5;
 	assert(std::abs(source_mesh.validation.minimum_jacobian-expected_source_jacobian)

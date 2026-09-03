@@ -296,6 +296,11 @@ inline std::uint64_t GeometryHash(const BezierVisualizationMesh& mesh)
 		mesh.connectivity.size()*sizeof(mesh.connectivity.front()));
 	hash = HashBytes(hash, mesh.offsets.data(),
 		mesh.offsets.size()*sizeof(mesh.offsets.front()));
+	hash = HashBytes(hash, mesh.point_boundary_labels.data(),
+		mesh.point_boundary_labels.size()*sizeof(mesh.point_boundary_labels.front()));
+	hash = HashBytes(hash, mesh.element_boundary_face_labels.data(),
+		mesh.element_boundary_face_labels.size()
+			*sizeof(mesh.element_boundary_face_labels.front()));
 	return hash;
 }
 
@@ -386,6 +391,11 @@ public:
 private:
 	void CreateFile()
 	{
+		if (mesh_.point_boundary_labels.size() != mesh_.points.size()
+			|| mesh_.element_boundary_labels.size() != mesh_.types.size()
+			|| mesh_.element_boundary_face_labels.size() != mesh_.types.size())
+			throw std::runtime_error(
+				"Bezier visualization boundary metadata does not match the mesh");
 		root_ = hdf_detail::CreateGroup(file_.get(), "VTKHDF");
 		const std::array<std::int64_t, 2> version{{2, 1}};
 		auto version_space = hdf_detail::RequireHandle(H5Screate_simple(1,
@@ -413,7 +423,9 @@ private:
 		hdf_detail::WriteFixedDataset(root_.get(), "Types", mesh_.types.data(),
 			{mesh_.types.size()}, compression_);
 		auto point_data = hdf_detail::CreateGroup(root_.get(), "PointData");
-		(void)point_data;
+		hdf_detail::WriteFixedDataset(point_data.get(), "boundary_label",
+			mesh_.point_boundary_labels.data(), {mesh_.point_boundary_labels.size()},
+			compression_);
 		auto cell_data = hdf_detail::CreateGroup(root_.get(), "CellData");
 		auto degrees = hdf_detail::WriteFixedDataset(cell_data.get(), "HigherOrderDegrees",
 			mesh_.higher_order_degrees.front().data(), {mesh_.higher_order_degrees.size(), 3},
@@ -424,6 +436,12 @@ private:
 		hdf_detail::WriteStringAttribute(element_ids.get(), "Attribute", "GlobalIds");
 		hdf_detail::WriteFixedDataset(cell_data.get(), "metis_owner",
 			mesh_.element_owners.data(), {mesh_.element_owners.size()}, compression_);
+		hdf_detail::WriteFixedDataset(cell_data.get(), "boundary_label",
+			mesh_.element_boundary_labels.data(), {mesh_.element_boundary_labels.size()},
+			compression_);
+		hdf_detail::WriteFixedDataset(cell_data.get(), "boundary_face_labels",
+			mesh_.element_boundary_face_labels.front().data(),
+			{mesh_.element_boundary_face_labels.size(), 6}, compression_);
 		auto steps = hdf_detail::CreateGroup(root_.get(), "Steps");
 		hdf_detail::WriteScalarAttribute<std::int64_t>(steps.get(), "NSteps", 0);
 		hdf_detail::CreateExpandableDataset<double>(steps.get(), "Values", 1, 0);

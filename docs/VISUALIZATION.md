@@ -34,6 +34,22 @@ connectivity, cell types, element IDs, partition owners, and higher-order
 degrees are stored once. Each timestep appends only compressed point arrays and
 step metadata, so geometry is not repeated across time.
 
+Boundary metadata from the packed database is also stored once:
+
+- PointData `boundary_label` marks Bézier face points for direct surface
+  coloring (`-1` is interior, `0` is wall, and positive values are configured
+  inlet/outlet labels). At a cap rim, the wall label takes precedence, matching
+  `controlmesh.vtk`; `-2` denotes a junction between distinct non-wall labels.
+- CellData `boundary_label` is `-1` for an interior element, the label when all
+  of its boundary faces agree, and `-2` when the element touches multiple
+  boundary labels.
+- CellData `boundary_face_labels` preserves the exact six face labels in the
+  database face order; `-1` denotes an interior face.
+
+In ParaView, select Point Data `boundary_label` in **Color By** to see the wall,
+inlet, and outlets on the curved Bézier surface. Use the cell arrays when
+inspecting individual elements or exact face metadata.
+
 The point arrays are obtained by applying each extraction column to the control
 point solution. A global extraction-signature registry gives shared Bézier
 points one visualization point ID. Coordinate equality alone never merges
