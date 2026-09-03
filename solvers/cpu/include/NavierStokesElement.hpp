@@ -303,13 +303,17 @@ inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const NavierStokesVelocityHistory& previous_velocity,
 	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature,
-	const NavierStokesBodyForceEvaluator& body_force)
+	const NavierStokesBodyForceEvaluator& body_force,
+	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
 {
 	ValidateTransientNavierStokesHistory(element, previous_velocity, parameters);
 	std::vector<std::array<double, 4>> legacy(previous_velocity.size());
 	for (std::size_t i = 0; i < previous_velocity.size(); ++i)
 		for (int c = 0; c < 3; ++c) legacy[i][c] = previous_velocity[i][c];
-	return BuildNavierStokesElement(element, nodal_state, legacy, parameters, quadrature, body_force);
+	ValidateVolumeQuadratureRule(element, quadrature);
+	return BuildNavierStokesElementFromPoints(element, nodal_state, legacy, parameters,
+		[&quadrature](const auto& consume) { for (const auto& point : quadrature.Points()) consume(point); }, body_force,
+		resolved_mixed_form);
 }
 
 inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const Element& element,
@@ -329,7 +333,8 @@ inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& eleme
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const ImmersedVelocityHistory& previous_velocity, const ImmersedActiveLayout& layout,
 	double target_time_s, const NavierStokesParameters& parameters,
-	const VolumeQuadratureRule& quadrature, const NavierStokesBodyForceEvaluator& body_force)
+	const VolumeQuadratureRule& quadrature, const NavierStokesBodyForceEvaluator& body_force,
+	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
 {
 	ValidateTransientNavierStokesPreflight(parameters);
 	if (!previous_velocity.Valid() || !layout.Valid()
@@ -345,7 +350,8 @@ inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& eleme
 	if (target_time_s != expected_target)
 		throw std::invalid_argument("immersed velocity history target time does not match assembly time");
 	return BuildNavierStokesElementFromLocalVelocityHistory(element, nodal_state,
-		LocalizeImmersedVelocityHistory(element, layout, previous_velocity, target_time_s), parameters, quadrature, body_force);
+		LocalizeImmersedVelocityHistory(element, layout, previous_velocity, target_time_s), parameters, quadrature, body_force,
+		resolved_mixed_form);
 }
 
 inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& element,

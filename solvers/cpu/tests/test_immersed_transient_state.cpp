@@ -1,6 +1,7 @@
 #include "ImmersedTransientState.hpp"
 #include "NavierStokesElement.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -50,6 +51,16 @@ int main()
 	const auto transient=iga::BuildTransientNavierStokesElement(element,fields,history,layout,.2,
 		{1.0,.1,.1},volume.UsableRule(domain,0));
 	assert(!transient.jacobian.empty() && !transient.negative_residual.empty());
+	// The named global-ID path retains its body-fitted default for compatibility,
+	// while the immersed runtime explicitly selects the conservative pair.  This
+	// is a residual-level discriminator, independent of the FD tangent checks.
+	const auto conservative=iga::BuildTransientNavierStokesElement(element,fields,history,layout,.2,
+		{1.0,.1,.1},volume.UsableRule(domain,0),[](const std::array<double,3>&){return std::array<double,3>{{0,0,0}};},
+		iga::NavierStokesResolvedMixedForm::Conservative);
+	double mixed_form_difference=0.0;
+	for(std::size_t i=0;i<transient.negative_residual.size();++i)
+		mixed_form_difference=std::max(mixed_form_difference,std::abs(PetscRealPart(conservative.negative_residual[i]-transient.negative_residual[i])));
+	assert(mixed_form_difference>1e-10);
 	const std::vector<iga::ImmersedVelocityHistoryProvenance> committed(fields.size(),
 		iga::ImmersedVelocityHistoryProvenance::Committed);
 	const auto tiny_history=iga::ImmersedVelocityHistory(0.0,1e-16,"fixed-geometry","fixed-geometry",

@@ -19,8 +19,19 @@ its evaluated time.  `GeometryIdentitySha256()` names only current immutable
 geometry, while `PublicationIdentitySha256()` additionally names compatible
 predecessor and transition context used for publication/retry decisions.
 
-S7-A is GO only for PR7.3a's fixed-geometry foundation: Eulerian backward
-Euler uses current velocity for convection and a velocity-only history; it has
-no ALE terms.  Its state is keyed by global Cartesian node ID.  The moving
-extension remains NO-GO and unimplemented: it is the face-jump energy
-minimization over a time-slab band, pending its own tests and Sol review.
+S7-A is GO for the fixed-geometry backward-Euler runtime (PR7.3b): it consumes
+one immutable `MovingCutGeometry`, requires its exact current identity/layout
+at both ends of a step, uses current velocity for convection and an
+identity-only velocity history keyed by global Cartesian node ID.  Geometry
+motion, extended history, ALE terms, and material wall motion are rejected;
+the latter is certified from each retained quadrature point's canonical
+provenance before assembly.  Publication is an explicit
+idle → trial → prepared → finalized owner transaction: preparation may fail
+without visibility, finalize only swaps already prepared owners, rollback
+restores the frozen seed/history, and abort leaves the committed global state
+and port measurements unchanged.  PETSc vectors are trial-local; canonical
+publication remains `ImmersedGlobalFlowState`.
+
+The moving extension remains NO-GO and unimplemented: it is the face-jump
+energy minimization over a time-slab band, pending its own tests and Sol
+review.

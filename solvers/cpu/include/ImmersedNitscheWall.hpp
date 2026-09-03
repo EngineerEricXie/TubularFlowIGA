@@ -435,6 +435,25 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSyst
 		nullptr, &volume_system);
 }
 
+// The transient fixed-geometry runtime has already assembled its conservative
+// (global-ID history) volume term.  Retain material provenance when adding
+// just the wall delta; adapting through a physical callback would lose the
+// canonical material point required by prescribed motion.
+inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSystemMaterialAware(
+	const CartesianDomainClassification& domain,
+	const CutCellVolumeQuadratureCatalog& volume_catalog,
+	const ImmersedSurfaceQuadratureCatalog& surface_catalog, std::uint64_t cell_id,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const std::vector<int>& selected_boundary_labels,
+	const NavierStokesSystem& volume_system, const CutCellGhostPenaltyCatalog& ghost_catalog,
+	double gamma0, const ImmersedMaterialWallVelocityEvaluator& wall_velocity)
+{
+	return BuildImmersedNitscheWallElementImpl(domain, volume_catalog, surface_catalog, cell_id,
+		nodal_state, previous_nodal_state, parameters, selected_boundary_labels, gamma0, wall_velocity,
+		&ghost_catalog, &volume_system);
+}
+
 inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementFromVolumeSystem(
 	const CartesianDomainClassification& domain,
 	const CutCellVolumeQuadratureCatalog& volume_catalog,
