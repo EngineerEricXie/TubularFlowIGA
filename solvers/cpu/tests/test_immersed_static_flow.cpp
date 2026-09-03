@@ -51,6 +51,49 @@ double DirectMeasure(const iga::CartesianDomainClassification& domain, const iga
 	return total;
 }
 
+double VectorNorm(const std::vector<PetscScalar>& values)
+{
+	double squared = 0.0;
+	for (const auto value : values) squared += PetscRealPart(value)*PetscRealPart(value);
+	return std::sqrt(squared);
+}
+
+std::array<double, 3> ResidualBlockNorms(const iga::ImmersedStaticFlowRuntime& runtime,
+	const std::vector<PetscScalar>& residual)
+{
+	assert(residual.size() == runtime.Diagnostics().total_dofs);
+	std::array<double, 3> result{{0.0,0.0,0.0}};
+	for (std::size_t row = 0; row < residual.size(); ++row) {
+		const std::size_t block = row >= runtime.Diagnostics().physical_dofs ? 2 : ((row%4) == 3 ? 1 : 0);
+		result[block] += PetscRealPart(residual[row])*PetscRealPart(residual[row]);
+	}
+	for (auto& value : result) value = std::sqrt(value);
+	return result;
+}
+
+double HydrostaticPressure(const std::array<double, 3>& x)
+{
+	return .3*x[0]-.2*x[1]+.1*x[2]-.1;
+}
+
+std::vector<PetscScalar> HydrostaticState(const iga::CartesianDomainClassification& domain,
+	const iga::ImmersedStaticFlowRuntime& runtime)
+{
+	std::vector<PetscScalar> result(runtime.Diagnostics().total_dofs, 0.0);
+	const auto& background = domain.Background();
+	const auto& spec = background.Spec();
+	const std::uint64_t nx = static_cast<std::uint64_t>(spec.cells[0])+3;
+	const std::uint64_t ny = static_cast<std::uint64_t>(spec.cells[1])+3;
+	for (const auto node : runtime.ActiveNodes()) {
+		const auto raw = static_cast<std::uint64_t>(node);
+		const std::uint32_t i = static_cast<std::uint32_t>(raw%nx);
+		const std::uint32_t j = static_cast<std::uint32_t>((raw/nx)%ny);
+		const std::uint32_t k = static_cast<std::uint32_t>(raw/(nx*ny));
+		result[static_cast<std::size_t>(runtime.Dof(node, 3))] = HydrostaticPressure(background.Greville(i, j, k));
+	}
+	return result;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -160,6 +203,22 @@ int main(int argc, char** argv)
 		const double expected = PetscRealPart(expected_force_difference[4*a+3]);
 		assert(std::abs(actual-expected) < 1e-11*std::max({1.0, std::abs(actual), std::abs(expected)}));
 	}
+	// The conservative resolved mixed form, closed-wall Nitsche topology, and
+	// pressure gauge must retain the exactly representable hydrostatic root.
+	// The pressure has zero mean on this centered cube, so no gauge shift is
+	// needed: u=0 and grad(p)=(.3,-.2,.1) balances the supplied body force.
+	iga::ImmersedStaticFlowOptions hydrostatic_options = options;
+	hydrostatic_options.parameters = {1.0, 1.0, 0.0};
+	hydrostatic_options.body_force = [](const std::array<double, 3>&) {
+		return std::array<double, 3>{{.3,-.2,.1}};
+	};
+	iga::ImmersedStaticFlowRuntime hydrostatic(domain, volume, surface, ghost, hydrostatic_options);
+	assert(hydrostatic.HasGauge() && hydrostatic.PortDefinitions().empty());
+	hydrostatic.SetCommittedState(HydrostaticState(domain, hydrostatic));
+	hydrostatic.Assemble();
+	const auto hydrostatic_residual = hydrostatic.AssembledNegativeResidual();
+	assert(VectorNorm(hydrostatic_residual) < 1e-14);
+	for (const auto block : ResidualBlockNorms(hydrostatic, hydrostatic_residual)) assert(block < 1e-14);
 
 	const auto other_domain = Domain();
 	const iga::CutCellVolumeQuadratureCatalog other_volume(other_domain, {4,500000,500000,3000000});
@@ -180,14 +239,23 @@ int main(int argc, char** argv)
 	// All nonzero regression solves request the portable LU regularization
 	// explicitly.  Default (zero) remains a production policy choice.
 	iga::ImmersedStaticFlowOptions solve_options = options; solve_options.lu_pivot_shift = 1e-12;
-	iga::ImmersedStaticFlowOptions one_update_options = solve_options; one_update_options.nonlinear_maximum_iterations = 1;
-	iga::ImmersedStaticFlowRuntime one_update(domain, volume, surface, ghost, one_update_options);
-	assert(one_update.SolveTrial());
-	assert(one_update.Diagnostics().converged && one_update.Diagnostics().nonlinear_iterations == 1);
-	one_update.Commit();
-
 	iga::ImmersedStaticFlowRuntime solve(domain, volume, surface, ghost, solve_options);
-	assert(solve.SolveTrial()); Reject([&] { solve.SetCommittedState(solve.CommittedState()); }); solve.Commit();
+	solve.Assemble(); const auto initial_solve_residual = solve.AssembledNegativeResidual();
+	const double initial_solve_norm = VectorNorm(initial_solve_residual);
+	const double solve_tolerance = std::max(solve_options.nonlinear_absolute_tolerance,
+		solve_options.nonlinear_relative_tolerance*initial_solve_norm);
+	assert(solve.SolveTrial());
+	const auto final_solve_residual = solve.AssembledNegativeResidual();
+	const auto final_blocks = ResidualBlockNorms(solve, final_solve_residual);
+	assert(solve.Diagnostics().converged && solve.Diagnostics().nonlinear_iterations >= 2
+		&& solve.Diagnostics().newton_steps.size() >= 2);
+	assert(std::any_of(solve.Diagnostics().newton_steps.begin(), solve.Diagnostics().newton_steps.end(),
+		[](const iga::ImmersedStaticFlowNewtonStep& step) {
+			return step.damping == 1.0 && step.candidate_residual_norm < step.residual_norm;
+		}));
+	assert(solve.Diagnostics().residual_norm <= solve_tolerance && VectorNorm(final_solve_residual) <= solve_tolerance);
+	for (const auto block : final_blocks) assert(block <= solve_tolerance);
+	Reject([&] { solve.SetCommittedState(solve.CommittedState()); }); solve.Commit();
 	for (const auto value : solve.CommittedState()) assert(std::isfinite(PetscRealPart(value)));
 	assert(solve.Diagnostics().commit_count == 1 && solve.Diagnostics().committed);
 	Reject([&] { solve.Commit(); });
