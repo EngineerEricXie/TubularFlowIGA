@@ -87,3 +87,35 @@ scale \(\max(Q_{ref},|G_{BE}|,|Q_u|,|Q_w|)\).  In particular,
 diagnostic, not a hidden GCL or momentum correction.  Conservation records are
 built before inner prepare and are retained after the noexcept final owner
 exchange without exposing a trial as committed.
+
+## Pure moving immersed field snapshots
+
+The Phase 7 field-snapshot sampler is a pure, immutable post-processing
+operation over one exact `MovingCutGeometry`, `ImmersedActiveLayout`, and
+`ImmersedGlobalFlowState`, including matching gauge topology.  It neither
+captures runtime state nor writes VTU/JSON/PVD output.  It samples usable volume
+quadrature in x-fast cell and catalog order, supports both expanded and compact
+volume storage, and records velocity, pressure, vorticity, Q, enstrophy density,
+and physical integration weight.  Compact coalescing may change stored points,
+weights, order, and count while preserving its supported polynomial tensor
+moments.  Accordingly, manufactured polynomial fields require expanded/compact
+parity to relative-or-absolute tolerance `1e-12` for volume, enstrophy integral,
+mean enstrophy, and mean Q.  Discontinuous pointwise indicator measures--the
+Q-positive volume/fraction and stagnant volume/fraction--are instead
+storage- and quadrature-sampling-dependent estimates.  They must be finite and
+their fractions lie in `[0, 1]`, but are not required to agree across storage
+modes; refinement/convergence evidence is required before interpreting them
+physically.  Snapshot content identity carries the storage mode, so compact and
+expanded content hashes intentionally differ; the separate snapshot identity
+binds geometry/publication/layout/state/time/index.
+
+`endpoint_turnover_rate_per_s`, `endpoint_turnover_time_s`,
+`well_mixed_replacement_fraction_over_step`, and
+`stagnant_volume_fraction` are endpoint, instantaneous/global well-mixed, or
+threshold proxies.  They are not particle or tracer residence time, retained
+blood fraction, a blood-age distribution, or a washout curve.
+
+Wall mismatch reports area, maximum and RMS relative velocity in m/s, plus
+`wall_relative_velocity_squared_area_integral_m4_per_s2`, the dimensionally
+explicit integral of squared relative velocity over wall area.  Each requested
+wall label must independently resolve to finite, positive surface area.

@@ -12,7 +12,7 @@ HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-conf
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test
+PETSC_TARGETS := petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test
 
 ifneq ($(strip $(filter $(PETSC_TARGETS),$(MAKECMDGOALS))),)
 ifeq ($(strip $(PETSC_DIR)),)
@@ -23,11 +23,11 @@ PETSC_VARIABLES ?= $(PETSC_PREFIX)/lib/petsc/conf/petscvariables
 include $(PETSC_VARIABLES)
 endif
 
-.PHONY: all petsc petsc-test test config-check-dispatch-test vtkhdf-paraview-test clean phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test prescribed-surface-motion-test moving-cut-geometry-test immersed-transient-state-test immersed-transient-flow-test moving-immersed-transient-flow-test immersed-velocity-extension-test
+.PHONY: all petsc petsc-test test config-check-dispatch-test vtkhdf-paraview-test clean phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test prescribed-surface-motion-test moving-cut-geometry-test immersed-transient-state-test immersed-transient-flow-test moving-immersed-transient-flow-test moving-immersed-flow-snapshot-test immersed-velocity-extension-test
 
 # Shared Cartesian spline-face ordering is part of all immersed cut/ghost and
 # wall paths; make header changes rebuild every affected executable.
-immersed_face_targets := navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_static_flow_test immersed_transient_flow_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test phase5_closure_test moving_cut_geometry_test
+immersed_face_targets := navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_flow_snapshot_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test phase5_closure_test moving_cut_geometry_test
 $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
 
 all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference
@@ -112,6 +112,12 @@ moving_immersed_transient_flow_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT
 
 moving-immersed-transient-flow-test: moving_immersed_transient_flow_test
 	./moving_immersed_transient_flow_test
+
+moving_immersed_flow_snapshot_test: tests/test_moving_immersed_flow_snapshot.cpp include/MovingImmersedFlowSnapshot.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/TransportElement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+moving-immersed-flow-snapshot-test: moving_immersed_flow_snapshot_test
+	./moving_immersed_flow_snapshot_test
 
 immersed_flow_port_test: tests/test_immersed_flow_port.cpp include/ImmersedStaticFlowRuntime.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/NavierStokesElement.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/ElementGeometry.hpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -307,4 +313,4 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 clean:
-	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test moving_cut_geometry_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test moving_cut_geometry_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
