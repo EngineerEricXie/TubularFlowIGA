@@ -32,6 +32,25 @@ restores the frozen seed/history, and abort leaves the committed global state
 and port measurements unchanged.  PETSc vectors are trial-local; canonical
 publication remains `ImmersedGlobalFlowState`.
 
-The moving extension remains NO-GO and unimplemented: it is the face-jump
-energy minimization over a time-slab band, pending its own tests and Sol
-review.
+PR7.4a is a review-pending, non-integrated standalone immersed velocity/history
+extension.  It admits only exact positive-cell layouts on a fixed Cartesian
+grid, grows a deterministic six-face time-slab band from the old positive
+cells, and uses that forward-only containment check as its sole acceptance
+gate.  A deterministic sorted-level, six-neighbor multi-source reverse BFS
+from the new positive cells is retained only as an exact capped diagnostic: it
+counts seeds, stops once every old positive cell is reached, and fail-closes on
+its explicit resource cap or an exhausted unresolved frontier.  Its storage is
+grown only from actual bounded seeds and visits, never from the configured cap.
+A reverse
+distance greater than the requested forward layers is reported, not rejected.
+The
+extension minimizes the unregularized cubic third-normal-derivative jump
+energy on interior band faces, preserves old-layout anchor values bitwise, and
+uses one bounded dense scaled-Cholesky factor for all velocity components and
+optional scalar warm starts.  It publishes only a fully covered target
+`ImmersedVelocityHistory`, with deterministic operator/reduced/extension
+hashes and residual/pivot/coverage gates.  It is not approved or integrated
+until final Sol GO; moving-runtime integration remains explicitly NO-GO and
+out of scope for PR7.4a.  Independent PR7.4a continuation, long-double LDLT,
+deterministic-storage, directionality/cap, and fail-closed evidence is
+passing; final Sol review remains pending.
