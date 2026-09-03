@@ -101,6 +101,19 @@ inline const EquationSystemDefinition& FirstNavierStokesSystem(
 	throw std::runtime_error("simulation configuration has no navier_stokes equation system");
 }
 
+inline const EquationSystemDefinition& FindNavierStokesSystem(
+	const SimulationConfiguration& configuration, const std::string& name)
+{
+	if (name.empty()) return FirstNavierStokesSystem(configuration);
+	for (const auto& system : configuration.equation_systems)
+		if (system.name == name) {
+			if (system.kind != EquationKind::NavierStokes)
+				throw std::runtime_error("equation system '"+name+"' is not navier_stokes");
+			return system;
+		}
+	throw std::runtime_error("simulation configuration has no navier_stokes system named '"+name+"'");
+}
+
 inline ResolvedBoundaryConditions ResolveFlowBoundaries(
 	const SimulationConfiguration& configuration, const EquationSystemDefinition& system,
 	const std::vector<int>& labels,

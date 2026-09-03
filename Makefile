@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -29,6 +29,10 @@ cuda:
 
 spline:
 	$(MAKE) -C preprocessing/spline
+
+workflow-test: cpu
+	./scripts/tests/test_run_cases.sh
+	python3 ./scripts/tests/test_vtk_centerline_to_obj.py
 
 clean:
 	$(MAKE) -C preprocessing/mesh clean

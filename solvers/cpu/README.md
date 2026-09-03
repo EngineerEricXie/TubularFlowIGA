@@ -16,7 +16,7 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 | `iga_inspect` | Print database metadata and partition statistics |
 | `iga_case_check` | Validate case inputs and resolved boundary roles without PETSc |
 | `iga_mesh_check` | Evaluate every element at 4x4x4 quadrature points and reject non-positive Jacobians |
-| `iga_config_check` | Strictly validate `simulation_config.json` without PETSc |
+| `iga_config_check` | Strictly validate `simulation_config.json` and emit `--execution-plan` metadata without PETSc |
 | `iga_flow_validate` | Integrate boundary flow, check divergence-theorem closure, mass balance, and cycle repeatability |
 | `iga_womersley_reference` | Generate a time-aligned analytical straight-tube Womersley velocity series |
 | `iga_solve` | Solve configured one-to-many-field transport/operator systems |
@@ -25,7 +25,8 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 | `iga_transport` | Transitional old-input CLI, lowered through the generic assembler |
 
 `iga_solve` writes fields in configured order plus a `.fields` name file.
-`iga_navier_stokes` reads flow physics and boundary values from that same config.
+`iga_navier_stokes` reads flow physics and boundary values from that same config;
+`--system NAME` selects a named Navier--Stokes system when needed.
 `iga_solve` can also read a configured time-resolved velocity manifest and
 linearly interpolate flow snapshots onto the transport time grid.
 

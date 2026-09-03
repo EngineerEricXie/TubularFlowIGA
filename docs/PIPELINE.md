@@ -19,6 +19,45 @@ only, `--allow-preflight-failure` records the failed preflight in
 `manifest.json` and continues to the mandatory final mesh-quality and Bezier
 geometry gates.
 
+## Batch generation and execution
+
+[`run_cases.sh`](../scripts/run_cases.sh) is a thin orchestration layer over the
+native 1D solver and the 3D `generate_case.sh` pipeline. It can check, solve,
+and validate several cases while preserving a per-case `generated/` layout:
+
+```bash
+./scripts/run_cases.sh --config execution.conf CaseA CaseB
+```
+
+The execution profile contains machine and launch settings such as `RANKS`,
+`BACKEND`, and `OMP_NUM_THREADS`. Scientific inputs remain exclusively in each
+case's `simulation_config.json`. With no case names, all immediate
+subdirectories of `CASE_ROOT` are selected. Set `DRY_RUN=1` to inspect the
+commands without generating or solving anything. A fresh checkout must first
+build the dependency-free config checker with `make cpu` before automatic
+solver selection can be inspected in dry-run mode.
+
+By default, each output is written to `CASE/generated`. `OUTPUT_ROOT` may place
+the generated cases below a separate root. `CLEAN=0` is the safe default; when
+enabled, cleanup is accepted only for a directory containing a matching
+generated-case `manifest.json` or `run_manifest.json`.
+
+`SOLVER=auto` uses the machine-readable execution plan from
+`iga_config_check --execution-plan`, rather than searching the JSON text. That
+plan declares the dimension, mesh requirement, coupling mode, systems, and
+supported backends. Ambiguous multi-system configurations must set `SYSTEM`.
+
+Native 1D cases bypass mesh generation and `.ntiga` packing, run `iga_1d`, and
+may use `RANKS=1`. Three-dimensional cases require at least two partitions for
+`mpmetis`; CPU uses the same number of MPI processes, while CUDA reads the
+packed database on one GPU. CUDA is rejected before launch for native 1D and
+3D VCA cases because those coupling paths are currently CPU-only.
+
+A successful solve writes `run_manifest.json` with the selected dimension,
+backend, ranks, primary system, coupling mode, result path, and validation
+status. The generic runner performs normal per-run checks; specialized
+rank-parity and checkpoint/restart regression scripts remain separate.
+
 ## 1. Generate the control mesh
 
 A 3D case directory starts with a schema-v4 `simulation_config.json`. Its

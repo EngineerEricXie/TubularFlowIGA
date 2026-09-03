@@ -9,7 +9,10 @@
 int main(int argc, char** argv)
 {
 	try {
-		if (argc != 2) throw std::runtime_error("usage: iga_config_check SIMULATION_CONFIG.json");
+		if (argc < 2 || argc > 3 || (argc == 3 && std::string(argv[2]) != "--execution-plan"))
+			throw std::runtime_error(
+				"usage: iga_config_check SIMULATION_CONFIG.json [--execution-plan]");
+		const bool execution_plan = argc == 3;
 		std::ifstream input(argv[1]);
 		if (!input) throw std::runtime_error("cannot open simulation configuration");
 		std::ostringstream contents;
@@ -26,6 +29,20 @@ int main(int argc, char** argv)
 			const auto dimension = iga::config_detail::RequireString(*dimension_value, "dimension");
 			if (dimension == "1d") {
 				const auto configuration = iga::ParseOneDConfiguration(text);
+				if (execution_plan) {
+					std::cout << "schema_version=3\ndimension=1d\nrequires_mesh=false\n"
+						<< "coupling_mode="
+						<< iga::SimulationScopeModeName(configuration.coupling.mode)
+						<< "\nbackend=cpu\n";
+					for (const auto& system : configuration.flow_systems)
+						std::cout << "system=" << system.name
+							<< " kind=network_flow_1d\n";
+					for (const auto& system : configuration.transport_systems)
+						std::cout << "system=" << system.name
+							<< " kind=network_transport_1d flow_system="
+							<< system.flow_system << '\n';
+					return 0;
+				}
 				std::cout << "schema_version=3 dimension=" << configuration.dimension
 					<< " fields=" << configuration.fields.size()
 					<< " flow_systems=" << configuration.flow_systems.size()
@@ -42,6 +59,22 @@ int main(int argc, char** argv)
 			if (dimension != "3d") throw std::runtime_error("dimension must be '1d' or '3d'");
 		}
 		const auto configuration = iga::ParseSimulationConfiguration(text);
+		if (execution_plan) {
+			std::cout << "schema_version=" << configuration.schema_version
+				<< "\ndimension=3d\nrequires_mesh=true\ncoupling_mode="
+				<< iga::SimulationScopeModeName(configuration.coupling.mode) << '\n';
+			if (configuration.coupling.mode == iga::SimulationScopeMode::FlowOnly) {
+				std::cout << "backend=cpu\nbackend=cuda\n";
+			} else if (configuration.coupling.mode == iga::SimulationScopeMode::VcaClosedLoop) {
+				std::cout << "backend=cpu\n";
+			}
+			for (const auto& system : configuration.equation_systems) {
+				std::cout << "system=" << system.name << " kind=";
+				std::cout << (system.kind == iga::EquationKind::LinearTransport
+					? "linear_transport" : "navier_stokes") << '\n';
+			}
+			return 0;
+		}
 		std::cout << "schema_version=" << configuration.schema_version
 			<< " dimension=" << configuration.dimension
 			<< " fields=" << configuration.fields.size()
