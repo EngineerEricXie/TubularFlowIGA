@@ -296,6 +296,19 @@ int main()
 	assert(iga::CutCellGhostPenaltyCatalog::SelectFace(false, true));
 	assert(!iga::CutCellGhostPenaltyCatalog::SelectFace(false, false));
 
+	// A near-full terminal Cut cell must not exceed its certified unit upper
+	// bound, or ghost catalog construction would fail closed on a valid rule.
+	const auto near_full_domain = Domain(spec, {{0.0,0.0,0.0}}, {{2.999,2.9,2.9}});
+	const iga::CutCellVolumeQuadratureCatalog near_full_volume(near_full_domain, {4,300000,300000,3000000});
+	const auto near_full_cut = CellId(spec, 2, 1, 1);
+	const auto& near_full_diagnostics = near_full_volume.Cell(near_full_cut).diagnostics;
+	assert(near_full_domain.Cells()[near_full_cut].classification == iga::CellClassification::Cut);
+	assert(near_full_diagnostics.lower_reference_volume <= near_full_diagnostics.estimated_reference_volume);
+	assert(near_full_diagnostics.estimated_reference_volume <= near_full_diagnostics.upper_reference_volume);
+	assert(near_full_diagnostics.upper_reference_volume == 1.0);
+	const iga::CutCellGhostPenaltyCatalog near_full_catalog(near_full_domain, near_full_volume);
+	assert(near_full_catalog.Covered(near_full_cut));
+
 	// A one-cell closed surface is a positive but intentionally uncovered Cut cell.
 	const auto isolated = Domain(spec, {{.2,.2,.2}}, {{.8,.8,.8}});
 	const iga::CutCellVolumeQuadratureCatalog isolated_volume(isolated, {4,300000,300000,3000000});

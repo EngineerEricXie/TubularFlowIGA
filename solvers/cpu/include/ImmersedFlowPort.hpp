@@ -59,7 +59,8 @@ inline bool IsImmersedFlowPressureLike(ImmersedFlowPortControlMode mode)
 inline void ValidateImmersedFlowPortDefinition(const ImmersedFlowPortDefinition& port)
 {
 	if (port.id.empty()) throw std::invalid_argument("immersed flow port id must be nonempty");
-	if (port.boundary_label <= 0) throw std::invalid_argument("immersed flow port boundary label must be positive");
+	if (port.boundary_label < 0 || static_cast<std::uint64_t>(port.boundary_label) > std::numeric_limits<std::uint32_t>::max())
+		throw std::invalid_argument("immersed flow port boundary label must be a nonnegative uint32");
 	if (port.control_mode == ImmersedFlowPortControlMode::TotalPressure)
 		throw std::invalid_argument("total-pressure immersed port control is unsupported in Phase 6");
 	if (!std::isfinite(port.value)) throw std::invalid_argument("immersed flow port value must be finite");
@@ -142,7 +143,7 @@ inline ImmersedFlowPortElementAssembly BuildImmersedFlowPortElement(
 	ImmersedFlowPortControlMode mode, double value,
 	const std::vector<std::array<double, 4>>& nodal_state)
 {
-	if (boundary_label <= 0 || !std::isfinite(value) || nodal_state.size() != element.connectivity.size())
+	if (boundary_label < 0 || !std::isfinite(value) || nodal_state.size() != element.connectivity.size())
 		throw std::invalid_argument("immersed flow port element inputs are invalid");
 	if (mode == ImmersedFlowPortControlMode::TotalPressure)
 		throw std::invalid_argument("total-pressure immersed port control is unsupported in Phase 6");
@@ -178,7 +179,7 @@ inline ImmersedFlowPortMeasurement MeasureImmersedFlowPortElement(
 	const Element& element, const SurfaceQuadratureRule& rule, int boundary_label,
 	const std::vector<std::array<double, 4>>& nodal_state, double viscosity)
 {
-	if (boundary_label <= 0 || nodal_state.size() != element.connectivity.size()
+	if (boundary_label < 0 || nodal_state.size() != element.connectivity.size()
 		|| !std::isfinite(viscosity) || !(viscosity > 0.0))
 		throw std::invalid_argument("immersed flow port measurement inputs are invalid");
 	ValidateSurfaceQuadratureRule(element, rule);

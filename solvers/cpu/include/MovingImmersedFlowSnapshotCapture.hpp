@@ -8,9 +8,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace iga {
+
+inline bool SameMovingImmersedFlowSnapshotCaptureBits(double a, double b)
+{
+	return std::memcmp(&a,&b,sizeof(double)) == 0;
+}
 
 inline MovingImmersedFlowSnapshot BuildCommittedMovingImmersedFlowSnapshot(
 	const MovingImmersedTransientFlowRuntime& runtime,
@@ -22,12 +30,15 @@ inline MovingImmersedFlowSnapshot BuildCommittedMovingImmersedFlowSnapshot(
 	const auto& state = runtime.CommittedGlobalState();
 	MovingImmersedFlowSnapshotRequest request;
 	request.time_s = state.TimeS(); request.index = state.Index();
+	request.transition_available = false; request.dt_s = 0.0;
 	for (const int label : runtime.ConfiguredWallLabels()) {
-		if (label <= 0) throw std::logic_error("moving immersed snapshot capture wall label is invalid");
+		if (label < 0 || static_cast<std::uint64_t>(label) > std::numeric_limits<std::uint32_t>::max())
+			throw std::logic_error("moving immersed snapshot capture wall label is invalid");
 		request.wall_labels.push_back(static_cast<std::uint32_t>(label));
 	}
 	for (const auto& port : runtime.ConfiguredPorts()) {
-		if (port.boundary_label <= 0) throw std::logic_error("moving immersed snapshot capture port label is invalid");
+		if (port.boundary_label < 0 || static_cast<std::uint64_t>(port.boundary_label) > std::numeric_limits<std::uint32_t>::max())
+			throw std::logic_error("moving immersed snapshot capture port label is invalid");
 		request.port_labels.push_back(static_cast<std::uint32_t>(port.boundary_label));
 	}
 	std::sort(request.wall_labels.begin(), request.wall_labels.end());
@@ -52,14 +63,16 @@ inline MovingImmersedFlowSnapshot BuildCommittedMovingImmersedFlowSnapshot(
 			|| conservation.transition_identity_sha256 != outer.transition_identity_sha256
 			|| outer.target_geometry_identity_sha256 != geometry.GeometryIdentitySha256()
 			|| outer.target_publication_identity_sha256 != geometry.PublicationIdentitySha256()
-			|| outer.target_time_s != state.TimeS() || outer.target_index != state.Index()
-			|| outer.target_audited_volume_m3 != volume
+			|| !SameMovingImmersedFlowSnapshotCaptureBits(outer.target_time_s,state.TimeS()) || outer.target_index != state.Index()
+			|| !SameMovingImmersedFlowSnapshotCaptureBits(outer.target_audited_volume_m3,volume)
 			|| conservation.target_geometry_identity_sha256 != geometry.GeometryIdentitySha256()
 			|| conservation.target_publication_identity_sha256 != geometry.PublicationIdentitySha256()
-			|| conservation.target_time_s != state.TimeS() || conservation.target_index != state.Index()
-			|| !std::isfinite(volume) || conservation.target_audited_volume_m3 != volume)
+			|| !SameMovingImmersedFlowSnapshotCaptureBits(conservation.target_time_s,state.TimeS()) || conservation.target_index != state.Index()
+			|| !std::isfinite(volume) || !SameMovingImmersedFlowSnapshotCaptureBits(conservation.target_audited_volume_m3,volume))
 			throw std::logic_error("moving immersed snapshot capture retained conservation record is inconsistent");
 		request.transition_available = true; request.dt_s = conservation.dt_s;
+		if (!(request.dt_s > 0.0))
+			throw std::logic_error("moving immersed snapshot capture retained transition time step is invalid");
 		request.port_flows_available = true;
 		for (const auto label : request.port_labels) {
 			const auto found = conservation.fluid_surface_outward_flow_by_boundary_label_m3_s.find(static_cast<int>(label));

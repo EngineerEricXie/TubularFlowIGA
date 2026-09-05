@@ -32,6 +32,8 @@ struct ImmersedTransientFlowOptions {
 	std::vector<int> wall_labels;
 	std::vector<ImmersedFlowPortDefinition> ports;
 	double wall_gamma0 = 2.0;
+	// Optional backward-Euler wall impedance.  Zero is the exact legacy wall.
+	double wall_inertial_gamma0 = 0.0;
 	NavierStokesBodyForceEvaluator body_force = [](const std::array<double,3>&) { return std::array<double,3>{{0,0,0}}; };
 	bool include_pressure_gauge = true;
 	PetscInt nonlinear_maximum_iterations = 12, ksp_maximum_iterations = 2000;
@@ -57,11 +59,65 @@ struct ImmersedTransientFlowConservationDiagnostics {
 	double open_port_outward_flow_m3_s = 0.0, wall_outward_flow_m3_s = 0.0;
 	double total_material_surface_outward_flow_m3_s = 0.0;
 	double total_material_wall_outward_flow_m3_s = 0.0, wall_relative_leakage_m3_s = 0.0;
-	// R_div = int_Omega div(u) - int_boundary u.n.  The historical normalized
-	// open balance remains this same quantity and scale for stationary walls.
+	// R_div = int_Omega div(u) - int_boundary u.n: a volume/surface quadrature
+	// consistency measurement.  The historical normalized_open_balance keeps
+	// this exact meaning and is not a discrete moving-wall continuity residual.
 	double divergence_theorem_defect_m3_s = 0.0;
+	// R_cont = Q_port + Q_w,wall uses every configured port and only configured
+	// material-wall fluxes at the target endpoint.
+	double discrete_moving_wall_continuity_defect_m3_s = 0.0;
+	double discrete_moving_wall_continuity_normalization_scale_m3_s = 1.0;
 	double normalized_open_balance = 0.0, normalized_wall_leakage = 0.0;
+	double normalized_discrete_moving_wall_continuity_defect = 0.0;
 };
+
+namespace immersed_transient_detail {
+
+// This identity is evaluated from separately reduced aggregates:
+// (Q_port + Q_w,material) + (Q_w,fluid - Q_w,material) = Q_total,fluid.
+// Its tolerance must retain the scale of raw terms that can cancel before the
+// final comparison.  The fixed operation allowance is strictly roundoff-only;
+// it is not a physical continuity tolerance.
+inline double MovingWallContinuityIdentityRoundoffTolerance(
+	double open_port_outward_flow_m3_s,
+	double wall_outward_flow_m3_s,
+	double total_material_wall_outward_flow_m3_s,
+	double discrete_moving_wall_continuity_defect_m3_s,
+	double wall_relative_leakage_m3_s,
+	double total_fluid_surface_outward_flow_m3_s)
+{
+	for(const double value : {open_port_outward_flow_m3_s,wall_outward_flow_m3_s,
+		total_material_wall_outward_flow_m3_s,discrete_moving_wall_continuity_defect_m3_s,
+		wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s})
+		if(!std::isfinite(value)) return std::numeric_limits<double>::quiet_NaN();
+	const double raw_term_scale_m3_s=std::max({std::numeric_limits<double>::min(),
+		std::abs(open_port_outward_flow_m3_s),
+		std::abs(wall_outward_flow_m3_s),
+		std::abs(total_material_wall_outward_flow_m3_s),
+		std::abs(discrete_moving_wall_continuity_defect_m3_s),
+		std::abs(wall_relative_leakage_m3_s),
+		std::abs(total_fluid_surface_outward_flow_m3_s)});
+	return 128.0*std::numeric_limits<double>::epsilon()*raw_term_scale_m3_s;
+}
+
+inline bool MovingWallContinuityIdentityReconciles(
+	double open_port_outward_flow_m3_s,
+	double wall_outward_flow_m3_s,
+	double total_material_wall_outward_flow_m3_s,
+	double discrete_moving_wall_continuity_defect_m3_s,
+	double wall_relative_leakage_m3_s,
+	double total_fluid_surface_outward_flow_m3_s)
+{
+	const double tolerance=MovingWallContinuityIdentityRoundoffTolerance(open_port_outward_flow_m3_s,
+		wall_outward_flow_m3_s,total_material_wall_outward_flow_m3_s,
+		discrete_moving_wall_continuity_defect_m3_s,wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s);
+	const double reconstructed_total_fluid_surface_outward_flow_m3_s=discrete_moving_wall_continuity_defect_m3_s+wall_relative_leakage_m3_s;
+	if(!std::isfinite(tolerance)||!std::isfinite(reconstructed_total_fluid_surface_outward_flow_m3_s)) return false;
+	const double residual_m3_s=reconstructed_total_fluid_surface_outward_flow_m3_s-total_fluid_surface_outward_flow_m3_s;
+	return std::isfinite(residual_m3_s)&&std::abs(residual_m3_s)<=tolerance;
+}
+
+} // namespace immersed_transient_detail
 
 struct ImmersedTransientFlowDiagnostics {
 	std::size_t active_nodes = 0, physical_dofs = 0, total_dofs = 0, volume_cells = 0, surface_cells = 0, ghost_faces = 0;
@@ -73,6 +129,7 @@ struct ImmersedTransientFlowDiagnostics {
 	bool idle = true, trial_active = false, converged = false, prepared = false, committed = true, scalar_diagonal_structure_verified = false;
 	std::size_t attempt_count = 0, abort_count = 0, rollback_count = 0, prepare_count = 0, finalize_count = 0, commit_count = 0;
 	double last_assembly_seconds = 0.0, last_linear_solve_seconds = 0.0;
+	ImmersedNitscheWallDiagnostics wall_penalty;
 	std::string geometry_identity_sha256, layout_hash_sha256, committed_state_hash_sha256, trial_state_hash_sha256, history_hash_sha256;
 	// Deterministic publication identities deliberately exclude timing and lifetime
 	// attempt/abort counters.  They make an exact retry auditable.
@@ -140,6 +197,13 @@ public:
 		~FiniteConservationDefectScopeForTesting() { InjectFiniteConservationDefectForTesting()=false; }
 		FiniteConservationDefectScopeForTesting(const FiniteConservationDefectScopeForTesting&) = delete;
 		FiniteConservationDefectScopeForTesting& operator=(const FiniteConservationDefectScopeForTesting&) = delete;
+	};
+	class FiniteDiscreteMovingWallContinuityDefectScopeForTesting {
+	public:
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting() noexcept { InjectFiniteDiscreteMovingWallContinuityDefectForTesting()=true; }
+		~FiniteDiscreteMovingWallContinuityDefectScopeForTesting() { InjectFiniteDiscreteMovingWallContinuityDefectForTesting()=false; }
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting(const FiniteDiscreteMovingWallContinuityDefectScopeForTesting&) = delete;
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting& operator=(const FiniteDiscreteMovingWallContinuityDefectScopeForTesting&) = delete;
 	};
 	double MaxSurfaceRelativeVelocityNormForTesting() const { return MaxSurfaceRelativeVelocityNorm(); }
 #endif
@@ -251,21 +315,26 @@ public:
 		RequireTrial("assemble"); const auto start=std::chrono::steady_clock::now();
 		if(diagnostics_.converged) InvalidateSolved();
 		++diagnostics_.attempt_assembly_count;
-		Check(MatZeroEntries(jacobian_),"MatZeroEntries"); Check(VecSet(rhs_,0.0),"VecSet rhs"); diagnostics_.volume_cells=diagnostics_.surface_cells=diagnostics_.ghost_faces=0;
+		Check(MatZeroEntries(jacobian_),"MatZeroEntries"); Check(VecSet(rhs_,0.0),"VecSet rhs");
+		std::size_t candidate_volume_cells=0, candidate_surface_cells=0, candidate_ghost_faces=0;
+		ImmersedNitscheWallDiagnostics candidate_wall_penalty;
 		for(std::uint64_t cell=0;cell<domain_.Cells().size();++cell) if(Usable(cell)) {
 			const auto element=domain_.Background().MaterializeElement(cell); const auto nodal=Gather(element); const auto volume_system=BuildVolume(element,nodal,cell);
-			Scatter(element.connectivity,volume_system); ++diagnostics_.volume_cells;
+			Scatter(element.connectivity,volume_system); ++candidate_volume_cells;
 			if(domain_.Cells()[cell].classification==CellClassification::Cut) {
 				const auto& rule=surface_.UsableRule(domain_,cell); Scatter(element.connectivity,BuildImmersedConservativeMixedTraceElement(element,rule,nodal));
 				if(HasWallPoint(rule)) { const auto local_history=LocalizeImmersedVelocityHistory(element,layout_,*history_,target_time_s_); std::vector<std::array<double,4>> old(local_history.size()); for(std::size_t i=0;i<old.size();++i) for(int q=0;q<3;++q) old[i][q]=local_history[i][q];
-					auto wall=BuildImmersedNitscheWallElementFromVolumeSystemMaterialAware(domain_,volume_,surface_,cell,nodal,old,options_.parameters,options_.wall_labels,volume_system,ghost_,options_.wall_gamma0,MaterialVelocity());
-					SubtractAndScatter(element.connectivity,wall.system,volume_system); ++diagnostics_.surface_cells; }
+					auto wall=BuildImmersedNitscheWallElementFromVolumeSystemMaterialAware(domain_,volume_,surface_,cell,nodal,old,options_.parameters,options_.wall_labels,volume_system,ghost_,options_.wall_gamma0,options_.wall_inertial_gamma0,MaterialVelocity());
+					AccumulateWallPenaltyDiagnostics(candidate_wall_penalty,wall.diagnostics);
+					SubtractAndScatter(element.connectivity,wall.system,volume_system); ++candidate_surface_cells; }
 				for(std::size_t p=0;p<options_.ports.size();++p) if(RuleHasLabel(rule,options_.ports[p].boundary_label)) ScatterPort(element,nodal,rule,p);
 			}
 		}
-		for(std::size_t f=0;f<ghost_.Faces().size();++f) { const auto block=ghost_.AssembleFaceLocal(f,domain_,volume_,[this](std::int32_t node,int q){return Value(state_,Dof(node,q));},options_.parameters.dynamic_viscosity); ScatterBlock(block.connectivity,block.jacobian,block.negative_residual); ++diagnostics_.ghost_faces; }
+		for(std::size_t f=0;f<ghost_.Faces().size();++f) { const auto block=ghost_.AssembleFaceLocal(f,domain_,volume_,[this](std::int32_t node,int q){return Value(state_,Dof(node,q));},options_.parameters.dynamic_viscosity); ScatterBlock(block.connectivity,block.jacobian,block.negative_residual); ++candidate_ghost_faces; }
 		Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin"); Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd"); Check(VecAssemblyBegin(rhs_),"VecAssemblyBegin"); Check(VecAssemblyEnd(rhs_),"VecAssemblyEnd");
 		MeasurePorts(); if(HasGauge()) InsertGauge(); Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin gauge"); Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd gauge"); Check(VecAssemblyBegin(rhs_),"VecAssemblyBegin gauge"); Check(VecAssemblyEnd(rhs_),"VecAssemblyEnd gauge");
+		diagnostics_.volume_cells=candidate_volume_cells; diagnostics_.surface_cells=candidate_surface_cells; diagnostics_.ghost_faces=candidate_ghost_faces;
+		diagnostics_.wall_penalty=std::move(candidate_wall_penalty);
 		diagnostics_.last_assembly_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count(); RefreshHashes();
 	}
 	bool SolveTrial()
@@ -326,7 +395,7 @@ public:
 
 private:
 	static void Check(PetscErrorCode c,const char* op) { if(c) throw std::runtime_error(std::string("PETSc ")+op+" failed: "+std::to_string(static_cast<long long>(c))); }
-	void ValidateOptions() const { if(!options_.body_force||!std::isfinite(options_.parameters.density)||!(options_.parameters.density>0)||!std::isfinite(options_.parameters.dynamic_viscosity)||!(options_.parameters.dynamic_viscosity>0)||!std::isfinite(options_.wall_gamma0)||!(options_.wall_gamma0>0)||options_.nonlinear_maximum_iterations<=0||options_.ksp_maximum_iterations<=0||!std::isfinite(options_.ksp_relative_tolerance)||!(options_.ksp_relative_tolerance>0)||!std::isfinite(options_.nonlinear_relative_tolerance)||!(options_.nonlinear_relative_tolerance>0)||!std::isfinite(options_.nonlinear_absolute_tolerance)||!(options_.nonlinear_absolute_tolerance>0)||!std::isfinite(options_.flow_controller_relative_tolerance)||!(options_.flow_controller_relative_tolerance>0)||!std::isfinite(options_.flow_controller_absolute_tolerance_m3_s)||!(options_.flow_controller_absolute_tolerance_m3_s>0)||!std::isfinite(options_.flow_controller_reference_flow_m3_s)||!(options_.flow_controller_reference_flow_m3_s>0)||!std::isfinite(options_.minimum_damping)||!(options_.minimum_damping>0)||options_.minimum_damping>1||!std::isfinite(options_.lu_pivot_shift)||options_.lu_pivot_shift<0||!std::isfinite(options_.nonlinear_block_reduction)||options_.nonlinear_block_reduction<0) throw std::invalid_argument("immersed transient options are invalid"); ValidateImmersedNitscheWallLabels(options_.wall_labels); }
+	void ValidateOptions() const { if(!options_.body_force||!std::isfinite(options_.parameters.density)||!(options_.parameters.density>0)||!std::isfinite(options_.parameters.dynamic_viscosity)||!(options_.parameters.dynamic_viscosity>0)||!std::isfinite(options_.wall_gamma0)||!(options_.wall_gamma0>0)||!std::isfinite(options_.wall_inertial_gamma0)||options_.wall_inertial_gamma0<0||options_.nonlinear_maximum_iterations<=0||options_.ksp_maximum_iterations<=0||!std::isfinite(options_.ksp_relative_tolerance)||!(options_.ksp_relative_tolerance>0)||!std::isfinite(options_.nonlinear_relative_tolerance)||!(options_.nonlinear_relative_tolerance>0)||!std::isfinite(options_.nonlinear_absolute_tolerance)||!(options_.nonlinear_absolute_tolerance>0)||!std::isfinite(options_.flow_controller_relative_tolerance)||!(options_.flow_controller_relative_tolerance>0)||!std::isfinite(options_.flow_controller_absolute_tolerance_m3_s)||!(options_.flow_controller_absolute_tolerance_m3_s>0)||!std::isfinite(options_.flow_controller_reference_flow_m3_s)||!(options_.flow_controller_reference_flow_m3_s>0)||!std::isfinite(options_.minimum_damping)||!(options_.minimum_damping>0)||options_.minimum_damping>1||!std::isfinite(options_.lu_pivot_shift)||options_.lu_pivot_shift<0||!std::isfinite(options_.nonlinear_block_reduction)||options_.nonlinear_block_reduction<0) throw std::invalid_argument("immersed transient options are invalid"); ValidateImmersedNitscheWallLabels(options_.wall_labels); }
 	void ValidateGeometry() const { if(!surface_.Usable()||!ghost_.Usable()) throw std::invalid_argument("immersed transient geometry catalogs are unusable"); ghost_.ValidateBinding(domain_,volume_); }
 	void ConfigurePorts() { std::vector<int> labels; for(const auto& p:options_.ports){ValidateImmersedFlowPortDefinition(p); labels.push_back(p.boundary_label);} std::sort(labels.begin(),labels.end()); if(std::adjacent_find(labels.begin(),labels.end())!=labels.end()) throw std::invalid_argument("immersed transient port labels must be unique"); for(std::size_t i=0;i<options_.ports.size();++i){for(std::size_t j=0;j<i;++j)if(options_.ports[i].id==options_.ports[j].id)throw std::invalid_argument("immersed transient port ids must be unique"); if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),options_.ports[i].boundary_label)) throw std::invalid_argument("immersed transient wall and port labels overlap"); diagnostics_.ports.push_back({options_.ports[i].id,options_.ports[i].boundary_label,options_.ports[i].control_mode,options_.ports[i].value});}
 		for (const auto& entry : surface_.Diagnostics().source_area_by_boundary_id) {
@@ -400,6 +469,7 @@ private:
 #ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
 	static bool& InjectNonfiniteMaterialVelocityForTesting() noexcept { static bool value=false; return value; }
 	static bool& InjectFiniteConservationDefectForTesting() noexcept { static bool value=false; return value; }
+	static bool& InjectFiniteDiscreteMovingWallContinuityDefectForTesting() noexcept { static bool value=false; return value; }
 #endif
 	// This transaction intentionally has no PETSc command-line override path:
 	// every effective solver setting below is fixed or an explicit option and is
@@ -501,13 +571,15 @@ private:
 				else throw std::runtime_error("immersed transient conservation found an unconfigured surface label");
 			}
 		}
-		const double scale=std::max(options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s));
 		d.wall_relative_leakage_m3_s=d.wall_outward_flow_m3_s-d.total_material_wall_outward_flow_m3_s;
 		d.divergence_theorem_defect_m3_s=d.endpoint_volume_divergence_m3_s-d.total_surface_outward_flow_m3_s;
+		d.discrete_moving_wall_continuity_defect_m3_s=d.open_port_outward_flow_m3_s+d.total_material_wall_outward_flow_m3_s;
+		d.discrete_moving_wall_continuity_normalization_scale_m3_s=std::max({options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s),std::abs(d.total_material_wall_outward_flow_m3_s)});
 #ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
 		if(InjectFiniteConservationDefectForTesting()) d.divergence_theorem_defect_m3_s=1.0;
+		if(InjectFiniteDiscreteMovingWallContinuityDefectForTesting()) d.discrete_moving_wall_continuity_defect_m3_s=1.0;
 #endif
-		if(!std::isfinite(d.total_material_surface_outward_flow_m3_s)||!std::isfinite(d.wall_relative_leakage_m3_s)||!std::isfinite(d.divergence_theorem_defect_m3_s)) throw std::runtime_error("immersed transient conservation defect is nonfinite");
+		if(!std::isfinite(d.total_material_surface_outward_flow_m3_s)||!std::isfinite(d.wall_relative_leakage_m3_s)||!std::isfinite(d.divergence_theorem_defect_m3_s)||!std::isfinite(d.discrete_moving_wall_continuity_defect_m3_s)||!std::isfinite(d.discrete_moving_wall_continuity_normalization_scale_m3_s)||!(d.discrete_moving_wall_continuity_normalization_scale_m3_s>0.0)) throw std::runtime_error("immersed transient conservation defect is nonfinite or has invalid scale");
 		auto validate_map=[](const std::map<int,double>& values,double total,const char* what) {
 			double sum=0.0; for(const auto& value:values) { if(!std::isfinite(value.second)||!std::isfinite(sum+value.second)) throw std::runtime_error(std::string("immersed transient conservation ")+what+" label flux is nonfinite"); sum+=value.second; }
 			if(std::abs(sum-total)>128.0*std::numeric_limits<double>::epsilon()*std::max(1.0,std::abs(total))*std::max<std::size_t>(1,values.size())) throw std::logic_error(std::string("immersed transient conservation ")+what+" label fluxes do not reconcile with total");
@@ -515,9 +587,17 @@ private:
 		validate_map(d.surface_flow_by_boundary_label_m3_s,d.total_surface_outward_flow_m3_s,"fluid surface");
 		validate_map(d.material_surface_outward_flow_by_boundary_label_m3_s,d.total_material_surface_outward_flow_m3_s,"material surface");
 		validate_map(d.material_wall_outward_flow_by_boundary_label_m3_s,d.total_material_wall_outward_flow_m3_s,"material wall");
-		d.normalized_wall_leakage=std::abs(d.wall_relative_leakage_m3_s)/scale;
-		d.normalized_open_balance=std::abs(d.divergence_theorem_defect_m3_s)/scale;
-		if(!std::isfinite(d.normalized_wall_leakage)||!std::isfinite(d.normalized_open_balance)) throw std::runtime_error("immersed transient normalized conservation quotient is nonfinite");
+		for(const auto& port:options_.ports) if(d.surface_flow_by_boundary_label_m3_s.find(port.boundary_label)==d.surface_flow_by_boundary_label_m3_s.end()) throw std::logic_error("immersed transient conservation configured port is absent from surface flux map");
+		for(const auto& item:d.material_wall_outward_flow_by_boundary_label_m3_s) if(!std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),item.first)) throw std::logic_error("immersed transient conservation material-wall map contains an unconfigured label");
+		if(!immersed_transient_detail::MovingWallContinuityIdentityReconciles(d.open_port_outward_flow_m3_s,
+			d.wall_outward_flow_m3_s,d.total_material_wall_outward_flow_m3_s,
+			d.discrete_moving_wall_continuity_defect_m3_s,d.wall_relative_leakage_m3_s,d.total_surface_outward_flow_m3_s))
+			throw std::logic_error("immersed transient moving-wall continuity roundoff identity does not reconcile");
+		const double legacy_scale=std::max(options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s));
+		d.normalized_wall_leakage=std::abs(d.wall_relative_leakage_m3_s)/legacy_scale;
+		d.normalized_open_balance=std::abs(d.divergence_theorem_defect_m3_s)/legacy_scale;
+		d.normalized_discrete_moving_wall_continuity_defect=std::abs(d.discrete_moving_wall_continuity_defect_m3_s)/d.discrete_moving_wall_continuity_normalization_scale_m3_s;
+		if(!std::isfinite(d.normalized_wall_leakage)||!std::isfinite(d.normalized_open_balance)||!std::isfinite(d.normalized_discrete_moving_wall_continuity_defect)) throw std::runtime_error("immersed transient normalized conservation quotient is nonfinite");
 		return d;
 	}
 	void RefreshHashes(){diagnostics_.committed_state_hash_sha256=committed_global_->HashSha256();diagnostics_.trial_state_hash_sha256=diagnostics_.trial_active?HashVector(state_):std::string{};if(!history_){diagnostics_.identity_history_nodes=diagnostics_.committed_history_nodes=diagnostics_.extended_history_nodes=0;diagnostics_.missing_history_nodes=layout_.NodeIds().size();diagnostics_.history_hash_sha256.clear();}}
@@ -527,7 +607,77 @@ private:
 	void InvalidatePortMeasurements(std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) const { for(auto& port:ports) { port.measurement={}; port.measurement_valid=false; port.controller_error=0.0; } }
 	// Explicit Assemble() is permitted as pre-solve diagnostic work.  It is not
 	// solve-attempt work; reset at solve/rollback boundaries makes retries exact.
-	static void ResetAttemptWork(ImmersedTransientFlowDiagnostics& diagnostics) noexcept { diagnostics.converged=false; diagnostics.solved_state_hash_sha256.clear(); diagnostics.attempt_hash_sha256.clear(); diagnostics.residual_norm=0.0; diagnostics.true_linear_relative_residual=0.0; diagnostics.nonlinear_iterations=0; diagnostics.ksp_iterations=0; diagnostics.ksp_reason=KSP_CONVERGED_ITERATING; diagnostics.last_assembly_seconds=0.0; diagnostics.last_linear_solve_seconds=0.0; diagnostics.attempt_assembly_count=0; diagnostics.volume_cells=diagnostics.surface_cells=diagnostics.ghost_faces=0; diagnostics.newton_steps.clear(); }
+	static void ResetAttemptWork(ImmersedTransientFlowDiagnostics& diagnostics) noexcept { diagnostics.converged=false; diagnostics.solved_state_hash_sha256.clear(); diagnostics.attempt_hash_sha256.clear(); diagnostics.residual_norm=0.0; diagnostics.true_linear_relative_residual=0.0; diagnostics.nonlinear_iterations=0; diagnostics.ksp_iterations=0; diagnostics.ksp_reason=KSP_CONVERGED_ITERATING; diagnostics.last_assembly_seconds=0.0; diagnostics.last_linear_solve_seconds=0.0; diagnostics.attempt_assembly_count=0; diagnostics.volume_cells=diagnostics.surface_cells=diagnostics.ghost_faces=0; diagnostics.wall_penalty={}; diagnostics.newton_steps.clear(); }
+	static void AccumulateWallPenaltyDiagnostics(ImmersedNitscheWallDiagnostics& aggregate,
+		const ImmersedNitscheWallDiagnostics& local)
+	{
+		// Build a complete candidate first.  Assembly already delays publication
+		// of its candidate aggregate, and this keeps the helper equally atomic
+		// for any future caller that accumulates directly into a published record.
+		auto candidate=aggregate;
+		AccumulateWallPenaltyDiagnosticsInto(candidate,local);
+		using std::swap;
+		swap(aggregate,candidate);
+	}
+	static void AccumulateWallPenaltyDiagnosticsInto(ImmersedNitscheWallDiagnostics& aggregate,
+		const ImmersedNitscheWallDiagnostics& local)
+	{
+		bool local_selected=false, aggregate_selected=false;
+		for(const auto& item:local.by_boundary_id) local_selected=local_selected||item.second.selected_points!=0;
+		for(const auto& item:aggregate.by_boundary_id) aggregate_selected=aggregate_selected||item.second.selected_points!=0;
+		if(!local_selected) return;
+		const std::array<double,17> values{{local.minimum_h_n_m,local.maximum_h_n_m,
+			local.minimum_eta,local.maximum_eta,
+			local.minimum_eta_mu,local.maximum_eta_mu,local.minimum_eta_t,local.maximum_eta_t,
+			local.minimum_eta_mu_h_n_over_mu,local.maximum_eta_mu_h_n_over_mu,
+			local.minimum_eta_t_dt_over_rho_h_n,local.maximum_eta_t_dt_over_rho_h_n,
+			local.minimum_eta_mu_fraction,local.maximum_eta_mu_fraction,
+			local.minimum_eta_t_fraction,local.maximum_eta_t_fraction,local.maximum_gap_norm}};
+		for(double value:values) if(!std::isfinite(value)||value<0.0)
+			throw std::overflow_error("immersed transient wall penalty diagnostic is invalid");
+		if(!(local.minimum_h_n_m>0.0)||!(local.maximum_h_n_m>=local.minimum_h_n_m))
+			throw std::overflow_error("immersed transient wall h_n diagnostic is invalid");
+		const std::array<double,3> local_fractions{{local.fraction_lower,local.fraction_estimate,local.fraction_upper}};
+		for(double value:local_fractions) if(!std::isfinite(value)||value<0.0||value>1.0)
+			throw std::overflow_error("immersed transient local wall reference fraction is invalid");
+		if(local.fraction_lower>local.fraction_estimate||local.fraction_estimate>local.fraction_upper)
+			throw std::overflow_error("immersed transient local wall reference fraction ordering is invalid");
+		const auto checked_add=[](double& out,double value,const char* description) {
+			if(!std::isfinite(out)||!std::isfinite(value)||value<0.0||!std::isfinite(out+value))
+				throw std::overflow_error(description);
+			out+=value;
+		};
+		const auto merge_min=[aggregate_selected](double& out,double value) { out=aggregate_selected?std::min(out,value):value; };
+		const auto merge_max=[](double& out,double value) { out=std::max(out,value); };
+		merge_min(aggregate.minimum_h_n_m,local.minimum_h_n_m); merge_max(aggregate.maximum_h_n_m,local.maximum_h_n_m);
+		merge_min(aggregate.minimum_eta,local.minimum_eta); merge_max(aggregate.maximum_eta,local.maximum_eta);
+		merge_min(aggregate.minimum_eta_mu,local.minimum_eta_mu); merge_max(aggregate.maximum_eta_mu,local.maximum_eta_mu);
+		merge_min(aggregate.minimum_eta_t,local.minimum_eta_t); merge_max(aggregate.maximum_eta_t,local.maximum_eta_t);
+		merge_min(aggregate.minimum_eta_mu_h_n_over_mu,local.minimum_eta_mu_h_n_over_mu); merge_max(aggregate.maximum_eta_mu_h_n_over_mu,local.maximum_eta_mu_h_n_over_mu);
+		merge_min(aggregate.minimum_eta_t_dt_over_rho_h_n,local.minimum_eta_t_dt_over_rho_h_n); merge_max(aggregate.maximum_eta_t_dt_over_rho_h_n,local.maximum_eta_t_dt_over_rho_h_n);
+		merge_min(aggregate.minimum_eta_mu_fraction,local.minimum_eta_mu_fraction); merge_max(aggregate.maximum_eta_mu_fraction,local.maximum_eta_mu_fraction);
+		merge_min(aggregate.minimum_eta_t_fraction,local.minimum_eta_t_fraction); merge_max(aggregate.maximum_eta_t_fraction,local.maximum_eta_t_fraction);
+		merge_max(aggregate.maximum_eta_h_n_over_mu,local.maximum_eta_h_n_over_mu);
+		merge_max(aggregate.maximum_gap_norm,local.maximum_gap_norm);
+		checked_add(aggregate.fraction_lower,local.fraction_lower,"immersed transient wall reference fraction lower total overflows");
+		checked_add(aggregate.fraction_estimate,local.fraction_estimate,"immersed transient wall reference fraction estimate total overflows");
+		checked_add(aggregate.fraction_upper,local.fraction_upper,"immersed transient wall reference fraction upper total overflows");
+		if(aggregate.fraction_lower>aggregate.fraction_estimate||aggregate.fraction_estimate>aggregate.fraction_upper)
+			throw std::logic_error("immersed transient wall reference fraction totals are unordered");
+		aggregate.ghost_covered_policy=local.ghost_covered_policy;
+		for(const auto& item:local.by_boundary_id) {
+			auto& out=aggregate.by_boundary_id[item.first];
+			if(std::numeric_limits<std::size_t>::max()-out.selected_points<item.second.selected_points
+				||std::numeric_limits<std::size_t>::max()-out.skipped_points<item.second.skipped_points)
+				throw std::overflow_error("immersed transient wall point diagnostic overflows");
+			out.selected_points+=item.second.selected_points; out.skipped_points+=item.second.skipped_points;
+			for(const double value:{item.second.selected_area_m2,item.second.skipped_area_m2}) if(!std::isfinite(value)||value<0.0)
+				throw std::overflow_error("immersed transient wall area diagnostic is invalid");
+			if(!std::isfinite(out.selected_area_m2+item.second.selected_area_m2)||!std::isfinite(out.skipped_area_m2+item.second.skipped_area_m2))
+				throw std::overflow_error("immersed transient wall area diagnostic overflows");
+			out.selected_area_m2+=item.second.selected_area_m2; out.skipped_area_m2+=item.second.skipped_area_m2;
+		}
+	}
 	void ResetAttemptWork() noexcept { ResetAttemptWork(diagnostics_); }
 	void InvalidateSolved() noexcept { ResetAttemptWork(); }
 	void ClearIdlePublicationDiagnostics() noexcept { diagnostics_.input_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.history_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); diagnostics_.target_time_s=diagnostics_.dt_s=diagnostics_.pressure_gauge_defect=0.0; diagnostics_.prepared=false; ResetAttemptWork(); }
@@ -538,8 +688,8 @@ private:
 	static void AppendFixedSolverConfiguration(Sha256& h) { immersed_transient_detail::AppendString(h,"KSPGMRES"); h.AppendLittleEndian64(30); immersed_transient_detail::AppendString(h,"PCLU"); immersed_transient_detail::AppendString(h,"PC_RIGHT"); immersed_transient_detail::AppendString(h,"KSP_NORM_UNPRECONDITIONED"); h.AppendNormalizedDouble(1e-50); h.AppendNormalizedDouble(1e5); }
 	std::array<double,3> ResidualBlockNorms(const std::vector<PetscScalar>& residual) const { if(residual.size()!=diagnostics_.total_dofs) throw std::invalid_argument("immersed transient residual block vector size is invalid"); std::array<double,3> norms{{0.0,0.0,0.0}}; for(std::size_t row=0;row<residual.size();++row){const double value=PetscRealPart(residual[row]);const std::size_t block=row>=diagnostics_.physical_dofs?2:((row%4)==3?1:0);norms[block]+=value*value;}for(auto& value:norms)value=std::sqrt(value);return norms; }
 	bool BlockReductionSatisfied(const std::array<double,3>& initial,const std::vector<PetscScalar>& residual,double global_initial) const { if(options_.nonlinear_block_reduction==0.0)return true; const auto current=ResidualBlockNorms(residual); const double zero_block_tolerance=options_.nonlinear_absolute_tolerance+options_.nonlinear_relative_tolerance*global_initial; for(std::size_t block=0;block<current.size();++block)if(initial[block]>0.0?current[block]>initial[block]/options_.nonlinear_block_reduction:current[block]>zero_block_tolerance)return false;return true; }
-	std::string InputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientInput/v4"); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(committed_global_->TimeS());h.AppendLittleEndian64(committed_global_->Index());h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
-	std::string MovingInputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed,const ImmersedMovingTrialMapIdentity& map) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientMovingInput/v1"); immersed_transient_detail::AppendString(h,map.HashSha256()); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); immersed_transient_detail::AppendString(h,geometry_.PublicationIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
+	std::string InputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientInput/v5"); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(committed_global_->TimeS());h.AppendLittleEndian64(committed_global_->Index());h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendNormalizedDouble(options_.wall_inertial_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
+	std::string MovingInputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed,const ImmersedMovingTrialMapIdentity& map) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientMovingInput/v2"); immersed_transient_detail::AppendString(h,map.HashSha256()); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); immersed_transient_detail::AppendString(h,geometry_.PublicationIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendNormalizedDouble(options_.wall_inertial_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
 	std::string InputHash() const { if(!history_) return {}; return InputHash(options_.parameters,*history_,target_time_s_,target_index_,frozen_ports_,frozen_body_force_,frozen_seed_); }
 	std::string AttemptHash() const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientAttempt/v2"); immersed_transient_detail::AppendString(h,diagnostics_.input_hash_sha256); immersed_transient_detail::AppendString(h,HashVector(state_)); AppendPorts(h,trial_ports_); h.AppendLittleEndian64(diagnostics_.attempt_assembly_count);h.AppendLittleEndian64(diagnostics_.newton_steps.size());for(const auto&s:diagnostics_.newton_steps){h.AppendLittleEndian64(s.iteration);h.AppendLittleEndian64(s.ksp_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(s.ksp_reason));h.AppendNormalizedDouble(s.residual_norm);h.AppendNormalizedDouble(s.update_norm);h.AppendNormalizedDouble(s.linear_relative_residual);h.AppendNormalizedDouble(s.damping);} h.AppendLittleEndian64(diagnostics_.ksp_iterations);h.AppendLittleEndian64(diagnostics_.nonlinear_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(diagnostics_.ksp_reason));h.AppendNormalizedDouble(diagnostics_.residual_norm);h.AppendNormalizedDouble(diagnostics_.true_linear_relative_residual);return h.Hex(); }
 	std::string PreparedHash(const ImmersedGlobalFlowState& global,const std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientPrepared/v2"); immersed_transient_detail::AppendString(h,diagnostics_.attempt_hash_sha256); immersed_transient_detail::AppendString(h,global.HashSha256());AppendPorts(h,ports);return h.Hex(); }

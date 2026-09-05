@@ -42,15 +42,25 @@ struct MovingImmersedTransientFlowConservationDiagnostics {
 	std::map<int,double> fluid_surface_outward_flow_by_boundary_label_m3_s;
 	std::map<int,double> material_surface_outward_flow_by_boundary_label_m3_s;
 	std::map<int,double> material_wall_outward_flow_by_boundary_label_m3_s;
+	// Exact target-endpoint inner primitives retained for transition consumers.
+	double endpoint_volume_divergence_m3_s = 0.0;
 	double total_fluid_surface_outward_flow_m3_s = 0.0, total_material_surface_outward_flow_m3_s = 0.0;
-	double total_material_wall_outward_flow_m3_s = 0.0;
+	double open_port_outward_flow_m3_s = 0.0, wall_outward_flow_m3_s = 0.0, total_material_wall_outward_flow_m3_s = 0.0;
 	double divergence_theorem_defect_m3_s = 0.0, reynolds_defect_m3_s = 0.0;
 	double moving_mass_defect_m3_s = 0.0, wall_relative_leakage_m3_s = 0.0;
+	double discrete_moving_wall_continuity_defect_m3_s = 0.0;
+	double discrete_moving_wall_continuity_normalization_scale_m3_s = 1.0;
+	// This is the historical denominator for normalized_open_balance and
+	// normalized_wall_leakage.  Retain it explicitly so those values remain
+	// reproducible after the richer moving-transition normalization was added.
+	double legacy_normalization_scale_m3_s = 1.0;
 	// One explicit scale keeps all reported normalized rates comparable.  It is
 	// max(reference flow, |G_BE|, |Q_u|, |Q_w|), hence never zero.
 	double normalization_scale_m3_s = 1.0;
 	double normalized_divergence_theorem_defect = 0.0, normalized_reynolds_defect = 0.0;
 	double normalized_moving_mass_defect = 0.0, normalized_wall_relative_leakage = 0.0;
+	double normalized_open_balance = 0.0, normalized_wall_leakage = 0.0;
+	double normalized_discrete_moving_wall_continuity_defect = 0.0;
 };
 
 struct MovingImmersedTransientFlowDiagnostics {
@@ -227,6 +237,13 @@ public:
 		FiniteConservationDefectScopeForTesting(const FiniteConservationDefectScopeForTesting&) = delete;
 		FiniteConservationDefectScopeForTesting& operator=(const FiniteConservationDefectScopeForTesting&) = delete;
 	};
+	class FiniteDiscreteMovingWallContinuityDefectScopeForTesting {
+	public:
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting() noexcept { InjectFiniteDiscreteMovingWallContinuityDefectForTesting()=true; }
+		~FiniteDiscreteMovingWallContinuityDefectScopeForTesting() { InjectFiniteDiscreteMovingWallContinuityDefectForTesting()=false; }
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting(const FiniteDiscreteMovingWallContinuityDefectScopeForTesting&) = delete;
+		FiniteDiscreteMovingWallContinuityDefectScopeForTesting& operator=(const FiniteDiscreteMovingWallContinuityDefectScopeForTesting&) = delete;
+	};
 	enum class TestingFault : std::uint8_t { Geometry, InnerRuntime, Extension, Scalar, Seed, Map, BodyForce, MovingBegin, Count };
 	class TestingFaultScope {
 	public:
@@ -331,18 +348,29 @@ private:
 		result.fluid_surface_outward_flow_by_boundary_label_m3_s=inner.surface_flow_by_boundary_label_m3_s;
 		result.material_surface_outward_flow_by_boundary_label_m3_s=inner.material_surface_outward_flow_by_boundary_label_m3_s;
 		result.material_wall_outward_flow_by_boundary_label_m3_s=inner.material_wall_outward_flow_by_boundary_label_m3_s;
+		result.endpoint_volume_divergence_m3_s=inner.endpoint_volume_divergence_m3_s;
 		result.total_fluid_surface_outward_flow_m3_s=inner.total_surface_outward_flow_m3_s;
 		result.total_material_surface_outward_flow_m3_s=inner.total_material_surface_outward_flow_m3_s;
+		result.open_port_outward_flow_m3_s=inner.open_port_outward_flow_m3_s;
+		result.wall_outward_flow_m3_s=inner.wall_outward_flow_m3_s;
 		result.total_material_wall_outward_flow_m3_s=inner.total_material_wall_outward_flow_m3_s;
 		result.divergence_theorem_defect_m3_s=inner.divergence_theorem_defect_m3_s;
 		result.wall_relative_leakage_m3_s=inner.wall_relative_leakage_m3_s;
+		result.discrete_moving_wall_continuity_defect_m3_s=inner.discrete_moving_wall_continuity_defect_m3_s;
+		result.discrete_moving_wall_continuity_normalization_scale_m3_s=inner.discrete_moving_wall_continuity_normalization_scale_m3_s;
+		result.legacy_normalization_scale_m3_s=std::max(options_.flow.flow_controller_reference_flow_m3_s,
+			std::abs(result.open_port_outward_flow_m3_s));
+		result.normalized_open_balance=inner.normalized_open_balance;
+		result.normalized_wall_leakage=inner.normalized_wall_leakage;
+		result.normalized_discrete_moving_wall_continuity_defect=inner.normalized_discrete_moving_wall_continuity_defect;
 		result.reynolds_defect_m3_s=result.backward_euler_volume_rate_m3_s-result.total_material_surface_outward_flow_m3_s;
 		result.moving_mass_defect_m3_s=result.backward_euler_volume_rate_m3_s+result.total_fluid_surface_outward_flow_m3_s-result.total_material_surface_outward_flow_m3_s;
 #ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
 		if(InjectFiniteConservationDefectForTesting()) result.reynolds_defect_m3_s=1.0;
+		if(InjectFiniteDiscreteMovingWallContinuityDefectForTesting()) result.discrete_moving_wall_continuity_defect_m3_s=1.0;
 #endif
 		result.normalization_scale_m3_s=std::max({options_.flow.flow_controller_reference_flow_m3_s,std::abs(result.backward_euler_volume_rate_m3_s),std::abs(result.total_fluid_surface_outward_flow_m3_s),std::abs(result.total_material_surface_outward_flow_m3_s)});
-		for(const double value : {result.total_fluid_surface_outward_flow_m3_s,result.total_material_surface_outward_flow_m3_s,result.total_material_wall_outward_flow_m3_s,result.divergence_theorem_defect_m3_s,result.wall_relative_leakage_m3_s,result.reynolds_defect_m3_s,result.moving_mass_defect_m3_s,result.normalization_scale_m3_s}) if(!std::isfinite(value)) throw std::runtime_error("moving immersed transient conservation value is nonfinite");
+		for(const double value : {result.endpoint_volume_divergence_m3_s,result.total_fluid_surface_outward_flow_m3_s,result.open_port_outward_flow_m3_s,result.wall_outward_flow_m3_s,result.total_material_surface_outward_flow_m3_s,result.total_material_wall_outward_flow_m3_s,result.divergence_theorem_defect_m3_s,result.wall_relative_leakage_m3_s,result.discrete_moving_wall_continuity_defect_m3_s,result.discrete_moving_wall_continuity_normalization_scale_m3_s,result.legacy_normalization_scale_m3_s,result.reynolds_defect_m3_s,result.moving_mass_defect_m3_s,result.normalization_scale_m3_s}) if(!std::isfinite(value)) throw std::runtime_error("moving immersed transient conservation value is nonfinite");
 		auto validate_map=[](const std::map<int,double>& values,double total,const char* what) {
 			double sum=0.0; for(const auto& value:values) { if(!std::isfinite(value.second)||!std::isfinite(sum+value.second)) throw std::runtime_error(std::string("moving immersed transient ")+what+" label flux is nonfinite"); sum+=value.second; }
 			if(std::abs(sum-total)>128.0*std::numeric_limits<double>::epsilon()*std::max(1.0,std::abs(total))*std::max<std::size_t>(1,values.size())) throw std::logic_error(std::string("moving immersed transient ")+what+" label fluxes do not reconcile with total");
@@ -350,12 +378,18 @@ private:
 		validate_map(result.fluid_surface_outward_flow_by_boundary_label_m3_s,result.total_fluid_surface_outward_flow_m3_s,"fluid surface");
 		validate_map(result.material_surface_outward_flow_by_boundary_label_m3_s,result.total_material_surface_outward_flow_m3_s,"material surface");
 		validate_map(result.material_wall_outward_flow_by_boundary_label_m3_s,result.total_material_wall_outward_flow_m3_s,"material wall");
+		if(!immersed_transient_detail::MovingWallContinuityIdentityReconciles(result.open_port_outward_flow_m3_s,
+			result.wall_outward_flow_m3_s,result.total_material_wall_outward_flow_m3_s,
+			result.discrete_moving_wall_continuity_defect_m3_s,result.wall_relative_leakage_m3_s,result.total_fluid_surface_outward_flow_m3_s))
+			throw std::logic_error("moving immersed transient moving-wall continuity roundoff identity does not reconcile");
 		if(!(result.normalization_scale_m3_s>0.0)) throw std::runtime_error("moving immersed transient conservation normalization scale is invalid");
+		if(!(result.legacy_normalization_scale_m3_s>0.0)) throw std::runtime_error("moving immersed transient legacy normalization scale is invalid");
+		if(!(result.discrete_moving_wall_continuity_normalization_scale_m3_s>0.0)) throw std::runtime_error("moving immersed transient discrete continuity normalization scale is invalid");
 		result.normalized_divergence_theorem_defect=std::abs(result.divergence_theorem_defect_m3_s)/result.normalization_scale_m3_s;
 		result.normalized_reynolds_defect=std::abs(result.reynolds_defect_m3_s)/result.normalization_scale_m3_s;
 		result.normalized_moving_mass_defect=std::abs(result.moving_mass_defect_m3_s)/result.normalization_scale_m3_s;
 		result.normalized_wall_relative_leakage=std::abs(result.wall_relative_leakage_m3_s)/result.normalization_scale_m3_s;
-		if(!std::isfinite(result.normalized_divergence_theorem_defect)||!std::isfinite(result.normalized_reynolds_defect)||!std::isfinite(result.normalized_moving_mass_defect)||!std::isfinite(result.normalized_wall_relative_leakage)) throw std::runtime_error("moving immersed transient normalized conservation quotient is nonfinite");
+		if(!std::isfinite(result.normalized_divergence_theorem_defect)||!std::isfinite(result.normalized_reynolds_defect)||!std::isfinite(result.normalized_moving_mass_defect)||!std::isfinite(result.normalized_wall_relative_leakage)||!std::isfinite(result.normalized_open_balance)||!std::isfinite(result.normalized_wall_leakage)||!std::isfinite(result.normalized_discrete_moving_wall_continuity_defect)) throw std::runtime_error("moving immersed transient normalized conservation quotient is nonfinite");
 		return result;
 	}
 	void RequireIdle(const char* action) const { if (trial_) throw std::logic_error(std::string("cannot ")+action+" while a moving immersed transient trial exists"); }
@@ -385,6 +419,7 @@ private:
 	static std::array<bool,static_cast<std::size_t>(FaultStage::Count)>& TestingFaults()
 	{ static std::array<bool,static_cast<std::size_t>(FaultStage::Count)> faults{}; return faults; }
 	static bool& InjectFiniteConservationDefectForTesting() noexcept { static bool value=false; return value; }
+	static bool& InjectFiniteDiscreteMovingWallContinuityDefectForTesting() noexcept { static bool value=false; return value; }
 #endif
 	MovingImmersedTransientFlowOptions options_;
 	std::unique_ptr<Epoch> committed_, trial_;

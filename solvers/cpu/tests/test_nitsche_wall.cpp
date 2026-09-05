@@ -355,6 +355,80 @@ int main()
 	assert(filtered.diagnostics.minimum_h_n_m > 0.0 && filtered.diagnostics.minimum_eta > 0.0);
 	assert(std::abs(filtered.diagnostics.maximum_eta_h_n_over_mu-32.0/filtered.diagnostics.fraction_estimate) < 2e-12);
 
+	// Phase 7 transient impedance is an additive coefficient only.  Its
+	// component diagnostics expose the analytic p=3 factors and retain the
+	// exact low-level steady path when dt=0.
+	const iga::NavierStokesParameters transient_parameters{1.0, 0.25, .125};
+	// A positive-dt volume block requires a complete finite prior velocity
+	// state.  Keep it deliberately distinct from the trial state so this test
+	// exercises the real transient preassembly path rather than only validation.
+	auto transient_state = nonzero;
+	auto transient_previous = State(element, .07, -.03);
+	for (std::size_t a = 0; a < transient_state.size(); ++a)
+		transient_state[a][2] = -.02*static_cast<double>(a+1);
+	const auto transient_wall = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		transient_state, transient_previous, transient_parameters, {7}, 2.0, 4.0);
+	assert(transient_wall.diagnostics.minimum_eta_mu > 0.0);
+	assert(transient_wall.diagnostics.minimum_eta_t > 0.0);
+	assert(std::abs(transient_wall.diagnostics.minimum_eta_mu_h_n_over_mu-32.0/filtered.diagnostics.fraction_estimate) < 2e-12);
+	assert(std::abs(transient_wall.diagnostics.maximum_eta_t_dt_over_rho_h_n-64.0) < 2e-12);
+	assert(transient_wall.diagnostics.minimum_eta_mu_fraction > 0.0
+		&& transient_wall.diagnostics.maximum_eta_t_fraction > 0.0);
+	const auto transient_legacy = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		transient_state, transient_previous, transient_parameters, {7}, 2.0);
+	const auto transient_zero_gamma = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		transient_state, transient_previous, transient_parameters, {7}, 2.0, 0.0);
+	assert(transient_zero_gamma.system.jacobian == transient_legacy.system.jacobian);
+	assert(transient_zero_gamma.system.negative_residual == transient_legacy.system.negative_residual);
+
+	// The gamma_t delta is only the scalar penalty.  Check every velocity
+	// residual/tangent entry against its quadrature expression, including the
+	// signed negative-residual convention, rather than merely comparing norms.
+	const auto transient_delta_residual = Difference(transient_wall.system.negative_residual,
+		transient_zero_gamma.system.negative_residual);
+	const auto transient_delta_jacobian = Difference(transient_wall.system.jacobian,
+		transient_zero_gamma.system.jacobian);
+	std::vector<PetscScalar> expected_transient_delta_residual(ndof, 0.0);
+	std::vector<PetscScalar> expected_transient_delta_jacobian(ndof*ndof, 0.0);
+	for (const auto& point : surface.UsableRule(domain, 0).Points()) {
+		if (point.boundary_id != 7) continue;
+		const auto basis = iga::EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
+		const std::array<double, 3> inverse_normal{{
+			basis.inverse_jacobian[0][0]*point.normal[0]+basis.inverse_jacobian[0][1]*point.normal[1]+basis.inverse_jacobian[0][2]*point.normal[2],
+			basis.inverse_jacobian[1][0]*point.normal[0]+basis.inverse_jacobian[1][1]*point.normal[1]+basis.inverse_jacobian[1][2]*point.normal[2],
+			basis.inverse_jacobian[2][0]*point.normal[0]+basis.inverse_jacobian[2][1]*point.normal[1]+basis.inverse_jacobian[2][2]*point.normal[2]}};
+		const double h_n = 1.0/std::hypot(inverse_normal[0], inverse_normal[1], inverse_normal[2]);
+		const double eta_t = 16.0*4.0*transient_parameters.density*h_n/transient_parameters.dt;
+		std::array<double, 3> gap{{0.0,0.0,0.0}};
+		for (std::size_t a = 0; a < transient_state.size(); ++a)
+			for (int i = 0; i < 3; ++i) gap[i] += transient_state[a][i]*basis.value[a];
+		for (std::size_t a = 0; a < transient_state.size(); ++a)
+			for (int i = 0; i < 3; ++i) {
+				expected_transient_delta_residual[4*a+i] -= eta_t*basis.value[a]*gap[i]*point.weight;
+				for (std::size_t b = 0; b < transient_state.size(); ++b)
+					expected_transient_delta_jacobian[(4*a+i)*ndof+4*b+i] += eta_t*basis.value[a]*basis.value[b]*point.weight;
+			}
+	}
+	assert(MaxAbs(expected_transient_delta_residual) > 1e-5);
+	assert(MaxAbs(expected_transient_delta_jacobian) > 1e-5);
+	assert(MaxAbs(Difference(transient_delta_residual, expected_transient_delta_residual)) < 3e-12);
+	assert(MaxAbs(Difference(transient_delta_jacobian, expected_transient_delta_jacobian)) < 3e-12);
+	const auto slower_transient_wall = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		transient_state, transient_previous, {1.0, 0.25, .25}, {7}, 2.0, 4.0);
+	assert(RelativeError(slower_transient_wall.diagnostics.minimum_eta_t,
+		.5*transient_wall.diagnostics.minimum_eta_t) < 2e-12);
+	assert(RelativeError(slower_transient_wall.diagnostics.maximum_eta_t,
+		.5*transient_wall.diagnostics.maximum_eta_t) < 2e-12);
+	const iga::NavierStokesParameters steady_parameters{1.0, 0.25, 0.0};
+	const auto steady_transient_wall = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		zero, {}, steady_parameters, {7}, 2.0, 4.0);
+	const auto steady_legacy_wall = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
+		zero, {}, steady_parameters, {7}, 2.0);
+	assert(steady_transient_wall.system.jacobian == steady_legacy_wall.system.jacobian);
+	assert(steady_transient_wall.system.negative_residual == steady_legacy_wall.system.negative_residual);
+	assert(steady_transient_wall.diagnostics.minimum_eta_t == 0.0
+		&& steady_transient_wall.diagnostics.maximum_eta_t == 0.0);
+
 	const auto pressure = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
 		State(element, 0.0, 2.0), {}, parameters, {7,8}, 2.0);
 	const auto pressure_volume = iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0,
@@ -431,6 +505,37 @@ int main()
 	assert(RelativeError(anisotropic_wall.diagnostics.minimum_eta,
 		8.0/(anisotropic_wall.diagnostics.fraction_estimate*4.0)) < 2e-12);
 
+	// The transient overload must retain the ghost-covered route: alpha changes
+	// the viscous part only, while eta_t is still exactly proportional to h/dt.
+	const iga::CubicCartesianGridSpec ghost_grid{{{0,0,0}}, {{3,3,3}}, {{3,3,3}}};
+	const auto ghost_domain = Domain(Cube(.2, 2.25, true), ghost_grid);
+	const iga::CutCellVolumeQuadratureCatalog ghost_volume(ghost_domain, {4,300000,300000,3000000});
+	const iga::ImmersedSurfaceQuadratureCatalog ghost_surface(ghost_domain);
+	const iga::CutCellGhostPenaltyCatalog ghost_catalog(ghost_domain, ghost_volume);
+	std::uint64_t covered_wall_cell = ghost_domain.Cells().size();
+	for (std::uint64_t cell = 0; cell < ghost_domain.Cells().size(); ++cell) {
+		if (ghost_domain.Cells()[cell].classification != iga::CellClassification::Cut || !ghost_catalog.Covered(cell)) continue;
+		const auto& rule = ghost_surface.UsableRule(ghost_domain, cell);
+		if (std::any_of(rule.Points().begin(), rule.Points().end(), [](const auto& point) { return point.boundary_id == 7; })) {
+			covered_wall_cell = cell;
+			break;
+		}
+	}
+	assert(covered_wall_cell < ghost_domain.Cells().size());
+	const auto ghost_element = ghost_domain.Background().MaterializeElement(covered_wall_cell);
+	const auto ghost_state = State(ghost_element, .13, -.04);
+	const auto ghost_previous = State(ghost_element, -.02, .03);
+	const auto ghost_transient = iga::BuildImmersedNitscheWallElement(ghost_domain, ghost_volume, ghost_surface,
+		covered_wall_cell, ghost_state, ghost_previous, transient_parameters, {7}, ghost_catalog, 2.0, 4.0);
+	const auto unghosted_transient = iga::BuildImmersedNitscheWallElement(ghost_domain, ghost_volume, ghost_surface,
+		covered_wall_cell, ghost_state, ghost_previous, transient_parameters, {7}, 2.0, 4.0);
+	assert(ghost_transient.diagnostics.ghost_covered_policy);
+	assert(ghost_transient.diagnostics.minimum_eta_mu != unghosted_transient.diagnostics.minimum_eta_mu);
+	assert(ghost_transient.diagnostics.minimum_eta_t == unghosted_transient.diagnostics.minimum_eta_t);
+	assert(ghost_transient.diagnostics.maximum_eta_t == unghosted_transient.diagnostics.maximum_eta_t);
+	assert(std::abs(ghost_transient.diagnostics.minimum_eta_t_dt_over_rho_h_n-64.0) < 2e-12);
+	assert(std::abs(ghost_transient.diagnostics.maximum_eta_t_dt_over_rho_h_n-64.0) < 2e-12);
+
 	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, parameters, {7}, 0.0); });
 	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, parameters, {8,7}, 2.0); });
 	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, parameters, {9}, 2.0); });
@@ -447,6 +552,16 @@ int main()
 		}); });
 	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, parameters,
 		{7}, largest_finite); });
+	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, transient_parameters,
+		{7}, 2.0, -1.0); });
+	for (const double invalid : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
+		Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, transient_state,
+			transient_previous, transient_parameters, {7}, 2.0, invalid); });
+	const iga::NavierStokesParameters underflow_parameters{1.0, .25, std::numeric_limits<double>::max()};
+	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, transient_state,
+		transient_previous, underflow_parameters, {7}, 2.0, std::numeric_limits<double>::denorm_min()); });
+	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, surface, 0, zero, {}, transient_parameters,
+		{7}, 2.0, largest_finite); });
 	const auto wrong_surface_domain = Domain(Cube(.20, .70, true), one);
 	const iga::ImmersedSurfaceQuadratureCatalog wrong_surface(wrong_surface_domain);
 	Reject([&] { iga::BuildImmersedNitscheWallElement(domain, volume, wrong_surface, 0, zero, {}, parameters, {7}, 2.0); });

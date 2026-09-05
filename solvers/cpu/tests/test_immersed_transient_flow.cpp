@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -103,6 +104,92 @@ iga::ImmersedTransientFlowOptions PressureLikeOptions(iga::ImmersedFlowPortContr
 	auto options=Options(); options.wall_labels={2,7};
 	options.ports={{"port",1,mode,value}};
 	return options;
+}
+
+std::vector<std::array<double,4>> NonconstantFields(const iga::ImmersedActiveLayout& layout);
+std::vector<PetscScalar> NonconstantTrial(const iga::ImmersedTransientFlowRuntime& runtime);
+
+bool WallPenaltyCleared(const iga::ImmersedNitscheWallDiagnostics& value)
+{
+	return value.by_boundary_id.empty() && value.fraction_lower==0.0 && value.fraction_estimate==0.0
+		&& value.fraction_upper==0.0 && value.minimum_h_n_m==0.0 && value.maximum_h_n_m==0.0
+		&& value.minimum_eta==0.0 && value.maximum_eta==0.0 && value.minimum_eta_mu==0.0
+		&& value.maximum_eta_mu==0.0 && value.minimum_eta_t==0.0 && value.maximum_eta_t==0.0
+		&& value.maximum_gap_norm==0.0 && !value.ghost_covered_policy;
+}
+
+bool SameWallPenaltyBitwise(const iga::ImmersedNitscheWallDiagnostics& a,
+	const iga::ImmersedNitscheWallDiagnostics& b)
+{
+	if(a.by_boundary_id.size()!=b.by_boundary_id.size() || a.ghost_covered_policy!=b.ghost_covered_policy) return false;
+	for(const auto& item:a.by_boundary_id) {
+		const auto found=b.by_boundary_id.find(item.first);
+		if(found==b.by_boundary_id.end()) return false;
+		const auto& x=item.second; const auto& y=found->second;
+		if(x.selected_points!=y.selected_points || x.skipped_points!=y.skipped_points
+			|| !SameBits(x.selected_area_m2,y.selected_area_m2) || !SameBits(x.skipped_area_m2,y.skipped_area_m2)) return false;
+	}
+	return SameBits(a.fraction_lower,b.fraction_lower) && SameBits(a.fraction_estimate,b.fraction_estimate)
+		&& SameBits(a.fraction_upper,b.fraction_upper) && SameBits(a.minimum_h_n_m,b.minimum_h_n_m)
+		&& SameBits(a.maximum_h_n_m,b.maximum_h_n_m) && SameBits(a.minimum_eta,b.minimum_eta)
+		&& SameBits(a.maximum_eta,b.maximum_eta) && SameBits(a.maximum_eta_h_n_over_mu,b.maximum_eta_h_n_over_mu)
+		&& SameBits(a.minimum_eta_mu,b.minimum_eta_mu) && SameBits(a.maximum_eta_mu,b.maximum_eta_mu)
+		&& SameBits(a.minimum_eta_t,b.minimum_eta_t) && SameBits(a.maximum_eta_t,b.maximum_eta_t)
+		&& SameBits(a.minimum_eta_mu_h_n_over_mu,b.minimum_eta_mu_h_n_over_mu)
+		&& SameBits(a.maximum_eta_mu_h_n_over_mu,b.maximum_eta_mu_h_n_over_mu)
+		&& SameBits(a.minimum_eta_t_dt_over_rho_h_n,b.minimum_eta_t_dt_over_rho_h_n)
+		&& SameBits(a.maximum_eta_t_dt_over_rho_h_n,b.maximum_eta_t_dt_over_rho_h_n)
+		&& SameBits(a.minimum_eta_mu_fraction,b.minimum_eta_mu_fraction)
+		&& SameBits(a.maximum_eta_mu_fraction,b.maximum_eta_mu_fraction)
+		&& SameBits(a.minimum_eta_t_fraction,b.minimum_eta_t_fraction)
+		&& SameBits(a.maximum_eta_t_fraction,b.maximum_eta_t_fraction)
+		&& SameBits(a.maximum_gap_norm,b.maximum_gap_norm);
+}
+
+std::array<double,3> ExpectedWallReferenceFractionSums(const iga::MovingCutGeometry& geometry,
+	int wall_label)
+{
+	std::array<double,3> result{{0.0,0.0,0.0}};
+	for(std::uint64_t cell=0;cell<geometry.Domain().Cells().size();++cell) {
+		if(geometry.Domain().Cells()[cell].classification!=iga::CellClassification::Cut) continue;
+		const auto& rule=geometry.Surface().UsableRule(geometry.Domain(),cell);
+		if(!std::any_of(rule.Points().begin(),rule.Points().end(),[wall_label](const auto& point) { return point.boundary_id==wall_label; })) continue;
+		const auto& diagnostics=geometry.Volume().Cell(cell).diagnostics;
+		result[0]+=diagnostics.lower_reference_volume;
+		result[1]+=diagnostics.estimated_reference_volume;
+		result[2]+=diagnostics.upper_reference_volume;
+	}
+	return result;
+}
+
+void CheckTransientNitscheDiagnostics(const iga::MovingCutGeometry& geometry)
+{
+	auto options=Options(); options.wall_inertial_gamma0=1.0;
+	iga::ImmersedTransientFlowRuntime runtime(geometry,options);
+	runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,runtime.Layout(),
+		NonconstantFields(runtime.Layout()),{0.0,0.0},true,0.0));
+	runtime.BeginTrial(1.0,1,1.0); const auto trial=NonconstantTrial(runtime); runtime.SetTrialState(trial); runtime.Assemble();
+	const auto wall=runtime.Diagnostics().wall_penalty;
+	assert(runtime.Diagnostics().surface_cells>0 && runtime.Diagnostics().ghost_faces>0);
+	assert(wall.ghost_covered_policy && wall.by_boundary_id.at(7).selected_points>0);
+	assert(wall.minimum_h_n_m>0.0 && wall.maximum_h_n_m>=wall.minimum_h_n_m);
+	const auto expected_fractions=ExpectedWallReferenceFractionSums(geometry,7);
+	assert(std::isfinite(wall.fraction_lower) && std::isfinite(wall.fraction_estimate)
+		&& std::isfinite(wall.fraction_upper) && wall.fraction_lower>=0.0
+		&& wall.fraction_lower<=wall.fraction_estimate && wall.fraction_estimate<=wall.fraction_upper);
+	assert(SameBits(wall.fraction_lower,expected_fractions[0])
+		&& SameBits(wall.fraction_estimate,expected_fractions[1])
+		&& SameBits(wall.fraction_upper,expected_fractions[2]));
+	assert(wall.minimum_eta>0.0 && wall.maximum_eta>=wall.minimum_eta
+		&& wall.minimum_eta_mu>0.0 && wall.maximum_eta_mu>=wall.minimum_eta_mu
+		&& wall.minimum_eta_t>0.0 && wall.maximum_eta_t>=wall.minimum_eta_t);
+	assert(std::abs(wall.minimum_eta_t_dt_over_rho_h_n-16.0)<2e-12
+		&& std::abs(wall.maximum_eta_t_dt_over_rho_h_n-16.0)<2e-12);
+	runtime.Assemble(); assert(SameWallPenaltyBitwise(wall,runtime.Diagnostics().wall_penalty));
+	runtime.Rollback(); assert(WallPenaltyCleared(runtime.Diagnostics().wall_penalty));
+	runtime.SetTrialState(trial);
+	runtime.Assemble(); assert(SameWallPenaltyBitwise(wall,runtime.Diagnostics().wall_penalty));
+	runtime.AbortTrial(); assert(runtime.Diagnostics().idle && WallPenaltyCleared(runtime.Diagnostics().wall_penalty));
 }
 
 std::vector<std::array<double,4>> NonconstantFields(const iga::ImmersedActiveLayout& layout)
@@ -347,6 +434,27 @@ std::size_t LogicalVolumePoints(const iga::MovingCutGeometry& geometry)
 	return result;
 }
 
+bool CompactRuntimeNear(double left, double right, double tolerance)
+{
+	return std::abs(left-right)<=tolerance*std::max({1.0,std::abs(left),std::abs(right)});
+}
+
+void CheckVolumeDiagnosticParity(const iga::CutCellVolumeQuadratureDiagnostics& expanded,
+	const iga::CutCellVolumeQuadratureDiagnostics& compact)
+{
+	for(const auto values : {std::array<double,2>{{expanded.certified_reference_volume,compact.certified_reference_volume}},
+		std::array<double,2>{{expanded.estimated_reference_volume,compact.estimated_reference_volume}},
+		std::array<double,2>{{expanded.unresolved_reference_volume,compact.unresolved_reference_volume}},
+		std::array<double,2>{{expanded.lower_reference_volume,compact.lower_reference_volume}},
+		std::array<double,2>{{expanded.upper_reference_volume,compact.upper_reference_volume}},
+		std::array<double,2>{{expanded.certified_physical_volume,compact.certified_physical_volume}},
+		std::array<double,2>{{expanded.estimated_physical_volume,compact.estimated_physical_volume}},
+		std::array<double,2>{{expanded.unresolved_physical_volume,compact.unresolved_physical_volume}},
+		std::array<double,2>{{expanded.lower_physical_volume,compact.lower_physical_volume}},
+		std::array<double,2>{{expanded.upper_physical_volume,compact.upper_physical_volume}}})
+		assert(CompactRuntimeNear(values[0],values[1],1e-12));
+}
+
 void CheckCompactRuntime(const iga::MovingCutGeometry& expanded_geometry, const iga::MovingCutGeometry& compact_geometry)
 {
 	std::size_t expanded_calls=0, compact_calls=0; auto expanded_options=Options(), compact_options=Options();
@@ -357,29 +465,133 @@ void CheckCompactRuntime(const iga::MovingCutGeometry& expanded_geometry, const 
 	expanded.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,expanded.Layout(),NonconstantFields(expanded.Layout()),{0.0,0.0},true,0.0));
 	compact.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,compact.Layout(),NonconstantFields(compact.Layout()),{0.0,0.0},true,0.0));
 	const auto expanded_points=LogicalVolumePoints(expanded_geometry), compact_points=LogicalVolumePoints(compact_geometry);
-	assert(expanded_points==compact_points);
+	assert(expanded_points>0 && compact_points>0 && compact_points<expanded_points);
+	CheckVolumeDiagnosticParity(expanded_geometry.Volume().Diagnostics(),compact_geometry.Volume().Diagnostics());
+	for(std::uint64_t cell=0;cell<expanded_geometry.Domain().Cells().size();++cell)
+		CheckVolumeDiagnosticParity(expanded_geometry.Volume().Cell(cell).diagnostics,compact_geometry.Volume().Cell(cell).diagnostics);
 	expanded.BeginTrial(1.0,1,1.0); compact.BeginTrial(1.0,1,1.0);
 	const auto compact_input=compact.Diagnostics().input_hash_sha256;
 	assert(expanded_calls==expanded_points && compact_calls==compact_points && expanded.Diagnostics().input_hash_sha256!=compact_input);
 	const auto x=NonconstantTrial(expanded), direction=Direction(expanded); expanded.SetTrialState(x); compact.SetTrialState(x); expanded.Assemble(); compact.Assemble();
 	const auto er=expanded.AssembledNegativeResidual(), cr=compact.AssembledNegativeResidual(), ej=expanded.AssembledJacobianAction(direction), cj=compact.AssembledJacobianAction(direction);
-	for(std::size_t i=0;i<er.size();++i) { assert(std::abs(PetscRealPart(er[i]-cr[i]))<=2e-10); assert(std::abs(PetscRealPart(ej[i]-cj[i]))<=2e-10); }
+	// Coalesced compact certified blocks preserve degree-seven moments, but the
+	// nonlinear convection and stabilization terms are higher degree.
+	for(std::size_t i=0;i<er.size();++i) {
+		assert(CompactRuntimeNear(PetscRealPart(er[i]),PetscRealPart(cr[i]),5e-8));
+		assert(CompactRuntimeNear(PetscRealPart(ej[i]),PetscRealPart(cj[i]),3e-7));
+	}
 	const auto ec=expanded.ConservationDiagnostics(), cc=compact.ConservationDiagnostics();
 	assert(std::abs(ec.endpoint_volume_divergence_m3_s-cc.endpoint_volume_divergence_m3_s)<=2e-11 && std::abs(ec.total_surface_outward_flow_m3_s-cc.total_surface_outward_flow_m3_s)<=2e-11);
 	assert(ec.surface_flow_by_boundary_label_m3_s==cc.surface_flow_by_boundary_label_m3_s && ec.material_surface_outward_flow_by_boundary_label_m3_s==cc.material_surface_outward_flow_by_boundary_label_m3_s && ec.material_wall_outward_flow_by_boundary_label_m3_s==cc.material_wall_outward_flow_by_boundary_label_m3_s);
 	assert(std::abs(ec.total_material_surface_outward_flow_m3_s-cc.total_material_surface_outward_flow_m3_s)<=2e-11 && std::abs(ec.total_material_wall_outward_flow_m3_s-cc.total_material_wall_outward_flow_m3_s)<=2e-11 && std::abs(ec.wall_relative_leakage_m3_s-cc.wall_relative_leakage_m3_s)<=2e-11);
 	assert(std::abs(ec.divergence_theorem_defect_m3_s-cc.divergence_theorem_defect_m3_s)<=2e-11 && std::abs(ec.normalized_open_balance-cc.normalized_open_balance)<=2e-11 && std::abs(ec.normalized_wall_leakage-cc.normalized_wall_leakage)<=2e-11);
+	assert(std::abs(ec.discrete_moving_wall_continuity_defect_m3_s-cc.discrete_moving_wall_continuity_defect_m3_s)<=2e-11 && std::abs(ec.discrete_moving_wall_continuity_normalization_scale_m3_s-cc.discrete_moving_wall_continuity_normalization_scale_m3_s)<=2e-11 && std::abs(ec.normalized_discrete_moving_wall_continuity_defect-cc.normalized_discrete_moving_wall_continuity_defect)<=2e-11);
 	expanded.Assemble(); compact.Assemble(); assert(expanded_calls==expanded_points && compact_calls==compact_points);
 	expanded.AbortTrial(); compact.AbortTrial(); compact.BeginTrial(1.0,1,1.0);
 	assert(compact.Diagnostics().input_hash_sha256==compact_input && compact_calls==2*compact_points); compact.AbortTrial();
+}
+
+struct FirstSolveFormulationGate {
+	double initial_residual=std::numeric_limits<double>::quiet_NaN();
+	double convergence_threshold=std::numeric_limits<double>::quiet_NaN();
+	bool nonempty_record=false, update_count_within_limit=false, converged=false;
+	bool residual_converged=false, linear_residual_satisfied=false, accounting_consistent=false;
+
+	bool Passed() const
+	{
+		return nonempty_record && update_count_within_limit && converged && residual_converged
+			&& linear_residual_satisfied && accounting_consistent;
+	}
+};
+
+FirstSolveFormulationGate EvaluateFirstSolveFormulationGate(
+	const iga::ImmersedTransientFlowDiagnostics& diagnostics,
+	const iga::ImmersedTransientFlowOptions& options)
+{
+	FirstSolveFormulationGate gate;
+	const auto& steps=diagnostics.newton_steps;
+	gate.nonempty_record=!steps.empty();
+	gate.update_count_within_limit=steps.size()<=static_cast<std::size_t>(options.nonlinear_maximum_iterations);
+	gate.converged=diagnostics.converged;
+	if(gate.nonempty_record) {
+		gate.initial_residual=steps.front().residual_norm;
+		gate.convergence_threshold=std::max(options.nonlinear_absolute_tolerance,
+			options.nonlinear_relative_tolerance*gate.initial_residual);
+	}
+	gate.residual_converged=gate.nonempty_record && std::isfinite(gate.initial_residual)
+		&& std::isfinite(gate.convergence_threshold) && std::isfinite(diagnostics.residual_norm)
+		&& diagnostics.residual_norm<=gate.convergence_threshold;
+	gate.linear_residual_satisfied=std::isfinite(diagnostics.true_linear_relative_residual)
+		&& diagnostics.true_linear_relative_residual<=1e-10;
+	PetscInt summed_ksp_iterations=0;
+	bool records_consistent=true;
+	for(std::size_t i=0;i<steps.size();++i) {
+		const auto& step=steps[i];
+		summed_ksp_iterations+=step.ksp_iterations;
+		records_consistent=records_consistent && step.iteration==static_cast<PetscInt>(i)
+			&& step.ksp_reason>0 && std::isfinite(step.residual_norm) && std::isfinite(step.update_norm)
+			&& std::isfinite(step.linear_relative_residual) && std::isfinite(step.damping)
+			&& step.damping>=options.minimum_damping && step.damping<=1.0;
+	}
+	gate.accounting_consistent=records_consistent
+		&& diagnostics.nonlinear_iterations==static_cast<PetscInt>(steps.size())
+		&& diagnostics.ksp_iterations==summed_ksp_iterations
+		&& diagnostics.attempt_assembly_count>=2*steps.size();
+	return gate;
+}
+
+void PrintFirstSolveDiagnostic(const iga::ImmersedTransientFlowDiagnostics& diagnostics,
+	const iga::ImmersedTransientFlowOptions& options, const FirstSolveFormulationGate& gate)
+{
+	std::cout << std::setprecision(17)
+		<< "newton_diagnostic updates=" << diagnostics.newton_steps.size()
+		<< " configured_max=" << options.nonlinear_maximum_iterations
+		<< " initial_residual=" << gate.initial_residual
+		<< " final_residual=" << diagnostics.residual_norm
+		<< " convergence_threshold=" << gate.convergence_threshold
+		<< " true_linear_relative_residual=" << diagnostics.true_linear_relative_residual << '\n';
+	for(const auto& step:diagnostics.newton_steps)
+		std::cout << "newton_diagnostic step=" << step.iteration << " ksp_iterations=" << step.ksp_iterations
+			<< " ksp_reason=" << static_cast<int>(step.ksp_reason) << " residual=" << step.residual_norm
+			<< " update=" << step.update_norm << " linear_relative_residual=" << step.linear_relative_residual
+			<< " damping=" << step.damping << '\n';
+	std::cout << "newton_diagnostic gates nonempty_record=" << (gate.nonempty_record?"true":"false")
+		<< " update_count_within_limit=" << (gate.update_count_within_limit?"true":"false")
+		<< " converged=" << (gate.converged?"true":"false")
+		<< " residual_converged=" << (gate.residual_converged?"true":"false")
+		<< " linear_residual_satisfied=" << (gate.linear_residual_satisfied?"true":"false")
+		<< " accounting_consistent=" << (gate.accounting_consistent?"true":"false") << '\n';
+}
+
+int RunNewtonDiagnostic()
+{
+	const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
+	iga::MovingCutGeometryOptions geometry_options;
+	geometry_options.volume.max_depth=4; geometry_options.volume.max_nodes=500000;
+	geometry_options.volume.max_leaves=500000; geometry_options.volume.max_points=3000000;
+	const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+	auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	const auto options=Options(); iga::ImmersedTransientFlowRuntime runtime(*geometry,options);
+	runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,runtime.Layout(),
+		NonconstantFields(runtime.Layout()),{.019,-.023},true,.031));
+	runtime.BeginTrial(1.0,1,1.0);
+	const bool solved=runtime.SolveTrial(); const auto& diagnostics=runtime.Diagnostics();
+	const auto gate=EvaluateFirstSolveFormulationGate(diagnostics,options);
+	PrintFirstSolveDiagnostic(diagnostics,options,gate);
+	assert(solved && gate.Passed());
+	return 0;
 }
 
 }
 
 int main(int argc,char** argv)
 {
+	bool newton_diagnostic=false;
+	for(int i=1;i<argc;++i) if(std::string(argv[i])=="--newton-diagnostic") newton_diagnostic=true;
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	try {
+		if(newton_diagnostic) status=RunNewtonDiagnostic();
+		else {
 		const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
 		iga::MovingCutGeometryOptions go; go.volume.max_depth=4; go.volume.max_nodes=500000; go.volume.max_leaves=500000; go.volume.max_points=3000000;
 		const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
@@ -397,10 +609,12 @@ int main(int argc,char** argv)
 		CheckSolverConfigurationIdentity(*branch_geometry);
 		CheckBeginTrialExceptionTransaction(*branch_geometry);
 		CheckCompactRuntime(*branch_geometry,*compact_branch_geometry);
+		CheckTransientNitscheDiagnostics(*branch_geometry);
 		CheckMovingInnerTrial(branch_grid,branch_go);
 		Reject([&] { auto bad=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.1); bad.ports[0].boundary_label=0; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		Reject([&] { auto bad=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.1); bad.ports[0].boundary_label=99; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		for(const double invalid:{std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity()}) {
+			Reject([&] { auto bad=Options(); bad.wall_inertial_gamma0=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 			Reject([&] { auto bad=Options(); bad.flow_controller_relative_tolerance=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 			Reject([&] { auto bad=Options(); bad.flow_controller_absolute_tolerance_m3_s=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 			Reject([&] { auto bad=Options(); bad.flow_controller_reference_flow_m3_s=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
@@ -473,7 +687,8 @@ int main(int argc,char** argv)
 		assert(runtime.SolveTrial()); const auto solved=runtime.TrialState(); const auto ports=runtime.Diagnostics().ports; const auto trial_hash=runtime.Diagnostics().trial_state_hash_sha256; const auto history_hash=runtime.Diagnostics().history_hash_sha256;
 		const auto input_hash=runtime.Diagnostics().input_hash_sha256, solved_hash=runtime.Diagnostics().solved_state_hash_sha256, attempt_hash=runtime.Diagnostics().attempt_hash_sha256, layout_hash=runtime.Diagnostics().layout_hash_sha256;
 		const auto nonlinear_steps=runtime.Diagnostics().newton_steps; const auto first_ksp=runtime.Diagnostics().ksp_iterations; const auto first_assemblies=runtime.Diagnostics().attempt_assembly_count; const auto first_volume=runtime.Diagnostics().volume_cells, first_surface=runtime.Diagnostics().surface_cells, first_ghost=runtime.Diagnostics().ghost_faces;
-		assert(nonlinear_steps.size()==8 && runtime.Diagnostics().true_linear_relative_residual<=1e-10);
+		const auto first_solve_gate=EvaluateFirstSolveFormulationGate(runtime.Diagnostics(),Options());
+		assert(first_solve_gate.Passed());
 		assert(runtime.CommittedGlobalState().HashSha256()==committed_hash_before_solve && runtime.CommittedState()==committed_state_before_solve && SamePortsBitwise(committed_ports_before_solve,runtime.Diagnostics().ports));
 		assert(SamePorts(ports,runtime.Diagnostics().ports));
 		auto stale=solved; stale[0]+=1e-12; runtime.SetTrialState(stale); assert(!runtime.Diagnostics().converged && runtime.Diagnostics().solved_state_hash_sha256.empty() && runtime.Diagnostics().attempt_hash_sha256.empty() && runtime.Diagnostics().newton_steps.empty()); Reject([&] { runtime.PrepareCommit(); });
@@ -500,11 +715,16 @@ int main(int argc,char** argv)
 		assert(std::abs(nondivergence.total_material_wall_outward_flow_m3_s)<=2e-11);
 		assert(SameBits(nondivergence.wall_relative_leakage_m3_s,nondivergence.wall_outward_flow_m3_s));
 		assert(SameBits(nondivergence.divergence_theorem_defect_m3_s,nondivergence.endpoint_volume_divergence_m3_s-nondivergence.total_surface_outward_flow_m3_s));
+		assert(SameBits(nondivergence.discrete_moving_wall_continuity_defect_m3_s,nondivergence.open_port_outward_flow_m3_s+nondivergence.total_material_wall_outward_flow_m3_s));
+		assert(SameBits(nondivergence.discrete_moving_wall_continuity_normalization_scale_m3_s,std::max({Options().flow_controller_reference_flow_m3_s,std::abs(nondivergence.open_port_outward_flow_m3_s),std::abs(nondivergence.total_material_wall_outward_flow_m3_s)})));
+		assert(SameBits(nondivergence.normalized_discrete_moving_wall_continuity_defect,std::abs(nondivergence.discrete_moving_wall_continuity_defect_m3_s)/nondivergence.discrete_moving_wall_continuity_normalization_scale_m3_s));
+		assert(std::abs((nondivergence.discrete_moving_wall_continuity_defect_m3_s+nondivergence.wall_relative_leakage_m3_s)-nondivergence.total_surface_outward_flow_m3_s)<=2e-11);
 		const double corrected=std::abs(nondivergence.endpoint_volume_divergence_m3_s-nondivergence.total_surface_outward_flow_m3_s), old_plus=std::abs(nondivergence.endpoint_volume_divergence_m3_s+nondivergence.total_surface_outward_flow_m3_s);
 		assert(corrected<old_plus);
 		conservation_runtime.AbortTrial();
 		CheckAbortPublication(*geometry);
 		std::cout << "immersed_transient_flow_tests=passed active_nodes=" << runtime.Diagnostics().active_nodes << " fd_max=" << fd_max << " zero_block_max=" << zero_block_max << " newton_updates=" << nonlinear_steps.size() << " linear_relative=" << runtime.Diagnostics().true_linear_relative_residual << " open_balance=" << conservation.normalized_open_balance << " wall_leakage=" << conservation.normalized_wall_leakage << '\n';
+		}
 	} catch(const std::exception& error) { std::cerr << "immersed_transient_flow_test: " << error.what() << '\n'; status=1; }
 	PetscFinalize(); return status;
 }

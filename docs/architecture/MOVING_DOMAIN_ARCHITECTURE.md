@@ -1,5 +1,8 @@
 # Moving immersed-domain geometry
 
+Phase 7 is complete; the authoritative gate disposition and numerical evidence
+are recorded in [Phase 7 Closure Report](../progress/PHASE_7_REPORT.md).
+
 Phase 7 keeps the Cartesian background fixed in space: this is an Eulerian
 immersed method, not ALE.  Every evaluated prescribed-surface time owns a new,
 immutable full-rebuild chain (surface, spatial classification, cut volume,
@@ -31,6 +34,31 @@ without visibility, finalize only swaps already prepared owners, rollback
 restores the frozen seed/history, and abort leaves the committed global state
 and port measurements unchanged.  PETSc vectors are trial-local; canonical
 publication remains `ImmersedGlobalFlowState`.
+
+## Transient immersed-wall impedance
+
+The bounded Phase 7 wall keeps the existing symmetric Nitsche traction,
+adjoint-consistency, pressure-gap, and velocity-pressure blocks unchanged. It
+only replaces the coefficient in the existing penalty residual and tangent:
+
+\[
+\eta=\eta_\mu+\eta_t,\qquad
+\eta_\mu=16\,\gamma_\mu c_\alpha\mu/h_n,\qquad
+\eta_t=16\,\gamma_t\rho h_n/\Delta t.
+\]
+
+For the cubic basis, `C_p=16`; `c_alpha=1` under the ghost-covered policy and
+`1/alpha` under the legacy non-ghost policy. The inertial term is exactly zero
+when `dt=0`, before any reciprocal is formed. Thus the default
+`wall_inertial_gamma0=0.0` retains the steady and old low-level paths
+bit-for-bit. `wall_gamma0` remains the positive viscous gamma (default 2), and
+the inertial gamma is finite and nonnegative. Runtime diagnostics stage and
+publish min/max viscous, inertial, and total penalties, component
+nondimensional ratios, and component fractions.
+
+This is impedance stabilization only: it adds no ALE or space-time term, mesh
+motion, convective penalty, changed traction, FSI coupling, or snapshot-schema
+change.
 
 PR7.4a is committed as a standalone, non-integrated immersed velocity/history
 extension.  It admits only exact positive-cell layouts on a fixed Cartesian
@@ -73,8 +101,16 @@ material flux is also evaluated by boundary label over the *entire* target
 surface, \(Q_w=\int_{\partial\Omega^{n+1}}w\cdot n\), using immutable
 canonical triangle and barycentric provenance.  A separate wall-only material
 flux \(Q_{w,wall}=\int_{\Gamma_w^{n+1}}w\cdot n\) is retained for
-\(Q_{u,wall}-Q_{w,wall}\) wall-relative leakage.  The fixed divergence
-diagnostic is retained as \(R_{div}=\int_{\Omega^{n+1}}\nabla\cdot u-Q_u\).
+\(Q_{u,wall}-Q_{w,wall}\) wall-relative leakage.  The first-class endpoint
+continuity diagnostic is \(R_{cont}=Q_{port}+Q_{w,wall}\): every configured
+port participates, while only configured wall labels contribute material flux.
+Its scale is \(\max(Q_{ref},|Q_{port}|,|Q_{w,wall}|)\), and the record checks
+\(R_{cont}+(Q_{u,wall}-Q_{w,wall})=Q_u\) to summation roundoff.  This is a
+discrete target-endpoint continuity measurement, not a new PDE constraint.
+The retained fixed divergence diagnostic
+\(R_{div}=\int_{\Omega^{n+1}}\nabla\cdot u-Q_u\), including its historical
+`normalized_open_balance` meaning, is explicitly a volume/surface quadrature
+consistency measurement; it is not used as the moving-wall continuity gate.
 
 For each moving transition, immutable old/new closed-surface audited volumes
 and exact source/target epoch identity give
@@ -141,10 +177,33 @@ available) label-ordered outward port flows. Thus unavailable flows, measured
 zero flows, and no-port snapshots remain distinct during recovery and
 idempotent retry. A complete orphaned epoch is recoverable after a crash
 between the directory and PVD renames; schema or request-semantic mismatches
-are rejected while rebuilding the unchanged PVD collection. Static geometry
-remains on the Bézier VTKHDF visualization path.
+are rejected while rebuilding the unchanged PVD collection. This is the
+limited schema-v3 Phase 7 contract; broader artifact-integrity and recovery
+hardening is deferred as documented in `POST_PHASE_7_IO_HARDENING.md`.
+Static geometry remains on the Bézier VTKHDF visualization path.
 
 Wall mismatch reports area, maximum and RMS relative velocity in m/s, plus
 `wall_relative_velocity_squared_area_integral_m4_per_s2`, the dimensionally
 explicit integral of squared relative velocity over wall area.  Each requested
 wall label must independently resolve to finite, positive surface area.
+
+## Focused idealized-chamber closure driver
+
+`make phase7-lv-closure-test PETSC_DIR=/path/to/petsc` runs one deterministic,
+16-step prescribed-motion benchmark.  It uses a closed 12-sector, four-ring
+idealized prolate chamber with a wall label and two connected basal half-disk
+ports.  The ED/ES/ED frames are source-periodic; ES is the affine `.90, .90,
+.95` contraction about the basal plane.  The test uses a fixed `6x6x7`
+Cartesian background and depth-2 cut quadrature with empty-rule rescue through
+depth 9, density `1050 kg/m3`, dynamic
+viscosity `0.012 Pa s`, period `0.8 s`, and an outward inlet controller target
+of `-1e-6 m3/s` (inflow magnitude `1e-6 m3/s`) with a zero-pressure outlet.
+These are numerical benchmark
+settings, not a patient, FSI, ALE, tracer, or clinical model.  The `--one-step`
+path additionally re-integrates the solved same endpoint field at depths 1/2/3
+(with the same rescue cap) to audit only volume/surface divergence quadrature
+consistency; it does not re-solve or change the production state.
+
+By default it removes its temporary output after asserting transactional
+publication/retry.  `solvers/cpu/phase7_lv_closure_test /path/to/output-base`
+retains the committed VTU/JSON/PVD epochs for inspection.

@@ -40,11 +40,11 @@ RawSurfaceTriangle Face(std::int64_t a, std::int64_t b, std::int64_t c, int labe
 {
 	RawSurfaceTriangle value; value.indices={{a,b,c}}; value.boundary_id=label; return value;
 }
-RawSurfaceSoup Tetra(double shift=0.0)
+RawSurfaceSoup Tetra(double shift=0.0, int wall_label=1)
 {
 	RawSurfaceSoup value;
 	value.vertices={{{{shift+.18,.25,.25}},{{shift+.78,.25,.25}},{{shift+.18,.85,.25}},{{shift+.18,.25,.85}}}};
-	value.triangles={Face(0,2,1,1),Face(0,1,3,7),Face(0,3,2,9),Face(1,2,3,1)};
+	value.triangles={Face(0,2,1,wall_label),Face(0,1,3,7),Face(0,3,2,9),Face(1,2,3,wall_label)};
 	return value;
 }
 MovingCutGeometryOptions Options(CutCellVolumeQuadratureStorageMode storage)
@@ -54,9 +54,9 @@ MovingCutGeometryOptions Options(CutCellVolumeQuadratureStorageMode storage)
 	value.volume.max_retained_bytes=100000000; return value;
 }
 struct Fixture { CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}}; std::unique_ptr<MovingCutGeometry> geometry; ImmersedActiveLayout layout; };
-Fixture Make(CutCellVolumeQuadratureStorageMode storage=CutCellVolumeQuadratureStorageMode::Expanded)
+Fixture Make(CutCellVolumeQuadratureStorageMode storage=CutCellVolumeQuadratureStorageMode::Expanded, int wall_label=1)
 {
-	Fixture value; PrescribedSurfaceMotion motion({{0.,Tetra()},{1.,Tetra()}});
+	Fixture value; PrescribedSurfaceMotion motion({{0.,Tetra(0.0,wall_label)},{1.,Tetra(0.0,wall_label)}});
 	value.geometry=MovingCutGeometry::Build(value.grid,motion.Evaluate(0,0,1),Options(storage));
 	value.layout=ImmersedActiveLayout::Build(value.geometry->Domain(),value.geometry->Volume(),value.geometry->GeometryIdentitySha256(),{9}); return value;
 }
@@ -108,9 +108,9 @@ std::vector<std::array<double,4>> Constant(const ImmersedActiveLayout& layout,st
 {
 	std::vector<std::array<double,4>> value(layout.NodeIds().size());for(auto& q:value)q={{u[0],u[1],u[2],-1.}};return value;
 }
-MovingImmersedFlowSnapshotRequest Request(const Fixture& fixture,double dt=.25)
+MovingImmersedFlowSnapshotRequest Request(const Fixture& fixture,double dt=.25,std::uint32_t wall_label=1)
 {
-	MovingImmersedFlowSnapshotRequest value;value.time_s=fixture.geometry->Evaluation().EvaluatedTimeS();value.index=value.time_s==0.?4:5;value.transition_available=true;value.dt_s=dt;value.port_labels={7,9};value.port_flows_available=true;value.port_flows={{7,-.03},{9,.01}};value.wall_labels={1};return value;
+	MovingImmersedFlowSnapshotRequest value;value.time_s=fixture.geometry->Evaluation().EvaluatedTimeS();value.index=value.time_s==0.?4:5;value.transition_available=true;value.dt_s=dt;value.port_labels={7,9};value.port_flows_available=true;value.port_flows={{7,-.03},{9,.01}};value.wall_labels={wall_label};return value;
 }
 double ExpectedWallArea(const MovingCutGeometry& geometry,std::uint32_t label)
 {
@@ -140,6 +140,8 @@ void CheckIndicatorEstimates(const MovingImmersedFlowSnapshotMetrics& metrics)
 int main()
 {
 	try {
+		ExpectUnpublished([&]{(void)PrescribedSurfaceMotion({{0.,Tetra(0.0,-1)},{1.,Tetra(0.0,-1)}});},"prescribed surface requires explicit nonnegative labels");
+		auto zero_wall=Make(CutCellVolumeQuadratureStorageMode::Expanded,0);const auto zero_wall_state=ImmersedGlobalFlowState(0.,4,zero_wall.layout,Constant(zero_wall.layout,{{0.,0.,0.}}),{0.},false,0.);const auto zero_wall_snapshot=MovingImmersedFlowSnapshot::Build(*zero_wall.geometry,zero_wall.layout,zero_wall_state,Request(zero_wall,.25,0),{});Check(zero_wall_snapshot.Request().wall_labels==std::vector<std::uint32_t>({0})&&zero_wall_snapshot.Metrics().wall_area_m2>0.,"zero wall label snapshot was not retained");
 		// Match the corresponding flow coverage so these negatives reach the
 		// surface-partition validator rather than failing request coverage first.
 		auto partition_fixture=Make();const auto partition_state=ImmersedGlobalFlowState(0.,4,partition_fixture.layout,Constant(partition_fixture.layout,{{0.,0.,0.}}),{0.},false,0.);MovingImmersedFlowSnapshotOptions partition_options;auto missing=Request(partition_fixture);missing.port_labels={7};missing.port_flows={{7,-.03}};ExpectUnpublished([&]{(void)MovingImmersedFlowSnapshot::Build(*partition_fixture.geometry,partition_fixture.layout,partition_state,missing,partition_options);},"moving immersed snapshot wall and port labels must partition surface boundary labels");auto extraneous=Request(partition_fixture);extraneous.port_labels={7,9,999};extraneous.port_flows={{7,-.03},{9,.01},{999,0.}};ExpectUnpublished([&]{(void)MovingImmersedFlowSnapshot::Build(*partition_fixture.geometry,partition_fixture.layout,partition_state,extraneous,partition_options);},"moving immersed snapshot wall and port labels must partition surface boundary labels");auto overlap=Request(partition_fixture);overlap.wall_labels={1,7};ExpectUnpublished([&]{(void)MovingImmersedFlowSnapshot::Build(*partition_fixture.geometry,partition_fixture.layout,partition_state,overlap,partition_options);},"moving immersed snapshot wall and port labels must partition surface boundary labels");

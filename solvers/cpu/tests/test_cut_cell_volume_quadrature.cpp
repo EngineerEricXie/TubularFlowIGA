@@ -96,6 +96,12 @@ template <class Function> void RejectWithMessage(Function&& function, const char
 	catch (const std::exception& error) { rejected = std::string(error.what()).find(message) != std::string::npos; }
 	assert(rejected);
 }
+template <class Function> std::string RejectionMessage(Function&& function)
+{
+	try { function(); }
+	catch (const std::exception& error) { return error.what(); }
+	assert(false); return {};
+}
 std::size_t CompactRuleCapacityBytes(const iga::CompactCutCellVolumeRule& rule)
 {
 	assert(rule.certified_blocks.capacity() <= std::numeric_limits<std::size_t>::max()/sizeof(iga::CompactCutCellVolumeBlock));
@@ -162,6 +168,7 @@ int main()
 	const auto& cube_cell = cube.Cell(0);
 	assert(cube_cell.usable && cube_cell.rule.Points().size() == 64);
 	assert(Near(cube_cell.diagnostics.estimated_reference_volume, 1.0));
+	assert(cube_cell.diagnostics.estimated_reference_volume == cube_cell.diagnostics.upper_reference_volume);
 	assert(Near(Moment(cube_cell.rule, 1, 0, 0), .5));
 	assert(Near(Moment(cube_cell.rule, 2, 0, 0), 1.0/3.0));
 	assert(Near(Moment(cube_cell.rule, 1, 1, 1), .125));
@@ -187,6 +194,104 @@ int main()
 	Reject([&] { compact_cube.UsableRule(cube_domain, 0); });
 	Reject([&] { cube.UsableCompactRule(cube_domain, 0); });
 	compact_cube.ValidateUsableCompactRule(cube_domain, 0);
+
+	// Near-full Cut rules retain terminal samples alongside certified leaves.
+	// Their compensated producer estimate must remain exactly at the unit upper
+	// bound when every retained sample is inside.
+	const auto near_full_domain = Domain(Box({{0.0,0.0,0.0}}, {{.999,1.0,1.0}}), root);
+	const iga::CutCellVolumeQuadratureCatalog near_full(near_full_domain,
+		iga::OctreeCutQuadratureOptions{4,100000,100000,1000000});
+	const auto& near_full_cell = near_full.Cell(0);
+	assert(near_full_domain.Cells()[0].classification == iga::CellClassification::Cut);
+	assert(near_full_cell.diagnostics.lower_reference_volume <= near_full_cell.diagnostics.estimated_reference_volume);
+	assert(near_full_cell.diagnostics.estimated_reference_volume == near_full_cell.diagnostics.upper_reference_volume);
+	assert(near_full_cell.diagnostics.upper_reference_volume == 1.0);
+
+	// This small three-dimensional sliver isolates one Gauss point at absolute
+	// depth five.  Unlike a full y/z slab, its traversal stays small while the
+	// bounded rescue still has to discard empty unresolved whole-cell attempts.
+	const double thin_point = .5+iga::kGaussFourPoints[0]/32.0;
+	const auto thin_domain = Domain(Box({{thin_point-1.0e-6,thin_point-1.0e-6,thin_point-1.0e-6}},
+		{{thin_point+1.0e-6,thin_point+1.0e-6,thin_point+1.0e-6}}), root);
+	iga::OctreeCutQuadratureOptions thin_options{2,10000,10000,10000};
+	thin_options.empty_rule_rescue_max_depth = 5;
+	const iga::CutCellVolumeQuadratureCatalog thin(thin_domain, thin_options);
+	const auto& thin_cell = thin.Cell(0);
+	assert(thin_domain.Cells()[0].classification == iga::CellClassification::Cut);
+	assert(thin_cell.usable && thin_cell.diagnostics.rescue_effective_depth == 5
+		&& thin_cell.diagnostics.rescue_attempts == 4 && !thin_cell.rule.Points().empty());
+	assert(thin_cell.diagnostics.attempted_nodes > thin_cell.diagnostics.nodes);
+	for (const auto& point : thin_cell.rule.Points()) {
+		const auto physical = iga::EvaluateElementGeometry(thin_domain.Background().MaterializeElement(0), point.parametric).physical;
+		assert(thin_domain.SurfaceIndex().LocatePoint(physical) == iga::PointLocation::Inside);
+		assert(point.weight > 0.0 && point.parametric[0] >= 0.0 && point.parametric[0] <= 1.0);
+	}
+	auto direct_thin_options = thin_options; direct_thin_options.empty_rule_rescue_max_depth = 0; direct_thin_options.max_depth = 5;
+	const iga::CutCellVolumeQuadratureCatalog direct_thin(thin_domain, direct_thin_options);
+	RequireSameReferenceRule(thin, direct_thin);
+	assert(Near(WeightSum(thin_cell.rule), WeightSum(direct_thin.Cell(0).rule)));
+	// With rescue disabled, both storage modes retain the same structurally valid
+	// provisional empty Cut cell.  Consumers must fail closed in either mode.
+	auto compact_nominal_thin = thin_options; compact_nominal_thin.empty_rule_rescue_max_depth = 0;
+	const iga::CutCellVolumeQuadratureCatalog nominal(thin_domain, compact_nominal_thin);
+	const iga::CutCellVolumeQuadratureCatalog nominal_compact(thin_domain, compact_nominal_thin,
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	const auto& nominal_cell = nominal.Cell(0);
+	const auto& nominal_compact_cell = nominal_compact.Cell(0);
+	assert(nominal_cell.usable && nominal_compact_cell.usable);
+	assert(nominal_cell.rule.Points().empty()
+		&& iga::CompactCutCellVolumeLogicalPointCount(nominal_compact_cell.compact_rule) == 0);
+	assert(nominal_cell.diagnostics.certified_reference_volume == 0.0
+		&& nominal_cell.diagnostics.unresolved_reference_volume > 0.0);
+	assert(nominal_compact_cell.diagnostics.certified_reference_volume == nominal_cell.diagnostics.certified_reference_volume
+		&& nominal_compact_cell.diagnostics.unresolved_reference_volume == nominal_cell.diagnostics.unresolved_reference_volume);
+	RejectWithMessage([&] { nominal.ValidateUsableRule(thin_domain, 0); }, "not certified empty");
+	RejectWithMessage([&] { nominal_compact.ValidateUsableCompactRule(thin_domain, 0); }, "not certified empty");
+	const iga::CutCellVolumeQuadratureCatalog compact_thin(thin_domain, thin_options,
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	assert(compact_thin.Cell(0).diagnostics.rescue_effective_depth == 5
+		&& compact_thin.Cell(0).diagnostics.rescue_attempts == 4);
+	const iga::CutCellVolumeQuadratureCatalog direct_compact_thin(thin_domain, direct_thin_options,
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
+	RequireSameCompactRule(compact_thin.Cell(0).compact_rule, direct_compact_thin.Cell(0).compact_rule);
+	assert(Near(iga::CompactCutCellVolumeWeightSum(compact_thin.Cell(0).compact_rule), WeightSum(thin_cell.rule)));
+	const auto& compact_thin_diagnostics = compact_thin.Cell(0).diagnostics;
+	const auto& direct_compact_thin_diagnostics = direct_compact_thin.Cell(0).diagnostics;
+	// All four attempts append exactly one sample leaf.  The first reserve
+	// therefore has the exact, deterministic planned peak below.  Checking the
+	// rescue-wide maximum against that per-attempt peak keeps this test about
+	// planned capacity, while observed bytes remain accepted-rule capacity.
+	const std::size_t thin_sample_peak = sizeof(iga::CompactCutCellVolumeSampleLeaf);
+	assert(compact_thin_diagnostics.rescue_attempts == 4
+		&& compact_thin_diagnostics.attempted_record_attempts == 4
+		&& direct_compact_thin_diagnostics.record_attempts == 1);
+	assert(compact_thin_diagnostics.retained_bytes == thin_sample_peak
+		&& direct_compact_thin_diagnostics.retained_bytes == thin_sample_peak);
+	assert(compact_thin_diagnostics.observed_retained_bytes
+		== CompactRuleCapacityBytes(compact_thin.Cell(0).compact_rule));
+	assert(compact_thin_diagnostics.observed_retained_bytes
+		== direct_compact_thin_diagnostics.observed_retained_bytes);
+	compact_thin.ValidateUsableCompactRule(thin_domain, 0);
+	for (int x = 0; x <= 2; ++x) assert(MomentNear(CompactMoment(compact_thin.Cell(0).compact_rule, x, 0, 0),
+		Moment(thin_cell.rule, x, 0, 0), thin_cell.rule.Points().size()));
+	auto thin_cap = thin_options; thin_cap.empty_rule_rescue_max_depth = 4;
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog rejected(thin_domain, thin_cap); }, "empty-rule rescue exhausted");
+	auto exhausted_nodes = thin_options; exhausted_nodes.max_nodes = nominal.Cell(0).diagnostics.nodes;
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog rejected(thin_domain, exhausted_nodes); }, "node cap");
+	// The accepted depth-five rule alone fits under each bound.  Lowering the
+	// global cap by one must nevertheless fail because the discarded retries
+	// consume leaves and compact append attempts before acceptance.
+	assert(thin_cell.diagnostics.attempted_leaves > thin_cell.diagnostics.leaves);
+	auto exhausted_leaves = thin_options;
+	exhausted_leaves.max_leaves = thin_cell.diagnostics.attempted_leaves-1;
+	assert(exhausted_leaves.max_leaves > thin_cell.diagnostics.leaves);
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog rejected(thin_domain, exhausted_leaves); }, "leaf cap");
+	assert(compact_thin_diagnostics.attempted_record_attempts > direct_compact_thin_diagnostics.record_attempts);
+	auto exhausted_records = thin_options;
+	exhausted_records.max_records = compact_thin_diagnostics.attempted_record_attempts-1;
+	assert(exhausted_records.max_records > direct_compact_thin_diagnostics.record_attempts);
+	RejectWithMessage([&] { iga::CutCellVolumeQuadratureCatalog rejected(thin_domain, exhausted_records,
+		iga::CutCellVolumeQuadratureStorageMode::Compact); }, "record cap");
 
 	const auto inner_domain = Domain(Cube(.25, .75), root);
 	const iga::CutCellVolumeQuadratureCatalog inner(inner_domain, iga::OctreeCutQuadratureOptions{5,500000,500000,3000000});
@@ -452,8 +557,25 @@ int main()
 	const double narrow_upper = std::nextafter(narrow_lower, std::numeric_limits<double>::infinity());
 	const iga::CubicCartesianGridSpec narrow_grid{{{narrow_lower,narrow_lower,narrow_lower}}, {{narrow_upper,narrow_upper,narrow_upper}}, {{1,1,1}}};
 	const auto narrow_domain = Domain(Cube(narrow_lower, narrow_upper), narrow_grid);
-	const iga::CutCellVolumeQuadratureCatalog narrow(narrow_domain, iga::OctreeCutQuadratureOptions{4,10000,10000,100000});
+	iga::OctreeCutQuadratureOptions narrow_options{4,10000,10000,100000};
+	const iga::CutCellVolumeQuadratureCatalog narrow(narrow_domain, narrow_options);
+	const iga::CutCellVolumeQuadratureCatalog narrow_compact(narrow_domain, narrow_options,
+		iga::CutCellVolumeQuadratureStorageMode::Compact);
 	assert(narrow.Cell(0).diagnostics.precision_limited_leaves > 0);
+	assert(narrow.Cell(0).rule.Points().empty()
+		&& iga::CompactCutCellVolumeLogicalPointCount(narrow_compact.Cell(0).compact_rule) == 0);
+	RejectWithMessage([&] { narrow.ValidateUsableRule(narrow_domain, 0); }, "not certified empty");
+	RejectWithMessage([&] { narrow_compact.ValidateUsableCompactRule(narrow_domain, 0); }, "not certified empty");
+	narrow_options.empty_rule_rescue_max_depth = 5;
+	const std::string narrow_expanded_rejection = RejectionMessage([&] {
+		iga::CutCellVolumeQuadratureCatalog rejected(narrow_domain, narrow_options);
+	});
+	const std::string narrow_compact_rejection = RejectionMessage([&] {
+		iga::CutCellVolumeQuadratureCatalog rejected(narrow_domain, narrow_options,
+			iga::CutCellVolumeQuadratureStorageMode::Compact);
+	});
+	assert(narrow_expanded_rejection == narrow_compact_rejection);
+	assert(narrow_expanded_rejection.find("empty-rule rescue stopped by precision-limited subdivision") != std::string::npos);
 
 	std::cout << "cut-cell volume quadrature tests passed\n";
 }

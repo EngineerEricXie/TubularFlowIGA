@@ -231,7 +231,7 @@ private:
 		for (std::uint64_t id = 0; id < geometry.Surface().Cells().size(); ++id) {
 			const auto& rule = geometry.Surface().UsableRule(geometry.Domain(), id);
 			for (const auto& point : rule.Points()) {
-				if (point.boundary_id <= 0 || static_cast<std::uint64_t>(point.boundary_id) > std::numeric_limits<std::uint32_t>::max())
+				if (point.boundary_id < 0 || static_cast<std::uint64_t>(point.boundary_id) > std::numeric_limits<std::uint32_t>::max())
 					throw std::invalid_argument("moving immersed snapshot surface boundary label is invalid");
 				const auto boundary_id = static_cast<std::uint32_t>(point.boundary_id);
 				RequireFinitePositive(point.weight, "moving immersed snapshot wall weight is invalid");

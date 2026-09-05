@@ -34,6 +34,24 @@ iga::CartesianDomainClassification Domain()
 		iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(PortCube())));
 }
 
+iga::RawSurfaceSoup ZeroPortCube()
+{
+	auto result = PortCube();
+	// Label zero is an open z-low port here; the side wall deliberately uses a
+	// different label so this exercises the valid non-overlapping case.
+	result.triangles[0].boundary_id = 0;
+	result.triangles[1].boundary_id = 0;
+	for (std::size_t i = 4; i < result.triangles.size(); ++i) result.triangles[i].boundary_id = 3;
+	return result;
+}
+
+iga::CartesianDomainClassification ZeroPortDomain()
+{
+	const iga::CubicCartesianGridSpec spec{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+	return iga::CartesianDomainClassification(iga::CubicCartesianBackground(spec),
+		iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(ZeroPortCube())));
+}
+
 template <class Function> void Reject(Function&& function)
 { bool rejected = false; try { function(); } catch (const std::exception&) { rejected = true; } assert(rejected); }
 
@@ -73,6 +91,27 @@ int main(int argc, char** argv)
 		const iga::CutCellGhostPenaltyCatalog expanded_ghost(domain, expanded);
 		const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
 		iga::ImmersedStaticFlowOptions base; base.parameters = {1.0, 1.0, 0.0}; base.wall_labels = {0};
+
+		// Zero is a valid port label when it does not overlap a wall.  Assemble a
+		// pressure load and measure the same selected cap through the full runtime.
+		const auto zero_domain = ZeroPortDomain();
+		const iga::CutCellVolumeQuadratureCatalog zero_volume(zero_domain, {2,500000,500000,3000000});
+		const iga::ImmersedSurfaceQuadratureCatalog zero_surface(zero_domain);
+		const iga::CutCellGhostPenaltyCatalog zero_ghost(zero_domain, zero_volume);
+		iga::ImmersedStaticFlowOptions zero_port_options;
+		zero_port_options.parameters = {1.0, 1.0, 0.0}; zero_port_options.wall_labels = {3};
+		zero_port_options.ports = {{"zero",0,iga::ImmersedFlowPortControlMode::Pressure,5.0},
+			{"other",2,iga::ImmersedFlowPortControlMode::Pressure,7.0}};
+		zero_port_options.assemble_volume = false; zero_port_options.assemble_wall = false;
+		zero_port_options.assemble_ghost = false;
+		iga::ImmersedStaticFlowRuntime zero_port_runtime(zero_domain, zero_volume, zero_surface, zero_ghost, zero_port_options);
+		zero_port_runtime.Assemble();
+		const auto& zero_port = Port(zero_port_runtime, "zero");
+		assert(zero_port.assembled_surface_points > 0 && zero_port.area_m2 > 0.0);
+		assert(std::abs(zero_port.measurement.area_m2-zero_port.area_m2) < 2e-12);
+		assert(std::abs(zero_port.measurement.mean_pressure_pa) < 2e-12);
+		assert(std::any_of(zero_port_runtime.AssembledNegativeResidual().begin(), zero_port_runtime.AssembledNegativeResidual().end(),
+			[](PetscScalar value) { return PetscRealPart(value) != 0.0; }));
 
 		// A cap-only cut cell is legal: its open patch has no selected Nitsche
 		// points, but it still retains required ghost coverage.
@@ -308,7 +347,7 @@ int main(int argc, char** argv)
 		Reject([&] { auto bad = pressure; bad.ports[0].boundary_label = 9; iga::ImmersedStaticFlowRuntime x(domain, expanded, surface, expanded_ghost, bad); });
 		Reject([&] { auto bad = pressure; bad.wall_labels.clear(); iga::ImmersedStaticFlowRuntime x(domain, expanded, surface, expanded_ghost, bad); });
 		Reject([&] { auto bad = pressure; bad.ports[0].control_mode = iga::ImmersedFlowPortControlMode::TotalPressure; iga::ImmersedStaticFlowRuntime x(domain, expanded, surface, expanded_ghost, bad); });
-		Reject([&] { auto bad = pressure; bad.ports[0].boundary_label = 0; iga::ImmersedStaticFlowRuntime x(domain, expanded, surface, expanded_ghost, bad); });
+		Reject([&] { auto bad = pressure; bad.ports[0].boundary_label = -1; iga::ImmersedStaticFlowRuntime x(domain, expanded, surface, expanded_ghost, bad); });
 		// Port arithmetic fails deterministically before any non-finite PETSc insertion.
 		Reject([&] { (void)iga::CheckedImmersedFlowPortProduct(std::numeric_limits<double>::max(), 2.0, "test"); });
 		for (std::uint64_t id = 0; id < domain.Cells().size(); ++id) {
@@ -319,6 +358,8 @@ int main(int argc, char** argv)
 			const iga::SurfaceQuadratureRule overflow_rule({absurd});
 			const auto element = domain.Background().MaterializeElement(id);
 			std::vector<std::array<double, 4>> zero_nodal(element.connectivity.size());
+			Reject([&] { (void)iga::BuildImmersedFlowPortElement(element, rule, -1, iga::ImmersedFlowPortControlMode::Pressure, 0.0, zero_nodal); });
+			Reject([&] { (void)iga::MeasureImmersedFlowPortElement(element, rule, -1, zero_nodal, 1.0); });
 			Reject([&] { (void)iga::BuildImmersedFlowPortElement(element, overflow_rule, 1, iga::ImmersedFlowPortControlMode::Pressure, std::numeric_limits<double>::max(), zero_nodal); });
 			break;
 		}

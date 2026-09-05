@@ -33,6 +33,9 @@ struct OctreeCutQuadratureOptions {
 	std::size_t max_records = 1000000;
 	std::size_t max_retained_bytes = 256u*1024u*1024u;
 	std::size_t max_logical_points = 64u*1024u*1024u;
+	// Disabled by default.  A positive value retries an otherwise unresolved
+	// empty Cut rule at successive absolute depths through this bounded cap.
+	std::uint32_t empty_rule_rescue_max_depth = 0;
 };
 
 enum class CutCellVolumeQuadratureStorageMode { Expanded, Compact };
@@ -280,17 +283,29 @@ struct CutCellVolumeQuadratureDiagnostics {
 	// subtree rollback.  This excludes fixed-point block coalescing.
 	std::size_t rolled_back_records = 0;
 	// Compact-only deterministic compact-record accounting peak during this
-	// cell's construction.  It counts the planned 1.5x capacities and both old
-	// and replacement plans while reserve may reallocate.  This is the portable
-	// quantity constrained by max_retained_bytes; it is not an allocator-byte
-	// peak because std::vector::reserve may overallocate.
+	// cell's construction, including discarded empty-rule rescue attempts.  It
+	// counts the planned 1.5x capacities and both old and replacement plans
+	// while reserve may reallocate.  This is the portable quantity constrained
+	// by max_retained_bytes; it is not an allocator-byte peak because
+	// std::vector::reserve may overallocate.
 	std::size_t retained_bytes = 0;
-	// Compact-only observed final std::vector capacity bytes.  This diagnostic
-	// is intentionally not capped and does not report a transient allocator
-	// peak.
+	// Compact-only observed final std::vector capacity bytes for the accepted
+	// rule.  This diagnostic is intentionally not capped and does not report a
+	// transient allocator peak or discarded rescue-attempt capacity.
 	std::size_t observed_retained_bytes = 0;
 	std::size_t logical_output_points = 0;
 	std::uint32_t reached_depth = 0;
+	// Rescue attempts include the nominal build.  The work counters are
+	// monotone across discarded retries; retained rule counters above describe
+	// only the accepted rule.
+	std::size_t rescue_attempts = 0;
+	std::size_t attempted_nodes = 0;
+	std::size_t attempted_leaves = 0;
+	std::size_t attempted_output_points = 0;
+	std::size_t attempted_samples = 0;
+	std::size_t attempted_record_attempts = 0;
+	std::size_t attempted_logical_output_points = 0;
+	std::uint32_t rescue_effective_depth = 0;
 };
 
 struct CutCellVolumeQuadratureCell {
@@ -323,8 +338,8 @@ public:
 			CutCellVolumeQuadratureCell result;
 			result.id = cell.id;
 			result.classification = cell.classification;
-			if (storage_mode_ == CutCellVolumeQuadratureStorageMode::Expanded) BuildCell(domain, cell, result);
-			else BuildCompactCell(domain, cell, result);
+			if (storage_mode_ == CutCellVolumeQuadratureStorageMode::Expanded) BuildCellWithRescue(domain, cell, result);
+			else BuildCompactCellWithRescue(domain, cell, result);
 			Accumulate(diagnostics_, result.diagnostics);
 			cells_.push_back(std::move(result));
 		}
@@ -435,6 +450,9 @@ private:
 	static OctreeCutQuadratureOptions ValidateOptions(OctreeCutQuadratureOptions options)
 	{
 		if (options.max_depth > 20) throw std::invalid_argument("octree cut quadrature depth exceeds supported cap");
+		if (options.empty_rule_rescue_max_depth
+			&& (options.empty_rule_rescue_max_depth <= options.max_depth || options.empty_rule_rescue_max_depth > 20))
+			throw std::invalid_argument("octree empty-rule rescue depth must exceed max_depth and not exceed supported cap");
 		if (!options.max_nodes || !options.max_leaves || !options.max_points
 			|| !options.max_records || !options.max_retained_bytes || !options.max_logical_points)
 			throw std::invalid_argument("octree cut quadrature caps must be positive");
@@ -465,6 +483,21 @@ private:
 			|| total > std::numeric_limits<double>::max()-value)
 			throw std::runtime_error(message);
 		total += value;
+	}
+	static void AddCompensatedNonnegative(double& total, double& compensation, double value, const char* message)
+	{
+		if (!std::isfinite(value) || value < 0.0 || !std::isfinite(total) || !std::isfinite(compensation))
+			throw std::runtime_error(message);
+		const double corrected = value-compensation;
+		const double next = total+corrected;
+		if (!std::isfinite(next)) throw std::runtime_error(message);
+		compensation = (next-total)-corrected;
+		total = next;
+	}
+	static void ValidateReferenceEstimate(double estimate)
+	{
+		if (!std::isfinite(estimate) || estimate < 0.0 || estimate > 1.0)
+			throw std::runtime_error("cut quadrature reference estimate is outside unit interval");
 	}
 	static double Volume(const std::array<double, 3>& lower, const std::array<double, 3>& upper)
 	{
@@ -503,7 +536,13 @@ private:
 		add_count(target.record_attempts, source.record_attempts); add_count(target.rolled_back_records, source.rolled_back_records);
 		add_count(target.retained_bytes, source.retained_bytes); add_count(target.observed_retained_bytes, source.observed_retained_bytes);
 		add_count(target.logical_output_points, source.logical_output_points);
+		add_count(target.rescue_attempts, source.rescue_attempts);
+		add_count(target.attempted_nodes, source.attempted_nodes); add_count(target.attempted_leaves, source.attempted_leaves);
+		add_count(target.attempted_output_points, source.attempted_output_points); add_count(target.attempted_samples, source.attempted_samples);
+		add_count(target.attempted_record_attempts, source.attempted_record_attempts);
+		add_count(target.attempted_logical_output_points, source.attempted_logical_output_points);
 		target.reached_depth = std::max(target.reached_depth, source.reached_depth);
+		target.rescue_effective_depth = std::max(target.rescue_effective_depth, source.rescue_effective_depth);
 	}
 	static void ValidateDiagnostics(const CutCellVolumeQuadratureDiagnostics& diagnostics)
 	{
@@ -532,49 +571,51 @@ private:
 	}
 	static void ValidateStoredRule(const CutCellVolumeQuadratureCell& cell)
 	{
-		double weight_sum = 0.0;
+		double weight_sum = 0.0, weight_compensation = 0.0;
 		for (const auto& point : cell.rule.Points()) {
 			if (!QuadratureFinite(point.parametric) || point.parametric[0] < 0.0 || point.parametric[0] > 1.0
 				|| point.parametric[1] < 0.0 || point.parametric[1] > 1.0
 				|| point.parametric[2] < 0.0 || point.parametric[2] > 1.0
 				|| !std::isfinite(point.weight) || !(point.weight > 0.0))
 				throw std::runtime_error("stored cut-cell quadrature point is invalid");
-			AddFinite(weight_sum, point.weight, "stored cut-cell quadrature weight sum overflows");
+			AddCompensatedNonnegative(weight_sum, weight_compensation, point.weight,
+				"stored cut-cell quadrature weight sum overflows");
 		}
 		if (cell.diagnostics.output_points != cell.rule.Points().size()
 			|| cell.diagnostics.logical_output_points != cell.rule.Points().size()
 			|| !QuadratureClose(weight_sum, cell.diagnostics.estimated_reference_volume))
 			throw std::runtime_error("stored cut-cell quadrature weights are inconsistent");
 	}
-	static void ValidateCompactStoredRule(const CutCellVolumeQuadratureCell& cell, const Element* element = nullptr)
+	static void ValidateCompactStoredRule(const CutCellVolumeQuadratureCell& cell, const Element* element = nullptr,
+		bool permit_provisional_empty = false)
 	{
 		const auto& rule = cell.compact_rule;
 		try { ValidateCompactCutCellVolumeRule(rule); }
 		catch (const std::exception&) { throw std::runtime_error("stored compact cut-cell rule is invalid"); }
 		double weight_sum = 0.0, physical_sum = 0.0, weight_compensation = 0.0, physical_compensation = 0.0;
-		const auto add_compensated = [](double& total, double& compensation, double value, const char* message) {
-			if (!std::isfinite(value) || value < 0.0 || !std::isfinite(total)) throw std::runtime_error(message);
-			const double corrected = value-compensation, next = total+corrected;
-			if (!std::isfinite(next)) throw std::runtime_error(message);
-			compensation = (next-total)-corrected; total = next;
-		};
 		ForEachVolumePoint(rule, [&](const VolumeQuadraturePoint& point) {
 			if (!QuadratureFinite(point.parametric) || point.parametric[0] < 0.0 || point.parametric[0] > 1.0
 				|| point.parametric[1] < 0.0 || point.parametric[1] > 1.0 || point.parametric[2] < 0.0 || point.parametric[2] > 1.0
 				|| !std::isfinite(point.weight) || !(point.weight > 0.0))
 				throw std::runtime_error("stored compact cut-cell point is invalid");
-			add_compensated(weight_sum, weight_compensation, point.weight, "stored compact cut-cell weight sum overflows");
+			AddCompensatedNonnegative(weight_sum, weight_compensation, point.weight,
+				"stored compact cut-cell weight sum overflows");
 			if (element) {
 				const auto geometry = EvaluateElementGeometry(*element, point.parametric);
 				if (!std::isfinite(geometry.raw_determinant) || !(geometry.raw_determinant > 0.0)
 					|| point.weight > std::numeric_limits<double>::max()/geometry.raw_determinant)
 					throw std::runtime_error("stored compact cut-cell physical Jacobian is invalid");
-				add_compensated(physical_sum, physical_compensation, point.weight*geometry.raw_determinant, "stored compact cut-cell physical volume overflows");
+				AddCompensatedNonnegative(physical_sum, physical_compensation, point.weight*geometry.raw_determinant,
+					"stored compact cut-cell physical volume overflows");
 			}
 		});
 		if (!std::isfinite(weight_sum) || !QuadratureClose(weight_sum, cell.diagnostics.estimated_reference_volume)
 			|| CompactCutCellVolumeLogicalPointCount(rule) != cell.diagnostics.logical_output_points)
 			throw std::runtime_error("stored compact cut-cell weights are inconsistent");
+		if (!permit_provisional_empty && CompactCutCellVolumeLogicalPointCount(rule) == 0
+			&& (cell.diagnostics.certified_reference_volume != 0.0
+				|| cell.diagnostics.unresolved_reference_volume != 0.0))
+			throw std::runtime_error("empty compact cut-cell rule is not certified empty");
 		if (rule.certified_blocks.size() > std::numeric_limits<std::size_t>::max()-rule.sample_leaves.size()
 			|| cell.diagnostics.record_attempts < rule.certified_blocks.size()+rule.sample_leaves.size())
 			throw std::runtime_error("stored compact cut-cell record diagnostics are inconsistent");
@@ -614,13 +655,14 @@ private:
 	}
 	static double PhysicalRuleVolume(const Element& element, const VolumeQuadratureRule& rule)
 	{
-		double result = 0.0;
+		double result = 0.0, compensation = 0.0;
 		for (const auto& point : rule.Points()) {
 			const auto geometry = EvaluateElementGeometry(element, point.parametric);
 			if (!std::isfinite(geometry.raw_determinant) || !(geometry.raw_determinant > 0.0)
 				|| !std::isfinite(point.weight) || point.weight > std::numeric_limits<double>::max()/geometry.raw_determinant)
 				throw std::runtime_error("cut-cell quadrature has invalid physical Jacobian");
-			AddFinite(result, point.weight*geometry.raw_determinant, "cut quadrature physical estimate overflows");
+			AddCompensatedNonnegative(result, compensation, point.weight*geometry.raw_determinant,
+				"cut quadrature physical estimate overflows");
 		}
 		return result;
 	}
@@ -665,9 +707,128 @@ private:
 		AddFinite(diagnostics.unresolved_reference_volume, reference_volume, "cut quadrature unresolved volume overflows");
 		AddFinite(diagnostics.unresolved_physical_volume, reference_volume*physical_cell_volume, "cut quadrature physical volume overflows");
 	}
-
-	void BuildCell(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
+	static std::size_t RemainingCap(std::size_t cap, std::size_t used, const char* message)
+	{
+		if (used > cap) throw std::runtime_error(message);
+		return cap-used;
+	}
+	static void AddAttemptWork(CutCellVolumeQuadratureDiagnostics& target,
+		const CutCellVolumeQuadratureDiagnostics& attempt, std::size_t max_retained_bytes)
+	{
+		const auto add = [](std::size_t& left, std::size_t right) {
+			if (right > std::numeric_limits<std::size_t>::max()-left)
+				throw std::overflow_error("cut quadrature rescue work count overflows");
+			left += right;
+		};
+		if (target.rescue_attempts == std::numeric_limits<std::size_t>::max())
+			throw std::overflow_error("cut quadrature rescue work count overflows");
+		++target.rescue_attempts;
+		add(target.attempted_nodes, attempt.nodes); add(target.attempted_leaves, attempt.leaves);
+		add(target.attempted_output_points, attempt.output_points); add(target.attempted_samples, attempt.samples);
+		add(target.attempted_record_attempts, attempt.record_attempts);
+		add(target.attempted_logical_output_points, attempt.logical_output_points);
+		if (attempt.retained_bytes > max_retained_bytes)
+			throw std::runtime_error("compact cut-cell retained byte cap reached");
+		target.retained_bytes = std::max(target.retained_bytes, attempt.retained_bytes);
+	}
+	OctreeCutQuadratureOptions AttemptOptions(std::uint32_t depth,
+		const CutCellVolumeQuadratureDiagnostics& work, bool compact) const
+	{
+		OctreeCutQuadratureOptions result = options_;
+		result.max_depth = depth;
+		result.max_nodes = RemainingCap(options_.max_nodes, work.attempted_nodes,
+			"octree cut quadrature node cap reached");
+		result.max_leaves = RemainingCap(options_.max_leaves, work.attempted_leaves,
+			"octree cut quadrature leaf cap reached");
+		result.max_points = RemainingCap(options_.max_points, work.attempted_output_points,
+			"octree cut quadrature point cap reached");
+		if (compact) {
+			result.max_records = RemainingCap(options_.max_records, work.attempted_record_attempts,
+				"compact cut-cell record cap reached");
+			result.max_logical_points = RemainingCap(options_.max_logical_points, work.attempted_logical_output_points,
+				"compact cut-cell logical point cap reached");
+		}
+		return result;
+	}
+	static bool IsExactCertifiedEmpty(const CutCellVolumeQuadratureCell& cell, bool compact)
+	{
+		const std::size_t logical_points = compact ? CompactCutCellVolumeLogicalPointCount(cell.compact_rule)
+			: cell.rule.Points().size();
+		return logical_points == 0 && cell.diagnostics.certified_reference_volume == 0.0
+			&& cell.diagnostics.unresolved_reference_volume == 0.0;
+	}
+	static bool HasLogicalSupport(const CutCellVolumeQuadratureCell& cell, bool compact)
+	{
+		return compact ? CompactCutCellVolumeLogicalPointCount(cell.compact_rule) != 0 : !cell.rule.Points().empty();
+	}
+	void PublishAttempt(CutCellVolumeQuadratureCell& result, CutCellVolumeQuadratureCell&& attempt,
+		const CutCellVolumeQuadratureDiagnostics& work, std::uint32_t effective_depth) const
+	{
+		result = std::move(attempt);
+		result.diagnostics.retained_bytes = work.retained_bytes;
+		result.diagnostics.rescue_attempts = work.rescue_attempts;
+		result.diagnostics.attempted_nodes = work.attempted_nodes;
+		result.diagnostics.attempted_leaves = work.attempted_leaves;
+		result.diagnostics.attempted_output_points = work.attempted_output_points;
+		result.diagnostics.attempted_samples = work.attempted_samples;
+		result.diagnostics.attempted_record_attempts = work.attempted_record_attempts;
+		result.diagnostics.attempted_logical_output_points = work.attempted_logical_output_points;
+		result.diagnostics.rescue_effective_depth = effective_depth;
+	}
+	void BuildCellWithRescue(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
 		CutCellVolumeQuadratureCell& result) const
+	{
+		BuildWithRescue(domain, source, result, false);
+	}
+	void BuildCompactCellWithRescue(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
+		CutCellVolumeQuadratureCell& result) const
+	{
+		BuildWithRescue(domain, source, result, true);
+	}
+	void BuildWithRescue(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
+		CutCellVolumeQuadratureCell& result, bool compact) const
+	{
+		CutCellVolumeQuadratureDiagnostics work;
+		for (std::uint32_t depth = options_.max_depth;; ++depth) {
+			CutCellVolumeQuadratureCell attempt; attempt.id = source.id; attempt.classification = source.classification;
+			const auto attempt_options = AttemptOptions(depth, work, compact);
+			if (compact) BuildCompactCellAtDepth(domain, source, attempt, attempt_options);
+			else BuildCellAtDepth(domain, source, attempt, attempt_options);
+			AddAttemptWork(work, attempt.diagnostics, options_.max_retained_bytes);
+			const bool positive = HasLogicalSupport(attempt, compact);
+			const bool certified_empty = IsExactCertifiedEmpty(attempt, compact);
+			const bool provisional_empty = !positive && !certified_empty;
+			// A rescue retry cannot repair a midpoint that no longer subdivides.
+			// Do not publish a usable, zero-support unresolved rule in this case:
+			// it would conceal the precision failure in expanded storage while
+			// compact consumer validation correctly rejects the same rule.
+			if (provisional_empty && attempt.usable
+				&& attempt.diagnostics.unresolved_reference_volume > 0.0
+				&& options_.empty_rule_rescue_max_depth
+				&& attempt.diagnostics.precision_limited_leaves != 0)
+				throw std::runtime_error("cut-cell empty-rule rescue stopped by precision-limited subdivision for cell "
+					+ std::to_string(source.id) + " at depth " + std::to_string(depth));
+			if (positive || certified_empty || source.classification != CellClassification::Cut
+				|| !options_.empty_rule_rescue_max_depth || source.ambiguous
+				|| !attempt.usable || attempt.diagnostics.precision_limited_leaves != 0) {
+				// With rescue disabled, retain a structurally valid zero-support Cut
+				// attempt in either storage mode for backward-compatible construction.
+				// Consumer-facing validation still rejects it as not certified empty.
+				if (compact && attempt.usable) ValidateCompactStoredRule(attempt, nullptr,
+					provisional_empty && !options_.empty_rule_rescue_max_depth);
+				PublishAttempt(result, std::move(attempt), work, depth);
+				return;
+			}
+			if (depth == options_.empty_rule_rescue_max_depth) {
+				throw std::runtime_error("cut-cell empty-rule rescue exhausted for cell " + std::to_string(source.id)
+					+ " at depth " + std::to_string(depth) + " with unresolved reference volume "
+					+ std::to_string(attempt.diagnostics.unresolved_reference_volume));
+			}
+		}
+	}
+
+	void BuildCellAtDepth(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
+		CutCellVolumeQuadratureCell& result, const OctreeCutQuadratureOptions& options) const
 	{
 		const auto cell = domain.Background().Cell(source.id);
 		const Element element = domain.Background().MaterializeElement(source.id);
@@ -682,19 +843,21 @@ private:
 			result.diagnostics.estimated_physical_volume = PhysicalRuleVolume(element, result.rule);
 			result.diagnostics.lower_physical_volume = physical_volume;
 			result.diagnostics.upper_physical_volume = physical_volume;
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
-			CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
-			CheckAdd(result.diagnostics.output_points, result.rule.Points().size(), options_.max_points, "octree cut quadrature point cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
+			CheckAdd(result.diagnostics.output_points, result.rule.Points().size(), options.max_points, "octree cut quadrature point cap reached");
 			CheckAdd(result.diagnostics.samples, result.rule.Points().size(), std::numeric_limits<std::size_t>::max(), "cut quadrature sample count overflows");
 			result.diagnostics.logical_output_points = result.diagnostics.output_points;
 			ValidateVolumeQuadratureRule(element, result.rule);
+			ValidateReferenceEstimate(result.diagnostics.estimated_reference_volume);
 			ValidateStoredRule(result);
 			ValidateDiagnostics(result.diagnostics);
 			return;
 		}
 		if (source.classification == CellClassification::Outside) {
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
-			CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
+			ValidateReferenceEstimate(result.diagnostics.estimated_reference_volume);
 			ValidateStoredRule(result);
 			ValidateDiagnostics(result.diagnostics);
 			return;
@@ -706,7 +869,7 @@ private:
 		if (source.ambiguous) { result.usable = false; ++result.diagnostics.predicate_ambiguities; }
 		while (!stack.empty()) {
 			Node node = stack.back(); stack.pop_back();
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
 			result.diagnostics.reached_depth = std::max(result.diagnostics.reached_depth, node.depth);
 			bool ambiguous = false;
 			const auto contact = domain.SurfaceIndex().IntersectBox(node.physical_bounds);
@@ -716,26 +879,26 @@ private:
 				for (std::size_t axis = 0; axis < 3; ++axis) center[axis] = node.reference_lower[axis]+(node.reference_upper[axis]-node.reference_lower[axis])/2.0;
 				const auto location = domain.SurfaceIndex().LocatePoint(EvaluateElementGeometry(element, center).physical);
 				if (location == PointLocation::Inside) {
-					CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+					CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
 					AddCertified(node, result.diagnostics, physical_volume);
-					AppendScaledGauss(node, points, result.diagnostics, options_);
+					AppendScaledGauss(node, points, result.diagnostics, options);
 					continue;
 				}
 				if (location == PointLocation::Outside) {
-					CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+					CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
 					continue;
 				}
 				ambiguous = location == PointLocation::Ambiguous;
 			}
 			if (ambiguous) { result.usable = false; ++result.diagnostics.predicate_ambiguities; }
 			std::array<double, 3> ref_mid{}, physical_mid{};
-			bool midpoint_ok = node.depth < options_.max_depth;
+			bool midpoint_ok = node.depth < options.max_depth;
 			for (std::size_t axis = 0; axis < 3 && midpoint_ok; ++axis)
 				midpoint_ok = Midpoint(node.reference_lower[axis], node.reference_upper[axis], ref_mid[axis])
 					&& Midpoint(node.physical_bounds.minimum[axis], node.physical_bounds.maximum[axis], physical_mid[axis]);
 			if (!midpoint_ok) {
-				CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
-				if (node.depth < options_.max_depth) ++result.diagnostics.precision_limited_leaves;
+				CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
+				if (node.depth < options.max_depth) ++result.diagnostics.precision_limited_leaves;
 				AddUnresolved(node, result.diagnostics, physical_volume);
 				for (std::size_t qz = 0; qz < 4; ++qz)
 					for (std::size_t qy = 0; qy < 4; ++qy)
@@ -748,7 +911,7 @@ private:
 							}
 							const auto location = domain.SurfaceIndex().LocatePoint(EvaluateElementGeometry(element, reference).physical);
 							if (location == PointLocation::Inside) {
-								CheckAdd(result.diagnostics.output_points, 1, options_.max_points, "octree cut quadrature point cap reached");
+								CheckAdd(result.diagnostics.output_points, 1, options.max_points, "octree cut quadrature point cap reached");
 								const double weight = Volume(node.reference_lower, node.reference_upper)*kGaussFourWeights[qx]*kGaussFourWeights[qy]*kGaussFourWeights[qz]/8.0;
 								points.push_back({reference, weight});
 							} else if (location == PointLocation::Boundary) ++result.diagnostics.boundary_samples;
@@ -756,7 +919,7 @@ private:
 						}
 				continue;
 			}
-			const std::size_t available_nodes = options_.max_nodes-result.diagnostics.nodes;
+			const std::size_t available_nodes = options.max_nodes-result.diagnostics.nodes;
 			if (stack.size() > available_nodes || 8 > available_nodes-stack.size())
 				throw std::runtime_error("octree cut quadrature node cap reached");
 			// LIFO reverse order gives Morton x-fast visitation 0..7.
@@ -777,7 +940,11 @@ private:
 		// unresolved leaves need pointwise sampling, so this sum is exactly the
 		// certified contribution plus accepted terminal samples.
 		result.diagnostics.estimated_reference_volume = 0.0;
-		for (const auto& point : result.rule.Points()) AddFinite(result.diagnostics.estimated_reference_volume, point.weight, "cut quadrature weight sum overflows");
+		double reference_estimate_compensation = 0.0;
+		for (const auto& point : result.rule.Points())
+			AddCompensatedNonnegative(result.diagnostics.estimated_reference_volume, reference_estimate_compensation,
+				point.weight, "cut quadrature weight sum overflows");
+		ValidateReferenceEstimate(result.diagnostics.estimated_reference_volume);
 		result.diagnostics.estimated_physical_volume = PhysicalRuleVolume(element, result.rule);
 		result.diagnostics.logical_output_points = result.diagnostics.output_points;
 		result.diagnostics.lower_reference_volume = result.diagnostics.certified_reference_volume;
@@ -836,33 +1003,25 @@ private:
 		std::sort(blocks.begin(), blocks.end(), CompactBlockLess);
 	}
 
-	void BuildCompactCell(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
-		CutCellVolumeQuadratureCell& result) const
+	void BuildCompactCellAtDepth(const CartesianDomainClassification& domain, const CartesianDomainCell& source,
+		CutCellVolumeQuadratureCell& result, const OctreeCutQuadratureOptions& options) const
 	{
 		const auto cell = domain.Background().Cell(source.id);
 		const Element element = domain.Background().MaterializeElement(source.id);
 		const double physical_volume = Volume(cell.lower_m, cell.upper_m);
-		result.compact_rule.max_depth = options_.max_depth;
+		result.compact_rule.max_depth = options.max_depth;
 		double reference_estimate_compensation = 0.0, physical_estimate_compensation = 0.0;
 		double certified_reference_compensation = 0.0, certified_physical_compensation = 0.0;
 		double unresolved_reference_compensation = 0.0, unresolved_physical_compensation = 0.0;
-		const auto add_estimate = [](double& total, double& compensation, double value, const char* message) {
-			if (!std::isfinite(value) || value < 0.0 || !std::isfinite(total)) throw std::runtime_error(message);
-			const double corrected = value-compensation;
-			const double next = total+corrected;
-			if (!std::isfinite(next)) throw std::runtime_error(message);
-			compensation = (next-total)-corrected;
-			total = next;
-		};
 		const auto add_certified = [&](const Node& node) {
 			const double volume = Volume(node.reference_lower, node.reference_upper);
-			add_estimate(result.diagnostics.certified_reference_volume, certified_reference_compensation, volume, "cut quadrature certified volume overflows");
-			add_estimate(result.diagnostics.certified_physical_volume, certified_physical_compensation, volume*physical_volume, "cut quadrature physical volume overflows");
+			AddCompensatedNonnegative(result.diagnostics.certified_reference_volume, certified_reference_compensation, volume, "cut quadrature certified volume overflows");
+			AddCompensatedNonnegative(result.diagnostics.certified_physical_volume, certified_physical_compensation, volume*physical_volume, "cut quadrature physical volume overflows");
 		};
 		const auto add_unresolved = [&](const Node& node) {
 			const double volume = Volume(node.reference_lower, node.reference_upper);
-			add_estimate(result.diagnostics.unresolved_reference_volume, unresolved_reference_compensation, volume, "cut quadrature unresolved volume overflows");
-			add_estimate(result.diagnostics.unresolved_physical_volume, unresolved_physical_compensation, volume*physical_volume, "cut quadrature physical volume overflows");
+			AddCompensatedNonnegative(result.diagnostics.unresolved_reference_volume, unresolved_reference_compensation, volume, "cut quadrature unresolved volume overflows");
+			AddCompensatedNonnegative(result.diagnostics.unresolved_physical_volume, unresolved_physical_compensation, volume*physical_volume, "cut quadrature physical volume overflows");
 		};
 		const auto add_node_estimate = [&](const Node& node, std::uint64_t mask) {
 			const double volume = Volume(node.reference_lower, node.reference_upper);
@@ -872,12 +1031,12 @@ private:
 				std::array<double, 3> reference{};
 				for (std::size_t axis = 0; axis < 3; ++axis) { const std::size_t q = axis == 0 ? qx : (axis == 1 ? qy : qz); reference[axis] = node.reference_lower[axis]+(node.reference_upper[axis]-node.reference_lower[axis])*kGaussFourPoints[q]; }
 				const double weight = volume*kGaussFourWeights[qx]*kGaussFourWeights[qy]*kGaussFourWeights[qz]/8.0;
-				add_estimate(result.diagnostics.estimated_reference_volume, reference_estimate_compensation, weight, "cut quadrature weight sum overflows");
+				AddCompensatedNonnegative(result.diagnostics.estimated_reference_volume, reference_estimate_compensation, weight, "cut quadrature weight sum overflows");
 				const auto geometry = EvaluateElementGeometry(element, reference);
 				if (!std::isfinite(geometry.raw_determinant) || !(geometry.raw_determinant > 0.0)
 					|| weight > std::numeric_limits<double>::max()/geometry.raw_determinant)
 					throw std::runtime_error("cut-cell quadrature has invalid physical Jacobian");
-				add_estimate(result.diagnostics.estimated_physical_volume, physical_estimate_compensation, weight*geometry.raw_determinant, "cut quadrature physical estimate overflows");
+				AddCompensatedNonnegative(result.diagnostics.estimated_physical_volume, physical_estimate_compensation, weight*geometry.raw_determinant, "cut quadrature physical estimate overflows");
 			}
 		};
 		// Scratch vectors are shared by the whole recursive walk.  Record attempts
@@ -916,7 +1075,7 @@ private:
 			return std::max(required, capacity+increment);
 		};
 		const auto observe_accounted_bytes = [&](std::size_t bytes) {
-			if (bytes > options_.max_retained_bytes)
+			if (bytes > options.max_retained_bytes)
 				throw std::runtime_error("compact cut-cell retained byte cap reached");
 			peak_retained_bytes = std::max(peak_retained_bytes, bytes);
 		};
@@ -939,21 +1098,21 @@ private:
 			}
 		};
 		const auto append_block = [&](const CompactCutCellVolumeBlock& block) {
-			CheckAdd(record_attempts, 1, options_.max_records, "compact cut-cell record cap reached");
+			CheckAdd(record_attempts, 1, options.max_records, "compact cut-cell record cap reached");
 			reserve_block(); blocks.push_back(block);
 		};
 		const auto append_sample = [&](const CompactCutCellVolumeSampleLeaf& sample) {
-			CheckAdd(record_attempts, 1, options_.max_records, "compact cut-cell record cap reached");
+			CheckAdd(record_attempts, 1, options.max_records, "compact cut-cell record cap reached");
 			reserve_sample(); samples.push_back(sample);
 		};
 		const auto finish = [&] {
 			CoalesceCompactBlocks(blocks);
 			const std::size_t records = checked_count_sum(blocks.size(), samples.size());
-			if (records > options_.max_records) throw std::runtime_error("compact cut-cell record cap reached");
-			CompactCutCellVolumeRule published; published.max_depth = options_.max_depth;
+			if (records > options.max_records) throw std::runtime_error("compact cut-cell record cap reached");
+			CompactCutCellVolumeRule published; published.max_depth = options.max_depth;
 			published.certified_blocks = std::move(blocks); published.sample_leaves = std::move(samples);
 			const std::size_t logical_points = CompactCutCellVolumeLogicalPointCount(published);
-			if (logical_points > options_.max_logical_points)
+			if (logical_points > options.max_logical_points)
 				throw std::runtime_error("compact cut-cell logical point cap reached");
 			result.compact_rule = std::move(published);
 			result.diagnostics.certified_blocks = result.compact_rule.certified_blocks.size();
@@ -967,25 +1126,28 @@ private:
 			result.diagnostics.upper_reference_volume = result.diagnostics.certified_reference_volume+result.diagnostics.unresolved_reference_volume;
 			result.diagnostics.lower_physical_volume = result.diagnostics.certified_physical_volume;
 			result.diagnostics.upper_physical_volume = result.diagnostics.certified_physical_volume+result.diagnostics.unresolved_physical_volume;
-			ValidateCompactStoredRule(result, &element); ValidateDiagnostics(result.diagnostics);
+			ValidateReferenceEstimate(result.diagnostics.estimated_reference_volume);
+			// Empty unresolved attempts are structurally valid provisional rescue
+			// candidates.  BuildWithRescue applies the publishability predicate.
+			ValidateCompactStoredRule(result, &element, true); ValidateDiagnostics(result.diagnostics);
 		};
 		if (source.classification == CellClassification::Inside) {
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
-			CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
 			CheckAdd(result.diagnostics.samples, 64, std::numeric_limits<std::size_t>::max(), "cut quadrature sample count overflows");
-			append_block(CompactBlock(Node{{{0,0,0}},{{1,1,1}},source.bounds,0,{{0,0,0}}}, options_.max_depth));
+			append_block(CompactBlock(Node{{{0,0,0}},{{1,1,1}},source.bounds,0,{{0,0,0}}}, options.max_depth));
 			result.diagnostics.certified_reference_volume = 1.0; result.diagnostics.certified_physical_volume = physical_volume;
 			add_node_estimate(Node{{{0,0,0}},{{1,1,1}},source.bounds,0,{{0,0,0}}}, ~std::uint64_t(0));
 			finish(); return;
 		}
 		if (source.classification == CellClassification::Outside) {
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
-			CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
 			finish(); return;
 		}
 		if (source.ambiguous) { result.usable = false; ++result.diagnostics.predicate_ambiguities; }
 		const auto recurse = [&](auto&& self, const Node& node) -> CompactNodeState {
-			CheckAdd(result.diagnostics.nodes, 1, options_.max_nodes, "octree cut quadrature node cap reached");
+			CheckAdd(result.diagnostics.nodes, 1, options.max_nodes, "octree cut quadrature node cap reached");
 			result.diagnostics.reached_depth = std::max(result.diagnostics.reached_depth, node.depth);
 			bool ambiguous = false;
 			const auto contact = domain.SurfaceIndex().IntersectBox(node.physical_bounds);
@@ -995,22 +1157,22 @@ private:
 				for (std::size_t axis = 0; axis < 3; ++axis) center[axis] = node.reference_lower[axis]+(node.reference_upper[axis]-node.reference_lower[axis])/2.0;
 				const auto location = domain.SurfaceIndex().LocatePoint(EvaluateElementGeometry(element, center).physical);
 				if (location == PointLocation::Inside) {
-					CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
+					CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
 					CheckAdd(result.diagnostics.samples, 64, std::numeric_limits<std::size_t>::max(), "cut quadrature sample count overflows");
 					add_certified(node); add_node_estimate(node, ~std::uint64_t(0)); return CompactNodeState::UniformFull;
 				}
-				if (location == PointLocation::Outside) { CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached"); return CompactNodeState::UniformEmpty; }
+				if (location == PointLocation::Outside) { CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached"); return CompactNodeState::UniformEmpty; }
 				ambiguous = location == PointLocation::Ambiguous;
 			}
 			if (ambiguous) { result.usable = false; ++result.diagnostics.predicate_ambiguities; }
 			std::array<double, 3> ref_mid{}, physical_mid{};
-			bool midpoint_ok = node.depth < options_.max_depth;
+			bool midpoint_ok = node.depth < options.max_depth;
 			for (std::size_t axis = 0; axis < 3 && midpoint_ok; ++axis)
 				midpoint_ok = Midpoint(node.reference_lower[axis], node.reference_upper[axis], ref_mid[axis])
 					&& Midpoint(node.physical_bounds.minimum[axis], node.physical_bounds.maximum[axis], physical_mid[axis]);
 			if (!midpoint_ok) {
-				CheckAdd(result.diagnostics.leaves, 1, options_.max_leaves, "octree cut quadrature leaf cap reached");
-				if (node.depth < options_.max_depth) ++result.diagnostics.precision_limited_leaves;
+				CheckAdd(result.diagnostics.leaves, 1, options.max_leaves, "octree cut quadrature leaf cap reached");
+				if (node.depth < options.max_depth) ++result.diagnostics.precision_limited_leaves;
 				add_unresolved(node);
 				CompactCutCellVolumeSampleLeaf leaf; leaf.key = node.key; leaf.depth = node.depth;
 				for (std::size_t qz = 0; qz < 4; ++qz) for (std::size_t qy = 0; qy < 4; ++qy) for (std::size_t qx = 0; qx < 4; ++qx) {
@@ -1039,17 +1201,17 @@ private:
 				const CompactNodeState state = self(self, children[child]);
 				all_full = all_full && state == CompactNodeState::UniformFull;
 				all_empty = all_empty && state == CompactNodeState::UniformEmpty;
-				if (state == CompactNodeState::UniformFull) append_block(CompactBlock(children[child], options_.max_depth));
+				if (state == CompactNodeState::UniformFull) append_block(CompactBlock(children[child], options.max_depth));
 			}
 			if (all_full || all_empty) {
-				RollbackCompactRecords(blocks, samples, block_start, sample_start, result.diagnostics, options_.max_records);
+				RollbackCompactRecords(blocks, samples, block_start, sample_start, result.diagnostics, options.max_records);
 				return all_full ? CompactNodeState::UniformFull : CompactNodeState::UniformEmpty;
 			}
 			return CompactNodeState::Mixed;
 		};
 		Node root_node{{{0,0,0}}, {{1,1,1}}, source.bounds, 0, {{0,0,0}}};
 		const CompactNodeState compact = recurse(recurse, root_node);
-		if (compact == CompactNodeState::UniformFull) append_block(CompactBlock(root_node, options_.max_depth));
+		if (compact == CompactNodeState::UniformFull) append_block(CompactBlock(root_node, options.max_depth));
 		finish();
 	}
 

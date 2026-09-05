@@ -225,8 +225,10 @@ private:
 		for (std::size_t item : {value.nodes, value.leaves, value.output_points, value.samples, value.boundary_samples,
 			value.ambiguous_samples, value.predicate_ambiguities, value.precision_limited_leaves, value.certified_blocks,
 			value.sample_leaves, value.record_attempts, value.rolled_back_records, value.retained_bytes,
-			value.observed_retained_bytes, value.logical_output_points}) AppendCount(hash, item);
-		hash.AppendLittleEndian32(value.reached_depth);
+			value.observed_retained_bytes, value.logical_output_points, value.rescue_attempts, value.attempted_nodes,
+			value.attempted_leaves, value.attempted_output_points, value.attempted_samples,
+			value.attempted_record_attempts, value.attempted_logical_output_points}) AppendCount(hash, item);
+		hash.AppendLittleEndian32(value.reached_depth); hash.AppendLittleEndian32(value.rescue_effective_depth);
 	}
 	static void AppendGhostDiagnostics(Sha256& hash, const CutCellGhostPenaltyDiagnostics& value)
 	{
@@ -251,11 +253,11 @@ private:
 	}
 	std::string HashGeometryState() const
 	{
-		Sha256 hash; AppendString(hash, "MovingCutGeometry/current/v3"); AppendString(hash, evaluation_.IdentitySha256());
+		Sha256 hash; AppendString(hash, "MovingCutGeometry/current/v4"); AppendString(hash, evaluation_.IdentitySha256());
 		for (double value : domain_.Background().Spec().lower_m) hash.AppendNormalizedDouble(value);
 		for (double value : domain_.Background().Spec().upper_m) hash.AppendNormalizedDouble(value);
 		for (auto value : domain_.Background().Spec().cells) hash.AppendLittleEndian32(value);
-		hash.AppendLittleEndian32(options_.volume.max_depth); hash.AppendLittleEndian64(options_.volume.max_nodes); hash.AppendLittleEndian64(options_.volume.max_leaves); hash.AppendLittleEndian64(options_.volume.max_points); hash.AppendLittleEndian64(options_.volume.max_records); hash.AppendLittleEndian64(options_.volume.max_retained_bytes); hash.AppendLittleEndian64(options_.volume.max_logical_points); hash.AppendLittleEndian32(static_cast<std::uint32_t>(options_.volume_storage));
+		hash.AppendLittleEndian32(options_.volume.max_depth); hash.AppendLittleEndian64(options_.volume.max_nodes); hash.AppendLittleEndian64(options_.volume.max_leaves); hash.AppendLittleEndian64(options_.volume.max_points); hash.AppendLittleEndian64(options_.volume.max_records); hash.AppendLittleEndian64(options_.volume.max_retained_bytes); hash.AppendLittleEndian64(options_.volume.max_logical_points); hash.AppendLittleEndian32(options_.volume.empty_rule_rescue_max_depth); hash.AppendLittleEndian32(static_cast<std::uint32_t>(options_.volume_storage));
 		hash.AppendLittleEndian64(options_.surface.max_candidates); hash.AppendLittleEndian64(options_.surface.max_fragments); hash.AppendLittleEndian64(options_.surface.max_points); hash.AppendLittleEndian64(options_.surface.max_exact_limbs);
 		hash.AppendNormalizedDouble(options_.ghost.gamma_u); hash.AppendNormalizedDouble(options_.ghost.gamma_p); hash.AppendLittleEndian64(options_.ghost.max_faces); hash.AppendLittleEndian64(options_.ghost.max_quadrature_points); hash.AppendLittleEndian64(options_.ghost.max_trace_entries);
 		AppendCount(hash, domain_.Cells().size());
@@ -283,7 +285,7 @@ private:
 	}
 	std::string HashPublicationState(const MovingCutGeometry* previous) const
 	{
-		Sha256 hash; AppendString(hash,"MovingCutGeometry/publication/v2"); AppendString(hash,diagnostics_.geometry_identity_sha256); AppendString(hash,previous ? previous->GeometryIdentitySha256() : std::string{}); hash.AppendLittleEndian64(diagnostics_.unchanged_cells); hash.AppendLittleEndian64(diagnostics_.transitions.size()); for (const auto& item:diagnostics_.transition_counts) { AppendClassification(hash,item.first.first); AppendClassification(hash,item.first.second); hash.AppendLittleEndian64(item.second); } for (const auto& transition:diagnostics_.transitions) { hash.AppendLittleEndian64(transition.id); AppendClassification(hash,transition.old_classification); AppendClassification(hash,transition.new_classification); } return hash.Hex();
+		Sha256 hash; AppendString(hash,"MovingCutGeometry/publication/v3"); AppendString(hash,diagnostics_.geometry_identity_sha256); AppendString(hash,previous ? previous->GeometryIdentitySha256() : std::string{}); hash.AppendLittleEndian64(diagnostics_.unchanged_cells); hash.AppendLittleEndian64(diagnostics_.transitions.size()); for (const auto& item:diagnostics_.transition_counts) { AppendClassification(hash,item.first.first); AppendClassification(hash,item.first.second); hash.AppendLittleEndian64(item.second); } for (const auto& transition:diagnostics_.transitions) { hash.AppendLittleEndian64(transition.id); AppendClassification(hash,transition.old_classification); AppendClassification(hash,transition.new_classification); } return hash.Hex();
 	}
 
 	// Declaration order is the required lifetime order: evaluation first, then
