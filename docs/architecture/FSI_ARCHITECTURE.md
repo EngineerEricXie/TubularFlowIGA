@@ -1,8 +1,8 @@
 # FSI Architecture
 
-Status: **PR8.1b fluid-side traction extraction/projection boundary**. No
-fluid--structure solve, membrane model, or moving-domain FSI execution exists
-in this revision.
+Status: **PR8.2a bounded rank-local membrane numerical kernel plus PR8.1b
+fluid-side traction extraction/projection boundary**. No fluid--structure
+runtime solve or moving-domain FSI execution exists in this revision.
 
 ## Scope and first benchmark
 
@@ -217,6 +217,15 @@ belong on allocated resources rather than login nodes.
 
 ## Explicit exclusions
 
-PR8.1b excludes a structural solver, MPI collectives, nonmatching transfer,
-contact, ALE/remeshing, a monolithic FSI solve, production FSI runtime or
-coordinator/executor, and any claim of an operating FSI benchmark.
+PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
+kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
+and backward-Euler trial/prepare/finalize state.  Each successful solve issues
+one membrane-instance-owned generation capability from the unchanged committed
+state; it must be prepared and finalized, or explicitly rejected/aborted,
+before another solve. Rejected, aborted, stale, foreign, superseded, or
+modified capabilities cannot commit. Static coercivity and the dynamic SPD
+solve use scale-relative Cholesky checks; the dynamic solve also checks finite
+values and its backward-error residual. It excludes MPI structural
+assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
+monolithic FSI solve, production FSI runtime or coordinator/executor, and any
+claim of an operating FSI benchmark.
