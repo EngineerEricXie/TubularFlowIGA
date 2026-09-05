@@ -597,6 +597,143 @@ void ValidateSpeciesMultidomain(const fs::path& output)
 		}
 }
 
+constexpr int kZeroDClockSteps = 8;
+constexpr double kZeroDClockDt = 0.1;
+
+void WriteZeroDModel(const fs::path& directory, bool source)
+{
+	std::ofstream output(directory/"zero_d_model.json");
+	if (source) {
+		output << R"json({"role":"source_reservoir","capacitance_m3_pa":0.1,
+"resistance_pa_s_m3":100,"initial_pressure_pa":0.1,"prescribed_flow_m3_s":0.001})json";
+	} else {
+		output << R"json({"role":"terminal_rcr","proximal_resistance_pa_s_m3":0,
+"distal_resistance_pa_s_m3":100,"capacitance_m3_pa":0.1,"distal_pressure_pa":0,
+"initial_pressure_pa":0})json";
+	}
+	if (!output) throw std::runtime_error("cannot write 0D clock fixture model");
+}
+
+void WriteZeroDThreeDCase(const fs::path& directory)
+{
+	WriteThreeDCase(directory);
+	std::string configuration = ReadFile(directory/"simulation_config.json");
+	const std::string previous = "\"time\":{\"dt\":"+Number(kDt)
+		+",\"steps\":"+std::to_string(kSteps)+"}";
+	const std::string replacement = "\"time\":{\"dt\":"+Number(kZeroDClockDt)
+		+",\"steps\":"+std::to_string(kZeroDClockSteps)+"}";
+	const auto position = configuration.find(previous);
+	if (position == std::string::npos)
+		throw std::runtime_error("0D clock fixture cannot update 3D time grid");
+	configuration.replace(position, previous.size(), replacement);
+	std::ofstream output(directory/"simulation_config.json", std::ios::trunc);
+	output << configuration;
+	if (!output) throw std::runtime_error("cannot write 0D clock fixture 3D time grid");
+}
+
+void WriteZeroDClockGraph(const fs::path& root)
+{
+	std::ofstream output(root/"simulation_config.json", std::ios::trunc);
+	output << "{\n  \"schema_version\":5,\"time\":{\"dt\":" << Number(kZeroDClockDt)
+		<< ",\"steps\":" << kZeroDClockSteps << "},\"start_domain\":\"source_0d\",\n"
+		<< "  \"execution\":{\"kind\":\"explicit\"},\n  \"domains\":[\n"
+		<< "    {\"id\":\"source_0d\",\"dimension\":\"0d\",\"kind\":\"zero_d_flow\","
+		<< "\"case\":\"zero_source\",\"zero_d_model\":\"zero_d_model.json\",\"ports\":[{"
+		<< "\"id\":\"port\",\"locator_kind\":\"zero_d_port\",\"locator\":\"port\","
+		<< "\"provides\":[\"mean_pressure\",\"flow_rate\"],\"requires\":[\"mean_pressure\"]}]},\n"
+		<< "    {\"id\":\"junction\",\"dimension\":\"3d\",\"kind\":\"body_fitted_iga_flow\","
+		<< "\"case\":\"zero_junction\",\"database\":\"zero_junction.ntiga\",\"ports\":["
+		<< "{\"id\":\"inlet\",\"locator_kind\":\"boundary_label\",\"locator\":\"1\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"flow_rate\"]},"
+		<< "{\"id\":\"outlet_a\",\"locator_kind\":\"boundary_label\",\"locator\":\"2\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[\"mean_pressure\"]},"
+		<< "{\"id\":\"outlet_b\",\"locator_kind\":\"boundary_label\",\"locator\":\"3\","
+		<< "\"provides\":[\"area\",\"flow_rate\",\"mean_pressure\"],\"requires\":[]},"
+		<< "{\"id\":\"wall\",\"locator_kind\":\"boundary_label\",\"locator\":\"0\","
+		<< "\"provides\":[\"flow_rate\"],\"requires\":[]}]},\n"
+		<< "    {\"id\":\"terminal_0d\",\"dimension\":\"0d\",\"kind\":\"zero_d_flow\","
+		<< "\"case\":\"zero_terminal\",\"zero_d_model\":\"zero_d_model.json\",\"ports\":[{"
+		<< "\"id\":\"port\",\"locator_kind\":\"zero_d_port\",\"locator\":\"port\","
+		<< "\"provides\":[\"mean_pressure\",\"flow_rate\"],\"requires\":[\"flow_rate\"]}]}\n"
+		<< "  ],\n  \"couplings\":["
+		<< "{\"id\":\"source_to_junction\",\"a\":{\"domain\":\"source_0d\",\"port\":\"port\"},"
+		<< "\"b\":{\"domain\":\"junction\",\"port\":\"inlet\"},\"mode\":\"pressure_flow\",\"initial_pressure_pa\":0},"
+		<< "{\"id\":\"junction_to_terminal\",\"a\":{\"domain\":\"junction\",\"port\":\"outlet_a\"},"
+		<< "\"b\":{\"domain\":\"terminal_0d\",\"port\":\"port\"},\"mode\":\"pressure_flow\",\"initial_pressure_pa\":0}]\n}\n";
+	if (!output) throw std::runtime_error("cannot write 0D clock graph");
+}
+
+void RequireManifestDigest(const std::string& manifest, const std::string& key)
+{
+	const auto start = manifest.find(key);
+	if (start == std::string::npos)
+		throw std::runtime_error("0D manifest is missing "+key);
+	const auto value = start+key.size();
+	const auto end = manifest.find('"', value);
+	if (end == std::string::npos || end-value != 64)
+		throw std::runtime_error("0D manifest digest is malformed");
+}
+
+std::size_t CountOccurrences(const std::string& text, const std::string& needle)
+{
+	std::size_t count = 0;
+	for (std::size_t position = text.find(needle); position != std::string::npos;
+		position = text.find(needle, position+needle.size()))
+		++count;
+	return count;
+}
+
+void ValidateZeroDClockRun(const fs::path& output)
+{
+	if (!fs::is_regular_file(output/"graph_binding_manifest.json"))
+		throw std::runtime_error("0D clock fixture did not complete cleanly");
+	const std::string manifest = ReadFile(output/"graph_binding_manifest.json");
+	for (const auto& text : {"\"kind\":\"zero_d_flow\"", "\"model_role\":\"source_reservoir\"",
+		"\"model_role\":\"terminal_rcr\""})
+		if (manifest.find(text) == std::string::npos)
+			throw std::runtime_error("0D manifest model role is incomplete");
+	for (const auto& key : {"\"model_identity_sha256\":\"",
+		"\"final_state_identity_sha256\":\"",
+		"\"final_step_accounting_identity_sha256\":\""}) {
+		if (CountOccurrences(manifest, key) != 2)
+			throw std::runtime_error("0D manifest is missing a domain identity");
+		RequireManifestDigest(manifest, key);
+	}
+	const auto steps = ReadCsv(output/"pressure_flow_steps.csv");
+	const auto ports = ReadCsv(output/"pressure_flow_ports.csv");
+	const auto history = ReadCsv(output/"zero_d_flow_history.csv");
+	if (steps.size() != kZeroDClockSteps || history.size() != 2*kZeroDClockSteps)
+		throw std::runtime_error("0D clock fixture long-form output is incomplete");
+	int nullable_area_rows = 0;
+	for (const auto& row : ports)
+		if (row.at("domain_id") == "source_0d" || row.at("domain_id") == "terminal_0d") {
+			if (!row.at("area_m2").empty())
+				throw std::runtime_error("0D port output fabricated an area");
+			++nullable_area_rows;
+		}
+	if (nullable_area_rows != 2*kZeroDClockSteps)
+		throw std::runtime_error("0D port output omitted nullable-area rows");
+	std::map<std::string, int> history_domains;
+	for (const auto& row : history) {
+		++history_domains[row.at("domain_id")];
+		for (const auto& field : {"stored_pressure_pa", "initial_stored_volume_m3",
+			"final_stored_volume_m3", "prescribed_source_amount_m3",
+			"distal_sink_amount_m3", "outward_graph_port_amount_m3", "residual_m3"})
+			if (!std::isfinite(Value(row, field)))
+				throw std::runtime_error("0D history contains a non-finite value");
+		const double scale = std::max({std::abs(Value(row, "final_stored_volume_m3")
+			-Value(row, "initial_stored_volume_m3")),
+			std::abs(Value(row, "prescribed_source_amount_m3")),
+			std::abs(Value(row, "distal_sink_amount_m3")),
+			std::abs(Value(row, "outward_graph_port_amount_m3"))});
+		if (std::abs(Value(row, "residual_m3")) > 1.0e-12*std::max(1.0, scale))
+			throw std::runtime_error("0D step balance is not conservative");
+	}
+	if (history_domains != std::map<std::string, int>{{"source_0d", kZeroDClockSteps},
+		{"terminal_0d", kZeroDClockSteps}})
+		throw std::runtime_error("0D history does not cover both model roles");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -609,8 +746,39 @@ int main(int argc, char** argv)
 		for (const auto& directory : {"three_a", "three_b", "source", "bridge",
 			"leaf_a", "leaf_b", "leaf_c", "junction", "species_source",
 			"species_leaf_a", "species_leaf_b", "immersed", "immersed_source",
-			"immersed_sink"})
+			"immersed_sink", "zero_source", "zero_terminal", "zero_junction"})
 			fs::create_directories(root/directory);
+		// The eight 0.1 s steps cross the n*dt rounding divergence point.  The
+		// body-fitted single-element case also exercises source-0D initialization
+		// without turning this into a benchmark solve.
+		WriteZeroDModel(root/"zero_source", true);
+		WriteZeroDModel(root/"zero_terminal", false);
+		WriteZeroDThreeDCase(root/"zero_junction");
+		WriteDatabase(root/"zero_junction.ntiga", 1);
+		WriteZeroDClockGraph(root);
+		// The runner must reject a loaded model-role/port mismatch before it can
+		// create a native 3D runtime or output directory.
+		WriteZeroDModel(root/"zero_source", false);
+		if (RunMultidomain(root, root/"zero_d_invalid_role") == 0
+			|| fs::exists(root/"zero_d_invalid_role/graph_binding_manifest.json"))
+			throw std::runtime_error("invalid schema-v5 0D model-role topology was accepted");
+		RequireLogContains(root/"zero_d_invalid_role.log",
+			"0D flow domain port does not match its model role");
+		WriteZeroDModel(root/"zero_source", true);
+		if (RunMultidomain(root, root/"zero_d_clock_one") != 0)
+			throw std::runtime_error("schema-v5 0D exact-clock production run failed");
+		ValidateZeroDClockRun(root/"zero_d_clock_one");
+		if (RunMultidomain(root, root/"zero_d_clock_two") != 0)
+			throw std::runtime_error("repeated schema-v5 0D production run failed");
+		ValidateZeroDClockRun(root/"zero_d_clock_two");
+		if (ReadFile(root/"zero_d_clock_one/zero_d_flow_history.csv")
+			!= ReadFile(root/"zero_d_clock_two/zero_d_flow_history.csv"))
+			throw std::runtime_error("schema-v5 0D history is not deterministic");
+		if (std::getenv("TUBULARFLOWIGA_ZERO_D_CLOCK_FIXTURE_ONLY")) {
+			fs::remove_all(root);
+			std::cout << "schema-v5 0D exact-clock production fixture passed\n";
+			return 0;
+		}
 		WriteOneDCase(root/"immersed_source", 1.0e-3);
 		WriteOneDCase(root/"immersed_sink", 1.0e-3);
 		WriteImmersedCase(root/"immersed");

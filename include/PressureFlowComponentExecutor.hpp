@@ -130,17 +130,19 @@ public:
 				if (iteration > 1)
 					for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain)
 						registry_.Runtime(*domain).RollbackTrial();
+				// Pressure conditions are the iteration unknowns and may live on a
+				// downstream port of a domain.  Supply every one before the
+				// topological flow sweep so a multi-port 3D/1D runtime sees all of
+				// its boundary inputs when its upstream flow arrives.
+				for (std::size_t edge_index = 0; edge_index < interfaces_.size(); ++edge_index) {
+					PortBoundaryData input;
+					input.time_s = step.EndTime();
+					input.mean_pressure_pa = pressure[edge_index];
+					registry_.Runtime(interfaces_[edge_index].pressure_receiver.domain_id)
+						.SetPortInput(interfaces_[edge_index].pressure_receiver.port_id, input);
+				}
 				for (const auto& domain_id : plan_.domain_order) {
 					auto& runtime = registry_.Runtime(domain_id);
-					for (std::size_t edge_index = 0; edge_index < interfaces_.size(); ++edge_index) {
-						if (interfaces_[edge_index].pressure_receiver.domain_id != domain_id)
-							continue;
-						PortBoundaryData input;
-						input.time_s = step.EndTime();
-						input.mean_pressure_pa = pressure[edge_index];
-						runtime.SetPortInput(
-							interfaces_[edge_index].pressure_receiver.port_id, input);
-					}
 					runtime.SolveTrial();
 					for (const auto& interface : interfaces_) {
 						if (interface.flow_provider.domain_id != domain_id) continue;

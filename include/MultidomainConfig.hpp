@@ -631,6 +631,54 @@ inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& 
 		ValidateZeroDFlowDomainMetadata(domain.id, domain.ports,
 			domain.zero_d_flow_model->model.role);
 	}
+	// A 0D hydraulic component is deliberately narrow in this schema: one
+	// compliant source starts the directed tree and RCR models terminate it.
+	// Do this after model files are loaded, because port shape alone cannot
+	// distinguish those two otherwise compatible one-port roles.
+	std::size_t source_count = 0;
+	bool has_zero_d = false;
+	for (const auto& domain : result.domains) {
+		if (domain.kind != DomainKind::ZeroDFlow) continue;
+		has_zero_d = true;
+		if (!domain.zero_d_flow_model)
+			throw std::runtime_error("0D flow domain model was not loaded");
+		if (domain.zero_d_flow_model->model.role == ZeroDFlowRole::SourceReservoir)
+			++source_count;
+	}
+	if (has_zero_d) {
+		if (source_count != 1)
+			throw std::runtime_error("schema-v5 0D flow topology requires exactly one source reservoir");
+		const auto plan = MakeAcyclicPressureFlowPlan(result.graph, result.start_domain_id);
+		if (result.graph.Edges().size()+1 != result.graph.Domains().size())
+			throw std::runtime_error("schema-v5 0D flow topology requires one connected acyclic tree");
+		const auto start_it = std::find_if(result.domains.begin(), result.domains.end(),
+			[&](const GraphDomainDefinition& domain) {
+				return domain.id == result.start_domain_id;
+			});
+		if (start_it == result.domains.end())
+			throw std::runtime_error("0D flow start domain is not declared");
+		const auto& start = *start_it;
+		if (start.kind != DomainKind::ZeroDFlow || !start.zero_d_flow_model
+			|| start.zero_d_flow_model->model.role != ZeroDFlowRole::SourceReservoir)
+			throw std::runtime_error("schema-v5 0D flow source reservoir must be the declared start domain");
+		for (const auto& domain : result.domains) {
+			if (domain.kind != DomainKind::ZeroDFlow) continue;
+			const bool pressure_receiver = std::any_of(plan.interfaces.begin(), plan.interfaces.end(),
+				[&](const PressureFlowInterfacePlan& edge) {
+					return edge.pressure_receiver.domain_id == domain.id;
+				});
+			const bool flow_receiver = std::any_of(plan.interfaces.begin(), plan.interfaces.end(),
+				[&](const PressureFlowInterfacePlan& edge) {
+					return edge.flow_receiver.domain_id == domain.id;
+				});
+			if (domain.zero_d_flow_model->model.role == ZeroDFlowRole::SourceReservoir) {
+				if (!pressure_receiver || flow_receiver || domain.id != result.start_domain_id)
+					throw std::runtime_error("0D source reservoir must be the unique pressure-receiving start");
+			} else if (!flow_receiver || pressure_receiver) {
+				throw std::runtime_error("0D terminal RCR must be a flow-receiving terminal leaf");
+			}
+		}
+	}
 	return result;
 }
 

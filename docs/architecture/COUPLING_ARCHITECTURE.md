@@ -1,6 +1,6 @@
 # Coupling Architecture
 
-Status: Phase 1 complete; Phase 2 in progress. The verified 1D--3D--1D
+Status: Phase 1 complete; Phase 2 in progress; PR9.3 candidate. The verified 1D--3D--1D
 lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
 topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
 provides the strict schema-v5 graph manifest and its production runner binding.
@@ -51,6 +51,23 @@ source amount, distal sink amount, outward graph-port amount, and residual) and 
 state, and accounting identities.  It is compatible with the runtime registry
 for in-memory graph tests, but generic runner/executor materialization remains
 PR9.3.
+
+## PR9.3 candidate: generic schema-v5 0D runner integration
+
+The schema-v5 flow runner now owns and registers `ZeroDFlowDomainRuntime`
+objects alongside 1D and 3D runtimes. Its shared pressure-flow sweep accepts
+a source-reservoir start, preloads all pressure conditions, and routes source
+flow through 3D/1D domains to terminal RCR leaves without a special solver.
+0D topology is restricted to one connected acyclic heterogeneous tree: a
+single source is the declared pressure-receiving start, and every terminal RCR
+is a flow-receiving leaf. The runner seeds a flow-controlled 3D inlet from the
+source's committed compliant pressure and edge pressure without publishing a
+trial state. 0D areas remain absent, and machine-readable output includes
+model identity/role plus committed pressure and storage-balance history.
+
+Schema-v6/species execution continues to reject 0D domains. Restart,
+multirate, valves, 0D species, distributed immersed execution, and the full
+closure benchmark remain follow-on work.
 
 ## Current runtime boundaries
 

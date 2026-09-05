@@ -1,4 +1,5 @@
 #include "PressureFlowComponentExecutor.hpp"
+#include "ZeroDFlowDomain.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -77,6 +78,32 @@ iga::SimulationGraph Branch(bool permuted = false)
 		std::move(junction)}, std::move(edges));
 }
 
+iga::SimulationGraph ZeroDSourceChain()
+{
+	iga::ZeroDFlowModel model;
+	model.role = iga::ZeroDFlowRole::SourceReservoir;
+	model.source.capacitance_m3_pa = 1.0;
+	model.source.resistance_pa_s_m3 = 1.0;
+	auto source = iga::DomainNode{"source", iga::DomainKind::ZeroDFlow,
+		{iga::MakeZeroDFlowPort("source", model.role)}};
+	auto middle = iga::DomainNode{"mid", iga::DomainKind::ThreeDBodyFittedFlow,
+		{Port("mid", "inlet", {iga::PortQuantity::FlowRate}),
+		 Port("mid", "outlet", {iga::PortQuantity::MeanPressure})}};
+	auto downstream = iga::DomainNode{"down", iga::DomainKind::OneDFlow,
+		{Port("down", "root", {iga::PortQuantity::FlowRate}),
+		 Port("down", "terminal", {iga::PortQuantity::MeanPressure})}};
+	auto terminal = iga::DomainNode{"terminal", iga::DomainKind::ZeroDFlow,
+		{iga::MakeZeroDFlowPort("terminal", iga::ZeroDFlowRole::TerminalRcr)}};
+	return iga::SimulationGraph({std::move(source), std::move(middle), std::move(downstream),
+		std::move(terminal)}, {
+		{"source_to_mid", {"source", "port"}, {"mid", "inlet"},
+			iga::CouplingLaw::PressureFlow},
+		{"mid_to_down", {"mid", "outlet"}, {"down", "root"},
+			iga::CouplingLaw::PressureFlow},
+		{"down_to_terminal", {"down", "terminal"}, {"terminal", "port"},
+			iga::CouplingLaw::PressureFlow}});
+}
+
 class FakeRuntime : public iga::CoupledDomainRuntime {
 public:
 	FakeRuntime(std::string id, iga::DomainKind kind, std::vector<iga::CouplingPort> ports,
@@ -128,6 +155,12 @@ public:
 		} else if (id_ == "down") {
 			RequireFlow("root");
 			states_["root"] = State(*inputs_.at("root").outward_flow_m3_s, 20.0);
+			const auto terminal = std::find_if(ports_.begin(), ports_.end(),
+				[](const iga::CouplingPort& port) { return port.id == "terminal"; });
+			if (terminal != ports_.end()) {
+				RequirePressure("terminal");
+				states_["terminal"] = State(2.0, *inputs_.at("terminal").mean_pressure_pa);
+			}
 		} else if (id_ == "junction") {
 			RequireFlow("inlet");
 			RequirePressure("left");
@@ -216,13 +249,13 @@ private:
 	void RequireFlow(const std::string& port) const
 	{
 		if (!inputs_.count(port) || !inputs_.at(port).outward_flow_m3_s)
-			throw std::runtime_error("fake missing flow input");
+			throw std::runtime_error("fake "+id_+" missing flow input '"+port+"'");
 	}
 
 	void RequirePressure(const std::string& port) const
 	{
 		if (!inputs_.count(port) || !inputs_.at(port).mean_pressure_pa)
-			throw std::runtime_error("fake missing pressure input");
+			throw std::runtime_error("fake "+id_+" missing pressure input '"+port+"'");
 	}
 
 	void Event(const std::string& event) const
@@ -351,6 +384,42 @@ int main()
 			&& fixture.down->commits == 1);
 		for (const auto& edge : result.iterations.front().edges)
 			assert(edge.flow_residual_m3_s == 0.0);
+	}
+	{
+		const auto zero_graph = ZeroDSourceChain();
+		iga::ZeroDFlowModel source_model;
+		source_model.role = iga::ZeroDFlowRole::SourceReservoir;
+		source_model.source = {1.0, 1.0, 0.0};
+		auto source = std::make_unique<iga::ZeroDFlowDomainRuntime>("source", source_model,
+			iga::ZeroDFlowState{10.0}, zero_graph.Domain("source").ports);
+		auto* source_runtime = source.get();
+		auto middle = std::make_unique<FakeRuntime>("mid", iga::DomainKind::ThreeDBodyFittedFlow,
+			zero_graph.Domain("mid").ports);
+		auto downstream = std::make_unique<FakeRuntime>("down", iga::DomainKind::OneDFlow,
+			zero_graph.Domain("down").ports);
+		iga::ZeroDFlowModel terminal_model;
+		terminal_model.role = iga::ZeroDFlowRole::TerminalRcr;
+		terminal_model.terminal = {0.0, 1.0, 1.0, 0.0};
+		auto terminal = std::make_unique<iga::ZeroDFlowDomainRuntime>("terminal", terminal_model,
+			iga::ZeroDFlowState{0.0}, zero_graph.Domain("terminal").ports);
+		auto* terminal_runtime = terminal.get();
+		std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
+		runtimes.push_back(std::move(downstream));
+		runtimes.push_back(std::move(source));
+		runtimes.push_back(std::move(middle));
+		runtimes.push_back(std::move(terminal));
+		iga::DomainRuntimeRegistry registry(zero_graph, std::move(runtimes));
+		iga::PressureFlowComponentExecutor executor(registry, "source", {});
+		assert((executor.Plan().domain_order
+			== std::vector<std::string>{"source", "mid", "down", "terminal"}));
+		RequireRejected([&] { executor.Advance(step,
+			{{"source_to_mid", 10.0}, {"mid_to_down", 0.0}, {"down_to_terminal", 0.0}},
+			[](const iga::PressureFlowStepResult&) { throw std::runtime_error("precommit"); }); });
+		assert(source_runtime->CommittedStepCount() == 0 && terminal_runtime->CommittedStepCount() == 0);
+		const auto result = executor.Advance(step,
+			{{"source_to_mid", 10.0}, {"mid_to_down", 0.0}, {"down_to_terminal", 0.0}});
+		assert(result.accepted_ports.at({"source", "port"}).area_m2 == std::nullopt);
+		assert(source_runtime->CommittedStepCount() == 1 && terminal_runtime->CommittedStepCount() == 1);
 	}
 	{
 		const auto body_fitted_graph = Chain(iga::DomainKind::ThreeDBodyFittedFlow);

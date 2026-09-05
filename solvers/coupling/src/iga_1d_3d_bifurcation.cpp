@@ -12,6 +12,7 @@
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "ThreeDBodyFittedFlowTransportDomainAdapter.hpp"
 #include "ThreeDImmersedFlowDomain.hpp"
+#include "ZeroDFlowDomain.hpp"
 #include "ThreeDFlowCoupling.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -238,6 +239,7 @@ const char* ManifestDomainKind(iga::DomainKind kind)
 	if (kind == iga::DomainKind::OneDFlow) return "network_flow";
 	if (kind == iga::DomainKind::ThreeDBodyFittedFlow) return "body_fitted_iga_flow";
 	if (kind == iga::DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
+	if (kind == iga::DomainKind::ZeroDFlow) return "zero_d_flow";
 	throw std::runtime_error("unknown domain kind in output manifest");
 }
 
@@ -433,6 +435,8 @@ struct AcceptedStep {
 	double three_d_mass_m3_s = 0.0;
 	double external_outward_flow_m3_s = 0.0;
 	std::map<std::string, std::pair<double, double>> three_d_balance;
+	std::map<std::string, iga::ZeroDFlowState> zero_d_states;
+	std::map<std::string, iga::ZeroDFlowStepAccounting> zero_d_accounting;
 	iga::PressureFlowStepResult result;
 };
 
@@ -464,7 +468,9 @@ void WriteOutputs(const fs::path& directory,
 	std::ofstream ports(directory/"pressure_flow_ports.csv");
 	std::ofstream initialization(directory/"one_d_initialization.csv");
 	std::ofstream balances(directory/"pressure_flow_domain_balances.csv");
-	if (!summary || !edges || !iterations || !ports || !initialization || !balances)
+	std::ofstream zero_d_history(directory/"zero_d_flow_history.csv");
+	if (!summary || !edges || !iterations || !ports || !initialization || !balances
+		|| !zero_d_history)
 		throw std::runtime_error("cannot create bifurcation long-form output");
 	summary << "step,time_s,iterations,three_d_mass_imbalance_m3_s,external_outward_flow_m3_s\n";
 	edges << "step,time_s,edge_id,applied_pressure_pa,measured_pressure_pa,pressure_residual_pa,"
@@ -478,6 +484,9 @@ void WriteOutputs(const fs::path& directory,
 	initialization << "domain_id,inlet_policy,native_inlet_flow_m3_s\n";
 	balances << "step,time_s,domain_id,boundary_flow_sum_m3_s,"
 		"boundary_flow_absolute_sum_m3_s,normalized_mass_imbalance\n";
+	zero_d_history << "step,time_s,domain_id,stored_pressure_pa,initial_stored_volume_m3,"
+		"final_stored_volume_m3,prescribed_source_amount_m3,distal_sink_amount_m3,"
+		"outward_graph_port_amount_m3,residual_m3\n";
 	for (const auto& item : one_d)
 		initialization << std::setprecision(17) << CsvEscape(item.first) << ','
 			<< (item.second.inlet_policy == iga::OneDInletPolicy::ConfiguredOpenLoop
@@ -506,11 +515,22 @@ void WriteOutputs(const fs::path& directory,
 					<< edge.normalized_flow_residual << '\n';
 		for (const auto& port : step.result.accepted_ports) {
 			ports << std::setprecision(17) << step.step << ',' << step.time_s << ','
-				<< CsvEscape(port.first.domain_id) << ',' << CsvEscape(port.first.port_id) << ','
-				<< RequireValue(port.second.area_m2, "port area") << ','
-				<< RequireValue(port.second.outward_flow_m3_s, "port flow") << ',';
+				<< CsvEscape(port.first.domain_id) << ',' << CsvEscape(port.first.port_id) << ',';
+			if (port.second.area_m2) ports << *port.second.area_m2;
+			ports << ',' << RequireValue(port.second.outward_flow_m3_s, "port flow") << ',';
 			if (port.second.mean_pressure_pa) ports << *port.second.mean_pressure_pa;
 			ports << '\n';
+		}
+		for (const auto& zero : step.zero_d_states) {
+			const auto& accounting = step.zero_d_accounting.at(zero.first);
+			zero_d_history << std::setprecision(17) << step.step << ',' << step.time_s << ','
+				<< CsvEscape(zero.first) << ',' << zero.second.stored_pressure_pa << ','
+				<< accounting.initial_stored_volume_m3 << ','
+				<< accounting.final_stored_volume_m3 << ','
+				<< accounting.prescribed_source_amount_m3 << ','
+				<< accounting.distal_sink_amount_m3 << ','
+				<< accounting.outward_graph_port_amount_m3 << ','
+				<< accounting.residual_m3 << '\n';
 		}
 		for (const auto& balance : step.three_d_balance)
 			balances << std::setprecision(17) << step.step << ',' << step.time_s << ','
@@ -525,7 +545,9 @@ void WriteOutputs(const fs::path& directory,
 	ports.close();
 	initialization.close();
 	balances.close();
-	if (!summary || !edges || !iterations || !ports || !initialization || !balances)
+	zero_d_history.close();
+	if (!summary || !edges || !iterations || !ports || !initialization || !balances
+		|| !zero_d_history)
 		throw std::runtime_error("cannot finalize bifurcation long-form output");
 	std::ofstream marker(directory/"graph_binding_manifest.json.tmp");
 	if (!marker) throw std::runtime_error("cannot create bifurcation completion marker");
@@ -552,7 +574,26 @@ void WriteOutputs(const fs::path& directory,
 				<< JsonEscape(resolved.case_directory.generic_string()) << "\"";
 			if (domain.second.kind == iga::DomainKind::ThreeDBodyFittedFlow)
 				marker << ",\"database\":\""
-				<< JsonEscape(resolved.database.generic_string()) << "\"";
+					<< JsonEscape(resolved.database.generic_string()) << "\"";
+			if (domain.second.kind == iga::DomainKind::ZeroDFlow) {
+				const auto& definition = iga::GraphDomainDefinitionFor(configuration, domain.first);
+				const auto& model = definition.zero_d_flow_model->model;
+				marker << ",\"model_role\":\"" << iga::ZeroDFlowRoleName(model.role)
+					<< "\",\"model_identity_sha256\":\""
+					<< iga::BuildZeroDFlowModelIdentitySha256(model) << "\"";
+				if (!steps.empty()) {
+					const auto state = steps.back().zero_d_states.find(domain.first);
+					const auto accounting = steps.back().zero_d_accounting.find(domain.first);
+					if (state == steps.back().zero_d_states.end()
+						|| accounting == steps.back().zero_d_accounting.end())
+						throw std::runtime_error("accepted 0D output is missing final state or accounting");
+					marker << ",\"final_state_identity_sha256\":\""
+						<< iga::BuildZeroDFlowStateIdentitySha256(model, state->second)
+						<< "\",\"final_step_accounting_identity_sha256\":\""
+						<< iga::BuildZeroDFlowStepAccountingIdentitySha256(model, accounting->second)
+						<< "\"";
+				}
+			}
 			if (domain.second.kind == iga::DomainKind::ThreeDImmersedFlow) {
 				const auto& native = *immersed.at(domain.first);
 				const auto& grid = native.Grid();
@@ -803,9 +844,6 @@ int main(int argc, char** argv)
 				iga::ResolveOneDThreeDBifurcation(*configuration_holder));
 #endif
 			assets = iga::ResolveGraphDomainAssets(*configuration_holder, graph_root);
-			if (configuration_holder->graph.Domain(configuration_holder->start_domain_id).kind
-				!= iga::DomainKind::OneDFlow)
-				throw std::runtime_error("multidomain flow requires a 1D start domain");
 			for (const auto& domain_id : plan_holder->domain_order) {
 				if (configuration_holder->graph.Domain(domain_id).kind
 					!= iga::DomainKind::OneDFlow) continue;
@@ -904,13 +942,32 @@ int main(int argc, char** argv)
 					});
 				if (interface == plan.interfaces.end())
 					throw std::runtime_error("3D flow receiver is not bound to a graph edge");
-				const auto& provider = one_d.at(interface->flow_provider.domain_id);
-				const auto provider_state = provider.runtime->GetPortState(
-					configuration.graph.Port(interface->flow_provider).locator);
 				iga::PortBoundaryData input;
 				input.time_s = 0.0;
-				input.outward_flow_m3_s = -RequireValue(
-					provider_state.outward_flow_m3_s, "initial upstream provider flow");
+				if (one_d.count(interface->flow_provider.domain_id)) {
+					const auto& provider = one_d.at(interface->flow_provider.domain_id);
+					const auto provider_state = provider.runtime->GetPortState(
+						configuration.graph.Port(interface->flow_provider).locator);
+					input.outward_flow_m3_s = -RequireValue(
+						provider_state.outward_flow_m3_s, "initial upstream provider flow");
+				} else {
+					const auto& provider = iga::GraphDomainDefinitionFor(configuration,
+						interface->flow_provider.domain_id);
+					if (provider.kind != iga::DomainKind::ZeroDFlow
+						|| !provider.zero_d_flow_model
+						|| provider.zero_d_flow_model->model.role
+							!= iga::ZeroDFlowRole::SourceReservoir)
+						throw std::runtime_error(
+							"flow-controlled 3D inlet requires a 1D or source-0D flow provider");
+					const auto& source = provider.zero_d_flow_model->model.source;
+					const double edge_pressure = configuration.initial_pressure_pa.at(
+						interface->edge_id);
+					// This is an initialization-only boundary seed.  It uses the
+					// committed compliant pressure and coupling-edge pressure directly;
+					// do not publish or commit a speculative 0D trial here.
+					input.outward_flow_m3_s = -(provider.zero_d_flow_model->initial_state
+						.stored_pressure_pa-edge_pressure)/source.resistance_pa_s_m3;
+				}
 				iga::ApplyThreeDReferenceProfileInput(native.initial_configuration,
 					iga::FirstNavierStokesSystem(native.initial_configuration), port, input,
 					reference);
@@ -929,6 +986,7 @@ int main(int argc, char** argv)
 		}
 
 		std::vector<std::unique_ptr<iga::CoupledDomainRuntime>> runtimes;
+		std::map<std::string, iga::ZeroDFlowDomainRuntime*> zero_d;
 		iga::ThreeDFlowDomainControls controls;
 		controls.maximum_newton = options.maximum_newton;
 		controls.nonlinear_relative_tolerance = kNonlinearRelativeTolerance;
@@ -969,10 +1027,22 @@ int main(int argc, char** argv)
 					domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
 					native.configuration, native.case_directory,
 					native.reference_outward_flow_m3_s, controls));
-			} else {
+			} else if (immersed.count(domain_id)) {
 				auto native = std::move(immersed.at(domain_id));
 				immersed_audit.emplace(domain_id, native.get());
 				runtimes.push_back(std::move(native));
+			} else {
+				const auto& definition = iga::GraphDomainDefinitionFor(configuration, domain_id);
+				if (definition.kind != iga::DomainKind::ZeroDFlow
+					|| !definition.zero_d_flow_model)
+					throw std::runtime_error("multidomain graph has no runtime owner for domain '"
+						+domain_id+"'");
+				auto runtime = std::make_unique<iga::ZeroDFlowDomainRuntime>(domain_id,
+					definition.zero_d_flow_model->model,
+					definition.zero_d_flow_model->initial_state,
+					configuration.graph.Domain(domain_id).ports);
+				zero_d.emplace(domain_id, runtime.get());
+				runtimes.push_back(std::move(runtime));
 			}
 		}
 		iga::DomainRuntimeRegistry registry(configuration.graph, std::move(runtimes));
@@ -1025,15 +1095,20 @@ int main(int argc, char** argv)
 		};
 		std::vector<AcceptedStep> accepted;
 		std::vector<AcceptedSpeciesStep> accepted_species;
+		// The start of every accepted step is the exact EndTime() that was
+		// committed by the preceding context.  Do not reconstruct it as n*dt:
+		// exact-clock runtimes deliberately reject that different rounding.
+		double accepted_time_s = 0.0;
 		for (int step = 1; step <= final_step; ++step) {
-			const double time = step*configuration.time.dt_s;
+			const iga::DomainStepContext step_context{step-1, accepted_time_s,
+				configuration.time.dt_s};
+			const double time = step_context.EndTime();
 			std::map<std::string, std::pair<double, double>> pending_balance;
 			double pending_mass = 0.0;
 			double pending_external = 0.0;
 			if (species_executor) {
 				std::map<iga::PortRef, iga::PortState> pending_transport_ports;
-				auto result = species_executor->Advance({step-1,
-					(step-1)*configuration.time.dt_s, configuration.time.dt_s}, pressure,
+				auto result = species_executor->Advance(step_context, pressure,
 					[&](const iga::SpeciesPressureFlowStepResult& trial) {
 						VerifyHydraulicBalance(trial, pending_balance, pending_mass,
 							pending_external);
@@ -1051,19 +1126,29 @@ int main(int argc, char** argv)
 				for (const auto& edge : accepted_species.back().result.hydraulic_iterations.back().edges)
 					pressure[edge.edge_id] = edge.measured_pressure_pa;
 			} else {
-				auto result = flow_executor->Advance({step-1, (step-1)*configuration.time.dt_s,
-					configuration.time.dt_s}, pressure,
+				auto result = flow_executor->Advance(step_context, pressure,
 					[&](const iga::PressureFlowStepResult& trial) {
 						VerifyHydraulicBalance(trial, pending_balance, pending_mass,
 							pending_external);
 						if (step == injected_failure_step)
 							throw std::runtime_error("injected bifurcation failure before commit");
 					});
-				accepted.push_back({step, time, static_cast<int>(result.iterations.size()),
-					pending_mass, pending_external, std::move(pending_balance), std::move(result)});
+				AcceptedStep accepted_step{step, time, static_cast<int>(result.iterations.size()),
+					pending_mass, pending_external, std::move(pending_balance), {}, {},
+					std::move(result)};
+				for (const auto& zero : zero_d) {
+					accepted_step.zero_d_states.emplace(zero.first, zero.second->CommittedState());
+					accepted_step.zero_d_accounting.emplace(zero.first,
+						*zero.second->CommittedStepAccounting());
+				}
+				accepted.push_back(std::move(accepted_step));
 				for (const auto& edge : accepted.back().result.iterations.back().edges)
 					pressure[edge.edge_id] = edge.measured_pressure_pa;
 			}
+			// Advance only after the executor's transactional commit and all
+			// accepted-result bookkeeping have completed.  A failed trial or
+			// precommit callback therefore leaves this accepted clock unchanged.
+			accepted_time_s = step_context.EndTime();
 		}
 
 		int output_failed = 0;

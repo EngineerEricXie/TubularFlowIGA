@@ -180,15 +180,14 @@ private:
 			if (iteration > 1)
 				for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain)
 					staged_.at(*domain)->RollbackHydraulicTrial();
+			for (std::size_t i = 0; i < interfaces_.size(); ++i) {
+				PortBoundaryData input;
+				input.time_s = step.EndTime();
+				input.mean_pressure_pa = pressure[i];
+				registry_.Runtime(interfaces_[i].pressure_receiver.domain_id).SetPortInput(
+					interfaces_[i].pressure_receiver.port_id, input);
+			}
 			for (const auto& domain_id : plan_.domain_order) {
-				auto& runtime = registry_.Runtime(domain_id);
-				for (std::size_t i = 0; i < interfaces_.size(); ++i)
-					if (interfaces_[i].pressure_receiver.domain_id == domain_id) {
-						PortBoundaryData input;
-						input.time_s = step.EndTime();
-						input.mean_pressure_pa = pressure[i];
-						runtime.SetPortInput(interfaces_[i].pressure_receiver.port_id, input);
-					}
 				staged_.at(domain_id)->SolveHydraulicTrial();
 				for (const auto& interface : interfaces_) if (interface.flow_provider.domain_id == domain_id) {
 					const auto state = HydraulicState(interface.flow_provider);

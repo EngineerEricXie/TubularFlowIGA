@@ -385,6 +385,10 @@ inline PressureFlowComponentPlan MakeAcyclicPressureFlowPlan(
 			= first.requires.count(PortQuantity::MeanPressure) != 0;
 		const auto pressure_receiver = first_receives_pressure ? edge.first : edge.second;
 		const auto flow_receiver = first_receives_pressure ? edge.second : edge.first;
+		// The pressure receiver is solved first.  Its resulting flow drives the
+		// opposite flow receiver, whose pressure closes the interface residual.
+		// Keeping these four roles explicit is what lets a 0D source lead a
+		// 3D/1D component without a bespoke execution path.
 		plan.interfaces.push_back({edge.id, pressure_receiver, flow_receiver,
 			flow_receiver, pressure_receiver});
 		downstream.at(pressure_receiver.domain_id).push_back(flow_receiver.domain_id);
