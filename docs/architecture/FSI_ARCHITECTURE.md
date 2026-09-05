@@ -1,0 +1,105 @@
+# FSI Architecture
+
+Status: **PR8.0a contracts only**. No fluid--structure solve, membrane model,
+or moving-domain FSI execution exists in this revision.
+
+## Scope and first benchmark
+
+The first vertical slice is a small-displacement, pre-tensioned compliant
+membrane patch over a rectangular immersed-flow channel. It is intentionally a
+benchmark-sized coupling problem: full Cartesian interface fields are carried
+even though the initial membrane relaxes only the normal generalized traction.
+
+## Separate surface contracts
+
+`DistributedSurfaceInterface.hpp` is the dependency-free contract for
+field-valued interface exchange. It is separate from scalar P/Q
+`CouplingPort`: a fluid publishes traction on the structure and a structure
+publishes displacement and velocity. A surface layout identifies reference
+material nodes, owned IDs, reference triangles, and positive reference lumped
+areas. Every published field stamp also carries the immutable partition
+identity derived from its exact owned IDs and weights, so equal-sized ownership
+slices cannot cross-bind. Ghost values are local scratch only and never confer
+publication ownership. Material-surface interfaces require nonempty,
+canonical sorted boundary labels (label zero is valid). The first fluid and
+structure interfaces are bidirectional: each must declare a nonempty
+`provides` list and a nonempty `requires` list; both lists are canonical sorted,
+unique, and disjoint. Interface identities delimit and count each list
+explicitly.
+
+The sign convention for the fluid load is fluid-on-structure Cauchy traction:
+
+\[
+t_{\mathrm{on\ structure}}=-\sigma_f n_f.
+\]
+
+The first slice requires identical material topology and global node IDs on
+both sides. Nonmatching interpolation/projection is explicitly deferred.
+
+## Weighted Aitken
+
+Strong coupling uses one scalar dynamic Aitken factor over the flattened
+interface vector. Each rank retains its positive, unnormalized owned
+reference-area weights \(a_i\) and receives the explicit positive global area
+\(A=\sum_i a_i\). For the accepted residual \(r_{k-1}\) and current residual
+\(r_k\), each rank contributes
+
+\[
+N_{\mathrm{local}}=\sum_i a_i r_{k-1,i}(r_{k,i}-r_{k-1,i}),\qquad
+D_{\mathrm{local}}=\sum_i a_i(r_{k,i}-r_{k-1,i})^2.
+\]
+
+The runtime must sum those two terms and max-reduce a common residual scale
+\(s\). Before that reduction/proposal, it must allgather-and-compare or
+broadcast the `ControlStateIdentitySha256()` value. The proposal API requires
+that expected identity and fails closed when a rank has desynchronized control
+state. The identity covers only globally identical state that can affect the
+scalar: reset phase/generation, accepted-iteration count, previous relaxation,
+history-present flag, controls, and global area. It also encodes whether a
+proposal is pending; in that phase it binds the globally identical proposal
+identity, so a pending rank and a proposal-ready rank compare unequal while
+synchronized pending ranks compare equal. It deliberately excludes the
+partition-local previous residual vector and local weights, which remain bound
+to each rank's partition/history. With identical validated \(N\), \(D\), \(s\),
+and control identity, every rank produces the same \(\omega\) and applies
+\(\omega_{k+1}=-\omega_k N/D\). There is intentionally no hidden MPI
+dependency or rank-local normalization. The positive finite
+`reference_scale` is a lower bound, not a fixed scale: the common scale is
+`max(reference_scale, abs(all current and accepted previous residual
+entries))`. It is used only by the tiny-difference fallback, which tests
+\(D/(A s^2)\) against the configured threshold; it does not alter the Aitken
+candidate. The single-rank convenience route computes the same local
+contributions and calls the reduced proposal route exactly. The partition and
+unnormalized weight identity are fixed by the Aitken owner; any change requires
+a fresh owner. A proposal has two identities: its global identity covers only
+the collectively identical control and reduction facts and is the identity
+bound into a pending control state; its local identity additionally covers the
+bound partition/weight identity and exact-bit local iterate, residual, update,
+and next vectors. `AcceptApplied` recomputes both from the supplied fields and
+requires an exact-bit match to its locally pending proposal (including status
+and diagnostics), rather than trusting a carried identity string. The proposal
+is one-use, its applied scalar must match exactly, and a reset invalidates all
+pending proposals. This contract defines the distributed reduction and
+ownership requirements only; it makes no runtime FSI claim.
+
+## Ownership and future transaction
+
+Before a surface field can be published, its producer must be producer-neutral
+with respect to the surface contract: it must establish the exact material
+surface, reference/layout identities, owned values, and a producer-state
+identity without depending on a future coupling owner. A later runtime will
+use a transaction shaped as `idle -> trial -> prepared -> finalized`: validate
+unpublished fields and convergence data first, then perform a non-allocating
+ownership exchange. Abort discards trial data; ghosts remain scratch.
+
+Performance work carries forward the Phase 7 requirement to measure assembly
+and solve time separately, host peak RSS, CUDA peak allocation, rank/partition
+agreement, and CPU/CUDA field differences. Representative distributed solves
+belong on allocated resources rather than login nodes.
+
+## Explicit exclusions
+
+PR8.0a excludes a structural solver, traction integration implementation,
+fluid-side surface extraction, MPI collectives, nonmatching transfer,
+contact, ALE/remeshing, a monolithic FSI solve, and any claim of an operating
+FSI benchmark.

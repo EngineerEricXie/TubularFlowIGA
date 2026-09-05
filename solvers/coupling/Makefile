@@ -18,9 +18,15 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
+.PHONY: all test surface-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
+
+distributed_surface_contracts_test: tests/test_distributed_surface_contracts.cpp ../../include/DistributedSurfaceInterface.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp ../cpu/include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+surface-contracts-test: distributed_surface_contracts_test
+	./distributed_surface_contracts_test
 
 explicit_coupling_test: tests/test_explicit_coupling.cpp ../../include/ExplicitOneDThreeDCoupling.hpp ../../include/StrongOneDThreeDCoupling.hpp ../../include/AitkenRelaxation.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
@@ -37,12 +43,13 @@ species_pressure_flow_executor_test: tests/test_species_pressure_flow_executor.c
 multidomain_config_test: tests/test_multidomain_config.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
-test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
+test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test distributed_surface_contracts_test
 	./explicit_coupling_test
 	./simulation_graph_test
 	./pressure_flow_executor_test
 	./species_pressure_flow_executor_test
 	./multidomain_config_test
+	./distributed_surface_contracts_test
 
 petsc: iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
 
@@ -123,4 +130,4 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
-	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
+	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test distributed_surface_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
