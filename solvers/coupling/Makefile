@@ -22,7 +22,7 @@ endif
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
-zero_d_flow_test: tests/test_zero_d_flow.cpp ../../include/ZeroDFlowDomain.hpp ../../include/CouplingPort.hpp ../cpu/include/Sha256.hpp
+zero_d_flow_test: tests/test_zero_d_flow.cpp ../../include/ZeroDFlowDomain.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingPort.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 zero-d-flow-test: zero_d_flow_test

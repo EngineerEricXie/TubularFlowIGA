@@ -3,11 +3,12 @@
 
 // Dependency-free 0D hydraulic contracts.  Flow is always positive outward
 // from this 0D subsystem, and all quantities use SI units.
-#include "CouplingPort.hpp"
+#include "CoupledDomainRuntime.hpp"
 #include "Sha256.hpp"
 
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -61,6 +62,18 @@ struct ZeroDFlowModelConfiguration {
 
 struct ZeroDFlowStorageBalance {
 	double stored_volume_change_m3 = 0.0;
+	double prescribed_source_amount_m3 = 0.0;
+	double distal_sink_amount_m3 = 0.0;
+	double outward_graph_port_amount_m3 = 0.0;
+	double residual_m3 = 0.0;
+};
+
+// Per-step volume accounting is intentionally separate from the hydraulic
+// state.  It gives callers a compact conservation check without adding a
+// second numerical update path to either 0D model.
+struct ZeroDFlowStepAccounting {
+	double initial_stored_volume_m3 = 0.0;
+	double final_stored_volume_m3 = 0.0;
 	double prescribed_source_amount_m3 = 0.0;
 	double distal_sink_amount_m3 = 0.0;
 	double outward_graph_port_amount_m3 = 0.0;
@@ -153,6 +166,33 @@ inline std::string BuildZeroDFlowStateIdentitySha256(const ZeroDFlowModel& model
 	return hash.Hex();
 }
 
+inline void ValidateZeroDFlowStepAccounting(const ZeroDFlowStepAccounting& accounting)
+{
+	RequireFinitePortValue("0D flow initial stored volume", accounting.initial_stored_volume_m3);
+	RequireFinitePortValue("0D flow final stored volume", accounting.final_stored_volume_m3);
+	RequireFinitePortValue("0D flow prescribed source amount", accounting.prescribed_source_amount_m3);
+	RequireFinitePortValue("0D flow distal sink amount", accounting.distal_sink_amount_m3);
+	RequireFinitePortValue("0D flow outward graph-port amount", accounting.outward_graph_port_amount_m3);
+	RequireFinitePortValue("0D flow storage residual", accounting.residual_m3);
+}
+
+inline std::string BuildZeroDFlowStepAccountingIdentitySha256(
+	const ZeroDFlowModel& model, const ZeroDFlowStepAccounting& accounting)
+{
+	ValidateZeroDFlowModel(model);
+	ValidateZeroDFlowStepAccounting(accounting);
+	Sha256 hash;
+	zero_d_flow_detail::AppendString(hash, "ZeroDFlowStepAccounting/v1");
+	zero_d_flow_detail::AppendString(hash, BuildZeroDFlowModelIdentitySha256(model));
+	hash.AppendNormalizedDouble(accounting.initial_stored_volume_m3);
+	hash.AppendNormalizedDouble(accounting.final_stored_volume_m3);
+	hash.AppendNormalizedDouble(accounting.prescribed_source_amount_m3);
+	hash.AppendNormalizedDouble(accounting.distal_sink_amount_m3);
+	hash.AppendNormalizedDouble(accounting.outward_graph_port_amount_m3);
+	hash.AppendNormalizedDouble(accounting.residual_m3);
+	return hash.Hex();
+}
+
 inline CouplingPort MakeZeroDFlowPort(const std::string& domain_id, ZeroDFlowRole role)
 {
 	if (domain_id.empty()) throw std::runtime_error("0D flow domain id must be nonempty");
@@ -237,6 +277,209 @@ inline ZeroDFlowTrial EvaluateZeroDFlowTrial(const ZeroDFlowModel& model,
 	ValidatePortState(result.port);
 	return result;
 }
+
+inline ZeroDFlowStepAccounting MakeZeroDFlowStepAccounting(const ZeroDFlowModel& model,
+	const ZeroDFlowState& initial, const ZeroDFlowTrial& trial)
+{
+	ValidateZeroDFlowModel(model);
+	ValidateZeroDFlowState(initial);
+	ValidateZeroDFlowState(trial.state);
+	const double capacitance = model.role == ZeroDFlowRole::SourceReservoir
+		? model.source.capacitance_m3_pa : model.terminal.capacitance_m3_pa;
+	ZeroDFlowStepAccounting result;
+	result.initial_stored_volume_m3 = capacitance*initial.stored_pressure_pa;
+	result.final_stored_volume_m3 = capacitance*trial.state.stored_pressure_pa;
+	result.prescribed_source_amount_m3 = trial.storage.prescribed_source_amount_m3;
+	result.distal_sink_amount_m3 = trial.storage.distal_sink_amount_m3;
+	result.outward_graph_port_amount_m3 = trial.storage.outward_graph_port_amount_m3;
+	result.residual_m3 = trial.storage.residual_m3;
+	ValidateZeroDFlowStepAccounting(result);
+	return result;
+}
+
+// Transactional production owner for the dependency-free 0D kernels.  The
+// only mutable numerical state is committed pressure; every SolveTrial call
+// evaluates from the step's committed t_n snapshot, never from a prior trial.
+class ZeroDFlowDomainRuntime final : public CoupledDomainRuntime {
+public:
+	ZeroDFlowDomainRuntime(std::string domain_id, ZeroDFlowModel model,
+		ZeroDFlowState initial_state, std::vector<CouplingPort> ports,
+		double initial_time_s = 0.0)
+		: domain_id_(std::move(domain_id)), model_(std::move(model)),
+		  ports_(std::move(ports)), committed_state_(initial_state)
+	{
+		if (domain_id_.empty()) throw std::runtime_error("0D flow runtime domain id must be nonempty");
+		if (!std::isfinite(initial_time_s))
+			throw std::runtime_error("0D flow runtime initial time must be finite");
+		ValidateZeroDFlowModel(model_);
+		ValidateZeroDFlowState(committed_state_);
+		ValidateZeroDFlowDomainMetadata(domain_id_, ports_, model_.role);
+		committed_time_s_ = initial_time_s;
+	}
+
+	const std::string& DomainId() const noexcept override { return domain_id_; }
+	DomainKind Kind() const noexcept override { return DomainKind::ZeroDFlow; }
+	const std::vector<CouplingPort>& Ports() const noexcept override { return ports_; }
+	const ZeroDFlowModel& Model() const noexcept { return model_; }
+	const ZeroDFlowState& CommittedState() const noexcept { return committed_state_; }
+	double CommittedTime() const noexcept { return committed_time_s_; }
+	int CommittedStepIndex() const noexcept { return committed_step_index_; }
+	std::size_t CommittedStepCount() const noexcept { return committed_step_count_; }
+	const std::optional<PortState>& CommittedPortState() const noexcept { return committed_port_; }
+	const std::optional<ZeroDFlowStepAccounting>& CommittedStepAccounting() const noexcept
+	{ return committed_accounting_; }
+	std::string ModelIdentitySha256() const { return BuildZeroDFlowModelIdentitySha256(model_); }
+	std::string CommittedStateIdentitySha256() const
+	{ return BuildZeroDFlowStateIdentitySha256(model_, committed_state_); }
+
+	void BeginStep(const DomainStepContext& step) override
+	{
+		RequirePhase(Phase::Committed, "begin step");
+		step.Validate();
+		if (step.start_time_s != committed_time_s_)
+			throw std::runtime_error("0D flow runtime step start time is not the committed time");
+		if (step.step_index != committed_step_index_+1)
+			throw std::runtime_error("0D flow runtime step index is not the next committed index");
+		step_ = step;
+		base_state_ = committed_state_;
+		input_.reset(); trial_.reset(); trial_accounting_.reset(); staged_.reset();
+		phase_ = Phase::TrialReady;
+	}
+
+	void SetPortInput(const std::string& port_id, const PortBoundaryData& input) override
+	{
+		RequirePhase(Phase::TrialReady, "set port input");
+		if (port_id != ports_.front().id)
+			throw std::runtime_error("0D flow runtime has no port '"+port_id+"'");
+		ValidatePortBoundaryData(input);
+		if (input.time_s != step_.EndTime())
+			throw std::runtime_error("0D flow runtime input time does not match the active step end");
+		if (input_)
+			throw std::runtime_error("0D flow runtime port input was supplied twice");
+		const bool source = model_.role == ZeroDFlowRole::SourceReservoir;
+		if (source) {
+			if (!input.mean_pressure_pa || input.outward_flow_m3_s || input.mean_normal_traction_pa
+				|| input.total_pressure_pa || !input.concentration.empty() || !input.outward_species_flux.empty())
+				throw std::runtime_error("0D source runtime input requires exactly mean_pressure_pa");
+		} else if (!input.outward_flow_m3_s || input.mean_pressure_pa || input.mean_normal_traction_pa
+			|| input.total_pressure_pa || !input.concentration.empty() || !input.outward_species_flux.empty()) {
+			throw std::runtime_error("0D terminal runtime input requires exactly outward_flow_m3_s");
+		}
+		input_ = input;
+	}
+
+	void SolveTrial() override
+	{
+		RequirePhase(Phase::TrialReady, "solve trial");
+		if (!input_) throw std::runtime_error("0D flow runtime is missing its required port input");
+		const double value = model_.role == ZeroDFlowRole::SourceReservoir
+			? *input_->mean_pressure_pa : *input_->outward_flow_m3_s;
+		// Evaluate from base_state_ every time; that snapshot is made exactly once
+		// at BeginStep and is untouched by rollback/retry activity.
+		auto trial = EvaluateZeroDFlowTrial(model_, base_state_, value, step_.dt_s,
+			step_.start_time_s);
+		auto accounting = MakeZeroDFlowStepAccounting(model_, base_state_, trial);
+		ValidatePortState(trial.port);
+		ValidateZeroDFlowStepAccounting(accounting);
+		trial_ = std::move(trial);
+		trial_accounting_ = std::move(accounting);
+		phase_ = Phase::TrialSolved;
+	}
+
+	PortState GetPortState(const std::string& port_id) const override
+	{
+		if (phase_ != Phase::TrialSolved && phase_ != Phase::Prepared)
+			throw std::runtime_error("0D flow runtime has no solved trial port state");
+		if (port_id != ports_.front().id)
+			throw std::runtime_error("0D flow runtime has no port '"+port_id+"'");
+		return trial_->port;
+	}
+
+	// Return a snapshot so callers cannot retain a reference into trial storage
+	// that is invalidated by rollback, abort, or final promotion.
+	ZeroDFlowStepAccounting TrialStepAccounting() const
+	{
+		if (phase_ != Phase::TrialSolved && phase_ != Phase::Prepared)
+			throw std::runtime_error("0D flow runtime has no solved trial accounting");
+		return *trial_accounting_;
+	}
+
+	void RollbackTrial() override
+	{
+		RequirePhase(Phase::TrialSolved, "rollback trial");
+		input_.reset(); trial_.reset(); trial_accounting_.reset();
+		phase_ = Phase::TrialReady;
+	}
+
+	void AbortStep() override
+	{
+		if (phase_ != Phase::TrialReady && phase_ != Phase::TrialSolved && phase_ != Phase::Prepared)
+			throw std::runtime_error("0D flow runtime abort requires an active step");
+		input_.reset(); trial_.reset(); trial_accounting_.reset(); staged_.reset();
+		phase_ = Phase::Committed;
+	}
+
+	void PrepareCommitStep() override
+	{
+		RequirePhase(Phase::TrialSolved, "prepare commit");
+		// Do all potentially throwing checks and copies before the no-throw
+		// promotion path.  No committed datum is published here.
+		ValidateZeroDFlowState(trial_->state);
+		ValidatePortState(trial_->port);
+		ValidateZeroDFlowStepAccounting(*trial_accounting_);
+		Staged committed{trial_->state, trial_->port, *trial_accounting_};
+		staged_ = std::move(committed);
+		phase_ = Phase::Prepared;
+	}
+
+	void FinalizeCommitStep() noexcept override
+	{
+		if (phase_ != Phase::Prepared) return;
+		// Only scalar/optional swaps and moves remain: this promotion cannot
+		// allocate or call the numerical kernel.
+		committed_state_ = staged_->state;
+		committed_port_.swap(staged_->port);
+		committed_accounting_.swap(staged_->accounting);
+		committed_time_s_ = step_.EndTime();
+		committed_step_index_ = step_.step_index;
+		++committed_step_count_;
+		input_.reset(); trial_.reset(); trial_accounting_.reset(); staged_.reset();
+		phase_ = Phase::Committed;
+	}
+
+private:
+	enum class Phase { Committed, TrialReady, TrialSolved, Prepared };
+
+	struct Staged {
+		ZeroDFlowState state;
+		std::optional<PortState> port;
+		std::optional<ZeroDFlowStepAccounting> accounting;
+	};
+
+	void RequirePhase(Phase expected, const char* operation) const
+	{
+		if (phase_ != expected)
+			throw std::runtime_error(std::string("0D flow runtime cannot ")+operation
+				+" in its current lifecycle phase");
+	}
+
+	std::string domain_id_;
+	const ZeroDFlowModel model_;
+	const std::vector<CouplingPort> ports_;
+	Phase phase_ = Phase::Committed;
+	DomainStepContext step_;
+	ZeroDFlowState committed_state_;
+	ZeroDFlowState base_state_;
+	double committed_time_s_ = 0.0;
+	int committed_step_index_ = -1;
+	std::size_t committed_step_count_ = 0;
+	std::optional<PortBoundaryData> input_;
+	std::optional<ZeroDFlowTrial> trial_;
+	std::optional<ZeroDFlowStepAccounting> trial_accounting_;
+	std::optional<Staged> staged_;
+	std::optional<PortState> committed_port_;
+	std::optional<ZeroDFlowStepAccounting> committed_accounting_;
+};
 
 } // namespace iga
 

@@ -31,6 +31,27 @@ the coefficient/state configuration; schema v6 rejects 0D domains because the
 species layer has no 0D transport contract yet.  Graph planning accepts 0D--1D
 and 0D--3D heterogeneous edges, but explicitly rejects 0D--0D edges.
 
+## PR9.2: transactional 0D flow runtime
+
+`ZeroDFlowDomainRuntime` is the production owner for a single configured 0D
+source reservoir or terminal RCR model.  It binds immutable model and one-port
+metadata to a committed pressure/time/index image.  `BeginStep` accepts only
+the exact next time/index and snapshots that committed state; every
+`SolveTrial` evaluates the existing pure backward-Euler kernel from the same
+snapshot.  Inputs are role-specific and exact: sources accept only mean
+pressure and terminals accept only outward flow.  Trial port data is stamped
+at `t_n + dt` and remains unpublished until prepare/finalize.
+
+Rollback and abort discard all input, trial, staged-port, and accounting data
+without changing the committed image.  Prepare validates and stages the
+pressure, port state, and signed balance before the no-throw final promotion;
+finalize is idempotent and advances time/index exactly once.  The runtime also
+returns trial step-accounting snapshots by value (initial/final stored volume,
+source amount, distal sink amount, outward graph-port amount, and residual) and deterministic model,
+state, and accounting identities.  It is compatible with the runtime registry
+for in-memory graph tests, but generic runner/executor materialization remains
+PR9.3.
+
 ## Current runtime boundaries
 
 ### Three-dimensional flow
