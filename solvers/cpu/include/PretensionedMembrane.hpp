@@ -168,6 +168,7 @@ public:
 
 	const DistributedSurfaceLayout& Layout() const noexcept { return layout_; }
 	const std::vector<std::array<double, 3>>& ReferenceVertexNormals() const noexcept { return normals_; }
+	const std::vector<bool>& ClampedNodeMask() const noexcept { return clamped_; }
 	const PretensionedMembraneState& CommittedState() const noexcept { return committed_state_; }
 	const std::string& ModelIdentitySha256() const noexcept { return model_identity_sha256_; }
 	const std::string& CommittedStateIdentitySha256() const noexcept { return committed_state_identity_sha256_; }

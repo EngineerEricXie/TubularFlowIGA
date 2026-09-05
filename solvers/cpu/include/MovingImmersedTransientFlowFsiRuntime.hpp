@@ -22,6 +22,8 @@
 
 namespace iga {
 
+class StrongFluidStructureCouplingAccess;
+
 class MovingImmersedTransientFlowFsiRuntime final : public FsiFluidDomainRuntime {
 public:
 	static_assert(std::is_nothrow_swappable<std::optional<SurfaceTraction>>::value,
@@ -56,6 +58,8 @@ public:
 	const std::vector<DistributedSurfaceInterface>& SurfaceInterfaces() const noexcept override
 	{ return catalog_; }
 	const FsiTrialLifecycle& Lifecycle() const noexcept { return lifecycle_; }
+	const FsiCouplingEdge& StrongCouplingEdge() const noexcept { return edge_; }
+	const DistributedSurfaceLayout& StrongCouplingLayout() const noexcept { return fluid_layout_; }
 	const MovingImmersedTransientFlowDiagnostics& MovingDiagnostics() const noexcept { return moving_.Diagnostics(); }
 	const MovingCutGeometry& CommittedGeometry() const noexcept { return moving_.CommittedGeometry(); }
 	const ImmersedGlobalFlowState& CommittedGlobalState() const { return moving_.CommittedGlobalState(); }
@@ -296,6 +300,20 @@ public:
 		lifecycle_.AbortStep();
 	}
 
+	// These are read only while the prepared snapshots remain abortable.  They
+	// let a strong coordinator stage its complete result before finalization.
+	std::string CoordinatorPreparedCommittedTractionIdentitySha256() const
+	{
+		if (!prepared_traction_.has_value()) throw std::runtime_error("fluid FSI prepared traction is unavailable");
+		return BuildSurfaceTractionIdentitySha256(*prepared_traction_, fluid_layout_);
+	}
+	std::string CoordinatorPreparedCommittedCompositionIdentitySha256() const
+	{
+		if (!prepared_target_ || trial_composition_identity_sha256_.empty())
+			throw std::runtime_error("fluid FSI prepared composition is unavailable");
+		return trial_composition_identity_sha256_;
+	}
+
 #ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
 	void FailNextPrepareForTesting() { moving_.FailNextPrepareForTesting(); }
 	void FailNextLatePublicationForTesting() noexcept { fail_next_late_publication_ = true; }
@@ -304,6 +322,20 @@ public:
 #endif
 
 private:
+	friend class StrongFluidStructureCouplingAccess;
+	void CoordinatorRequireFinalizeAllowed() const
+	{
+		if (!prepared_traction_.has_value() || !prepared_target_ || !moving_.Prepared())
+			throw std::runtime_error("fluid FSI coordinator finalize requires prepared state");
+		lifecycle_.RequireFinalizeAllowed();
+	}
+	void CoordinatorFinalizeCommitNoexcept() noexcept
+	{
+		moving_.FinalizeCommit(); using std::swap;
+		swap(committed_traction_, prepared_traction_); swap(committed_traction_diagnostics_, prepared_traction_diagnostics_);
+		committed_full_.swap(prepared_target_); committed_composition_identity_sha256_.swap(trial_composition_identity_sha256_);
+		lifecycle_.FinalizePreparedCommitNoexcept(); trial_traction_.reset(); trial_traction_diagnostics_.reset(); trial_target_.reset(); trial_flow_diagnostics_.reset(); input_.reset(); prepared_traction_.reset(); prepared_traction_diagnostics_.reset(); prepared_target_.reset();
+	}
 	void ValidateConstruction() const
 	{
 		ValidateFsiCouplingEdge(edge_);

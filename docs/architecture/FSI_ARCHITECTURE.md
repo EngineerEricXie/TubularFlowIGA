@@ -1,10 +1,10 @@
 # FSI Architecture
 
-Status: **PR8.3b rank-local moving immersed-flow FSI runtime** is now paired
+Status: **PR8.4a bounded strong Dirichlet--Neumann coordinator** is now paired
 with the PR8.3a patch-to-closed-material composition foundation, PR8.2b
 structure-side membrane runtime, and PR8.1b traction extraction/projection
-boundary. This is an adapter-level, single-rank fluid execution slice; it is
-not yet a coupled coordinator or a distributed FSI execution claim.
+boundary. It is a bounded, single-partition coordinator slice, not a
+distributed FSI execution claim.
 
 ## Scope and first benchmark
 
@@ -313,6 +313,40 @@ the field portion of a transaction shaped as `idle -> step-active -> iteration
 convergence data first, then perform a non-allocating ownership exchange.
 Abort discards trial data; ghosts remain scratch.
 
+## Strong Dirichlet--Neumann coordinator (PR8.4a)
+
+`StrongFluidStructureCoupling.hpp` owns one exact `FsiCouplingEdge`, one
+single-partition layout, its convergence controls, and a
+`DynamicWeightedAitkenRelaxation` owner. It publishes a producer-owned,
+backward-Euler-consistent predictor, performs exact kinematics-to-fluid then
+traction-to-structure trials, and measures scalar normal-displacement
+residuals against immutable reference normals. RMS uses reference lumped area
+weights and convergence is explicit: `rms <= absolute_m + relative *
+max(reference_m, raw/current displacement scale)`. Clamped nodes stay exactly
+zero. Rejected trials are discarded by both runtimes before the one-use Aitken
+proposal is accepted and a new Cartesian displacement/BE velocity field gets a
+derived identity binding raw field, committed structure state/model, context,
+and Aitken facts; a raw stamp is never reused for a modified iterate.
+
+Both runtimes prepare before coordinator-only prevalidation permits private
+noexcept finalization handoffs.  The coordinator first obtains the exact
+prepared final field/state/composition identities and allocates/hashes its
+complete result; only then may it prevalidate and execute the two private
+noexcept handoffs.  Thus preparation, result staging, or prevalidation failure
+aborts both with no cross-runtime partial commit, while the post-first-finalize
+tail contains only noexcept handoffs, scalar state updates, and a statically
+verified noexcept result move. Exceptions and maximum-iteration
+nonconvergence also abort both and reset Aitken pending state. Diagnostics are
+value snapshots binding all convergence options, context, histories,
+norms/scales/thresholds, exact fluid/raw/current/accepted identities, and
+Aitken control/proposal/factor facts. A converged trial explicitly records that
+no Aitken proposal was applied; it does not invent an initial status or a
+factor of one. Immutable reference normals must already be unit length to
+roundoff, so scalar projection and Cartesian reconstruction cannot rescale a
+field.
+The focused coverage uses deterministic mock adapters and deliberately does
+not run a real immersed-flow benchmark.
+
 Performance work carries forward the Phase 7 requirement to measure assembly
 and solve time separately, host peak RSS, CUDA peak allocation, rank/partition
 agreement, and CPU/CUDA field differences. Representative distributed solves
@@ -320,6 +354,8 @@ belong on allocated resources rather than login nodes.
 
 ## Explicit exclusions
 
+PR8.4a excludes MPI/collective strong execution, nonmatching transfer,
+contact, ALE/remeshing, monolithic coupling, and a real-fluid benchmark claim.
 PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
 kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
 and backward-Euler trial/prepare/finalize state. PR8.2b adds only its local

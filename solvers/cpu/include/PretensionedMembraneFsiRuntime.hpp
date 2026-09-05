@@ -6,17 +6,23 @@
 // stamps for each already-scheduled exchange.
 #include "FsiDomainRuntime.hpp"
 #include "PretensionedMembrane.hpp"
+#include "StrongFluidStructureCoupling.hpp"
 
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace iga {
 
+class StrongFluidStructureCouplingAccess;
+
 class PretensionedMembraneFsiRuntime final : public FsiStructureDomainRuntime {
 public:
+	static_assert(std::is_nothrow_swappable<SurfaceKinematics>::value,
+		"prepared membrane kinematics publication must swap without throwing");
 	PretensionedMembraneFsiRuntime(const PretensionedMembraneFsiRuntime&) = delete;
 	PretensionedMembraneFsiRuntime& operator=(const PretensionedMembraneFsiRuntime&) = delete;
 	PretensionedMembraneFsiRuntime(PretensionedMembraneFsiRuntime&&) = delete;
@@ -55,6 +61,19 @@ public:
 	PretensionedMembraneState CommittedStateSnapshot() const { return membrane_.CommittedState(); }
 	std::string ModelIdentitySha256() const { return membrane_.ModelIdentitySha256(); }
 	std::string CommittedStateIdentitySha256() const { return membrane_.CommittedStateIdentitySha256(); }
+	const FsiCouplingEdge& StrongCouplingEdge() const noexcept { return edge_; }
+	const DistributedSurfaceLayout& StrongCouplingLayout() const noexcept { return structure_layout_; }
+	StrongCouplingStructureSnapshot StrongCouplingCommittedSnapshot() const
+	{
+		StrongCouplingStructureSnapshot result;
+		result.displacement_m = membrane_.CommittedState().displacement_m;
+		result.velocity_m_per_s = membrane_.CommittedState().velocity_m_per_s;
+		result.immutable_reference_normals = membrane_.ReferenceVertexNormals();
+		result.clamped = membrane_.ClampedNodeMask();
+		result.committed_state_identity_sha256 = membrane_.CommittedStateIdentitySha256();
+		result.model_identity_sha256 = membrane_.ModelIdentitySha256();
+		return result;
+	}
 
 	void BeginMacroStep(const DomainStepContext& step)
 	{
@@ -181,7 +200,32 @@ public:
 		lifecycle_.AbortStep();
 	}
 
+	// These identities describe the exact already-prepared payload.  The strong
+	// coordinator consumes them before its paired irreversible finalizers.
+	std::string CoordinatorPreparedCommittedKinematicsIdentitySha256() const
+	{
+		if (!trial_.has_value()) throw std::runtime_error("membrane FSI prepared kinematics are unavailable");
+		return BuildSurfaceKinematicsIdentitySha256(prepared_kinematics_, structure_layout_);
+	}
+	std::string CoordinatorPreparedCommittedStateIdentitySha256() const
+	{
+		if (!trial_.has_value()) throw std::runtime_error("membrane FSI prepared state is unavailable");
+		return trial_->prepared_committed_state_identity_sha256;
+	}
+
 private:
+	friend class StrongFluidStructureCouplingAccess;
+	void CoordinatorRequireFinalizeAllowed() const
+	{
+		if (!trial_.has_value()) throw std::runtime_error("membrane FSI coordinator finalize requires a prepared trial");
+		membrane_.RequireFinalizeAllowed(*trial_); lifecycle_.RequireFinalizeAllowed();
+	}
+	void CoordinatorFinalizeCommitNoexcept() noexcept
+	{
+		membrane_.FinalizePreparedTrialNoexcept(std::move(*trial_));
+		using std::swap; swap(committed_kinematics_, prepared_kinematics_);
+		lifecycle_.FinalizePreparedCommitNoexcept(); trial_.reset(); traction_.reset();
+	}
 	PretensionedMembraneTrialContext MembraneContext() const
 	{
 		const auto& context = lifecycle_.Context();
