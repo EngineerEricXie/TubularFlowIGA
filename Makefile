@@ -19,7 +19,7 @@ cpu-petsc:
 	$(MAKE) -C solvers/one_d petsc
 
 fluid-surface-traction-test:
-	$(MAKE) -C solvers/cpu fluid-surface-traction-test PETSC_DIR=$(PETSC_DIR) PETSC_ARCH=$(PETSC_ARCH)
+	$(MAKE) -C solvers/cpu fluid-surface-traction-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 
 pretensioned-membrane-test:
 	$(MAKE) -C solvers/cpu pretensioned-membrane-test

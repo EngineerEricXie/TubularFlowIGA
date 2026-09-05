@@ -7,6 +7,7 @@
 #include "DistributedSurfaceInterface.hpp"
 #include "FluidCauchyStress.hpp"
 #include "ImmersedSurfaceQuadrature.hpp"
+#include "MaterialSurfacePatchMap.hpp"
 #include "MaterialSurfaceKinematics.hpp"
 #include "NavierStokesElement.hpp"
 
@@ -175,11 +176,19 @@ inline void AppendCartesianDiscretization(Sha256& hash,
 
 inline std::string BuildStateIdentity(const CartesianDomainClassification& domain,
 	const ImmersedSurfaceQuadratureCatalog& catalog, const MaterialSurfaceKinematics& material,
+	const MaterialSurfacePatchMap& patch_map,
 	double viscosity_pa_s, const std::vector<FluidSurfaceElementState>& state)
 {
-	Sha256 hash; AppendString(hash, "FluidSurfaceTraction/producer-state/v2");
+	Sha256 hash; AppendString(hash, "FluidSurfaceTraction/producer-state/v3");
 	AppendCartesianDiscretization(hash, domain, catalog);
 	AppendString(hash, material.ContentIdentitySha256());
+	AppendString(hash, material.MaterialIdentitySha256());
+	AppendString(hash, material.TopologyIdentitySha256());
+	AppendString(hash, patch_map.IdentitySha256());
+	AppendString(hash, patch_map.ReferenceIdentitySha256());
+	hash.AppendLittleEndian32(patch_map.PatchLabel());
+	hash.AppendLittleEndian64(static_cast<std::uint64_t>(patch_map.LayoutTriangleToSourceTriangles().size()));
+	for (const auto source_triangle : patch_map.LayoutTriangleToSourceTriangles()) hash.AppendLittleEndian32(source_triangle);
 	hash.AppendNormalizedDouble(viscosity_pa_s);
 	hash.AppendLittleEndian64(static_cast<std::uint64_t>(state.size()));
 	for (const auto& element : state) {
@@ -231,16 +240,18 @@ inline std::vector<double> SolveConsistentMass(std::vector<double> matrix,
 
 inline std::string BuildFluidSurfaceTractionStateIdentitySha256(
 	const CartesianDomainClassification& domain, const ImmersedSurfaceQuadratureCatalog& catalog,
-	const MaterialSurfaceKinematics& material, double dynamic_viscosity_pa_s,
+	const MaterialSurfaceKinematics& material, const MaterialSurfacePatchMap& patch_map,
+	double dynamic_viscosity_pa_s,
 	const std::vector<FluidSurfaceElementState>& state)
 {
-	return fluid_surface_traction_detail::BuildStateIdentity(domain, catalog, material, dynamic_viscosity_pa_s, state);
+	return fluid_surface_traction_detail::BuildStateIdentity(domain, catalog, material, patch_map, dynamic_viscosity_pa_s, state);
 }
 
 inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 	const CartesianDomainClassification& domain, const ImmersedSurfaceQuadratureCatalog& catalog,
 	const MaterialSurfaceKinematics& material, const DistributedSurfaceInterface& surface,
-	const DistributedSurfaceLayout& layout, const SurfaceFieldStamp& stamp,
+	const DistributedSurfaceLayout& layout, const MaterialSurfacePatchMap& patch_map,
+	const SurfaceFieldStamp& stamp,
 	double dynamic_viscosity_pa_s, const std::vector<FluidSurfaceElementState>& state,
 	FluidSurfaceTractionProjectionOptions options = {})
 {
@@ -257,66 +268,51 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 			&& !(options.conservation_absolute_moment_tolerance_n_m > 0.0)
 			&& !(options.conservation_relative_tolerance > 0.0)))
 		throw std::invalid_argument("fluid surface traction parameters are invalid");
-	if (!std::binary_search(surface.provides.begin(), surface.provides.end(),
-		SurfaceFieldQuantity::TractionOnStructure, [](SurfaceFieldQuantity left, SurfaceFieldQuantity right) {
-			return static_cast<std::uint8_t>(left) < static_cast<std::uint8_t>(right);
-		}))
-		throw std::invalid_argument("fluid surface traction interface does not provide traction on structure");
+	if (surface.provides != std::vector<SurfaceFieldQuantity>{SurfaceFieldQuantity::TractionOnStructure}
+		|| surface.requires != std::vector<SurfaceFieldQuantity>{
+			SurfaceFieldQuantity::Displacement, SurfaceFieldQuantity::Velocity})
+		throw std::invalid_argument("fluid surface traction requires the exact traction/displacement/velocity role");
 	if (layout.partition_count != 1 || layout.partition_rank != 0)
 		throw std::invalid_argument("fluid surface traction supports only the complete single-rank partition");
 	if (layout.owned_global_node_ids.size() > options.maximum_nodes)
 		throw std::invalid_argument("fluid surface traction node count exceeds the bounded consistent projection");
-	if (surface.reference_mesh_identity_sha256 != material.MaterialIdentitySha256()
-		|| layout.reference_mesh_identity_sha256 != material.MaterialIdentitySha256()
+	if (material.MaterialIdentitySha256() != patch_map.FullReference().MaterialIdentitySha256()
+		|| material.TopologyIdentitySha256() != patch_map.FullReference().TopologyIdentitySha256()
 		|| material.Surface().CanonicalSha256() != domain.SurfaceCanonicalHash()
 		|| catalog.SurfaceCanonicalHash() != domain.SurfaceCanonicalHash())
-		throw std::invalid_argument("fluid surface traction material, layout, or quadrature identity is inconsistent");
+		throw std::invalid_argument("fluid surface traction material, patch map, or quadrature identity is inconsistent");
+	if (surface.reference_mesh_identity_sha256 != patch_map.ReferenceIdentitySha256()
+		|| layout.reference_mesh_identity_sha256 != patch_map.ReferenceIdentitySha256()
+		|| surface.boundary_labels != patch_map.Interface().boundary_labels
+		|| surface.boundary_labels != std::vector<std::int64_t>{static_cast<std::int64_t>(patch_map.PatchLabel())}
+		|| layout.layout_identity_sha256 != patch_map.Layout().layout_identity_sha256
+		|| BuildDistributedSurfacePartitionIdentitySha256(layout)
+			!= BuildDistributedSurfacePartitionIdentitySha256(patch_map.Layout()))
+		throw std::invalid_argument("fluid surface traction interface or layout is not the mapped patch authority");
 	if (stamp.time_s != material.EvaluatedTimeS())
 		throw std::invalid_argument("fluid surface traction stamp time does not match material state");
 	ValidateSurfaceFieldStamp(stamp, layout);
 
-	const auto& reference = material.ReferenceMaterialVerticesM();
-	std::vector<std::uint32_t> source_for_local(layout.reference_positions.size(), std::numeric_limits<std::uint32_t>::max());
-	std::vector<std::size_t> local_for_source(reference.size(), std::numeric_limits<std::size_t>::max());
-	for (std::size_t local = 0; local < layout.reference_positions.size(); ++local) {
-		const auto& position = layout.reference_positions[local];
-		std::uint32_t match = std::numeric_limits<std::uint32_t>::max();
-		for (std::uint32_t source = 0; source < reference.size(); ++source)
-			if (position.position_m == reference[source]) {
-				if (match != std::numeric_limits<std::uint32_t>::max())
-					throw std::invalid_argument("fluid surface traction material reference positions are ambiguous");
-				match = source;
-			}
-		if (match == std::numeric_limits<std::uint32_t>::max() || local_for_source[match] != std::numeric_limits<std::size_t>::max())
-			throw std::invalid_argument("fluid surface traction layout does not exactly represent material nodes");
-		source_for_local[local] = match; local_for_source[match] = local;
+	const std::size_t nodes = layout.owned_global_node_ids.size();
+	std::vector<std::uint32_t> source_for_local(nodes);
+	for (std::size_t local = 0; local < nodes; ++local)
+		source_for_local[local] = patch_map.SourceVertexForGlobalNode(layout.owned_global_node_ids[local]);
+	std::vector<std::size_t> layout_for_canonical(material.CanonicalTriangleProvenance().size(),
+		std::numeric_limits<std::size_t>::max());
+	for (std::size_t triangle = 0; triangle < patch_map.LayoutTriangleToSourceTriangles().size(); ++triangle) {
+		const auto canonical = patch_map.CanonicalTriangleForLayoutTriangle(triangle);
+		if (canonical >= layout_for_canonical.size() || layout_for_canonical[canonical] != std::numeric_limits<std::size_t>::max())
+			throw std::invalid_argument("fluid surface traction patch map canonical membership is ambiguous");
+		layout_for_canonical[canonical] = triangle;
 	}
-
-	std::vector<std::array<std::uint64_t, 3>> expected_triangles, actual_triangles;
-	for (const auto& source_triangle : material.SourceTriangles()) {
-		if (!std::binary_search(surface.boundary_labels.begin(), surface.boundary_labels.end(),
-			static_cast<std::int64_t>(source_triangle.boundary_id))) continue;
-		std::array<std::uint64_t, 3> triangle{};
-		for (std::size_t corner = 0; corner < 3; ++corner) {
-			const auto local = local_for_source.at(source_triangle.source_vertex_indices[corner]);
-			if (local == std::numeric_limits<std::size_t>::max())
-				throw std::invalid_argument("fluid surface traction layout omits a selected material node");
-			triangle[corner] = layout.reference_positions[local].global_node_id;
-		}
-		expected_triangles.push_back(SortedTriangle(triangle));
-	}
-	for (const auto& triangle : layout.reference_triangles) actual_triangles.push_back(SortedTriangle(triangle));
-	std::sort(expected_triangles.begin(), expected_triangles.end()); std::sort(actual_triangles.begin(), actual_triangles.end());
-	if (expected_triangles.empty() || expected_triangles != actual_triangles)
-		throw std::invalid_argument("fluid surface traction layout topology does not exactly represent interface labels");
 
 	std::vector<std::uint64_t> required_cells;
 	for (std::uint64_t id = 0; id < domain.Cells().size(); ++id) {
 		if (domain.Cells()[static_cast<std::size_t>(id)].classification != CellClassification::Cut) continue;
-		const auto& rule = catalog.UsableRule(domain, id);
-		if (std::any_of(rule.Points().begin(), rule.Points().end(), [&surface](const SurfaceQuadraturePoint& point) {
-			return std::binary_search(surface.boundary_labels.begin(), surface.boundary_labels.end(),
-				static_cast<std::int64_t>(point.boundary_id));
+		const auto& provenance = catalog.UsableProvenance(domain, id);
+		if (std::any_of(provenance.begin(), provenance.end(), [&layout_for_canonical](const ImmersedSurfaceQuadraturePointProvenance& point) {
+			return point.canonical_triangle < layout_for_canonical.size()
+				&& layout_for_canonical[point.canonical_triangle] != std::numeric_limits<std::size_t>::max();
 		})) required_cells.push_back(id);
 	}
 	if (state.size() != required_cells.size()) throw std::invalid_argument("fluid surface traction state does not cover exactly the retained interface cells");
@@ -344,10 +340,9 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 			} else { global_coefficients[node] = value; global_coefficient_present[node] = true; }
 		}
 	}
-	if (stamp.producer_state_identity_sha256 != BuildStateIdentity(domain, catalog, material, dynamic_viscosity_pa_s, state))
+	if (stamp.producer_state_identity_sha256 != BuildStateIdentity(domain, catalog, material, patch_map, dynamic_viscosity_pa_s, state))
 		throw std::invalid_argument("fluid surface traction producer state identity is not derived from the IGA state");
 
-	const std::size_t nodes = layout.owned_global_node_ids.size();
 	std::vector<double> mass(nodes*nodes, 0.0); std::vector<CompensatedSum> force_accumulator(3*nodes);
 	CompensatedVector quadrature_resultant, quadrature_moment;
 	FluidSurfaceTractionDiagnostics diagnostics;
@@ -359,16 +354,31 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 		const auto& provenance = catalog.UsableProvenance(domain, state[item].cell_id);
 		for (std::size_t point_index = 0; point_index < rule.Points().size(); ++point_index) {
 			const auto& point = rule.Points()[point_index];
-			if (!std::binary_search(surface.boundary_labels.begin(), surface.boundary_labels.end(), static_cast<std::int64_t>(point.boundary_id))) continue;
 			const auto& material_point = provenance[point_index];
+			if (material_point.canonical_triangle >= layout_for_canonical.size()
+				|| layout_for_canonical[material_point.canonical_triangle] == std::numeric_limits<std::size_t>::max()) continue;
+			const auto layout_triangle = layout_for_canonical[material_point.canonical_triangle];
 			const auto& triangle_provenance = material.CanonicalTriangleProvenance().at(material_point.canonical_triangle);
+			const auto source_triangle = patch_map.SourceTriangleForLayoutTriangle(layout_triangle);
+			if (triangle_provenance.source_triangle != source_triangle
+				|| source_triangle >= material.SourceTriangles().size()
+				|| point.boundary_id != static_cast<std::int32_t>(patch_map.PatchLabel())
+				|| triangle_provenance.boundary_id != patch_map.PatchLabel()
+				|| material.SourceTriangles()[source_triangle].boundary_id != patch_map.PatchLabel())
+				throw std::invalid_argument("fluid surface traction point label or source provenance disagrees with patch map");
 			std::array<std::size_t, 3> local_nodes{};
 			for (std::size_t corner = 0; corner < 3; ++corner) {
 				const auto source_vertex = triangle_provenance.source_vertex_indices[
 					triangle_provenance.canonical_corner_to_source_corner[corner]];
-				local_nodes[corner] = local_for_source.at(source_vertex);
-				if (local_nodes[corner] == std::numeric_limits<std::size_t>::max())
-					throw std::runtime_error("fluid surface traction point has no owned material node");
+				const auto& map_triangle = layout.reference_triangles[layout_triangle];
+				std::size_t layout_corner = 0;
+				while (layout_corner < 3 && patch_map.SourceVertexForGlobalNode(map_triangle[layout_corner]) != source_vertex) ++layout_corner;
+				if (layout_corner == 3) throw std::runtime_error("fluid surface traction mapped triangle omits canonical source vertex");
+				const auto global = map_triangle[layout_corner];
+				const auto local = std::lower_bound(layout.owned_global_node_ids.begin(), layout.owned_global_node_ids.end(), global);
+				if (local == layout.owned_global_node_ids.end() || *local != global)
+					throw std::runtime_error("fluid surface traction mapped triangle has no owned local node");
+				local_nodes[corner] = static_cast<std::size_t>(local-layout.owned_global_node_ids.begin());
 			}
 			const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
 			double pressure = 0.0; std::array<std::array<double, 3>, 3> gradient{};
@@ -425,20 +435,24 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 			+options.conservation_relative_tolerance*(quadrature_moment.absolute_sum[component].Value("fluid surface traction moment scale")
 				+nodal_moment.absolute_sum[component].Value("fluid surface traction nodal moment scale")))
 			throw std::runtime_error("fluid surface traction consistent projection does not conserve resultant or moment");
-	Sha256 identity; AppendString(identity, "FluidSurfaceTractionProjection/consistent-p1/v1");
+	Sha256 identity; AppendString(identity, "FluidSurfaceTractionProjection/consistent-p1/v2");
 	AppendString(identity, BuildDistributedSurfaceInterfaceIdentitySha256(surface));
-	AppendString(identity, BuildSurfaceFieldStampIdentitySha256(stamp, layout)); AppendString(identity, material.MaterialIdentitySha256());
+	AppendString(identity, BuildSurfaceFieldStampIdentitySha256(stamp, layout));
+	AppendString(identity, patch_map.IdentitySha256()); AppendString(identity, patch_map.ReferenceIdentitySha256());
+	AppendString(identity, material.MaterialIdentitySha256());
 	AppendString(identity, material.TopologyIdentitySha256()); AppendString(identity, material.ContentIdentitySha256());
 	AppendString(identity, catalog.SurfaceCanonicalHash());
-	AppendString(identity, BuildStateIdentity(domain, catalog, material, dynamic_viscosity_pa_s, state));
+	AppendString(identity, BuildStateIdentity(domain, catalog, material, patch_map, dynamic_viscosity_pa_s, state));
 	identity.AppendNormalizedDouble(dynamic_viscosity_pa_s); identity.AppendLittleEndian64(static_cast<std::uint64_t>(options.maximum_nodes));
 	identity.AppendNormalizedDouble(options.conservation_absolute_force_tolerance_n);
 	identity.AppendNormalizedDouble(options.conservation_absolute_moment_tolerance_n_m);
 	identity.AppendNormalizedDouble(options.conservation_relative_tolerance);
-	for (const auto label : surface.boundary_labels) identity.AppendLittleEndian64(static_cast<std::uint64_t>(label));
+	identity.AppendLittleEndian32(patch_map.PatchLabel());
+	for (const auto source_triangle : patch_map.LayoutTriangleToSourceTriangles()) identity.AppendLittleEndian32(source_triangle);
 	for (std::size_t item = 0; item < state.size(); ++item) {
 		const auto& rule = catalog.UsableRule(domain, state[item].cell_id); const auto& provenance = catalog.UsableProvenance(domain, state[item].cell_id);
-		for (std::size_t point = 0; point < rule.Points().size(); ++point) if (std::binary_search(surface.boundary_labels.begin(), surface.boundary_labels.end(), static_cast<std::int64_t>(rule.Points()[point].boundary_id))) {
+		for (std::size_t point = 0; point < rule.Points().size(); ++point) if (provenance[point].canonical_triangle < layout_for_canonical.size()
+			&& layout_for_canonical[provenance[point].canonical_triangle] != std::numeric_limits<std::size_t>::max()) {
 			identity.AppendLittleEndian64(state[item].cell_id); identity.AppendLittleEndian32(provenance[point].canonical_triangle);
 			for (double value : provenance[point].canonical_barycentric) identity.AppendNormalizedDouble(value);
 			for (double value : rule.Points()[point].physical) identity.AppendNormalizedDouble(value);

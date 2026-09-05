@@ -89,6 +89,18 @@ t_{\mathrm{on\ structure}}=-\sigma_f n_f.
 The first slice requires identical material topology and global node IDs on
 both sides. Nonmatching interpolation/projection is explicitly deferred.
 
+PR8.3a2 makes that fluid-side extraction patch-authoritative: it requires the
+immutable `MaterialSurfacePatchMap`, accepts a fluid endpoint distinct from
+the map's structural endpoint, and requires the exact fluid role
+`TractionOnStructure <- Displacement, Velocity`.  The fluid interface and
+layout bind the map's patch-scoped reference digest, labels, layout and
+partition; full material/topology identities remain bound to the Cartesian
+domain and quadrature catalog.  Selected cut cells and points are determined
+only by mapped canonical-triangle membership.  Every retained point checks
+its canonical/source/map labels, and P1 barycentric coordinates are routed
+through the explicit mapped triangle/node permutation.  State and projection
+identities include map identity and membership.
+
 PR8.1b adds a read-only fluid-side kernel for the immersed Cartesian path.  It
 uses the catalog normal exactly as the closed-surface outward fluid normal (the
 catalog and moving-cut provenance audit compare it to
