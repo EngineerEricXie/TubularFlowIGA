@@ -18,7 +18,7 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all test zero-d-flow-test simulation-graph-test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
+.PHONY: all test zero-d-flow-test simulation-graph-test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test phase9-multiscale-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
@@ -88,6 +88,12 @@ phase6-aneurysm-closure-test: phase6_aneurysm_closure_test
 	$(MAKE) -C ../cpu phase6-aneurysm-runtime-closure-test PETSC_DIR=$(PETSC_DIR) PETSC_ARCH=$(PETSC_ARCH)
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./phase6_aneurysm_closure_test ./iga_multidomain_flow
 
+phase9_multiscale_closure_test: tests/test_phase9_multiscale_closure.cpp tests/CouplingFixture.hpp iga_multidomain_flow ../cpu/include/IgaDatabase.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+phase9-multiscale-closure-test: phase9_multiscale_closure_test
+	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./phase9_multiscale_closure_test ./iga_multidomain_flow
+
 immersed-case-factory-test: immersed_case_factory_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./immersed_case_factory_test
 
@@ -147,4 +153,4 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
-	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
+	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow

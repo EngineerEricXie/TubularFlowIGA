@@ -1,10 +1,59 @@
 # Coupling Architecture
 
-Status: Phase 1 complete; Phase 2 in progress; PR9.3 candidate. The verified 1D--3D--1D
+Status: Phase 1 complete; Phase 2 in progress; PR9.4 bounded multiscale-closure candidate. The verified 1D--3D--1D
 lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
 topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
 provides the strict schema-v5 graph manifest and its production runner binding.
 Branch execution and multiple 3D islands remain subsequent Phase 2 work.
+
+## PR9.4 candidate: bounded real multiscale closure
+
+`phase9-multiscale-closure-test` drives the shared schema-v5 production runner,
+`iga_multidomain_flow`, through a five-domain, four-edge tree: compliant source
+0D -> body-fitted straight 3D root -> rigid Poiseuille 1D bifurcation -> two
+terminal RCR 0Ds. The 1D horizon equals the 3D macro grid, so the closure uses
+exactly one native 1D advance per macro step. It uses generic strong-fixed
+iteration (factor `.5`), not a mock runtime or special closure solver.
+
+The temporary C2 body-fitted fixture requires every edge pressure and
+outward-flow residual to converge, independently checks `Q_a,out + Q_b,out =
+0` and `p_measured = p_applied`, and retains the existing per-3D-boundary mass
+audit. Each 0D row carries its exact backward-Euler accounting. The component
+check includes source pump amount, both terminal distal-sink amounts, and all
+three 0D stored-volume changes; graph-port amounts are omitted because they
+cancel pairwise. Its independently recomputed residual is
+
+\[
+\sum_{0D}(V^{n+1}-V^n)-V_{pump}+V_{sink,a}+V_{sink,b}.
+\]
+
+The terminals are intentionally asymmetric: `rcr_a` uses
+`Rp=10`, `Rd=100`, `C=5e-4` in SI units, while `rcr_b` uses
+`Rp=20`, `Rd=80`, `C=6.25e-4`; both start at 0 Pa. The completion manifest must
+therefore carry distinct model identities,
+while the generated
+graph and accepted port/edge rows must retain the explicit
+`terminal_a -> rcr_a.port` and `terminal_b -> rcr_b.port` bindings. The settled
+oracle checks the separate capacitor pressures, port pressures, and flows
+against their own branch values, so a copied or relabeled terminal model cannot
+pass by symmetry.
+
+The settled source comparison uses `R_source + R_3D,C2 + R_parallel`, where
+`R_parallel = R_a R_b/(R_a + R_b)` and
+`R_i = R_1D,i + Rp_i + Rd_i`. `R_3D,C2` is independently computed from the C2
+Ritz square-duct resistance and each rigid branch uses `8 mu L/(pi r^4)`. The
+time oracle passes the configured `dt` into validation and builds each accepted
+time by setting the next start to the prior `EndTime`, rather than multiplying
+the step number by `dt`; it checks every emitted step, edge, iteration, port,
+0D-history, and 3D-balance CSV timestamp. A same-end-time `dt`, `dt/2`,
+`dt/4` source/capacitor comparison expects an error ratio near three because
+the `dt/4` solution is the reference. Serial/two-rank accepted pressures,
+flows, 0D states, 3D balances, and complete per-edge iteration diagnostics
+(including residuals, relaxation, and convergence flags) are compared
+numerically. Newton/KSP counts are observed in the production solver output,
+but are not harness-gated because the PR9.4 CSV contract does not expose those
+counts. Four ranks are deliberately not claimed: the two-element root would add
+empty partitions, not a meaningful scaling point.
 
 This document fixes the runtime and interface contracts that precede direct
 1D--3D coupling. The implementation remains incremental: existing standalone
