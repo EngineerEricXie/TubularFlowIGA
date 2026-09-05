@@ -17,6 +17,7 @@
 namespace iga {
 
 class PretensionedMembraneFsiRuntime;
+class MovingImmersedTransientFlowFsiRuntime;
 
 enum class FsiTrialPhase : std::uint8_t {
 	Idle,
@@ -234,11 +235,14 @@ public:
 
 private:
 	friend class PretensionedMembraneFsiRuntime;
+	friend class MovingImmersedTransientFlowFsiRuntime;
+
+	// This is intentionally not part of the lifecycle's public capability.
+	// Only the two runtime adapters that atomically finalize their numerical
+	// owner and surface publication may use this noexcept handoff, immediately
+	// after RequireFinalizeAllowed() succeeds.
 	void FinalizePreparedCommitNoexcept() noexcept
 	{
-		// RequireFinalizeAllowed() must have succeeded immediately beforehand.
-		// std::string::swap and scalar state changes make this ownership handoff
-		// allocation-free, so a membrane/runtime transaction cannot half-commit.
 		using std::swap;
 		swap(committed_output_, prepared_output_);
 		has_committed_output_ = true;
@@ -246,6 +250,7 @@ private:
 		context_ = FsiTrialContext{};
 		phase_ = FsiTrialPhase::Idle;
 	}
+
 	void ValidateExpectedStamp(const SurfaceFieldStamp& stamp,
 		const DistributedSurfaceLayout& layout, const FsiTrialContext& context) const
 	{

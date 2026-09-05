@@ -1,9 +1,10 @@
 # FSI Architecture
 
-Status: **PR8.3a1 bounded patch-to-closed-material composition foundation**,
-plus the PR8.2b rank-local structure-side membrane runtime and PR8.1b
-fluid-side traction extraction/projection boundary. No fluid adapter,
-coordinator, or moving-domain FSI execution exists in this revision.
+Status: **PR8.3b rank-local moving immersed-flow FSI runtime** is now paired
+with the PR8.3a patch-to-closed-material composition foundation, PR8.2b
+structure-side membrane runtime, and PR8.1b traction extraction/projection
+boundary. This is an adapter-level, single-rank fluid execution slice; it is
+not yet a coupled coordinator or a distributed FSI execution claim.
 
 ## Scope and first benchmark
 
@@ -207,6 +208,38 @@ kinematics, and lifecycle availability; neither owner can expose or commit a
 partial trial. The committed-field accessor therefore remains on its old
 snapshot until finalize.
 
+## Moving immersed-flow runtime adapter (PR8.3b)
+
+`MovingImmersedTransientFlowFsiRuntime.hpp` is the rank-local fluid-side
+implementation of `FsiFluidDomainRuntime`. It composes one moving immersed
+flow owner, one `FsiTrialLifecycle`, an immutable patch map, and value
+snapshots for accepted kinematics, target material state, traction, transition
+conservation, and force/moment projection audits. The accepted patch is
+composed into the closed material surface before moving cut geometry,
+moving-wall Nitsche assembly, state transfer, and patch-authoritative traction
+projection are evaluated.
+
+Input acceptance is one-shot: phase/duplicate guards precede snapshot
+mutation, all fallible validation and copying happen in a local candidate, and
+the lifecycle gate is opened immediately before noexcept publication. Stale,
+foreign, wrong-interface, or duplicate input therefore leaves an accepted
+input and its pending solve intact. Conservation is exposed only with solved
+trial traction or a committed transition; reject/abort retain committed flow,
+geometry, traction, and diagnostics. Prepare completes fallible preparation
+before publication, and finalize uses only prevalidated noexcept handoffs. The
+lifecycle's final handoff is private and friended only to the two production
+adapters.
+
+The solved transition follows the same rule: traction, target material state,
+composition identity, and value diagnostics are fully staged before
+`MarkSolved`. After that call succeeds, the adapter performs only noexcept
+swaps, so a projection/snapshot allocation failure cannot advertise a solved
+field without its matching numerical epoch. The focused channel fixture uses
+triangle-derived reference lumped areas `{.03,.045,.015,.045,.09,.045,.015,.045,.03}`
+(sum `.36 m^2`), a nonzero moving wall speed, and a normalized moving-mass
+acceptance bound below `.03`; these are a bounded regression check, not a
+general conservation claim.
+
 ## In-memory graph integration (PR8.0b2)
 
 `SimulationGraph` now stores typed `FsiCouplingEdge` values separately from
@@ -290,7 +323,8 @@ belong on allocated resources rather than login nodes.
 PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
 kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
 and backward-Euler trial/prepare/finalize state. PR8.2b adds only its local
-structure-side runtime adapter; it does not add fluid execution. Each successful solve issues
+structure-side runtime adapter; PR8.3b adds the bounded local fluid adapter
+above, but neither adds a coordinator or collective execution. Each successful solve issues
 one membrane-instance-owned generation capability from the unchanged committed
 state; it must be prepared and finalized, or explicitly rejected/aborted,
 before another solve. Rejected, aborted, stale, foreign, superseded, or
@@ -298,8 +332,8 @@ modified capabilities cannot commit. Static coercivity and the dynamic SPD
 solve use scale-relative Cholesky checks; the dynamic solve also checks finite
 values and its backward-error residual. It excludes MPI structural
 assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
-monolithic FSI solve, a fluid runtime or coordinator/executor, and any
-claim of an operating FSI benchmark.
+monolithic FSI solve, a coordinator/executor, and any claim of a distributed
+operating FSI benchmark.
 PR8.3a1 also excludes distributed patch ownership, multiple labels, nonmatching
 transfer, patch remeshing/contact, and any change to fluid traction/runtime
 paths.
