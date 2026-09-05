@@ -1,6 +1,6 @@
 # FSI Architecture
 
-Status: **PR8.0b1 typed edge and runtime capability contracts**. No
+Status: **PR8.0b2 in-memory graph integration**. No
 fluid--structure solve, membrane model, or moving-domain FSI execution exists
 in this revision.
 
@@ -84,9 +84,25 @@ without scalar overloads or ownership ambiguity.  The focused contract test
 uses that arrangement and validates exact field stamps, layouts, partitions,
 subsystems, and lifecycle availability before accepting an input field.
 
-PR8.0b1 does **not** wire FSI edges into `SimulationGraph`, instantiate a
-production FSI runtime, or add a coordinator/executor.  It makes no claim of
-a running FSI solve or collective transaction.
+PR8.0b1 did **not** wire FSI edges into `SimulationGraph`, instantiate a
+production FSI runtime, or add a coordinator/executor. It made no claim of a
+running FSI solve or collective transaction.
+
+## In-memory graph integration (PR8.0b2)
+
+`SimulationGraph` now stores typed `FsiCouplingEdge` values separately from
+scalar `CouplingEdge` values. `DomainNode` declares material-surface catalogs
+and exact per-surface layouts; graph construction validates the directional
+fluid/structure capabilities, endpoint subsystem/interface identity, mesh,
+layout, rank-local partition, boundary labels, globally unique edge IDs, and
+one-to-one endpoint use. Declared surfaces may not be orphaned. The initial
+topology is deliberately limited to one `ThreeDImmersedFlow` domain paired
+with one `SurfaceMembraneStructure` domain. A membrane has material topology
+dimension two and embedding dimension three; it is not a scalar-flow domain.
+`MakeFluidStructurePairPlan` returns the two directional field exchanges
+(structure displacement/velocity to fluid, fluid traction to structure)
+without changing scalar P/Q graph ordering or cycle checks. Parser and schema
+formats remain unchanged.
 
 ## Weighted Aitken
 
@@ -152,7 +168,7 @@ belong on allocated resources rather than login nodes.
 
 ## Explicit exclusions
 
-PR8.0b1 excludes a structural solver, traction integration implementation,
+PR8.0b2 excludes a structural solver, traction integration implementation,
 fluid-side surface extraction, MPI collectives, nonmatching transfer,
 contact, ALE/remeshing, a monolithic FSI solve, production FSI runtime or
 coordinator/executor, and any claim of an operating FSI benchmark.

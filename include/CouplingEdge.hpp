@@ -14,7 +14,8 @@ namespace iga {
 enum class DomainKind {
 	OneDFlow,
 	ThreeDBodyFittedFlow,
-	ThreeDImmersedFlow
+	ThreeDImmersedFlow,
+	SurfaceMembraneStructure
 };
 
 inline const char* DomainKindName(DomainKind kind)
@@ -22,21 +23,45 @@ inline const char* DomainKindName(DomainKind kind)
 	if (kind == DomainKind::OneDFlow) return "one_d_flow";
 	if (kind == DomainKind::ThreeDBodyFittedFlow) return "three_d_body_fitted_flow";
 	if (kind == DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
+	if (kind == DomainKind::SurfaceMembraneStructure) return "surface_membrane_structure";
 	return "unknown";
 }
 
 inline bool IsKnownDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
+		|| kind == DomainKind::ThreeDImmersedFlow
+		|| kind == DomainKind::SurfaceMembraneStructure;
+}
+
+inline bool IsFlowDomainKind(DomainKind kind)
+{
+	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
 		|| kind == DomainKind::ThreeDImmersedFlow;
 }
 
-inline int DomainDimensionOf(DomainKind kind)
+// The membrane is a two-dimensional material topology.  Its embedding is
+// three-dimensional, but it must never be treated as a volumetric flow domain.
+inline int DomainTopologyDimensionOf(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return 1;
 	if (kind == DomainKind::ThreeDBodyFittedFlow
 		|| kind == DomainKind::ThreeDImmersedFlow) return 3;
-	throw std::runtime_error("domain kind has no semantic dimension");
+	if (kind == DomainKind::SurfaceMembraneStructure) return 2;
+	throw std::runtime_error("domain kind has no topology dimension");
+}
+
+inline int DomainEmbeddingDimensionOf(DomainKind kind)
+{
+	if (kind == DomainKind::SurfaceMembraneStructure) return 3;
+	return DomainTopologyDimensionOf(kind);
+}
+
+// Retained for existing scalar-coupling callers.  New code must select either
+// topology or embedding dimension deliberately.
+inline int DomainDimensionOf(DomainKind kind)
+{
+	return DomainTopologyDimensionOf(kind);
 }
 
 struct PortRef {

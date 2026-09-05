@@ -18,7 +18,7 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
+.PHONY: all test simulation-graph-test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
@@ -37,8 +37,11 @@ fsi-runtime-contracts-test: fsi_runtime_contracts_test
 explicit_coupling_test: tests/test_explicit_coupling.cpp ../../include/ExplicitOneDThreeDCoupling.hpp ../../include/StrongOneDThreeDCoupling.hpp ../../include/AitkenRelaxation.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
-simulation_graph_test: tests/test_simulation_graph.cpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp
+simulation_graph_test: tests/test_simulation_graph.cpp ../../include/SimulationGraph.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+simulation-graph-test: simulation_graph_test
+	./simulation_graph_test
 
 pressure_flow_executor_test: tests/test_pressure_flow_executor.cpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
