@@ -71,7 +71,7 @@ iga::SurfaceFieldStamp MakeStamp(const iga::DistributedSurfaceLayout& layout)
 iga::SurfaceKinematics MakeKinematics(const iga::DistributedSurfaceLayout& layout)
 {
 	iga::SurfaceKinematics value;
-	value.interface = {"fluid", "membrane"};
+	value.interface = {"fluid", "fluid_backend", "membrane"};
 	value.stamp = MakeStamp(layout);
 	value.displacement_m = {{{0.0, 0.0, 0.01}}, {{0.0, 0.0, 0.02}}, {{0.0, 0.0, 0.03}}};
 	value.velocity_m_per_s = {{{0.0, 0.0, 1.0}}, {{0.0, 0.0, 2.0}}, {{0.0, 0.0, 3.0}}};
@@ -81,7 +81,7 @@ iga::SurfaceKinematics MakeKinematics(const iga::DistributedSurfaceLayout& layou
 iga::SurfaceTraction MakeTraction(const iga::DistributedSurfaceLayout& layout)
 {
 	iga::SurfaceTraction value;
-	value.interface = {"fluid", "membrane"};
+	value.interface = {"fluid", "fluid_backend", "membrane"};
 	value.stamp = MakeStamp(layout);
 	value.traction_on_structure_pa = {{{0.0, 0.0, -10.0}}, {{0.0, 0.0, -20.0}}, {{0.0, 0.0, -30.0}}};
 	value.consistent_nodal_force_n = {{{0.0, 0.0, -1.0}}, {{0.0, 0.0, -2.0}}, {{0.0, 0.0, -3.0}}};
@@ -92,8 +92,8 @@ iga::SurfaceTraction MakeTraction(const iga::DistributedSurfaceLayout& layout)
 iga::DistributedSurfaceInterface MakeInterface()
 {
 	iga::DistributedSurfaceInterface surface;
-	surface.id = {"fluid", "membrane"};
-	surface.subsystem_id = "fluid";
+	surface.id = {"fluid", "fluid_backend", "membrane"};
+	surface.subsystem_id = "fluid_backend";
 	surface.boundary_labels = {0, 7};
 	surface.reference_mesh_identity_sha256 = kMesh;
 	surface.provides = {iga::SurfaceFieldQuantity::TractionOnStructure};
@@ -136,7 +136,7 @@ int main()
 	RequireRejected([&] { iga::ValidateSurfaceFieldStamp(first_stamp, different_partition); });
 	RequireRejected([&] { iga::BuildSurfaceFieldStampIdentitySha256(first_stamp, different_partition); });
 	iga::SurfaceKinematics equal_shape_field;
-	equal_shape_field.interface = {"fluid", "membrane"};
+	equal_shape_field.interface = {"fluid", "fluid_backend", "membrane"};
 	equal_shape_field.stamp = first_stamp;
 	equal_shape_field.displacement_m = {{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}};
 	equal_shape_field.velocity_m_per_s = {{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}};
@@ -150,6 +150,10 @@ int main()
 	auto interface_mutation = surface;
 	interface_mutation.boundary_labels = {0, 8};
 	assert(surface_identity != iga::BuildDistributedSurfaceInterfaceIdentitySha256(interface_mutation));
+	auto subsystem_mutation = surface;
+	subsystem_mutation.id.subsystem_id = "other_backend";
+	subsystem_mutation.subsystem_id = "other_backend";
+	assert(surface_identity != iga::BuildDistributedSurfaceInterfaceIdentitySha256(subsystem_mutation));
 	// These had identical concatenated quantity bytes before collection counts.
 	auto split_one = surface;
 	split_one.provides = {iga::SurfaceFieldQuantity::Displacement};
@@ -160,7 +164,8 @@ int main()
 	assert(iga::BuildDistributedSurfaceInterfaceIdentitySha256(split_one)
 		!= iga::BuildDistributedSurfaceInterfaceIdentitySha256(split_two));
 
-	RequireRejected([] { iga::ValidateSurfaceInterfaceRef({"", "membrane"}); });
+	RequireRejected([] { iga::ValidateSurfaceInterfaceRef({"", "fluid_backend", "membrane"}); });
+	RequireRejected([] { iga::ValidateSurfaceInterfaceRef({"fluid", "", "membrane"}); });
 	RequireRejected([&] { auto invalid = layout; invalid.reference_mesh_identity_sha256 = "not-a-hash"; iga::ValidateDistributedSurfaceLayout(invalid); });
 	RequireRejected([&] { auto invalid = layout; invalid.reference_positions[0].position_m[0] = NAN; iga::ValidateDistributedSurfaceLayout(invalid); });
 	RequireRejected([&] { auto invalid = layout; invalid.owned_global_node_ids = {10, 10, 30}; iga::ValidateDistributedSurfaceLayout(invalid); });

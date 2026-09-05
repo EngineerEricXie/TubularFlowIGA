@@ -13,6 +13,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace iga {
@@ -32,6 +33,10 @@ inline bool IsKnownSurfaceFieldQuantity(SurfaceFieldQuantity quantity)
 
 struct SurfaceInterfaceRef {
 	std::string domain_id;
+	// A domain may host more than one independently stepped solver.  Surface
+	// endpoint identity therefore includes the concrete subsystem, not only a
+	// user-facing interface label.
+	std::string subsystem_id;
 	std::string interface_id;
 };
 
@@ -199,8 +204,24 @@ inline bool IsLowercaseSha256(const std::string& value)
 
 inline void ValidateSurfaceInterfaceRef(const SurfaceInterfaceRef& reference)
 {
-	if (reference.domain_id.empty() || reference.interface_id.empty())
-		throw std::runtime_error("surface interface domain and interface IDs must be nonempty");
+	if (reference.domain_id.empty() || reference.subsystem_id.empty()
+		|| reference.interface_id.empty())
+		throw std::runtime_error("surface interface domain, subsystem, and interface IDs must be nonempty");
+}
+
+inline bool operator==(const SurfaceInterfaceRef& first,
+	const SurfaceInterfaceRef& second)
+{
+	return first.domain_id == second.domain_id
+		&& first.subsystem_id == second.subsystem_id
+		&& first.interface_id == second.interface_id;
+}
+
+inline bool operator<(const SurfaceInterfaceRef& first,
+	const SurfaceInterfaceRef& second)
+{
+	return std::tie(first.domain_id, first.subsystem_id, first.interface_id)
+		< std::tie(second.domain_id, second.subsystem_id, second.interface_id);
 }
 
 inline std::string BuildDistributedSurfaceLayoutIdentitySha256(const DistributedSurfaceLayout& layout)
@@ -322,8 +343,9 @@ inline std::string BuildSurfaceKinematicsIdentitySha256(const SurfaceKinematics&
 {
 	ValidateSurfaceKinematics(value, layout);
 	Sha256 hash;
-	distributed_surface_detail::AppendString(hash, "SurfaceKinematics/v1");
+	distributed_surface_detail::AppendString(hash, "SurfaceKinematics/v2");
 	distributed_surface_detail::AppendString(hash, value.interface.domain_id);
+	distributed_surface_detail::AppendString(hash, value.interface.subsystem_id);
 	distributed_surface_detail::AppendString(hash, value.interface.interface_id);
 	distributed_surface_detail::AppendString(hash, BuildSurfaceFieldStampIdentitySha256(value.stamp, layout));
 	for (const auto& vector : value.displacement_m) distributed_surface_detail::AppendVector(hash, vector);
@@ -336,8 +358,9 @@ inline std::string BuildSurfaceTractionIdentitySha256(const SurfaceTraction& val
 {
 	ValidateSurfaceTraction(value, layout);
 	Sha256 hash;
-	distributed_surface_detail::AppendString(hash, "SurfaceTraction/v1");
+	distributed_surface_detail::AppendString(hash, "SurfaceTraction/v2");
 	distributed_surface_detail::AppendString(hash, value.interface.domain_id);
+	distributed_surface_detail::AppendString(hash, value.interface.subsystem_id);
 	distributed_surface_detail::AppendString(hash, value.interface.interface_id);
 	distributed_surface_detail::AppendString(hash, BuildSurfaceFieldStampIdentitySha256(value.stamp, layout));
 	distributed_surface_detail::AppendString(hash, value.projection_identity_sha256);
@@ -350,6 +373,8 @@ inline void ValidateDistributedSurfaceInterface(const DistributedSurfaceInterfac
 {
 	ValidateSurfaceInterfaceRef(surface.id);
 	if (surface.subsystem_id.empty()) throw std::runtime_error("surface interface subsystem ID must be nonempty");
+	if (surface.id.subsystem_id != surface.subsystem_id)
+		throw std::runtime_error("surface interface declaration subsystem does not match its reference");
 	if (surface.locator_kind != "material_surface")
 		throw std::runtime_error("surface interface locator kind must be material_surface");
 	if (surface.boundary_labels.empty())
@@ -386,8 +411,9 @@ inline std::string BuildDistributedSurfaceInterfaceIdentitySha256(const Distribu
 {
 	ValidateDistributedSurfaceInterface(surface);
 	Sha256 hash;
-	distributed_surface_detail::AppendString(hash, "DistributedSurfaceInterface/v1");
+	distributed_surface_detail::AppendString(hash, "DistributedSurfaceInterface/v2");
 	distributed_surface_detail::AppendString(hash, surface.id.domain_id);
+	distributed_surface_detail::AppendString(hash, surface.id.subsystem_id);
 	distributed_surface_detail::AppendString(hash, surface.id.interface_id);
 	distributed_surface_detail::AppendString(hash, surface.subsystem_id);
 	distributed_surface_detail::AppendString(hash, surface.locator_kind);
