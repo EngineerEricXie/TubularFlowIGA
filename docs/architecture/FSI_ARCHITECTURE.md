@@ -1,6 +1,13 @@
 # FSI Architecture
 
-Status: **PR8.4a bounded strong Dirichlet--Neumann coordinator** is now paired
+Status: **Phase 8 foundational simple compliant-channel slice is closed**.
+It composes
+the PR8.4a bounded strong Dirichlet--Neumann coordinator with the PR8.3b real
+moving immersed-flow adapter and PR8.2b real pre-tensioned membrane adapter.
+Fresh Sol review approved closure.  It remains a sequential
+`PETSC_COMM_SELF`, one-partition benchmark; it is not a distributed FSI
+execution claim.  The PR8.4a
+bounded strong Dirichlet--Neumann coordinator is paired
 with the PR8.3a patch-to-closed-material composition foundation, PR8.2b
 structure-side membrane runtime, and PR8.1b traction extraction/projection
 boundary. It is a bounded, single-partition coordinator slice, not a
@@ -344,8 +351,10 @@ no Aitken proposal was applied; it does not invent an initial status or a
 factor of one. Immutable reference normals must already be unit length to
 roundoff, so scalar projection and Cartesian reconstruction cannot rescale a
 field.
-The focused coverage uses deterministic mock adapters and deliberately does
-not run a real immersed-flow benchmark.
+Focused coverage includes deterministic mock adapters and the controlled real
+compliant-channel benchmark.  The latter is closure evidence for this bounded
+single-partition slice, not a distributed performance or production-anatomy
+claim.
 
 Performance work carries forward the Phase 7 requirement to measure assembly
 and solve time separately, host peak RSS, CUDA peak allocation, rank/partition
@@ -354,8 +363,11 @@ belong on allocated resources rather than login nodes.
 
 ## Explicit exclusions
 
-PR8.4a excludes MPI/collective strong execution, nonmatching transfer,
-contact, ALE/remeshing, monolithic coupling, and a real-fluid benchmark claim.
+Phase 8 excludes MPI/collective strong execution, nonmatching transfer,
+contact, ALE/remeshing, monolithic coupling, and any distributed performance
+claim.  The closed compliant-channel benchmark does not close the subsequent
+compliant-tube, aneurysm-wall, thin-shell valve, valve opening/closing,
+leaflet-contact, or patient-specific valve work.
 PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
 kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
 and backward-Euler trial/prepare/finalize state. PR8.2b adds only its local

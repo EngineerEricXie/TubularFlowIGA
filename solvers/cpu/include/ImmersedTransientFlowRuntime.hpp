@@ -374,7 +374,7 @@ public:
 		if(!diagnostics_.prepared) return;
 		std::swap(committed_,prepared_); committed_global_.swap(prepared_global_); diagnostics_.ports.swap(prepared_ports_);
 		diagnostics_.committed_state_hash_sha256.swap(prepared_global_hash_); // already allocated in PrepareCommit
-		history_.reset(); moving_map_.reset(); moving_trial_=false; frozen_body_force_.clear(); frozen_seed_.clear(); trial_ports_.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); diagnostics_.prepared=false; diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; diagnostics_.converged=false; ++diagnostics_.finalize_count; ++diagnostics_.commit_count;
+		history_.reset(); moving_map_.reset(); moving_trial_=false; frozen_body_force_.clear(); frozen_seed_.clear(); trial_ports_.clear(); diagnostics_.trial_state_hash_sha256.clear(); diagnostics_.prepared_hash_sha256.clear(); diagnostics_.moving_map_identity_sha256.clear(); diagnostics_.prepared=false; diagnostics_.trial_active=false; diagnostics_.idle=true; diagnostics_.committed=true; ++diagnostics_.finalize_count; ++diagnostics_.commit_count;
 	}
 	void Commit() { PrepareCommit(); FinalizeCommit(); }
 	void Rollback()

@@ -61,6 +61,8 @@ public:
 	const FsiCouplingEdge& StrongCouplingEdge() const noexcept { return edge_; }
 	const DistributedSurfaceLayout& StrongCouplingLayout() const noexcept { return fluid_layout_; }
 	const MovingImmersedTransientFlowDiagnostics& MovingDiagnostics() const noexcept { return moving_.Diagnostics(); }
+	const ImmersedTransientFlowDiagnostics& CommittedFlowDiagnostics() const noexcept
+	{ return moving_.CommittedDiagnostics(); }
 	const MovingCutGeometry& CommittedGeometry() const noexcept { return moving_.CommittedGeometry(); }
 	const ImmersedGlobalFlowState& CommittedGlobalState() const { return moving_.CommittedGlobalState(); }
 	ImmersedTransientFlowDiagnostics TrialFlowDiagnostics() const

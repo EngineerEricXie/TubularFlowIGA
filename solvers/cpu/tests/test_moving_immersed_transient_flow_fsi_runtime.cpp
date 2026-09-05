@@ -1,5 +1,5 @@
 #include "MovingImmersedTransientFlowFsiRuntime.hpp"
-#include "PrescribedSurfaceMotion.hpp"
+#include "CompliantChannelFsiFixture.hpp"
 
 #include <array>
 #include <cassert>
@@ -271,79 +271,6 @@ void CheckNoTrialLeakage(const iga::MovingImmersedTransientFlowFsiRuntime& runti
 	Reject([&]{ (void)runtime.ConservationDiagnostics(); });
 }
 
-iga::RawSurfaceTriangle Face(int a, int b, int c, std::uint32_t label)
-{ iga::RawSurfaceTriangle value; value.indices={{a,b,c}}; value.boundary_id=label; return value; }
-
-iga::MaterialSurfaceKinematics Initial()
-{
-	iga::RawSurfaceSoup soup;
-	// A closed rectangular channel.  Every face is a 3x3 grid; the top label-7
-	// patch has eight triangles, a clamped perimeter, and one free center node.
-	std::vector<std::array<int,3>> lattice;
-	auto node=[&](int x,int y,int z) {
-		const std::array<int,3> key{{x,y,z}};
-		for(std::size_t i=0;i<lattice.size();++i) if(lattice[i]==key) return static_cast<int>(i);
-		lattice.push_back(key); soup.vertices.push_back({{.2+.3*x,.2+.3*y,.2+.3*z}});
-		return static_cast<int>(lattice.size()-1);
-	};
-	auto add_face=[&](std::uint32_t label, auto coordinate) {
-		int grid[3][3];
-		for(int i=0;i<3;++i) for(int j=0;j<3;++j) { const auto p=coordinate(i,j); grid[i][j]=node(p[0],p[1],p[2]); }
-		for(int i=0;i<2;++i) for(int j=0;j<2;++j) {
-			const int a=grid[i][j],b=grid[i+1][j],c=grid[i][j+1],d=grid[i+1][j+1];
-			auto add_outward=[&](int q0,int q1,int q2) {
-				const auto& p0=soup.vertices[q0]; const auto& p1=soup.vertices[q1]; const auto& p2=soup.vertices[q2];
-				const std::array<double,3> normal{{(p1[1]-p0[1])*(p2[2]-p0[2])-(p1[2]-p0[2])*(p2[1]-p0[1]),(p1[2]-p0[2])*(p2[0]-p0[0])-(p1[0]-p0[0])*(p2[2]-p0[2]),(p1[0]-p0[0])*(p2[1]-p0[1])-(p1[1]-p0[1])*(p2[0]-p0[0])}};
-				const std::array<double,3> radial{{(p0[0]+p1[0]+p2[0])/3.-.5,(p0[1]+p1[1]+p2[1])/3.-.5,(p0[2]+p1[2]+p2[2])/3.-.5}};
-				if(normal[0]*radial[0]+normal[1]*radial[1]+normal[2]*radial[2]<0.) std::swap(q1,q2);
-				soup.triangles.push_back(Face(q0,q1,q2,label));
-			};
-			add_outward(a,b,d); add_outward(a,d,c);
-		}
-	};
-	add_face(7,[](int x,int y){return std::array<int,3>{{x,y,2}};});
-	add_face(9,[](int x,int y){return std::array<int,3>{{x,y,0}};});
-	add_face(1,[](int y,int z){return std::array<int,3>{{0,y,z}};});
-	add_face(2,[](int y,int z){return std::array<int,3>{{2,y,z}};});
-	add_face(9,[](int x,int z){return std::array<int,3>{{x,0,z}};});
-	add_face(9,[](int x,int z){return std::array<int,3>{{x,2,z}};});
-	return iga::PrescribedSurfaceMotion({{0.0,soup},{1.0,soup}}).Evaluate(1.0,0.0,1.0);
-}
-
-iga::DistributedSurfaceInterface Structure(const std::string& ref)
-{
-	iga::DistributedSurfaceInterface v; v.id={"structure","membrane","patch"}; v.subsystem_id="membrane";
-	v.boundary_labels={7}; v.reference_mesh_identity_sha256=ref;
-	v.provides={iga::SurfaceFieldQuantity::Displacement,iga::SurfaceFieldQuantity::Velocity};
-	v.requires={iga::SurfaceFieldQuantity::TractionOnStructure}; return v;
-}
-iga::DistributedSurfaceInterface Fluid(const std::string& ref)
-{
-	iga::DistributedSurfaceInterface v; v.id={"fluid","immersed","patch"}; v.subsystem_id="immersed";
-	v.boundary_labels={7}; v.reference_mesh_identity_sha256=ref;
-	v.provides={iga::SurfaceFieldQuantity::TractionOnStructure};
-	v.requires={iga::SurfaceFieldQuantity::Displacement,iga::SurfaceFieldQuantity::Velocity}; return v;
-}
-iga::MaterialSurfacePatchMap Map(const iga::MaterialSurfaceKinematics& initial)
-{
-	iga::DistributedSurfaceLayout layout; layout.global_node_count=9; layout.partition_count=1; layout.partition_rank=0;
-	layout.owned_global_node_ids={11,12,13,14,15,16,17,18,19};
-	for(std::size_t i=0;i<9;++i) layout.reference_positions.push_back({layout.owned_global_node_ids[i],initial.ReferenceMaterialVerticesM()[i]});
-	for(std::uint64_t x=0;x<2;++x) for(std::uint64_t y=0;y<2;++y) { const auto a=11+3*x+y,b=a+3,c=a+1,d=b+1; layout.reference_triangles.push_back({{a,b,d}}); layout.reference_triangles.push_back({{a,d,c}}); }
-	layout.owned_reference_lumped_areas_m2={.03,.045,.015,.045,.09,.045,.015,.045,.03};
-	std::vector<iga::MaterialSurfacePatchMap::GlobalToSourceVertex> vertices; for(std::size_t i=0;i<9;++i) vertices.push_back({layout.owned_global_node_ids[i],static_cast<std::uint32_t>(i)});
-	const std::vector<std::uint32_t> triangles{0,1,2,3,4,5,6,7}; const std::vector<std::uint64_t> clamps{11,12,13,14,16,17,18,19};
-	layout.reference_mesh_identity_sha256=iga::MaterialSurfacePatchMap::BuildReferenceIdentitySha256(initial,7,vertices,layout.reference_triangles,triangles,clamps);
-	layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(layout);
-	return iga::MaterialSurfacePatchMap::Create(Structure(layout.reference_mesh_identity_sha256),layout,initial,7,vertices,triangles,clamps);
-}
-iga::MovingImmersedTransientFlowOptions Options()
-{
-	iga::MovingImmersedTransientFlowOptions v; v.grid={{{0,0,0}},{{1,1,1}},{{2,2,2}}};
-	v.grid={{{0,0,0}},{{1,1,1}},{{3,3,3}}}; v.geometry.volume.max_depth=3; v.geometry.volume.max_nodes=v.geometry.volume.max_leaves=v.geometry.volume.max_points=1000000;
-	v.flow.parameters={1.,1.,1.}; v.flow.wall_labels={7,9}; v.flow.ports={{"inlet",1,iga::ImmersedFlowPortControlMode::Pressure,.10},{"outlet",2,iga::ImmersedFlowPortControlMode::Pressure,0.}}; v.flow.ksp_relative_tolerance=1e-12; v.flow.lu_pivot_shift=1e-20;
-	return v;
-}
 iga::SurfaceFieldStamp Stamp(const iga::DistributedSurfaceLayout& l, std::uint64_t iteration)
 {
 	iga::SurfaceFieldStamp s; s.time_s=2.; s.step=1; s.coupling_iteration=iteration;
@@ -368,13 +295,13 @@ int main(int argc, char** argv)
 {
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	try {
-		const auto initial=Initial(); const auto map=Map(initial); const auto& layout=map.Layout(); const auto fluid=Fluid(map.ReferenceIdentitySha256());
+		const auto initial=iga::compliant_channel_fixture::InitialMaterial(); const auto map=iga::compliant_channel_fixture::PatchMap(initial); const auto& layout=map.Layout(); const auto fluid=iga::compliant_channel_fixture::Fluid(map.ReferenceIdentitySha256());
 		const iga::FsiCouplingEdge edge("wall",fluid.id,map.Interface().id,iga::FsiCouplingLaw::FluidStructureTractionKinematics);
 		auto wrong_fluid=fluid; wrong_fluid.id.interface_id="wrong";
-		Reject([&]{ iga::MovingImmersedTransientFlowFsiRuntime("fluid","immersed",edge,wrong_fluid,map.Interface(),layout,layout,initial,map,Options()); });
+		Reject([&]{ iga::MovingImmersedTransientFlowFsiRuntime("fluid","immersed",edge,wrong_fluid,map.Interface(),layout,layout,initial,map,iga::compliant_channel_fixture::FlowOptions()); });
 		auto wrong_structure=map.Interface(); wrong_structure.id.subsystem_id="wrong";
-		Reject([&]{ iga::MovingImmersedTransientFlowFsiRuntime("fluid","immersed",edge,fluid,wrong_structure,layout,layout,initial,map,Options()); });
-		iga::MovingImmersedTransientFlowFsiRuntime runtime("fluid","immersed",edge,fluid,map.Interface(),layout,layout,initial,map,Options());
+		Reject([&]{ iga::MovingImmersedTransientFlowFsiRuntime("fluid","immersed",edge,fluid,wrong_structure,layout,layout,initial,map,iga::compliant_channel_fixture::FlowOptions()); });
+		iga::MovingImmersedTransientFlowFsiRuntime runtime("fluid","immersed",edge,fluid,map.Interface(),layout,layout,initial,map,iga::compliant_channel_fixture::FlowOptions());
 		Reject([&]{ runtime.GetSurfaceTraction("patch"); });
 		Reject([&]{ runtime.GetCommittedSurfaceTraction("patch",Stamp(layout,0)); });
 		Reject([&]{ (void)runtime.ConservationDiagnostics(); });
@@ -447,6 +374,11 @@ int main(int argc, char** argv)
 		const auto committed=runtime.GetCommittedSurfaceTraction("patch",prepare_retry.traction.stamp);
 		Require(SameTraction(committed,prepare_retry.traction)&&runtime.CommittedGlobalState().Index()==1,"finalize did not expose exact committed traction");
 		Require(SameTractionDiagnostics(runtime.CommittedSurfaceTractionDiagnostics(),prepare_retry.traction_diagnostics),"finalize did not expose exact committed traction diagnostics");
+		const auto& committed_flow=runtime.CommittedFlowDiagnostics();
+		Require(committed_flow.converged && !committed_flow.trial_active && committed_flow.committed
+			&& committed_flow.identity_history_nodes==committed_flow.active_nodes && committed_flow.missing_history_nodes==0
+			&& !committed_flow.history_hash_sha256.empty() && !committed_flow.layout_hash_sha256.empty(),
+			"finalize did not retain the converged committed flow diagnostics");
 		const auto committed_conservation=runtime.ConservationDiagnostics();
 		Require(SameConservation(committed_conservation,original_trial.conservation)
 			&&runtime.CommittedCompositionIdentitySha256()==original_trial.composition,"commit did not retain transition conservation/composition");

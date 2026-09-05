@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test coupling coupling-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test coupling coupling-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
 
 all: cpu
 
@@ -23,6 +23,9 @@ fluid-surface-traction-test:
 
 moving-immersed-transient-flow-fsi-runtime-test:
 	$(MAKE) -C solvers/cpu moving-immersed-transient-flow-fsi-runtime-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
+
+compliant-channel-fsi-test:
+	$(MAKE) -C solvers/cpu compliant-channel-fsi-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 
 pretensioned-membrane-test:
 	$(MAKE) -C solvers/cpu pretensioned-membrane-test

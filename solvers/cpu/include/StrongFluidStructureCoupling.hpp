@@ -22,6 +22,12 @@
 
 namespace iga {
 
+namespace strong_fsi_detail {
+template <class Runtime, class = void> struct HasTrialFlowDiagnostics : std::false_type {};
+template <class Runtime> struct HasTrialFlowDiagnostics<Runtime,
+	std::void_t<decltype(std::declval<const Runtime&>().TrialFlowDiagnostics())>> : std::true_type {};
+}
+
 class StrongFluidStructureCouplingAccess {
 private:
 	template <class FluidRuntime, class StructureRuntime>
@@ -79,6 +85,13 @@ struct StrongFluidStructureIterationDiagnostics {
 	std::string relaxed_kinematics_identity_sha256;
 	std::string aitken_proposal_identity_sha256;
 	std::string aitken_control_state_identity_sha256;
+	// Present only when the concrete fluid adapter exposes real trial flow
+	// diagnostics.  They make a production benchmark's aggregate solve work
+	// auditable without changing the mock adapter contract.
+	std::optional<std::uint64_t> fluid_nonlinear_iterations;
+	std::optional<std::uint64_t> fluid_ksp_iterations;
+	std::optional<double> fluid_residual_norm;
+	std::optional<double> fluid_linear_relative_residual;
 };
 
 struct StrongFluidStructureCouplingResult {
@@ -159,6 +172,13 @@ public:
 				diagnostic.fluid_traction_identity_sha256 = BuildSurfaceTractionIdentitySha256(traction, layout_);
 				diagnostic.raw_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(raw, layout_);
 				diagnostic.current_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(current, layout_);
+				if constexpr (strong_fsi_detail::HasTrialFlowDiagnostics<FluidRuntime>::value) {
+					const auto flow_diagnostics = fluid_.TrialFlowDiagnostics();
+					diagnostic.fluid_nonlinear_iterations = static_cast<std::uint64_t>(flow_diagnostics.nonlinear_iterations);
+					diagnostic.fluid_ksp_iterations = static_cast<std::uint64_t>(flow_diagnostics.ksp_iterations);
+					diagnostic.fluid_residual_norm = flow_diagnostics.residual_norm;
+					diagnostic.fluid_linear_relative_residual = flow_diagnostics.true_linear_relative_residual;
+				}
 				if (rms <= diagnostic.convergence_threshold_m) {
 					diagnostic.relaxed_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(current, layout_);
 					diagnostic.converged = true; result.history.push_back(std::move(diagnostic));
@@ -307,9 +327,11 @@ private:
 		return hash.Hex();
 	}
 	std::string ResultIdentity(const DomainStepContext& step, const StrongFluidStructureCouplingResult& result) const
-	{ Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingResult/v2"); distributed_surface_detail::AppendString(hash,BuildFsiCouplingEdgeIdentitySha256(edge_)); distributed_surface_detail::AppendString(hash,partition_identity_sha256_); distributed_surface_detail::AppendString(hash,result.options_identity_sha256); hash.AppendLittleEndian64(static_cast<std::uint64_t>(step.step_index)); hash.AppendNormalizedDouble(step.start_time_s); hash.AppendNormalizedDouble(step.dt_s); hash.AppendLittleEndian64(result.iterations); hash.AppendLittleEndian32(result.converged ? 1U : 0U); distributed_surface_detail::AppendString(hash,result.status); for(const auto& d:result.history){hash.AppendLittleEndian64(d.iteration);hash.AppendNormalizedDouble(d.area_weighted_rms_residual_m);hash.AppendNormalizedDouble(d.max_residual_m);hash.AppendNormalizedDouble(d.displacement_scale_m);hash.AppendNormalizedDouble(d.convergence_threshold_m);hash.AppendLittleEndian32(d.converged ? 1U : 0U);hash.AppendLittleEndian32(d.aitken_proposal_applied ? 1U : 0U); AppendOptional(hash,d.relaxation);AppendOptional(hash,d.unclamped_relaxation);AppendOptionalStatus(hash,d.aitken_status);AppendOptional(hash,d.aitken_global_numerator);AppendOptional(hash,d.aitken_global_denominator);AppendOptional(hash,d.aitken_residual_scale);hash.AppendLittleEndian32(d.aitken_had_previous_residual ? 1U : 0U);distributed_surface_detail::AppendString(hash,d.fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,d.raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.current_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_proposal_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_control_state_identity_sha256);} distributed_surface_detail::AppendString(hash,result.accepted_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_state_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_composition_identity_sha256); return hash.Hex(); }
+	{ Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingResult/v3"); distributed_surface_detail::AppendString(hash,BuildFsiCouplingEdgeIdentitySha256(edge_)); distributed_surface_detail::AppendString(hash,partition_identity_sha256_); distributed_surface_detail::AppendString(hash,result.options_identity_sha256); hash.AppendLittleEndian64(static_cast<std::uint64_t>(step.step_index)); hash.AppendNormalizedDouble(step.start_time_s); hash.AppendNormalizedDouble(step.dt_s); hash.AppendLittleEndian64(result.iterations); hash.AppendLittleEndian32(result.converged ? 1U : 0U); distributed_surface_detail::AppendString(hash,result.status); for(const auto& d:result.history){hash.AppendLittleEndian64(d.iteration);hash.AppendNormalizedDouble(d.area_weighted_rms_residual_m);hash.AppendNormalizedDouble(d.max_residual_m);hash.AppendNormalizedDouble(d.displacement_scale_m);hash.AppendNormalizedDouble(d.convergence_threshold_m);hash.AppendLittleEndian32(d.converged ? 1U : 0U);hash.AppendLittleEndian32(d.aitken_proposal_applied ? 1U : 0U); AppendOptional(hash,d.relaxation);AppendOptional(hash,d.unclamped_relaxation);AppendOptionalStatus(hash,d.aitken_status);AppendOptional(hash,d.aitken_global_numerator);AppendOptional(hash,d.aitken_global_denominator);AppendOptional(hash,d.aitken_residual_scale);hash.AppendLittleEndian32(d.aitken_had_previous_residual ? 1U : 0U); AppendOptionalUint64(hash,d.fluid_nonlinear_iterations);AppendOptionalUint64(hash,d.fluid_ksp_iterations);AppendOptional(hash,d.fluid_residual_norm);AppendOptional(hash,d.fluid_linear_relative_residual);distributed_surface_detail::AppendString(hash,d.fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,d.raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.current_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_proposal_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_control_state_identity_sha256);} distributed_surface_detail::AppendString(hash,result.accepted_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_state_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_composition_identity_sha256); return hash.Hex(); }
 	static void AppendOptional(Sha256& hash, const std::optional<double>& value)
 	{ hash.AppendLittleEndian32(value ? 1U : 0U); if (value) hash.AppendNormalizedDouble(*value); }
+	static void AppendOptionalUint64(Sha256& hash, const std::optional<std::uint64_t>& value)
+	{ hash.AppendLittleEndian32(value ? 1U : 0U); if (value) hash.AppendLittleEndian64(*value); }
 	static void AppendOptionalStatus(Sha256& hash, const std::optional<AitkenRelaxationStatus>& value)
 	{ hash.AppendLittleEndian32(value ? 1U : 0U); if (value) hash.AppendLittleEndian32(static_cast<std::uint32_t>(*value)); }
 
