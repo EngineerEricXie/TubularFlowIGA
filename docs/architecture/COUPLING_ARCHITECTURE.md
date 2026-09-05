@@ -1,6 +1,6 @@
 # Coupling Architecture
 
-Status: Phase 1 complete; Phase 2 in progress; PR9.4 bounded multiscale-closure candidate. The verified 1D--3D--1D
+Status: foundational roadmap Phases 0--9 complete; PR9.4 is the accepted bounded multiscale closure. The verified 1D--3D--1D
 lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
 topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
 provides the strict schema-v5 graph manifest and its production runner binding.
