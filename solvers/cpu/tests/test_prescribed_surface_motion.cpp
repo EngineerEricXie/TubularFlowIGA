@@ -18,6 +18,9 @@ using iga::RawSurfaceSoup;
 using iga::RawSurfaceTriangle;
 
 using Evaluation = iga::PrescribedSurfaceMotion::Evaluation;
+using MaterialSurfaceKinematics = iga::MaterialSurfaceKinematics;
+static_assert(std::is_same<Evaluation, MaterialSurfaceKinematics>::value,
+	"prescribed motion must publish the producer-neutral material payload");
 static_assert(std::is_same<decltype(std::declval<const Evaluation&>().Surface()),
 	const iga::ClosedTriangulatedSurface&>::value, "evaluation surface must be read-only");
 static_assert(std::is_same<decltype(std::declval<const Evaluation&>().SourceVerticesM()),
@@ -105,11 +108,92 @@ int main()
 {
 	const iga::PrescribedSurfaceMotion motion(ThreeFrames());
 	const auto midpoint = motion.Evaluate(0.5, 0.0, 0.5);
+	const MaterialSurfaceKinematics& neutral_midpoint = midpoint;
+	neutral_midpoint.Validate();
 	assert(Near(midpoint.EvaluatedTimeS(), 0.5));
+	assert(Near(midpoint.StepStartS(), 0.0) && Near(midpoint.StepEndS(), 0.5) && Near(midpoint.DtS(), 0.5));
+	assert(midpoint.GeometryEpochIdentitySha256() == midpoint.IdentitySha256());
+	assert(!midpoint.MaterialIdentitySha256().empty() && !midpoint.TopologyIdentitySha256().empty());
+	assert(midpoint.ReferenceMaterialVerticesM() == ThreeFrames().front().surface.vertices);
+	const auto neutral_copy = MaterialSurfaceKinematics::Create(midpoint.Surface(), midpoint.ReferenceMaterialVerticesM(), midpoint.SourceVerticesM(),
+		midpoint.SourceVertexVelocitiesMPerS(), midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(),
+		midpoint.EvaluatedTimeS(), midpoint.StepStartS(), midpoint.StepEndS(), midpoint.GeometryEpochIdentitySha256(),
+		midpoint.MaterialIdentitySha256(), midpoint.TopologyIdentitySha256());
+	assert(neutral_copy.IdentitySha256() == midpoint.IdentitySha256()
+		&& neutral_copy.MaterialIdentitySha256() == midpoint.MaterialIdentitySha256()
+		&& neutral_copy.TopologyIdentitySha256() == midpoint.TopologyIdentitySha256()
+		&& neutral_copy.ContentIdentitySha256() == midpoint.ContentIdentitySha256()
+		&& neutral_copy.SourceVerticesM() == midpoint.SourceVerticesM()
+		&& neutral_copy.SourceVertexVelocitiesMPerS() == midpoint.SourceVertexVelocitiesMPerS());
+	const auto derived_neutral = MaterialSurfaceKinematics::Create(midpoint.Surface(), midpoint.ReferenceMaterialVerticesM(), midpoint.SourceVerticesM(),
+		midpoint.SourceVertexVelocitiesMPerS(), midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(),
+		midpoint.EvaluatedTimeS(), midpoint.StepStartS(), midpoint.StepEndS());
+	assert(derived_neutral.IdentitySha256() == derived_neutral.ContentIdentitySha256()
+		&& derived_neutral.ContentIdentitySha256() == midpoint.ContentIdentitySha256());
+	const auto CreateNeutral = [&](std::vector<std::array<double, 3>> vertices,
+		std::vector<std::array<double, 3>> velocities, std::vector<iga::SourceTriangleProvenance> canonical,
+		std::vector<iga::SourceTriangleProvenance> source, const std::string& epoch,
+		const std::string& material, const std::string& topology) {
+		return MaterialSurfaceKinematics::Create(midpoint.Surface(), midpoint.ReferenceMaterialVerticesM(), std::move(vertices), std::move(velocities),
+			std::move(canonical), std::move(source), midpoint.EvaluatedTimeS(), midpoint.StepStartS(),
+			midpoint.StepEndS(), epoch, material, topology);
+	};
+	// Public neutral construction cannot reuse a producer identity after any
+	// owned current state changes, and it requires complete material/canonical
+	// topology correspondence rather than merely usable local indices.
+	auto altered_velocities = midpoint.SourceVertexVelocitiesMPerS();
+	altered_velocities[0][0] += 0.125;
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), altered_velocities,
+		midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(), midpoint.IdentitySha256(),
+		midpoint.MaterialIdentitySha256(), midpoint.TopologyIdentitySha256()); });
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(), midpoint.IdentitySha256(),
+		"forged-material", midpoint.TopologyIdentitySha256()); });
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(), "forged-epoch",
+		midpoint.MaterialIdentitySha256(), midpoint.TopologyIdentitySha256()); });
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(), midpoint.IdentitySha256(),
+		midpoint.MaterialIdentitySha256(), "forged-topology"); });
+	auto label_disagreement = midpoint.CanonicalTriangleProvenance();
+	auto relabelled_source = midpoint.SourceTriangles();
+	++label_disagreement[0].boundary_id; ++relabelled_source[label_disagreement[0].source_triangle].boundary_id;
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		label_disagreement, relabelled_source, midpoint.IdentitySha256(), midpoint.MaterialIdentitySha256(),
+		midpoint.TopologyIdentitySha256()); });
+	auto bad_stored_index = midpoint.SourceTriangles();
+	bad_stored_index[0].source_triangle = 1;
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		midpoint.CanonicalTriangleProvenance(), bad_stored_index, midpoint.IdentitySha256(),
+		midpoint.MaterialIdentitySha256(), midpoint.TopologyIdentitySha256()); });
+	auto duplicate_mapping = midpoint.CanonicalTriangleProvenance();
+	duplicate_mapping[1] = duplicate_mapping[0];
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		duplicate_mapping, midpoint.SourceTriangles(), midpoint.IdentitySha256(), midpoint.MaterialIdentitySha256(),
+		midpoint.TopologyIdentitySha256()); });
+	auto reversed_mapping = midpoint.CanonicalTriangleProvenance();
+	std::swap(reversed_mapping[0].canonical_corner_to_source_corner[0],
+		reversed_mapping[0].canonical_corner_to_source_corner[1]);
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		reversed_mapping, midpoint.SourceTriangles(), midpoint.IdentitySha256(), midpoint.MaterialIdentitySha256(),
+		midpoint.TopologyIdentitySha256()); });
+	auto extra_source = midpoint.SourceTriangles();
+	extra_source.push_back(extra_source.front()); extra_source.back().source_triangle = static_cast<std::uint32_t>(extra_source.size()-1);
+	RequireRejected([&] { (void)CreateNeutral(midpoint.SourceVerticesM(), midpoint.SourceVertexVelocitiesMPerS(),
+		midpoint.CanonicalTriangleProvenance(), extra_source, midpoint.IdentitySha256(), midpoint.MaterialIdentitySha256(),
+		midpoint.TopologyIdentitySha256()); });
+	auto extra_vertices = midpoint.SourceVerticesM(); auto extra_vertex_velocities = midpoint.SourceVertexVelocitiesMPerS();
+	extra_vertices.push_back({{7.0, 8.0, 9.0}}); extra_vertex_velocities.push_back({{0.0, 0.0, 0.0}});
+	RequireRejected([&] { (void)CreateNeutral(extra_vertices, extra_vertex_velocities,
+		midpoint.CanonicalTriangleProvenance(), midpoint.SourceTriangles(), midpoint.IdentitySha256(),
+		midpoint.MaterialIdentitySha256(), midpoint.TopologyIdentitySha256()); });
 	assert(Near(midpoint.SourceVerticesM()[0][0], 0.5));
 	assert(Near(midpoint.SourceVerticesM()[1][0], 1.5));
 	assert(Near(midpoint.SourceVertexVelocitiesMPerS()[0][0], 1.0));
 	const auto endpoint = motion.Evaluate(1.0, 0.5, 1.0);
+	endpoint.ValidateNextEpoch(midpoint, 1.0, 0.5);
+	RequireRejected([&] { endpoint.ValidateNextEpoch(midpoint, 0.5, 0.5); });
+	RequireRejected([&] { endpoint.ValidateNextEpoch(endpoint, 1.0, 0.5); });
 	assert(Near(endpoint.SourceVerticesM()[0][0], 1.0));
 	assert(Near(endpoint.SourceVertexVelocitiesMPerS()[0][0], 1.0));
 	const auto next_interval = motion.Evaluate(1.0, 1.0, 1.5);
@@ -167,6 +251,20 @@ int main()
 
 	const auto same_state_different_envelope = motion.Evaluate(0.5, 0.25, 0.75);
 	assert(midpoint.IdentitySha256() == same_state_different_envelope.IdentitySha256());
+	RequireRejected([&] { same_state_different_envelope.ValidateNextEpoch(midpoint, 0.5, 0.5); });
+	auto different_topology_frames = ThreeFrames();
+	for (auto& frame : different_topology_frames) frame.surface.triangles[0].boundary_id = 99;
+	const iga::PrescribedSurfaceMotion different_topology(different_topology_frames);
+	RequireRejected([&] { different_topology.Evaluate(1.0, 0.5, 1.0).ValidateNextEpoch(midpoint, 1.0, 0.5); });
+	// Equal connectivity and labels do not make separate immutable material
+	// reference surfaces interchangeable across motion epochs.
+	auto different_reference_frames = ThreeFrames();
+	for (auto& frame : different_reference_frames) frame.surface = Tetrahedron(10.0);
+	const iga::PrescribedSurfaceMotion different_reference(different_reference_frames);
+	const auto foreign_epoch = different_reference.Evaluate(1.0, 0.5, 1.0);
+	assert(foreign_epoch.TopologyIdentitySha256() == midpoint.TopologyIdentitySha256());
+	assert(foreign_epoch.MaterialIdentitySha256() != midpoint.MaterialIdentitySha256());
+	RequireRejected([&] { foreign_epoch.ValidateNextEpoch(midpoint, 1.0, 0.5); });
 
 	auto nonfinite_coordinate = ThreeFrames();
 	nonfinite_coordinate[1].surface.vertices[0][0] = std::numeric_limits<double>::quiet_NaN();
@@ -188,6 +286,16 @@ int main()
 	RequireRejected([&] { iga::PrescribedSurfaceMotion rejected(bad_winding); });
 	auto degenerate = ThreeFrames(); degenerate[1].surface.vertices[2] = {{2.0, 0.0, 0.0}};
 	RequireRejected([&] { iga::PrescribedSurfaceMotion rejected(degenerate); });
+	auto split_coincident = ThreeFrames();
+	for (auto& frame : split_coincident) {
+		frame.surface.vertices.push_back(frame.surface.vertices[0]);
+		frame.surface.triangles[0].indices[0] = 4;
+	}
+	RequireRejected([&] { iga::PrescribedSurfaceMotion rejected(split_coincident); });
+	auto reversed_triangle = ThreeFrames();
+	for (auto& frame : reversed_triangle)
+		std::swap(frame.surface.triangles[0].indices[1], frame.surface.triangles[0].indices[2]);
+	RequireRejected([&] { iga::PrescribedSurfaceMotion rejected(reversed_triangle); });
 
 	std::vector<PrescribedSurfaceFrame> inward{{0.0, Cube()}, {1.0, Cube()}};
 	for (auto& frame : inward) for (auto& face : frame.surface.triangles) std::swap(face.indices[1], face.indices[2]);

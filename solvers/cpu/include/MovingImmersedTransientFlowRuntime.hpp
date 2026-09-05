@@ -82,7 +82,7 @@ struct MovingImmersedTransientFlowDiagnostics {
 
 class MovingImmersedTransientFlowRuntime {
 public:
-	explicit MovingImmersedTransientFlowRuntime(PrescribedSurfaceMotion::Evaluation initial,
+	explicit MovingImmersedTransientFlowRuntime(MaterialSurfaceKinematics initial,
 		MovingImmersedTransientFlowOptions options)
 		: options_(std::move(options))
 	{
@@ -133,7 +133,7 @@ public:
 		throw std::logic_error("moving immersed transient port option is absent");
 	}
 
-	void BeginTrial(PrescribedSurfaceMotion::Evaluation target, std::uint64_t target_index, double dt_s)
+	void BeginTrial(MaterialSurfaceKinematics target, std::uint64_t target_index, double dt_s)
 	{
 		RequireIdle("begin trial");
 		const auto& old_state = committed_->runtime->CommittedGlobalState();
@@ -142,6 +142,7 @@ public:
 		const double target_time_s = target.EvaluatedTimeS();
 		if (target_index != old_state.Index()+1 || target_time_s != CheckedTransientTargetTime(old_state.TimeS(), dt_s))
 			throw std::invalid_argument("moving immersed transient target time/index is not the exact next epoch");
+		target.ValidateNextEpoch(committed_->geometry->Kinematics(), target_time_s, dt_s);
 
 		// Everything through BeginMovingTrial is local.  A failure destroys the
 		// target PETSc runtime before its referenced target geometry.

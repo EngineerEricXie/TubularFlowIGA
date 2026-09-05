@@ -1,4 +1,5 @@
 #include "MovingCutGeometry.hpp"
+#include "PrescribedSurfaceMotion.hpp"
 
 #include <array>
 #include <cassert>
@@ -248,6 +249,13 @@ int main()
 	different_first.triangles[0].boundary_id = 99; different.triangles[0].boundary_id = 99;
 	const auto label_motion = PrescribedSurfaceMotion({{0.0, different_first}, {1.0, different}});
 	Rejected([&] { (void)MovingCutGeometry::Build(grid, label_motion.Evaluate(1.0, 0.0, 1.0), options, initial.get()); });
+	// Matching source connectivity and labels cannot cross-bind a distinct
+	// immutable material reference surface to the previous cut epoch.
+	const auto material_motion = PrescribedSurfaceMotion({{0.0, Shell(.25)}, {1.0, Shell(.95)}});
+	const auto foreign_material = material_motion.Evaluate(1.0, 0.0, 1.0);
+	assert(foreign_material.TopologyIdentitySha256() == initial->Evaluation().TopologyIdentitySha256());
+	assert(foreign_material.MaterialIdentitySha256() != initial->Evaluation().MaterialIdentitySha256());
+	Rejected([&] { (void)MovingCutGeometry::Build(grid, foreign_material, options, initial.get()); });
 	std::unique_ptr<MovingCutGeometry> committed = std::move(initial);
 	const std::string committed_identity = committed->IdentitySha256();
 	MovingCutGeometryOptions invalid = options; invalid.surface.max_points = 1;

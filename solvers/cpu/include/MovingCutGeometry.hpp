@@ -1,10 +1,10 @@
 #ifndef IGA_MOVING_CUT_GEOMETRY_HPP
 #define IGA_MOVING_CUT_GEOMETRY_HPP
 
-// Immutable correctness-oracle geometry for a prescribed moving immersed
+// Immutable correctness-oracle geometry for a material moving immersed
 // boundary.  There is deliberately no reuse path: every evaluated time builds
 // its own complete dependency chain before this object is made visible.
-#include "PrescribedSurfaceMotion.hpp"
+#include "MaterialSurfaceKinematics.hpp"
 #include "CutCellGhostPenalty.hpp"
 #include "ImmersedSurfaceQuadrature.hpp"
 #include "Sha256.hpp"
@@ -61,14 +61,19 @@ public:
 	// only after this returns.  A failed constructor cannot publish a partial
 	// geometry state.
 	static std::unique_ptr<MovingCutGeometry> Build(CubicCartesianGridSpec grid,
-		PrescribedSurfaceMotion::Evaluation evaluation,
+		MaterialSurfaceKinematics kinematics,
 		MovingCutGeometryOptions options = {}, const MovingCutGeometry* previous = nullptr)
 	{
-		return std::unique_ptr<MovingCutGeometry>(new MovingCutGeometry(std::move(grid), std::move(evaluation),
+		kinematics.Validate();
+		if (previous) ValidatePreviousInput(grid, kinematics, *previous);
+		return std::unique_ptr<MovingCutGeometry>(new MovingCutGeometry(std::move(grid), std::move(kinematics),
 			std::move(options), previous));
 	}
 
-	const PrescribedSurfaceMotion::Evaluation& Evaluation() const noexcept { return evaluation_; }
+	const MaterialSurfaceKinematics& Kinematics() const noexcept { return kinematics_; }
+	// Compatibility accessor for Phase 7 callers; its value is the neutral
+	// material payload, not a prescribed-motion-specific representation.
+	const MaterialSurfaceKinematics& Evaluation() const noexcept { return kinematics_; }
 	const CartesianDomainClassification& Domain() const noexcept { return domain_; }
 	const CutCellVolumeQuadratureCatalog& Volume() const noexcept { return volume_; }
 	const ImmersedSurfaceQuadratureCatalog& Surface() const noexcept { return surface_; }
@@ -82,15 +87,16 @@ public:
 	const std::string& IdentitySha256() const noexcept { return GeometryIdentitySha256(); }
 
 private:
-	MovingCutGeometry(CubicCartesianGridSpec grid, PrescribedSurfaceMotion::Evaluation evaluation,
+	MovingCutGeometry(CubicCartesianGridSpec grid, MaterialSurfaceKinematics kinematics,
 		MovingCutGeometryOptions options, const MovingCutGeometry* previous)
-		: evaluation_(std::move(evaluation)), domain_(CubicCartesianBackground(grid),
-			SurfaceSpatialIndex(evaluation_.Surface())), volume_(domain_, options.volume, options.volume_storage),
+		: kinematics_(std::move(kinematics)), domain_(CubicCartesianBackground(grid),
+			SurfaceSpatialIndex(kinematics_.Surface())), volume_(domain_, options.volume, options.volume_storage),
 		  surface_(domain_, options.surface), ghost_(domain_, volume_, options.ghost), options_(std::move(options))
 	{
+		kinematics_.Validate();
 		ValidateCatalogs();
-		diagnostics_.time_s = evaluation_.EvaluatedTimeS();
-		diagnostics_.evaluated_motion_hash = evaluation_.IdentitySha256();
+		diagnostics_.time_s = kinematics_.EvaluatedTimeS();
+		diagnostics_.evaluated_motion_hash = kinematics_.ContentIdentitySha256();
 		diagnostics_.surface_hash = domain_.SurfaceCanonicalHash();
 		diagnostics_.outside_cells = domain_.Diagnostics().outside_count;
 		diagnostics_.inside_cells = domain_.Diagnostics().inside_count;
@@ -114,9 +120,20 @@ private:
 
 	static bool SameGrid(const CubicCartesianGridSpec& left, const CubicCartesianGridSpec& right) noexcept
 	{ return left.lower_m == right.lower_m && left.upper_m == right.upper_m && left.cells == right.cells; }
+	static void ValidatePreviousInput(const CubicCartesianGridSpec& grid, const MaterialSurfaceKinematics& kinematics,
+		const MovingCutGeometry& previous)
+	{
+		previous.kinematics_.Validate();
+		if (!SameGrid(grid, previous.domain_.Background().Spec()))
+			throw std::invalid_argument("moving cut geometry previous state has a different fixed grid");
+		if (kinematics.SourceVerticesM().size() != previous.kinematics_.SourceVerticesM().size()
+			|| kinematics.MaterialIdentitySha256() != previous.kinematics_.MaterialIdentitySha256()
+			|| kinematics.TopologyIdentitySha256() != previous.kinematics_.TopologyIdentitySha256())
+			throw std::invalid_argument("moving cut geometry previous state has different motion topology or labels");
+	}
 	double ClosedSurfaceVolume() const
 	{
-		const auto& vertices=evaluation_.Surface().Vertices(); const auto& triangles=evaluation_.Surface().Triangles();
+		const auto& vertices=kinematics_.Surface().Vertices(); const auto& triangles=kinematics_.Surface().Triangles();
 		if (vertices.empty()) throw std::runtime_error("moving cut geometry surface has no vertices");
 		const auto origin=vertices.front(); long double sum=0.0L;
 		for (const auto& triangle : triangles) { std::array<long double,3> a{},b{},c{}; for (std::size_t axis=0;axis<3;++axis) { a[axis]=static_cast<long double>(vertices[triangle.indices[0]][axis])-origin[axis]; b[axis]=static_cast<long double>(vertices[triangle.indices[1]][axis])-origin[axis]; c[axis]=static_cast<long double>(vertices[triangle.indices[2]][axis])-origin[axis]; } sum += a[0]*(b[1]*c[2]-b[2]*c[1])-a[1]*(b[0]*c[2]-b[2]*c[0])+a[2]*(b[0]*c[1]-b[1]*c[0]); }
@@ -130,7 +147,7 @@ private:
 	}
 	void ValidateCatalogs() const
 	{
-		if (evaluation_.Surface().CanonicalSha256() != domain_.SurfaceCanonicalHash()
+		if (kinematics_.Surface().CanonicalSha256() != domain_.SurfaceCanonicalHash()
 			|| !SameGrid(domain_.Background().Spec(), volume_.GridSpec()) || !SameGrid(domain_.Background().Spec(), surface_.GridSpec())
 			|| volume_.SurfaceCanonicalHash() != domain_.SurfaceCanonicalHash() || surface_.SurfaceCanonicalHash() != domain_.SurfaceCanonicalHash())
 			throw std::runtime_error("moving cut geometry catalog surface/grid binding is inconsistent");
@@ -146,13 +163,13 @@ private:
 				surface_.ValidateUsableRule(domain_, id);
 				const auto& rule = surface_.UsableRule(domain_, id); const auto& provenance = surface_.UsableProvenance(domain_, id);
 				for (std::size_t point = 0; point < rule.Points().size(); ++point) {
-					const auto& material = provenance[point]; const auto& triangle = evaluation_.Surface().Triangles().at(material.canonical_triangle);
+					const auto& material = provenance[point]; const auto& triangle = kinematics_.Surface().Triangles().at(material.canonical_triangle);
 					if (rule.Points()[point].boundary_id != static_cast<int>(triangle.boundary_id)) throw std::runtime_error("moving cut geometry surface label provenance is inconsistent");
 					const auto& bounds = domain_.Cells()[id].bounds;
 					std::array<double, 3> reconstruction{{0.0, 0.0, 0.0}}, local_point{{0.0, 0.0, 0.0}};
 					double normal_dot = 0.0, residual = 0.0, triangle_scale = 0.0, cell_scale = 0.0;
 					for (std::size_t corner = 0; corner < 3; ++corner) for (std::size_t axis = 0; axis < 3; ++axis) {
-						const double local = evaluation_.Surface().Vertices()[triangle.indices[corner]][axis]-bounds.minimum[axis];
+						const double local = kinematics_.Surface().Vertices()[triangle.indices[corner]][axis]-bounds.minimum[axis];
 						reconstruction[axis] += material.canonical_barycentric[corner]*local;
 						triangle_scale = std::max(triangle_scale, std::abs(local));
 					}
@@ -169,7 +186,7 @@ private:
 					if (residual > 2.0e-10*provenance_scale
 						|| normal_dot < 1.0-128.0*std::numeric_limits<double>::epsilon())
 						throw std::runtime_error("moving cut geometry surface physical or normal provenance is inconsistent");
-					(void)evaluation_.WallVelocity(material.canonical_triangle, material.canonical_barycentric);
+					(void)kinematics_.WallVelocity(material.canonical_triangle, material.canonical_barycentric);
 				}
 			}
 		}
@@ -182,11 +199,6 @@ private:
 	}
 	void ComparePrevious(const MovingCutGeometry& previous)
 	{
-		if (!SameGrid(domain_.Background().Spec(), previous.domain_.Background().Spec()))
-			throw std::invalid_argument("moving cut geometry previous state has a different fixed grid");
-		if (evaluation_.SourceVerticesM().size() != previous.evaluation_.SourceVerticesM().size()
-			|| !SameMotionTopology(evaluation_, previous.evaluation_))
-			throw std::invalid_argument("moving cut geometry previous state has different motion topology or labels");
 		const auto& old_cells = previous.domain_.Cells(); const auto& new_cells = domain_.Cells();
 		if (old_cells.size() != new_cells.size()) throw std::invalid_argument("moving cut geometry previous state has different cell count");
 		for (std::size_t id = 0; id < new_cells.size(); ++id) {
@@ -199,19 +211,6 @@ private:
 			++diagnostics_.transition_counts[key];
 			diagnostics_.transitions.push_back({static_cast<std::uint64_t>(id), key.first, key.second});
 		}
-	}
-	static bool SameMotionTopology(const PrescribedSurfaceMotion::Evaluation& left,
-		const PrescribedSurfaceMotion::Evaluation& right)
-	{
-		struct MaterialTriangle { std::array<std::uint32_t, 3> vertices{}; std::uint32_t label = 0; bool operator==(const MaterialTriangle& other) const { return vertices == other.vertices && label == other.label; } };
-		const auto material = [](const PrescribedSurfaceMotion::Evaluation& value) {
-			std::map<std::uint32_t, MaterialTriangle> result;
-			for (const auto& triangle : value.CanonicalTriangleProvenance()) {
-				if (!result.emplace(triangle.source_triangle, MaterialTriangle{triangle.source_vertex_indices, triangle.boundary_id}).second) return std::map<std::uint32_t, MaterialTriangle>{};
-			}
-			return result;
-		};
-		return material(left) == material(right) && left.CanonicalTriangleProvenance().size() == right.CanonicalTriangleProvenance().size();
 	}
 	static void AppendCount(Sha256& hash, std::size_t value) { hash.AppendLittleEndian64(value); }
 	static void AppendString(Sha256& hash, const std::string& value) { AppendCount(hash, value.size()); hash.Append(value.data(), value.size()); }
@@ -253,7 +252,10 @@ private:
 	}
 	std::string HashGeometryState() const
 	{
-		Sha256 hash; AppendString(hash, "MovingCutGeometry/current/v4"); AppendString(hash, evaluation_.IdentitySha256());
+		Sha256 hash; AppendString(hash, "MovingCutGeometry/current/v5");
+		// The content digest binds current coordinates and wall velocities even
+		// when an adapter retains a compatibility epoch identifier.
+		AppendString(hash, kinematics_.ContentIdentitySha256());
 		for (double value : domain_.Background().Spec().lower_m) hash.AppendNormalizedDouble(value);
 		for (double value : domain_.Background().Spec().upper_m) hash.AppendNormalizedDouble(value);
 		for (auto value : domain_.Background().Spec().cells) hash.AppendLittleEndian32(value);
@@ -290,7 +292,7 @@ private:
 
 	// Declaration order is the required lifetime order: evaluation first, then
 	// the domain (which owns its spatial index), then its dependent catalogs.
-	PrescribedSurfaceMotion::Evaluation evaluation_;
+	MaterialSurfaceKinematics kinematics_;
 	CartesianDomainClassification domain_;
 	CutCellVolumeQuadratureCatalog volume_;
 	ImmersedSurfaceQuadratureCatalog surface_;

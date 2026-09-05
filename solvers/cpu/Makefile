@@ -105,7 +105,7 @@ immersed_transient_flow_test: tests/test_immersed_transient_flow.cpp include/Imm
 immersed-transient-flow-test: immersed_transient_flow_test
 	./immersed_transient_flow_test
 
-moving_immersed_transient_flow_test: tests/test_moving_immersed_transient_flow.cpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshotPublisher.hpp include/MovingImmersedFlowSnapshot.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp
+moving_immersed_transient_flow_test: tests/test_moving_immersed_transient_flow.cpp include/MaterialSurfaceKinematics.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshotPublisher.hpp include/MovingImmersedFlowSnapshot.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving_immersed_transient_flow_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
@@ -241,13 +241,13 @@ sha256_test: tests/test_sha256.cpp include/Sha256.hpp
 surface_geometry_test: tests/test_surface_geometry.cpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-prescribed_surface_motion_test: tests/test_prescribed_surface_motion.cpp include/PrescribedSurfaceMotion.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
+prescribed_surface_motion_test: tests/test_prescribed_surface_motion.cpp include/MaterialSurfaceKinematics.hpp include/PrescribedSurfaceMotion.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 prescribed-surface-motion-test: prescribed_surface_motion_test
 	./prescribed_surface_motion_test
 
-moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/CutCellGhostPenalty.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/Sha256.hpp
+moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/MaterialSurfaceKinematics.hpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/CutCellGhostPenalty.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving-cut-geometry-test: moving_cut_geometry_test

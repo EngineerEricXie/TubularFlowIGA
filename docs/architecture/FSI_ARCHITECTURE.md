@@ -1,6 +1,6 @@
 # FSI Architecture
 
-Status: **PR8.0b2 in-memory graph integration**. No
+Status: **PR8.1a material-surface kinematics boundary**. No
 fluid--structure solve, membrane model, or moving-domain FSI execution exists
 in this revision.
 
@@ -12,6 +12,33 @@ benchmark-sized coupling problem: full Cartesian interface fields are carried
 even though the initial membrane relaxes only the normal generalized traction.
 
 ## Separate surface contracts
+
+`MaterialSurfaceKinematics.hpp` is the immutable producer-neutral geometry
+payload consumed by the moving cut geometry, moving-wall Nitsche path, and
+moving immersed runtime.  One payload binds exact material/topology identities,
+immutable reference material vertices kept separately from current canonical
+geometry and current material vertices, wall-velocity provenance, and
+the exact time/step interval.  It owns neither an FSI graph endpoint nor a
+distributed field layout.  The public neutral factory recomputes and verifies
+domain-separated material, topology, and complete current-content digests from
+its owned fields.  The material digest binds immutable reference coordinates,
+source connectivity, labels, and topology provenance; current displacement
+cannot change it.  The factory accepts reference geometry separately from the
+current state and recomputes every supplied digest, so a producer cannot claim
+an unrelated material identity.  It rejects incomplete, non-bijective,
+mislabeled, split-coincident, or orientation-reversed canonical/material
+provenance (while accepting cyclic/even triangle permutations).  The content digest
+binds current coordinates and wall velocity and is included in downstream cut
+geometry/publication identities, so equal claimed producer strings cannot
+alias numerically different Nitsche inputs.  Prescribed motion currently
+produces the payload through the legacy `PrescribedSurfaceMotion::Evaluation`
+spelling; its historical evaluation hash remains the separately verified
+geometry-epoch identity byte-for-byte, while the new content digest provides
+neutral integrity.  A later membrane producer can use the same public factory
+by supplying its immutable reference material geometry independently of its
+evaluated displacement state.
+Consumers reject stale time/dt/content or changed material/topology before
+trial geometry is built.
 
 `DistributedSurfaceInterface.hpp` is the dependency-free contract for
 field-valued interface exchange. It is separate from scalar P/Q

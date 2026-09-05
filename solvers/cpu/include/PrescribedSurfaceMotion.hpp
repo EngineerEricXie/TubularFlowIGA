@@ -1,7 +1,7 @@
 #ifndef IGA_PRESCRIBED_SURFACE_MOTION_HPP
 #define IGA_PRESCRIBED_SURFACE_MOTION_HPP
 
-#include "SurfaceGeometry.hpp"
+#include "MaterialSurfaceKinematics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -38,94 +38,11 @@ struct PrescribedSurfaceMotionOptions {
 	double maximum_extension_band_cfl = 1.0;
 };
 
-struct SourceTriangleProvenance {
-	std::uint32_t source_triangle = 0;
-	std::array<std::uint32_t, 3> source_vertex_indices{{0, 0, 0}};
-	std::uint32_t boundary_id = 0;
-	// For canonical-triangle provenance only, maps a canonical triangle corner
-	// to the corresponding source/material triangle corner.
-	std::array<std::uint32_t, 3> canonical_corner_to_source_corner{{0, 1, 2}};
-	bool operator==(const SourceTriangleProvenance& other) const
-	{
-		return source_triangle == other.source_triangle && source_vertex_indices == other.source_vertex_indices
-			&& boundary_id == other.boundary_id
-			&& canonical_corner_to_source_corner == other.canonical_corner_to_source_corner;
-	}
-};
-
 class PrescribedSurfaceMotion {
 public:
-	struct Evaluation {
-		Evaluation(const Evaluation&) = default;
-		Evaluation(Evaluation&&) noexcept = default;
-		Evaluation& operator=(const Evaluation&) = delete;
-		Evaluation& operator=(Evaluation&&) = delete;
-
-		const ClosedTriangulatedSurface& Surface() const noexcept { return surface_; }
-		const std::vector<std::array<double, 3>>& SourceVerticesM() const noexcept { return source_vertices_m_; }
-		const std::vector<std::array<double, 3>>& SourceVertexVelocitiesMPerS() const noexcept
-		{ return source_vertex_velocities_m_per_s_; }
-		// Indexed in canonical surface triangle order.  It provides the unique
-		// material/source facet and its canonical-to-material corner permutation.
-		const std::vector<SourceTriangleProvenance>& CanonicalTriangleProvenance() const noexcept
-		{ return canonical_triangle_provenance_; }
-		const std::string& IdentitySha256() const noexcept { return identity_sha256_; }
-		double EvaluatedTimeS() const noexcept { return evaluated_time_s_; }
-
-		// The input triangle and barycentric weights use the canonical surface
-		// triangle order returned by Surface().
-		std::array<double, 3> WallVelocity(std::uint32_t canonical_triangle,
-			const std::array<double, 3>& barycentric) const
-		{
-			if (canonical_triangle >= surface_.Triangles().size()
-				|| canonical_triangle >= canonical_triangle_provenance_.size())
-				throw std::out_of_range("canonical triangle is out of range");
-			const auto& provenance = canonical_triangle_provenance_[canonical_triangle];
-			if (provenance.source_triangle >= source_triangles_.size())
-				throw std::out_of_range("canonical triangle source provenance is out of range");
-			const auto& source_triangle = source_triangles_[provenance.source_triangle];
-			if (source_triangle.source_triangle != provenance.source_triangle
-				|| source_triangle.source_vertex_indices != provenance.source_vertex_indices
-				|| source_triangle.boundary_id != provenance.boundary_id)
-				throw std::invalid_argument("canonical triangle source provenance is inconsistent");
-			constexpr double barycentric_tolerance = 64.0*std::numeric_limits<double>::epsilon();
-			double weight_sum = 0.0;
-			for (double weight : barycentric) {
-				if (!std::isfinite(weight)) throw std::invalid_argument("barycentric weight is nonfinite");
-				if (weight < -barycentric_tolerance || weight > 1.0+barycentric_tolerance)
-					throw std::invalid_argument("barycentric weight is outside the simplex");
-				weight_sum += weight;
-				if (!std::isfinite(weight_sum)) throw std::invalid_argument("barycentric weight sum is nonfinite");
-			}
-			if (std::fabs(weight_sum-1.0) > barycentric_tolerance)
-				throw std::invalid_argument("barycentric weights do not sum to one");
-			std::array<double, 3> result{{0.0, 0.0, 0.0}};
-			for (std::size_t canonical_corner = 0; canonical_corner < 3; ++canonical_corner) {
-				const std::uint32_t source_corner = provenance.canonical_corner_to_source_corner[canonical_corner];
-				if (source_corner >= 3) throw std::out_of_range("canonical triangle corner provenance is out of range");
-				const std::uint32_t source_vertex = provenance.source_vertex_indices[source_corner];
-				if (source_vertex >= source_vertex_velocities_m_per_s_.size())
-					throw std::out_of_range("source vertex velocity is out of range");
-				for (std::size_t axis = 0; axis < 3; ++axis)
-					result[axis] += barycentric[canonical_corner]
-						*source_vertex_velocities_m_per_s_[source_vertex][axis];
-			}
-			for (double value : result)
-				if (!std::isfinite(value)) throw std::invalid_argument("wall velocity is nonfinite");
-			return result;
-		}
-
-	private:
-		friend class PrescribedSurfaceMotion;
-		explicit Evaluation(ClosedTriangulatedSurface checked) : surface_(std::move(checked)) {}
-		double evaluated_time_s_ = 0.0;
-		ClosedTriangulatedSurface surface_;
-		std::vector<std::array<double, 3>> source_vertices_m_;
-		std::vector<std::array<double, 3>> source_vertex_velocities_m_per_s_;
-		std::vector<SourceTriangleProvenance> canonical_triangle_provenance_;
-		std::string identity_sha256_;
-		std::vector<SourceTriangleProvenance> source_triangles_;
-	};
+	// Compatibility spelling for existing prescribed-motion callers.  New
+	// consumers take MaterialSurfaceKinematics directly.
+	using Evaluation = MaterialSurfaceKinematics;
 
 	explicit PrescribedSurfaceMotion(std::vector<PrescribedSurfaceFrame> frames,
 		const PrescribedSurfaceMotionOptions& options = PrescribedSurfaceMotionOptions())
@@ -199,12 +116,21 @@ public:
 		soup.triangles = frames_.front().surface.triangles;
 		Evaluation result(BuildValidated(soup));
 		result.evaluated_time_s_ = time_s;
+		result.step_start_s_ = step_start_s;
+		result.step_end_s_ = step_end_s;
+		result.reference_material_vertices_m_ = frames_.front().surface.vertices;
 		result.source_vertices_m_ = std::move(positions);
 		result.source_vertex_velocities_m_per_s_ = std::move(velocities);
 		ValidateContainment(result.source_vertices_m_);
 		result.canonical_triangle_provenance_ = CanonicalProvenance(soup, result.surface_);
 		result.source_triangles_ = source_triangles_;
 		result.identity_sha256_ = HashEvaluation(result);
+		// Preserve the prescribed producer's reference-coordinate material
+		// identity while the neutral owner independently recomputes it in Validate.
+		result.material_identity_sha256_ = HashMaterialIdentity();
+		result.topology_identity_sha256_ = HashTopologyIdentity();
+		result.content_identity_sha256_ = result.HashContentIdentity();
+		result.Validate();
 		return result;
 	}
 
@@ -259,9 +185,9 @@ private:
 	void ValidateSourceCanMapToCanonical(const RawSurfaceSoup& source,
 		const ClosedTriangulatedSurface& canonical) const
 	{
+		(void)CanonicalProvenance(source, canonical);
 		if (source.vertices.size() != canonical.Vertices().size())
 			throw std::invalid_argument("prescribed surface source vertices are not one-to-one");
-		(void)CanonicalProvenance(source, canonical);
 	}
 
 	void BuildSourceProvenance()
@@ -372,6 +298,19 @@ private:
 		std::map<std::array<double, 3>, std::uint32_t> vertex_ids;
 		for (std::size_t vertex = 0; vertex < canonical.Vertices().size(); ++vertex)
 			vertex_ids.emplace(canonical.Vertices()[vertex], static_cast<std::uint32_t>(vertex));
+		const auto unmapped_vertex = std::numeric_limits<std::uint32_t>::max();
+		std::vector<std::uint32_t> canonical_vertex_for_source(source.vertices.size(), unmapped_vertex);
+		std::vector<std::uint32_t> source_vertex_for_canonical(canonical.Vertices().size(), unmapped_vertex);
+		for (std::size_t source_vertex = 0; source_vertex < source.vertices.size(); ++source_vertex) {
+			const auto found = vertex_ids.find(source.vertices[source_vertex]);
+			if (found == vertex_ids.end())
+				throw std::invalid_argument("prescribed source vertex cannot map to canonical surface");
+			const auto canonical_vertex = found->second;
+			if (source_vertex_for_canonical[canonical_vertex] != unmapped_vertex)
+				throw std::invalid_argument("prescribed source/canonical vertex mapping is not one-to-one");
+			canonical_vertex_for_source[source_vertex] = canonical_vertex;
+			source_vertex_for_canonical[canonical_vertex] = static_cast<std::uint32_t>(source_vertex);
+		}
 		struct FacetMapping {
 			SourceTriangleProvenance provenance;
 			std::array<std::uint32_t, 3> canonical_vertex_by_source_corner{};
@@ -384,10 +323,9 @@ private:
 			std::array<std::uint32_t, 3> canonical_indices{};
 			for (std::size_t corner = 0; corner < 3; ++corner) {
 				mapping.provenance.source_vertex_indices[corner] = static_cast<std::uint32_t>(source.triangles[triangle].indices[corner]);
-				const auto found = vertex_ids.find(source.vertices[mapping.provenance.source_vertex_indices[corner]]);
-				if (found == vertex_ids.end()) throw std::invalid_argument("prescribed source vertex cannot map to canonical surface");
-				mapping.canonical_vertex_by_source_corner[corner] = found->second;
-				canonical_indices[corner] = found->second;
+				const auto source_vertex = mapping.provenance.source_vertex_indices[corner];
+				mapping.canonical_vertex_by_source_corner[corner] = canonical_vertex_for_source[source_vertex];
+				canonical_indices[corner] = canonical_vertex_for_source[source_vertex];
 			}
 			const auto smallest = std::min_element(canonical_indices.begin(), canonical_indices.end());
 			std::rotate(canonical_indices.begin(), smallest, canonical_indices.end());
@@ -410,6 +348,11 @@ private:
 				provenance.canonical_corner_to_source_corner[canonical_corner] =
 					static_cast<std::uint32_t>(source_corner-found->second.canonical_vertex_by_source_corner.begin());
 			}
+			const auto& permutation = provenance.canonical_corner_to_source_corner;
+			const unsigned inversions = (permutation[0] > permutation[1]) + (permutation[0] > permutation[2])
+				+ (permutation[1] > permutation[2]);
+			if (inversions%2 != 0)
+				throw std::invalid_argument("prescribed source triangle orientation is reversed");
 			result.push_back(provenance);
 		}
 		return result;
@@ -426,6 +369,32 @@ private:
 	{
 		AppendCount(hash, value.size());
 		hash.Append(value.data(), value.size());
+	}
+
+	std::string HashTopologyIdentity() const
+	{
+		Sha256 hash;
+		static constexpr char domain[] = "MaterialSurfaceKinematics/topology/v1";
+		hash.Append(domain, sizeof(domain)-1);
+		AppendCount(hash, source_triangles_.size());
+		for (const auto& triangle : source_triangles_) {
+			hash.AppendLittleEndian32(triangle.source_triangle);
+			hash.AppendLittleEndian32(triangle.boundary_id);
+			for (const auto index : triangle.source_vertex_indices) hash.AppendLittleEndian32(index);
+		}
+		return hash.Hex();
+	}
+
+	std::string HashMaterialIdentity() const
+	{
+		Sha256 hash;
+		static constexpr char domain[] = "MaterialSurfaceKinematics/material/v1";
+		hash.Append(domain, sizeof(domain)-1);
+		AppendCount(hash, frames_.front().surface.vertices.size());
+		for (const auto& vertex : frames_.front().surface.vertices)
+			for (const auto value : vertex) hash.AppendNormalizedDouble(value);
+		AppendString(hash, HashTopologyIdentity());
+		return hash.Hex();
 	}
 
 	std::string HashEvaluation(const Evaluation& evaluation) const
