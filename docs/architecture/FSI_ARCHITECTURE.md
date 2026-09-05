@@ -1,9 +1,9 @@
 # FSI Architecture
 
-Status: **PR8.2b bounded rank-local structure-side membrane FSI runtime**,
-plus the PR8.2a membrane kernel and PR8.1b fluid-side traction
-extraction/projection boundary. No fluid adapter, coordinator, or moving-domain
-FSI execution exists in this revision.
+Status: **PR8.3a1 bounded patch-to-closed-material composition foundation**,
+plus the PR8.2b rank-local structure-side membrane runtime and PR8.1b
+fluid-side traction extraction/projection boundary. No fluid adapter,
+coordinator, or moving-domain FSI execution exists in this revision.
 
 ## Scope and first benchmark
 
@@ -40,6 +40,30 @@ by supplying its immutable reference material geometry independently of its
 evaluated displacement state.
 Consumers reject stale time/dt/content or changed material/topology before
 trial geometry is built.
+
+PR8.3a1 adds a producer-neutral `CreateFromSourceTopology` route and an
+immutable `MaterialSurfacePatchMap`.  The map is initially deliberately narrow:
+one fully-owned partition, one label, and an explicit conforming P1 subset of
+the directed source triangles.  It derives a patch-scoped reference digest,
+requires the layout and interface to carry it, accepts no coordinate-search
+authority, and proves exact source/canonical correspondence, orientation,
+connectivity, and the clamped one-sided seam.  Its reference digest is strictly
+patch-scoped: sorted global IDs, their mapped immutable reference positions,
+the directed/cyclic patch triangle layout, and exact selected triangle labels.
+It intentionally excludes whole-material/topology identities and clamp/mapping
+configuration, so an unchanged patch has a stable reference digest when an
+unrelated closed-surface remainder changes.  The distinct map identity binds
+that patch digest to complete material/topology identities, the full
+distributed-interface identity, explicit source mapping, triangle map, and
+clamps.  The endpoint is the exact structural role: it provides sorted
+`Displacement, Velocity` and requires only `TractionOnStructure`.
+`MaterialSurfacePatchKinematics` is stateless: it composes a context/stamp-exact
+patch trial into a newly validated whole closed surface, fixes the remainder at
+the immutable reference, requires zero seam fields and a roundoff-scaled
+backward-Euler check using actual SI terms and the patch geometry scale (with
+exact zero handled exactly, not a one-metre floor), and binds map, committed
+content, patch publication, context, and target content in its composition
+identity.
 
 `DistributedSurfaceInterface.hpp` is the dependency-free contract for
 field-valued interface exchange. It is separate from scalar P/Q
@@ -264,3 +288,6 @@ values and its backward-error residual. It excludes MPI structural
 assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
 monolithic FSI solve, a fluid runtime or coordinator/executor, and any
 claim of an operating FSI benchmark.
+PR8.3a1 also excludes distributed patch ownership, multiple labels, nonmatching
+transfer, patch remeshing/contact, and any change to fluid traction/runtime
+paths.

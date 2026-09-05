@@ -8,6 +8,7 @@
 #include "SurfaceGeometry.hpp"
 #include "Sha256.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -74,6 +75,41 @@ public:
 		result.content_identity_sha256_ = result.HashContentIdentity();
 		result.Validate();
 		return result;
+	}
+
+	// Construct the neutral payload directly from one complete, directed source
+	// topology.  This is intentionally separate from the historical prescribed
+	// adapter: it derives the canonical provenance and all identities itself,
+	// so new structural producers cannot accidentally inherit that adapter's
+	// epoch-hash format.
+	static MaterialSurfaceKinematics CreateFromSourceTopology(
+		std::vector<std::array<double, 3>> reference_material_vertices_m,
+		std::vector<std::array<double, 3>> source_vertices_m,
+		std::vector<std::array<double, 3>> source_vertex_velocities_m_per_s,
+		std::vector<RawSurfaceTriangle> directed_source_triangles,
+		double evaluated_time_s, double step_start_s, double step_end_s)
+	{
+		if (reference_material_vertices_m.size() != source_vertices_m.size()
+			|| source_vertices_m.size() != source_vertex_velocities_m_per_s.size())
+			throw std::invalid_argument("source-topology material surface vertex fields do not align");
+		RawSurfaceSoup soup;
+		soup.vertices = source_vertices_m;
+		soup.triangles = std::move(directed_source_triangles);
+		for (const auto& triangle : soup.triangles)
+			if (triangle.boundary_id < 0)
+				throw std::invalid_argument("source-topology material surface requires explicit nonnegative labels");
+		SurfaceValidationOptions options;
+		options.length_scale_to_m = 1.0;
+		options.weld_tolerance_m = 0.0;
+		auto surface = ClosedTriangulatedSurface::Build(soup, options);
+		if (surface.Diagnostics().flipped_inward_shell)
+			throw std::invalid_argument("source-topology material surface winding is inward");
+		auto source_triangles = SourceProvenance(soup);
+		auto canonical_provenance = DeriveCanonicalProvenance(soup, surface);
+		return Create(std::move(surface), std::move(reference_material_vertices_m),
+			std::move(source_vertices_m), std::move(source_vertex_velocities_m_per_s),
+			std::move(canonical_provenance), std::move(source_triangles),
+			evaluated_time_s, step_start_s, step_end_s);
 	}
 
 	// Preferred producer-neutral route.  A future membrane producer need not
@@ -303,6 +339,82 @@ private:
 		if (count > static_cast<std::size_t>(std::numeric_limits<std::uint64_t>::max()))
 			throw std::overflow_error("material surface kinematics digest count is unrepresentable");
 		hash.AppendLittleEndian64(static_cast<std::uint64_t>(count));
+	}
+	static std::vector<SourceTriangleProvenance> SourceProvenance(const RawSurfaceSoup& source)
+	{
+		std::vector<SourceTriangleProvenance> result;
+		result.reserve(source.triangles.size());
+		for (std::size_t index = 0; index < source.triangles.size(); ++index) {
+			const auto& triangle = source.triangles[index];
+			if (index > std::numeric_limits<std::uint32_t>::max() || triangle.boundary_id < 0
+				|| static_cast<std::uintmax_t>(triangle.boundary_id) > std::numeric_limits<std::uint32_t>::max())
+				throw std::invalid_argument("source-topology material surface triangle identifier is invalid");
+			SourceTriangleProvenance provenance;
+			provenance.source_triangle = static_cast<std::uint32_t>(index);
+			provenance.boundary_id = static_cast<std::uint32_t>(triangle.boundary_id);
+			for (std::size_t corner = 0; corner < 3; ++corner) {
+				if (triangle.indices[corner] < 0 || static_cast<std::uintmax_t>(triangle.indices[corner])
+					> std::numeric_limits<std::uint32_t>::max())
+					throw std::invalid_argument("source-topology material surface vertex identifier is invalid");
+				provenance.source_vertex_indices[corner] = static_cast<std::uint32_t>(triangle.indices[corner]);
+			}
+			result.push_back(provenance);
+		}
+		return result;
+	}
+	static std::vector<SourceTriangleProvenance> DeriveCanonicalProvenance(
+		const RawSurfaceSoup& source, const ClosedTriangulatedSurface& canonical)
+	{
+		std::map<std::array<double, 3>, std::uint32_t> canonical_vertices;
+		for (std::size_t index = 0; index < canonical.Vertices().size(); ++index)
+			canonical_vertices.emplace(canonical.Vertices()[index], static_cast<std::uint32_t>(index));
+		const auto unmapped = std::numeric_limits<std::uint32_t>::max();
+		std::vector<std::uint32_t> canonical_for_source(source.vertices.size(), unmapped);
+		std::vector<std::uint32_t> source_for_canonical(canonical.Vertices().size(), unmapped);
+		for (std::size_t index = 0; index < source.vertices.size(); ++index) {
+			const auto found = canonical_vertices.find(source.vertices[index]);
+			if (found == canonical_vertices.end() || source_for_canonical[found->second] != unmapped)
+				throw std::invalid_argument("source-topology material surface source/canonical vertices are not one-to-one");
+			canonical_for_source[index] = found->second;
+			source_for_canonical[found->second] = static_cast<std::uint32_t>(index);
+		}
+		struct Facet { SourceTriangleProvenance provenance; std::array<std::uint32_t, 3> canonical_by_source{}; };
+		std::map<std::array<std::uint32_t, 3>, Facet> facets;
+		const auto source_provenance = SourceProvenance(source);
+		for (const auto& provenance : source_provenance) {
+			Facet facet; facet.provenance = provenance;
+			std::array<std::uint32_t, 3> key{};
+			for (std::size_t corner = 0; corner < 3; ++corner) {
+				facet.canonical_by_source[corner] = canonical_for_source[provenance.source_vertex_indices[corner]];
+				key[corner] = facet.canonical_by_source[corner];
+			}
+			std::sort(key.begin(), key.end());
+			if (!facets.emplace(key, facet).second)
+				throw std::invalid_argument("source-topology material surface facet mapping is not unique");
+		}
+		std::vector<SourceTriangleProvenance> result;
+		result.reserve(canonical.Triangles().size());
+		for (const auto& triangle : canonical.Triangles()) {
+			auto key = triangle.indices; std::sort(key.begin(), key.end());
+			const auto found = facets.find(key);
+			if (found == facets.end() || found->second.provenance.boundary_id != triangle.boundary_id)
+				throw std::invalid_argument("source-topology material surface winding or labels differ from canonical surface");
+			auto provenance = found->second.provenance;
+			for (std::size_t corner = 0; corner < 3; ++corner) {
+				const auto source_corner = std::find(found->second.canonical_by_source.begin(),
+					found->second.canonical_by_source.end(), triangle.indices[corner]);
+				if (source_corner == found->second.canonical_by_source.end())
+					throw std::invalid_argument("source-topology material surface canonical corner is unmapped");
+				provenance.canonical_corner_to_source_corner[corner] =
+					static_cast<std::uint32_t>(source_corner-found->second.canonical_by_source.begin());
+			}
+			const auto& permutation = provenance.canonical_corner_to_source_corner;
+			const unsigned inversions = (permutation[0] > permutation[1]) + (permutation[0] > permutation[2])
+				+ (permutation[1] > permutation[2]);
+			if (inversions%2) throw std::invalid_argument("source-topology material surface triangle orientation is reversed");
+			result.push_back(provenance);
+		}
+		return result;
 	}
 	static void AppendString(Sha256& hash, const std::string& value)
 	{
