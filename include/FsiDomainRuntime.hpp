@@ -11,9 +11,12 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace iga {
+
+class PretensionedMembraneFsiRuntime;
 
 enum class FsiTrialPhase : std::uint8_t {
 	Idle,
@@ -96,16 +99,23 @@ public:
 	}
 
 	void BeginIteration(std::uint64_t coupling_iteration,
-		const SurfaceFieldStamp& expected_input, const SurfaceFieldStamp& expected_output)
+		const SurfaceFieldStamp& expected_input, const SurfaceFieldStampEnvelope& output_envelope)
 	{
 		if (phase_ != FsiTrialPhase::StepActive)
 			throw std::runtime_error("FSI lifecycle iteration requires an active step with no prior trial");
-		context_.coupling_iteration = coupling_iteration;
-		ValidateFsiTrialContext(context_);
-		ValidateExpectedStamp(expected_input, peer_layout_);
-		ValidateExpectedStamp(expected_output, local_layout_);
-		expected_input_ = expected_input;
-		expected_output_ = expected_output;
+		FsiTrialContext candidate_context = context_;
+		candidate_context.coupling_iteration = coupling_iteration;
+		ValidateFsiTrialContext(candidate_context);
+		ValidateExpectedStamp(expected_input, peer_layout_, candidate_context);
+		ValidateOutputEnvelope(output_envelope, local_layout_, candidate_context);
+		// Complete every fallible copy before exposing the new iteration.  The
+		// following swaps and scalar updates cannot leave a half-started trial.
+		SurfaceFieldStamp input_copy = expected_input;
+		SurfaceFieldStampEnvelope envelope_copy = output_envelope;
+		using std::swap;
+		swap(expected_input_, input_copy);
+		swap(output_envelope_, envelope_copy);
+		context_ = candidate_context;
 		has_expected_stamps_ = true;
 		has_input_ = false;
 		has_output_ = false;
@@ -134,7 +144,10 @@ public:
 		RequireSolveAllowed();
 		if (!(producer == local_surface_.id))
 			throw std::runtime_error("FSI output belongs to the wrong local endpoint");
-		ValidateExactStamp(stamp, expected_output_, local_layout_);
+		ValidateOutputStamp(stamp, output_envelope_, local_layout_, context_);
+		SurfaceFieldStamp output_copy = stamp;
+		using std::swap;
+		swap(actual_output_, output_copy);
 		has_output_ = true;
 		phase_ = FsiTrialPhase::Solved;
 	}
@@ -146,25 +159,28 @@ public:
 			throw std::runtime_error("FSI output is unavailable before a successful exact trial solve");
 		if (!(producer == local_surface_.id))
 			throw std::runtime_error("FSI output belongs to the wrong local endpoint");
-		ValidateExactStamp(stamp, expected_output_, local_layout_);
+		ValidateExactStamp(stamp, actual_output_, local_layout_);
 	}
 
 	void PrepareCommit()
 	{
 		if (phase_ != FsiTrialPhase::Solved || !has_output_)
 			throw std::runtime_error("FSI prepare requires a solved exact trial");
+		// Copy while this operation is still allowed to fail.  FinalizeCommit()
+		// subsequently exchanges this prepared candidate without allocation.
+		prepared_output_ = actual_output_;
 		phase_ = FsiTrialPhase::Prepared;
+	}
+	void RequireFinalizeAllowed() const
+	{
+		if (phase_ != FsiTrialPhase::Prepared || !has_output_)
+			throw std::runtime_error("FSI finalize requires a prepared exact trial");
 	}
 
 	void FinalizeCommit()
 	{
-		if (phase_ != FsiTrialPhase::Prepared || !has_output_)
-			throw std::runtime_error("FSI finalize requires a prepared exact trial");
-		committed_output_ = expected_output_;
-		has_committed_output_ = true;
-		ClearTrial();
-		context_ = FsiTrialContext{};
-		phase_ = FsiTrialPhase::Idle;
+		RequireFinalizeAllowed();
+		FinalizePreparedCommitNoexcept();
 	}
 
 	void RequireCommittedOutput(const SurfaceInterfaceRef& producer,
@@ -217,19 +233,48 @@ public:
 	}
 
 private:
+	friend class PretensionedMembraneFsiRuntime;
+	void FinalizePreparedCommitNoexcept() noexcept
+	{
+		// RequireFinalizeAllowed() must have succeeded immediately beforehand.
+		// std::string::swap and scalar state changes make this ownership handoff
+		// allocation-free, so a membrane/runtime transaction cannot half-commit.
+		using std::swap;
+		swap(committed_output_, prepared_output_);
+		has_committed_output_ = true;
+		ClearTrial();
+		context_ = FsiTrialContext{};
+		phase_ = FsiTrialPhase::Idle;
+	}
 	void ValidateExpectedStamp(const SurfaceFieldStamp& stamp,
-		const DistributedSurfaceLayout& layout) const
+		const DistributedSurfaceLayout& layout, const FsiTrialContext& context) const
 	{
 		ValidateSurfaceFieldStamp(stamp, layout);
-		if (stamp.step != context_.step || stamp.coupling_iteration != context_.coupling_iteration
-			|| stamp.time_s != context_.EndTime())
+		if (stamp.step != context.step || stamp.coupling_iteration != context.coupling_iteration
+			|| stamp.time_s != context.EndTime())
 			throw std::runtime_error("FSI field stamp does not match the active macro step, time, or iteration");
+	}
+	void ValidateOutputEnvelope(const SurfaceFieldStampEnvelope& envelope,
+		const DistributedSurfaceLayout& layout, const FsiTrialContext& context) const
+	{
+		ValidateSurfaceFieldStampEnvelope(envelope, layout);
+		if (envelope.step != context.step || envelope.coupling_iteration != context.coupling_iteration
+			|| envelope.time_s != context.EndTime())
+			throw std::runtime_error("FSI output envelope does not match the active macro step, time, or iteration");
+	}
+	void ValidateOutputStamp(const SurfaceFieldStamp& stamp,
+		const SurfaceFieldStampEnvelope& envelope, const DistributedSurfaceLayout& layout,
+		const FsiTrialContext& context) const
+	{
+		ValidateExpectedStamp(stamp, layout, context);
+		ValidateOutputEnvelope(envelope, layout, context);
+		ValidateSurfaceFieldStampMatchesEnvelope(stamp, envelope, layout);
 	}
 	void ValidateExactStamp(const SurfaceFieldStamp& value, const SurfaceFieldStamp& expected,
 		const DistributedSurfaceLayout& layout) const
 	{
-		ValidateExpectedStamp(value, layout);
-		ValidateExpectedStamp(expected, layout);
+		ValidateExpectedStamp(value, layout, context_);
+		ValidateExpectedStamp(expected, layout, context_);
 		if (BuildSurfaceFieldStampIdentitySha256(value, layout)
 			!= BuildSurfaceFieldStampIdentitySha256(expected, layout))
 			throw std::runtime_error("FSI field stamp is stale or belongs to a different trial");
@@ -248,8 +293,8 @@ private:
 		has_expected_stamps_ = false;
 		has_input_ = false;
 		has_output_ = false;
-		expected_input_ = SurfaceFieldStamp{};
-		expected_output_ = SurfaceFieldStamp{};
+		// Stamps remain private stale storage.  Clearing their strings would make
+		// AbortStep()/FinalizePreparedCommitNoexcept() needlessly throwable.
 	}
 
 	std::string domain_id_;
@@ -261,7 +306,9 @@ private:
 	DistributedSurfaceLayout peer_layout_;
 	FsiTrialContext context_;
 	SurfaceFieldStamp expected_input_;
-	SurfaceFieldStamp expected_output_;
+	SurfaceFieldStampEnvelope output_envelope_;
+	SurfaceFieldStamp actual_output_;
+	SurfaceFieldStamp prepared_output_;
 	SurfaceFieldStamp committed_output_;
 	FsiTrialPhase phase_ = FsiTrialPhase::Idle;
 	bool has_expected_stamps_ = false;

@@ -146,7 +146,8 @@ public:
 	void PrepareCommitStep() override { lifecycle_.PrepareCommit(); }
 	void FinalizeCommitStep() noexcept override { lifecycle_.FinalizeCommit(); }
 
-	void BeginIteration(std::uint64_t iteration) { lifecycle_.BeginIteration(iteration, expected_input_, expected_output_); }
+	void BeginIteration(std::uint64_t iteration)
+	{ lifecycle_.BeginIteration(iteration, expected_input_, iga::MakeSurfaceFieldStampEnvelope(expected_output_)); }
 	const iga::FsiTrialLifecycle& Lifecycle() const { return lifecycle_; }
 	const std::vector<iga::DistributedSurfaceInterface>& SurfaceInterfaces() const noexcept override { return catalog_; }
 	void SetSurfaceKinematics(const std::string& interface_id, const iga::SurfaceKinematics& kinematics) override
@@ -190,7 +191,8 @@ public:
 		  kinematics_(MakeKinematics(edge_.structure, layout_, expected_output_)) {}
 
 	void BeginStep(const iga::DomainStepContext& step) { lifecycle_.BeginStep(step); }
-	void BeginIteration(std::uint64_t iteration) { lifecycle_.BeginIteration(iteration, expected_input_, expected_output_); }
+	void BeginIteration(std::uint64_t iteration)
+	{ lifecycle_.BeginIteration(iteration, expected_input_, iga::MakeSurfaceFieldStampEnvelope(expected_output_)); }
 	void SolveTrial() { lifecycle_.RequireSolveAllowed(); lifecycle_.MarkSolved(edge_.structure, kinematics_.stamp); }
 	void RollbackTrial() { lifecycle_.RollbackTrial(); }
 	void AbortStep() { lifecycle_.AbortStep(); }

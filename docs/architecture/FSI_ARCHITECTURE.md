@@ -1,8 +1,9 @@
 # FSI Architecture
 
-Status: **PR8.2a bounded rank-local membrane numerical kernel plus PR8.1b
-fluid-side traction extraction/projection boundary**. No fluid--structure
-runtime solve or moving-domain FSI execution exists in this revision.
+Status: **PR8.2b bounded rank-local structure-side membrane FSI runtime**,
+plus the PR8.2a membrane kernel and PR8.1b fluid-side traction
+extraction/projection boundary. No fluid adapter, coordinator, or moving-domain
+FSI execution exists in this revision.
 
 ## Scope and first benchmark
 
@@ -121,8 +122,13 @@ and moves through `idle -> step-active -> iteration-awaiting-input ->
 input-ready -> solved -> prepared -> idle`. `BeginStep` accepts the existing
 nonnegative `int` `DomainStepContext::step_index`, validates it, then widens
 the accepted value for uint64 storage and context hashing; it does not accept
-the full uint64 macro-step input range. Iteration, time/dt/end time, and exact
-input/output stamps are also validated. Input can be
+the full uint64 macro-step input range. Iteration, time/dt/end time, and the
+exact input stamp are also validated. Before solve, an output envelope fixes
+the exact time, step, coupling iteration, reference/layout, and partition but
+intentionally has no producer-state identity. The producer supplies that
+identity with its actual solved field; the lifecycle validates it against the
+envelope and retains that exact actual stamp for trial, prepared, and committed
+output gates. Input can be
 set once only while awaiting that iteration; output can be read only after
 solve; rollback/reject clears trial input/output; abort returns idle and
 invalidates trial state. Prepare does not make output committed; only finalize
@@ -136,6 +142,34 @@ subsystems, and lifecycle availability before accepting an input field.
 PR8.0b1 did **not** wire FSI edges into `SimulationGraph`, instantiate a
 production FSI runtime, or add a coordinator/executor. It made no claim of a
 running FSI solve or collective transaction.
+
+## Structure-side runtime adapter (PR8.2b)
+
+`PretensionedMembraneFsiRuntime.hpp` is the first production implementation of
+`FsiStructureDomainRuntime`. It composes exactly one `FsiTrialLifecycle` with
+exactly one `PretensionedMembrane`; construction independently binds both
+owners to the same directional edge, local structure endpoint/capability,
+fluid peer endpoint/capability, reference layout, and rank-local partition.
+The inherited membrane restriction remains explicit: this is a
+single-partition rank-local runtime and makes no MPI or collective claim.
+
+The public sequence is `BeginMacroStep`, `BeginCouplingIteration` with an exact
+traction stamp and producer-neutral kinematics envelope, `SetSurfaceTraction`, `SolveMembraneTrial`,
+`GetSurfaceKinematics`, then reject/abort or prepare/finalize. Inputs and
+outputs are value snapshots. Rejected iterations clear both owners, so every
+retry starts from the same committed membrane state. The generated kinematics
+stamp must match the declared envelope; its producer-state identity is created
+only by the membrane solve and becomes the exact stored output identity. The
+runtime exposes no membrane owner alias, only immutable value snapshots and
+diagnostic identity copies.
+
+Prepare copies the prospective committed public field and completes all
+fallible identity work. The lifecycle stores a prepared output stamp and the
+membrane stores a prepared committed-state identity. Finalize prevalidates both
+owners and then uses only noexcept exchanges for numerical state, committed
+kinematics, and lifecycle availability; neither owner can expose or commit a
+partial trial. The committed-field accessor therefore remains on its old
+snapshot until finalize.
 
 ## In-memory graph integration (PR8.0b2)
 
@@ -219,7 +253,8 @@ belong on allocated resources rather than login nodes.
 
 PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
 kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
-and backward-Euler trial/prepare/finalize state.  Each successful solve issues
+and backward-Euler trial/prepare/finalize state. PR8.2b adds only its local
+structure-side runtime adapter; it does not add fluid execution. Each successful solve issues
 one membrane-instance-owned generation capability from the unchanged committed
 state; it must be prepared and finalized, or explicitly rejected/aborted,
 before another solve. Rejected, aborted, stale, foreign, superseded, or
@@ -227,5 +262,5 @@ modified capabilities cannot commit. Static coercivity and the dynamic SPD
 solve use scale-relative Cholesky checks; the dynamic solve also checks finite
 values and its backward-error residual. It excludes MPI structural
 assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
-monolithic FSI solve, production FSI runtime or coordinator/executor, and any
+monolithic FSI solve, a fluid runtime or coordinator/executor, and any
 claim of an operating FSI benchmark.

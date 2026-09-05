@@ -19,6 +19,8 @@
 
 namespace iga {
 
+class PretensionedMembraneFsiRuntime;
+
 struct PretensionedMembraneMaterial {
 	// rho_A [kg/m^2], c_A [kg/(m^2 s)], T0 [N/m], k_A [N/m^3].
 	double areal_mass_kg_per_m2 = 0.0;
@@ -56,6 +58,7 @@ struct PretensionedMembraneTrial {
 	PretensionedMembraneState state;
 	SurfaceKinematics kinematics;
 	std::string base_committed_state_identity_sha256;
+	std::string prepared_committed_state_identity_sha256;
 	std::string trial_identity_sha256;
 	bool prepared = false;
 
@@ -222,7 +225,7 @@ public:
 				result.kinematics.velocity_m_per_s[node][component] = result.state.velocity_m_per_s[node]*normals_[node][component];
 			}
 		}
-		result.kinematics.stamp = MakeOutputStamp(context, traction);
+		result.kinematics.stamp = MakeOutputStamp(context, traction, result.state);
 		result.trial_identity_sha256 = BuildTrialIdentity(result);
 		next_generation_ = result.generation;
 		active_generation_ = result.generation;
@@ -235,21 +238,37 @@ public:
 	PretensionedMembraneTrial PrepareTrial(PretensionedMembraneTrial trial) const
 	{
 		ValidateTrial(trial, false);
+		// Complete all allocation/validation before changing the active
+		// capability.  The prepared identity is what FinalizePreparedTrialNoexcept
+		// exchanges with the committed identity.
+		trial.prepared_committed_state_identity_sha256 = BuildStateIdentity(trial.state);
 		trial.prepared = true;
 		trial.phase = PretensionedMembraneTrialPhase::Prepared;
 		trial.trial_identity_sha256 = BuildTrialIdentity(trial);
+		// Copy while the active capability still describes the solved trial.  A
+		// later swap and phase assignment are noexcept, so allocation failure
+		// cannot strand this owner in Prepared with a stale identity.
+		std::string prepared_active_identity = trial.trial_identity_sha256;
+		active_trial_identity_sha256_.swap(prepared_active_identity);
 		active_phase_ = PretensionedMembraneTrialPhase::Prepared;
-		active_trial_identity_sha256_ = trial.trial_identity_sha256;
 		return trial;
 	}
 
 	void FinalizeTrial(const PretensionedMembraneTrial& trial)
 	{
+		RequireFinalizeAllowed(trial);
+		// Preserve the standalone value-taking API.  The runtime uses the rvalue
+		// variant below to avoid copying numerical state at commit.
+		PretensionedMembraneTrial candidate = trial;
+		FinalizePreparedTrialNoexcept(std::move(candidate));
+	}
+
+	void RequireFinalizeAllowed(const PretensionedMembraneTrial& trial) const
+	{
 		ValidateTrial(trial, true);
-		const std::string new_identity = BuildStateIdentity(trial.state);
-		committed_state_ = trial.state;
-		committed_state_identity_sha256_ = new_identity;
-		ClearActiveTrial();
+		if (trial.prepared_committed_state_identity_sha256.empty()
+			|| trial.prepared_committed_state_identity_sha256 != BuildStateIdentity(trial.state))
+			throw std::runtime_error("pretensioned membrane prepared trial state identity is invalid");
 	}
 
 	void RejectTrial(const PretensionedMembraneTrial& trial) const
@@ -260,6 +279,15 @@ public:
 	void AbortTrial() const noexcept { ClearActiveTrial(); }
 
 private:
+	friend class PretensionedMembraneFsiRuntime;
+	void FinalizePreparedTrialNoexcept(PretensionedMembraneTrial&& trial) noexcept
+	{
+		// RequireFinalizeAllowed() must have succeeded immediately beforehand.
+		committed_state_.displacement_m.swap(trial.state.displacement_m);
+		committed_state_.velocity_m_per_s.swap(trial.state.velocity_m_per_s);
+		committed_state_identity_sha256_.swap(trial.prepared_committed_state_identity_sha256);
+		ClearActiveTrial();
+	}
 	static std::uint64_t AllocateOwnerToken()
 	{
 		static std::atomic<std::uint64_t> next(0);
@@ -538,11 +566,15 @@ private:
 		return hash.Hex();
 	}
 
-	SurfaceFieldStamp MakeOutputStamp(const PretensionedMembraneTrialContext& context, const SurfaceTraction& traction) const
+	SurfaceFieldStamp MakeOutputStamp(const PretensionedMembraneTrialContext& context,
+		const SurfaceTraction& traction, const PretensionedMembraneState& trial_state) const
 	{
 		Sha256 hash; distributed_surface_detail::AppendString(hash, "PretensionedMembrane/producer-state/v1");
 		distributed_surface_detail::AppendString(hash, model_identity_sha256_);
 		distributed_surface_detail::AppendString(hash, committed_state_identity_sha256_);
+		// A kinematics publication is a statement about this computed trial, not
+		// merely about the inputs that happened to determine it.
+		distributed_surface_detail::AppendString(hash, BuildStateIdentity(trial_state));
 		distributed_surface_detail::AppendString(hash, BuildSurfaceTractionIdentitySha256(traction, layout_));
 		hash.AppendNormalizedDouble(context.start_time_s); hash.AppendNormalizedDouble(context.dt_s);
 		hash.AppendLittleEndian64(context.step); hash.AppendLittleEndian64(context.coupling_iteration);
@@ -558,6 +590,7 @@ private:
 		Sha256 hash; distributed_surface_detail::AppendString(hash, "PretensionedMembrane/trial/v1");
 		distributed_surface_detail::AppendString(hash, model_identity_sha256_);
 		distributed_surface_detail::AppendString(hash, trial.base_committed_state_identity_sha256);
+		distributed_surface_detail::AppendString(hash, trial.prepared_committed_state_identity_sha256);
 		pretensioned_membrane_detail::AppendState(hash, trial.state);
 		distributed_surface_detail::AppendString(hash, BuildSurfaceKinematicsIdentitySha256(trial.kinematics, layout_));
 		hash.AppendLittleEndian64(trial.owner_token);

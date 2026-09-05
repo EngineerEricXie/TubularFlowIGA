@@ -74,6 +74,19 @@ struct SurfaceFieldStamp {
 	std::string producer_state_identity_sha256;
 };
 
+// A consumer can schedule the shape of an output publication before the
+// producer has solved, but cannot know its state-derived identity.  This
+// envelope deliberately binds every producer-neutral part of a stamp and is
+// validated against the exact owned publication slice.
+struct SurfaceFieldStampEnvelope {
+	double time_s = 0.0;
+	std::uint64_t step = 0;
+	std::uint64_t coupling_iteration = 0;
+	std::string reference_mesh_identity_sha256;
+	std::string layout_identity_sha256;
+	std::string partition_identity_sha256;
+};
+
 struct SurfaceKinematics {
 	SurfaceInterfaceRef interface;
 	SurfaceFieldStamp stamp;
@@ -288,6 +301,53 @@ inline void ValidateSurfaceFieldStamp(const SurfaceFieldStamp& stamp,
 		|| stamp.layout_identity_sha256 != layout.layout_identity_sha256
 		|| stamp.partition_identity_sha256 != BuildDistributedSurfacePartitionIdentitySha256(layout))
 		throw std::runtime_error("surface field stamp does not match its layout");
+}
+
+inline void ValidateSurfaceFieldStampEnvelope(const SurfaceFieldStampEnvelope& envelope)
+{
+	if (!std::isfinite(envelope.time_s))
+		throw std::runtime_error("surface field stamp envelope time must be finite");
+	if (!IsLowercaseSha256(envelope.reference_mesh_identity_sha256)
+		|| !IsLowercaseSha256(envelope.layout_identity_sha256)
+		|| !IsLowercaseSha256(envelope.partition_identity_sha256))
+		throw std::runtime_error("surface field stamp envelope identities must be lowercase SHA-256 hashes");
+}
+
+inline void ValidateSurfaceFieldStampEnvelope(const SurfaceFieldStampEnvelope& envelope,
+	const DistributedSurfaceLayout& layout)
+{
+	ValidateSurfaceFieldStampEnvelope(envelope);
+	ValidateDistributedSurfaceLayout(layout);
+	if (envelope.reference_mesh_identity_sha256 != layout.reference_mesh_identity_sha256
+		|| envelope.layout_identity_sha256 != layout.layout_identity_sha256
+		|| envelope.partition_identity_sha256 != BuildDistributedSurfacePartitionIdentitySha256(layout))
+		throw std::runtime_error("surface field stamp envelope does not match its layout");
+}
+
+inline SurfaceFieldStampEnvelope MakeSurfaceFieldStampEnvelope(const SurfaceFieldStamp& stamp)
+{
+	ValidateSurfaceFieldStamp(stamp);
+	SurfaceFieldStampEnvelope envelope;
+	envelope.time_s = stamp.time_s;
+	envelope.step = stamp.step;
+	envelope.coupling_iteration = stamp.coupling_iteration;
+	envelope.reference_mesh_identity_sha256 = stamp.reference_mesh_identity_sha256;
+	envelope.layout_identity_sha256 = stamp.layout_identity_sha256;
+	envelope.partition_identity_sha256 = stamp.partition_identity_sha256;
+	return envelope;
+}
+
+inline void ValidateSurfaceFieldStampMatchesEnvelope(const SurfaceFieldStamp& stamp,
+	const SurfaceFieldStampEnvelope& envelope, const DistributedSurfaceLayout& layout)
+{
+	ValidateSurfaceFieldStamp(stamp, layout);
+	ValidateSurfaceFieldStampEnvelope(envelope, layout);
+	if (stamp.time_s != envelope.time_s || stamp.step != envelope.step
+		|| stamp.coupling_iteration != envelope.coupling_iteration
+		|| stamp.reference_mesh_identity_sha256 != envelope.reference_mesh_identity_sha256
+		|| stamp.layout_identity_sha256 != envelope.layout_identity_sha256
+		|| stamp.partition_identity_sha256 != envelope.partition_identity_sha256)
+		throw std::runtime_error("surface field stamp does not match its producer-neutral envelope");
 }
 
 inline std::string BuildSurfaceFieldStampIdentitySha256(const SurfaceFieldStamp& stamp,
