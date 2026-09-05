@@ -129,57 +129,47 @@ inline SequentialOneDThreeDOneDDefinition ResolveSequentialOneDThreeDOneD(
 	return result;
 }
 
+// Retain the public containment helpers while sharing their implementation
+// with configuration-time 0D model loading.
 inline bool PathIsWithin(const std::filesystem::path& root,
 	const std::filesystem::path& candidate)
 {
-	const auto mismatch = std::mismatch(root.begin(), root.end(),
-		candidate.begin(), candidate.end());
-	return mismatch.first == root.end();
+	return multidomain_detail::PathIsWithin(root, candidate);
 }
 
 inline std::filesystem::path CanonicalGraphCaseRoot(
 	const std::filesystem::path& graph_case_root)
 {
-	std::error_code error;
-	const auto root = std::filesystem::canonical(graph_case_root, error);
-	if (error || !std::filesystem::is_directory(root))
-		throw std::runtime_error("graph-case root must be an existing directory");
-	return root;
+	return multidomain_detail::CanonicalGraphCaseRoot(graph_case_root);
 }
 
 inline std::filesystem::path ResolveContainedGraphAsset(
 	const std::filesystem::path& canonical_root, const std::filesystem::path& relative,
 	bool require_directory, const std::string& context)
 {
-	std::error_code error;
-	const auto resolved = std::filesystem::canonical(canonical_root/relative, error);
-	if (error || !PathIsWithin(canonical_root, resolved))
-		throw std::runtime_error("graph case "+context
-			+" does not resolve to an existing asset inside the graph-case root");
-	if (require_directory ? !std::filesystem::is_directory(resolved)
-		: !std::filesystem::is_regular_file(resolved))
-		throw std::runtime_error("graph case "+context+" has the wrong filesystem type");
-	return resolved;
+	return multidomain_detail::ResolveContainedGraphAsset(canonical_root, relative,
+		require_directory, context);
 }
 
 inline std::filesystem::path ResolveContainedCaseFile(
 	const std::filesystem::path& canonical_case_directory,
 	const std::filesystem::path& relative, const std::string& context)
 {
-	return ResolveContainedGraphAsset(canonical_case_directory, relative, false, context);
+	return multidomain_detail::ResolveContainedCaseFile(canonical_case_directory, relative,
+		context);
 }
 
 inline std::map<std::string, ResolvedGraphDomainAssets> ResolveGraphDomainAssets(
 	const MultidomainConfiguration& configuration, const std::filesystem::path& graph_case_root)
 {
-	const auto root = CanonicalGraphCaseRoot(graph_case_root);
+	const auto root = multidomain_detail::CanonicalGraphCaseRoot(graph_case_root);
 	std::map<std::string, ResolvedGraphDomainAssets> result;
 	for (const auto& domain : configuration.domains) {
 		ResolvedGraphDomainAssets assets;
-		assets.case_directory = ResolveContainedGraphAsset(root, domain.case_directory,
+		assets.case_directory = multidomain_detail::ResolveContainedGraphAsset(root, domain.case_directory,
 			true, "domain '"+domain.id+"' case directory");
 		if (domain.kind == DomainKind::ThreeDBodyFittedFlow)
-			assets.database = ResolveContainedGraphAsset(root, domain.database, false,
+			assets.database = multidomain_detail::ResolveContainedGraphAsset(root, domain.database, false,
 				"domain '"+domain.id+"' database");
 		result.emplace(domain.id, std::move(assets));
 	}

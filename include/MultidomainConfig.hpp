@@ -5,7 +5,9 @@
 #include "FlowDomainPortMetadata.hpp"
 #include "SimulationGraph.hpp"
 #include "SpeciesCoupling.hpp"
+#include "ZeroDFlowDomain.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -44,6 +46,8 @@ struct GraphDomainDefinition {
 	DomainKind kind = DomainKind::OneDFlow;
 	std::filesystem::path case_directory;
 	std::filesystem::path database;
+	std::filesystem::path zero_d_model;
+	std::optional<ZeroDFlowModelConfiguration> zero_d_flow_model;
 	OneDInletPolicy one_d_inlet_policy = OneDInletPolicy::ConfiguredOpenLoop;
 	std::vector<CouplingPort> ports;
 	std::map<std::string, std::string> species_bindings;
@@ -98,6 +102,47 @@ inline std::filesystem::path RelativePath(const JsonValue& value, const std::str
 			throw std::runtime_error("simulation_config.json: "+context
 				+" cannot traverse outside the graph case");
 	return path.lexically_normal();
+}
+
+inline bool PathIsWithin(const std::filesystem::path& root,
+	const std::filesystem::path& candidate)
+{
+	const auto mismatch = std::mismatch(root.begin(), root.end(),
+		candidate.begin(), candidate.end());
+	return mismatch.first == root.end();
+}
+
+inline std::filesystem::path CanonicalGraphCaseRoot(
+	const std::filesystem::path& graph_case_root)
+{
+	std::error_code error;
+	const auto root = std::filesystem::canonical(
+		graph_case_root.empty() ? std::filesystem::path(".") : graph_case_root, error);
+	if (error || !std::filesystem::is_directory(root))
+		throw std::runtime_error("graph-case root must be an existing directory");
+	return root;
+}
+
+inline std::filesystem::path ResolveContainedGraphAsset(
+	const std::filesystem::path& canonical_root, const std::filesystem::path& relative,
+	bool require_directory, const std::string& context)
+{
+	std::error_code error;
+	const auto resolved = std::filesystem::canonical(canonical_root/relative, error);
+	if (error || !PathIsWithin(canonical_root, resolved))
+		throw std::runtime_error("graph case "+context
+			+" does not resolve to an existing asset inside the graph-case root");
+	if (require_directory ? !std::filesystem::is_directory(resolved)
+		: !std::filesystem::is_regular_file(resolved))
+		throw std::runtime_error("graph case "+context+" has the wrong filesystem type");
+	return resolved;
+}
+
+inline std::filesystem::path ResolveContainedCaseFile(
+	const std::filesystem::path& canonical_case_directory,
+	const std::filesystem::path& relative, const std::string& context)
+{
+	return ResolveContainedGraphAsset(canonical_case_directory, relative, false, context);
 }
 
 inline PortQuantity ParsePortQuantity(const std::string& value)
@@ -192,13 +237,27 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 	const auto& object = RequireObject(value, context);
 	auto keys = std::set<std::string>{"id", "dimension", "kind", "case", "database",
 		"inlet_policy", "ports"};
-	if (schema_version == 6) keys.insert("species_bindings");
+	if (schema_version == 5) keys.insert("zero_d_model");
+	if (schema_version == 6) {
+		keys.insert("species_bindings");
+		// Keep this key recognized solely so the explicit schema-v6 0D diagnostic
+		// below is reachable instead of being masked as an unknown key.
+		keys.insert("zero_d_model");
+	}
 	RequireKnownKeys(object, keys, context);
 	GraphDomainDefinition domain;
 	domain.id = RequireString(Required(object, "id", context), context+".id");
 	const auto dimension = RequireString(Required(object, "dimension", context),
 		context+".dimension");
 	const auto kind = RequireString(Required(object, "kind", context), context+".kind");
+	if (Find(object, "zero_d_model")
+		&& !(schema_version == 5 && dimension == "0d" && kind == "zero_d_flow")) {
+		if (schema_version == 6 && dimension == "0d" && kind == "zero_d_flow")
+			throw std::runtime_error(
+				"simulation_config.json: schema_version 6 does not support zero_d_flow");
+		throw std::runtime_error("simulation_config.json: "+context
+			+" zero_d_model is only valid for schema_version 5 zero_d_flow domains");
+	}
 	if (dimension == "1d" && (kind == "network_flow" || kind == "one_d_flow")) {
 		domain.kind = DomainKind::OneDFlow;
 		if (Find(object, "database"))
@@ -227,7 +286,19 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 				+" immersed 3D domain does not accept inlet_policy");
 		if (Find(object, "database"))
 			throw std::runtime_error("simulation_config.json: "+context
-				+" immersed 3D domain does not accept body-fitted database");
+			+" immersed 3D domain does not accept body-fitted database");
+	} else if (dimension == "0d" && kind == "zero_d_flow") {
+		if (schema_version != 5)
+			throw std::runtime_error("simulation_config.json: schema_version 6 does not support zero_d_flow");
+		domain.kind = DomainKind::ZeroDFlow;
+		if (Find(object, "database") || Find(object, "inlet_policy"))
+			throw std::runtime_error("simulation_config.json: "+context
+				+" 0D domain does not accept database or inlet_policy");
+		domain.zero_d_model = RelativePath(Required(object, "zero_d_model", context),
+			context+".zero_d_model");
+		if (domain.zero_d_model.filename() != "zero_d_model.json")
+			throw std::runtime_error("simulation_config.json: "+context
+				+" zero_d_model must name zero_d_model.json");
 	} else throw std::runtime_error("simulation_config.json: "+context
 		+" has an inconsistent or unsupported dimension/kind");
 	domain.case_directory = RelativePath(Required(object, "case", context), context+".case");
@@ -250,7 +321,16 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 		ValidateOneDFlowDomainMetadata(domain.id, domain.ports, domain.one_d_inlet_policy);
 	else if (domain.kind == DomainKind::ThreeDBodyFittedFlow)
 		ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
-	else ValidateThreeDImmersedFlowDomainMetadata(domain.id, domain.ports);
+	else if (domain.kind == DomainKind::ThreeDImmersedFlow)
+		ValidateThreeDImmersedFlowDomainMetadata(domain.id, domain.ports);
+	else {
+		// The referenced model chooses the source or terminal role.  Before the
+		// case file is read, accept only the two exact role-shaped port contracts.
+		try { ValidateZeroDFlowDomainMetadata(domain.id, domain.ports,
+			ZeroDFlowRole::SourceReservoir); }
+		catch (const std::exception&) { ValidateZeroDFlowDomainMetadata(domain.id,
+			domain.ports, ZeroDFlowRole::TerminalRcr); }
+	}
 	return domain;
 }
 
@@ -380,6 +460,62 @@ inline GraphExecutionDefinition ParseExecution(const JsonValue& value, int schem
 
 } // namespace multidomain_detail
 
+inline ZeroDFlowModelConfiguration ParseZeroDFlowModelConfiguration(const std::string& text)
+{
+	using namespace multidomain_detail;
+	const auto root_value = config_detail::JsonParser(text).Parse();
+	const auto& root = RequireObject(root_value, "zero_d_model.json root");
+	const auto role = RequireString(Required(root, "role", "zero_d_model.json root"),
+		"zero_d_model.json.role");
+	ZeroDFlowModelConfiguration result;
+	auto& model = result.model;
+	if (role == "source_reservoir") {
+		RequireKnownKeys(root, {"role", "capacitance_m3_pa", "resistance_pa_s_m3",
+			"initial_pressure_pa", "prescribed_flow_m3_s"}, "zero_d_model.json root");
+		model.role = ZeroDFlowRole::SourceReservoir;
+		model.source.capacitance_m3_pa = RequireNumber(Required(root, "capacitance_m3_pa",
+			"zero_d_model.json root"), "zero_d_model.json.capacitance_m3_pa");
+		model.source.resistance_pa_s_m3 = RequireNumber(Required(root, "resistance_pa_s_m3",
+			"zero_d_model.json root"), "zero_d_model.json.resistance_pa_s_m3");
+		model.source.prescribed_flow_m3_s = RequireNumber(Required(root, "prescribed_flow_m3_s",
+			"zero_d_model.json root"), "zero_d_model.json.prescribed_flow_m3_s");
+		// Initial pressure belongs to the returned committed-state seed.
+		result.initial_state.stored_pressure_pa = RequireNumber(
+			Required(root, "initial_pressure_pa", "zero_d_model.json root"),
+			"zero_d_model.json.initial_pressure_pa");
+	} else if (role == "terminal_rcr") {
+		RequireKnownKeys(root, {"role", "proximal_resistance_pa_s_m3",
+			"distal_resistance_pa_s_m3", "capacitance_m3_pa", "distal_pressure_pa",
+			"initial_pressure_pa"}, "zero_d_model.json root");
+		model.role = ZeroDFlowRole::TerminalRcr;
+		model.terminal.proximal_resistance_pa_s_m3 = RequireNumber(Required(root,
+			"proximal_resistance_pa_s_m3", "zero_d_model.json root"),
+			"zero_d_model.json.proximal_resistance_pa_s_m3");
+		model.terminal.distal_resistance_pa_s_m3 = RequireNumber(Required(root,
+			"distal_resistance_pa_s_m3", "zero_d_model.json root"),
+			"zero_d_model.json.distal_resistance_pa_s_m3");
+		model.terminal.capacitance_m3_pa = RequireNumber(Required(root, "capacitance_m3_pa",
+			"zero_d_model.json root"), "zero_d_model.json.capacitance_m3_pa");
+		model.terminal.distal_pressure_pa = RequireNumber(Required(root, "distal_pressure_pa",
+			"zero_d_model.json root"), "zero_d_model.json.distal_pressure_pa");
+		result.initial_state.stored_pressure_pa = RequireNumber(
+			Required(root, "initial_pressure_pa", "zero_d_model.json root"),
+			"zero_d_model.json.initial_pressure_pa");
+	} else throw std::runtime_error("zero_d_model.json: unsupported role '"+role+"'");
+	ValidateZeroDFlowModel(model);
+	ValidateZeroDFlowState(result.initial_state);
+	return result;
+}
+
+inline ZeroDFlowModelConfiguration ReadZeroDFlowModelConfiguration(const std::filesystem::path& path)
+{
+	std::ifstream input(path);
+	if (!input) throw std::runtime_error("cannot open 0D flow model configuration: "+path.string());
+	std::ostringstream text;
+	text << input.rdbuf();
+	return ParseZeroDFlowModelConfiguration(text.str());
+}
+
 inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string& text)
 {
 	using namespace multidomain_detail;
@@ -482,7 +618,20 @@ inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& 
 	if (!input) throw std::runtime_error("cannot open multidomain simulation configuration: "+path);
 	std::ostringstream text;
 	text << input.rdbuf();
-	return ParseMultidomainConfiguration(text.str());
+	auto result = ParseMultidomainConfiguration(text.str());
+	const auto root = multidomain_detail::CanonicalGraphCaseRoot(
+		std::filesystem::path(path).parent_path());
+	for (auto& domain : result.domains) {
+		if (domain.kind != DomainKind::ZeroDFlow) continue;
+		const auto case_directory = multidomain_detail::ResolveContainedGraphAsset(root,
+			domain.case_directory, true, "domain '"+domain.id+"' case directory");
+		const auto model_path = multidomain_detail::ResolveContainedCaseFile(case_directory,
+			domain.zero_d_model, "domain '"+domain.id+"' zero_d_model");
+		domain.zero_d_flow_model = ReadZeroDFlowModelConfiguration(model_path);
+		ValidateZeroDFlowDomainMetadata(domain.id, domain.ports,
+			domain.zero_d_flow_model->model.role);
+	}
+	return result;
 }
 
 } // namespace iga

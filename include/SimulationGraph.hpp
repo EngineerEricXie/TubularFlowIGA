@@ -88,6 +88,9 @@ public:
 				throw std::runtime_error("simulation graph coupling edge ids must be unique");
 			const auto& first = Port(edge.first);
 			const auto& second = Port(edge.second);
+			if (Domain(edge.first.domain_id).kind == DomainKind::ZeroDFlow
+				&& Domain(edge.second.domain_id).kind == DomainKind::ZeroDFlow)
+				throw std::runtime_error("simulation graph does not support zero_d to zero_d edges");
 			if (!attached_ports.insert(edge.first).second
 				|| !attached_ports.insert(edge.second).second)
 				throw std::runtime_error("simulation graph port is attached to multiple edges");

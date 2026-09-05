@@ -1,4 +1,5 @@
 #include "SimulationGraph.hpp"
+#include "ZeroDFlowDomain.hpp"
 
 #include <algorithm>
 #include <array>
@@ -208,6 +209,9 @@ int main()
 	assert(iga::DomainDimensionOf(iga::DomainKind::OneDFlow) == 1);
 	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDBodyFittedFlow) == 3);
 	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDImmersedFlow) == 3);
+	assert(iga::DomainTopologyDimensionOf(iga::DomainKind::ZeroDFlow) == 0);
+	assert(iga::DomainEmbeddingDimensionOf(iga::DomainKind::ZeroDFlow) == 0);
+	assert(iga::IsFlowDomainKind(iga::DomainKind::ZeroDFlow));
 	assert(iga::DomainTopologyDimensionOf(iga::DomainKind::SurfaceMembraneStructure) == 2);
 	assert(iga::DomainEmbeddingDimensionOf(iga::DomainKind::SurfaceMembraneStructure) == 3);
 	assert(!iga::IsFlowDomainKind(iga::DomainKind::SurfaceMembraneStructure));
@@ -218,6 +222,34 @@ int main()
 	assert((reverse.domain_ids == std::vector<std::string>{"downstream", "roi", "upstream"}));
 	const auto pressure_flow_plan = iga::MakeSequentialPressureFlowPlan(graph, "upstream");
 	assert(pressure_flow_plan.domain_ids == plan.domain_ids);
+	{
+		auto source_port = iga::MakeZeroDFlowPort("source", iga::ZeroDFlowRole::SourceReservoir);
+		auto terminal_port = iga::MakeZeroDFlowPort("terminal", iga::ZeroDFlowRole::TerminalRcr);
+		auto root = LogicalPort("network", "root", "root", iga::PortQuantity::FlowRate);
+		auto outlet = LogicalPort("network", "outlet", "outlet:2", iga::PortQuantity::MeanPressure);
+		const iga::SimulationGraph zero_d_chain({Domain("source", iga::DomainKind::ZeroDFlow,
+			{source_port}), Domain("network", iga::DomainKind::OneDFlow, {root, outlet}),
+			Domain("terminal", iga::DomainKind::ZeroDFlow, {terminal_port})},
+			{{"source_to_network", {"source", "port"}, {"network", "root"},
+				iga::CouplingLaw::PressureFlow},
+			 {"network_to_terminal", {"network", "outlet"}, {"terminal", "port"},
+				iga::CouplingLaw::PressureFlow}});
+		assert((iga::MakeSequentialPlan(zero_d_chain, "source").domain_ids
+			== std::vector<std::string>{"source", "network", "terminal"}));
+		const iga::SimulationGraph zero_d_to_three_d({Domain("source", iga::DomainKind::ZeroDFlow,
+			{source_port}), Domain("roi", iga::DomainKind::ThreeDBodyFittedFlow,
+			{LogicalPort("roi", "inlet", "boundary:1", iga::PortQuantity::FlowRate)})},
+			{{"source_to_roi", {"source", "port"}, {"roi", "inlet"},
+				iga::CouplingLaw::PressureFlow}});
+		assert((iga::MakeSequentialPlan(zero_d_to_three_d, "source").domain_ids
+			== std::vector<std::string>{"source", "roi"}));
+		RequireRejected([&] {
+			iga::SimulationGraph({Domain("source", iga::DomainKind::ZeroDFlow, {source_port}),
+				Domain("terminal", iga::DomainKind::ZeroDFlow, {terminal_port})},
+				{{"invalid", {"source", "port"}, {"terminal", "port"},
+					iga::CouplingLaw::PressureFlow}});
+		});
+	}
 	const auto component_plan = iga::MakeAcyclicPressureFlowPlan(graph, "upstream");
 	assert(component_plan.domain_order == plan.domain_ids);
 	iga::ValidateConnectedGraph(graph, "upstream");

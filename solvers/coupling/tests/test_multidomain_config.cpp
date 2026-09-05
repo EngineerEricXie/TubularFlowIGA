@@ -23,6 +23,18 @@ void RequireRejected(const std::function<void()>& operation)
 	assert(rejected);
 }
 
+void RequireRejectedWith(const std::function<void()>& operation,
+	const std::string& diagnostic)
+{
+	bool rejected = false;
+	try { operation(); }
+	catch (const std::exception& error) {
+		rejected = true;
+		assert(std::string(error.what()).find(diagnostic) != std::string::npos);
+	}
+	assert(rejected);
+}
+
 std::string ValidConfiguration()
 {
 	return R"json({
@@ -121,6 +133,27 @@ std::string ValidSpeciesConfiguration()
 })json";
 }
 
+std::string ValidZeroDConfiguration()
+{
+	return R"json({
+  "schema_version":5,
+  "time":{"dt":0.01,"steps":2}, "start_domain":"source",
+  "execution":{"kind":"explicit"},
+  "domains":[
+    {"id":"source","dimension":"0d","kind":"zero_d_flow","case":"domains/source",
+     "zero_d_model":"zero_d_model.json","ports":[
+       {"id":"port","locator_kind":"zero_d_port","locator":"port",
+        "provides":["mean_pressure","flow_rate"],"requires":["mean_pressure"]}]},
+    {"id":"network","dimension":"1d","kind":"one_d_flow","case":"domains/network",
+     "inlet_policy":"coupled_root","ports":[
+       {"id":"root","locator_kind":"runtime_port","locator":"root",
+        "provides":["area","mean_pressure","flow_rate"],"requires":["flow_rate"]}]}
+  ],
+  "couplings":[{"id":"source_to_network","a":{"domain":"source","port":"port"},
+    "b":{"domain":"network","port":"root"},"mode":"pressure_flow","initial_pressure_pa":0}]
+})json";
+}
+
 std::string Replace(std::string text, const std::string& from, const std::string& to)
 {
 	const auto position = text.find(from);
@@ -151,6 +184,92 @@ std::string ImmersedConfiguration()
 
 int main()
 {
+	{
+		const auto configuration = iga::ParseMultidomainConfiguration(ValidZeroDConfiguration());
+		assert(configuration.schema_version == 5);
+		assert(configuration.graph.Domain("source").kind == iga::DomainKind::ZeroDFlow);
+		assert(configuration.domains.front().zero_d_model == "zero_d_model.json");
+		RequireRejected([] { (void)iga::ParseMultidomainConfiguration(Replace(
+			ValidZeroDConfiguration(), "\"zero_d_model.json\"", "\"../zero_d_model.json\"")); });
+		RequireRejected([] { (void)iga::ParseMultidomainConfiguration(Replace(
+			ValidZeroDConfiguration(), "\"zero_d_model.json\"", "\"model.json\"")); });
+		RequireRejectedWith([] {
+			auto schema_v6_zero_d = Replace(ValidSpeciesConfiguration(),
+				"\"dimension\":\"1d\",\"kind\":\"network_flow\",",
+				"\"dimension\":\"0d\",\"kind\":\"zero_d_flow\",");
+			schema_v6_zero_d = Replace(schema_v6_zero_d,
+				"\"case\":\"upstream\",\"inlet_policy\":\"configured_open_loop\",",
+				"\"case\":\"upstream\",\"zero_d_model\":\"zero_d_model.json\",");
+			(void)iga::ParseMultidomainConfiguration(schema_v6_zero_d);
+		}, "schema_version 6 does not support zero_d_flow");
+		RequireRejectedWith([] {
+			const auto misplaced_zero_d_model = Replace(ValidConfiguration(),
+				"\"case\": \"domains/upstream\", \"inlet_policy\": \"configured_open_loop\",",
+				"\"case\": \"domains/upstream\", \"zero_d_model\": \"zero_d_model.json\", "
+				"\"inlet_policy\": \"configured_open_loop\",");
+			(void)iga::ParseMultidomainConfiguration(misplaced_zero_d_model);
+		}, "zero_d_model is only valid for schema_version 5 zero_d_flow domains");
+		RequireRejectedWith([] {
+			const auto misplaced_zero_d_model = Replace(ValidConfiguration(),
+				"\"case\": \"domains/roi\", \"database\": \"domains/roi/roi.ntiga\",",
+				"\"case\": \"domains/roi\", \"database\": \"domains/roi/roi.ntiga\", "
+				"\"zero_d_model\": \"zero_d_model.json\",");
+			(void)iga::ParseMultidomainConfiguration(misplaced_zero_d_model);
+		}, "zero_d_model is only valid for schema_version 5 zero_d_flow domains");
+		const auto source = iga::ParseZeroDFlowModelConfiguration(R"json({
+  "role":"source_reservoir", "capacitance_m3_pa":1, "resistance_pa_s_m3":2,
+  "initial_pressure_pa":3, "prescribed_flow_m3_s":4
+})json");
+		assert(source.model.role == iga::ZeroDFlowRole::SourceReservoir);
+		assert(source.initial_state.stored_pressure_pa == 3.0);
+		RequireRejected([] { (void)iga::ParseZeroDFlowModelConfiguration(
+			"{\"role\":\"terminal_rcr\",\"capacitance_m3_pa\":1}"); });
+		const auto temporary = std::filesystem::temp_directory_path()/(
+			"iga_zero_d_model_"+std::to_string(std::chrono::steady_clock::now()
+				.time_since_epoch().count()));
+		std::filesystem::create_directories(temporary/"domains/source");
+		{
+			std::ofstream configuration_file(temporary/"simulation_config.json");
+			configuration_file << ValidZeroDConfiguration();
+			std::ofstream model_file(temporary/"domains/source/zero_d_model.json");
+			model_file << R"json({"role":"source_reservoir","capacitance_m3_pa":1,
+"resistance_pa_s_m3":2,"initial_pressure_pa":3,"prescribed_flow_m3_s":4})json";
+		}
+		const auto read = iga::ReadMultidomainConfiguration(
+			(temporary/"simulation_config.json").string());
+		assert(read.domains.front().zero_d_flow_model->model.source.resistance_pa_s_m3 == 2.0);
+		{
+			std::ofstream model_file(temporary/"domains/source/zero_d_model.json");
+			model_file << "{\"role\":\"terminal_rcr\"}";
+		}
+		RequireRejected([&] { (void)iga::ReadMultidomainConfiguration(
+			(temporary/"simulation_config.json").string()); });
+		const auto outside = temporary.parent_path()/(temporary.filename().string()+"_outside");
+		std::filesystem::create_directories(outside);
+		std::ofstream(outside/"zero_d_model.json") << R"json({"role":"source_reservoir",
+"capacitance_m3_pa":1,"resistance_pa_s_m3":2,"initial_pressure_pa":3,
+"prescribed_flow_m3_s":4})json";
+		std::filesystem::remove_all(temporary/"domains/source");
+		std::error_code symlink_error;
+		std::filesystem::create_directory_symlink(outside, temporary/"domains/source",
+			symlink_error);
+		if (!symlink_error) {
+			RequireRejectedWith([&] { (void)iga::ReadMultidomainConfiguration(
+				(temporary/"simulation_config.json").string()); },
+				"does not resolve to an existing asset inside the graph-case root");
+		}
+		std::filesystem::remove(temporary/"domains/source");
+		std::filesystem::create_directories(temporary/"domains/source");
+		symlink_error.clear();
+		std::filesystem::create_symlink(outside/"zero_d_model.json",
+			temporary/"domains/source/zero_d_model.json", symlink_error);
+		if (!symlink_error)
+			RequireRejectedWith([&] { (void)iga::ReadMultidomainConfiguration(
+				(temporary/"simulation_config.json").string()); },
+				"does not resolve to an existing asset inside the graph-case root");
+		std::filesystem::remove_all(temporary);
+		std::filesystem::remove_all(outside);
+	}
 	{
 		const auto species = iga::ParseMultidomainConfiguration(ValidSpeciesConfiguration());
 		assert(species.schema_version == 6);

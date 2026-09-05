@@ -11,6 +11,26 @@ This document fixes the runtime and interface contracts that precede direct
 executables continue to own configuration and output while reusable subsystem
 objects acquire explicit trial, rollback, and commit semantics.
 
+## PR9.1: dependency-free 0D flow contracts
+
+PR9.1 adds a first-class `ZeroDFlow` graph kind (topology and embedding
+dimension zero) and a one-port, SI-only kernel in `ZeroDFlowDomain.hpp`.  It
+introduces no executor or transactional runtime integration.  A source
+reservoir accepts interface pressure and reports pressure/flow; its backward
+Euler update is `Ps=((Cs/dt) Ps_n+Qp+pGamma/Rs)/(Cs/dt+1/Rs)`.  A terminal RCR
+accepts outward port flow (`Qport=-Qin`) and reports
+`pGamma=Pc+Rp Qin`, with `Ct(Pc-Pc_n)/dt=Qin-(Pc-Pv)/Rd`.  Reverse flow is
+valid and is never clamped.  Trial evaluation is pure from committed state,
+input, and `dt`, with deterministic model/state SHA-256 identities and signed
+storage/source-or-sink/port conservation terms.
+
+Schema v5 may declare a `0d` / `zero_d_flow` domain with exactly one logical
+`zero_d_port` and a case-contained relative `zero_d_model.json` reference.
+The referenced model declares either `source_reservoir` or `terminal_rcr` and
+the coefficient/state configuration; schema v6 rejects 0D domains because the
+species layer has no 0D transport contract yet.  Graph planning accepts 0D--1D
+and 0D--3D heterogeneous edges, but explicitly rejects 0D--0D edges.
+
 ## Current runtime boundaries
 
 ### Three-dimensional flow

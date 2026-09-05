@@ -15,7 +15,9 @@ enum class DomainKind {
 	OneDFlow,
 	ThreeDBodyFittedFlow,
 	ThreeDImmersedFlow,
-	SurfaceMembraneStructure
+	SurfaceMembraneStructure,
+	// Appended to preserve the serialized identities of the pre-existing kinds.
+	ZeroDFlow
 };
 
 inline const char* DomainKindName(DomainKind kind)
@@ -24,6 +26,7 @@ inline const char* DomainKindName(DomainKind kind)
 	if (kind == DomainKind::ThreeDBodyFittedFlow) return "three_d_body_fitted_flow";
 	if (kind == DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
 	if (kind == DomainKind::SurfaceMembraneStructure) return "surface_membrane_structure";
+	if (kind == DomainKind::ZeroDFlow) return "zero_d_flow";
 	return "unknown";
 }
 
@@ -31,13 +34,13 @@ inline bool IsKnownDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
 		|| kind == DomainKind::ThreeDImmersedFlow
-		|| kind == DomainKind::SurfaceMembraneStructure;
+		|| kind == DomainKind::SurfaceMembraneStructure || kind == DomainKind::ZeroDFlow;
 }
 
 inline bool IsFlowDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ThreeDImmersedFlow;
+		|| kind == DomainKind::ThreeDImmersedFlow || kind == DomainKind::ZeroDFlow;
 }
 
 // The membrane is a two-dimensional material topology.  Its embedding is
@@ -45,6 +48,7 @@ inline bool IsFlowDomainKind(DomainKind kind)
 inline int DomainTopologyDimensionOf(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return 1;
+	if (kind == DomainKind::ZeroDFlow) return 0;
 	if (kind == DomainKind::ThreeDBodyFittedFlow
 		|| kind == DomainKind::ThreeDImmersedFlow) return 3;
 	if (kind == DomainKind::SurfaceMembraneStructure) return 2;
