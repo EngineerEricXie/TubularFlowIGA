@@ -1,6 +1,6 @@
 # FSI Architecture
 
-Status: **PR8.1a material-surface kinematics boundary**. No
+Status: **PR8.1b fluid-side traction extraction/projection boundary**. No
 fluid--structure solve, membrane model, or moving-domain FSI execution exists
 in this revision.
 
@@ -63,6 +63,28 @@ t_{\mathrm{on\ structure}}=-\sigma_f n_f.
 
 The first slice requires identical material topology and global node IDs on
 both sides. Nonmatching interpolation/projection is explicitly deferred.
+
+PR8.1b adds a read-only fluid-side kernel for the immersed Cartesian path.  It
+uses the catalog normal exactly as the closed-surface outward fluid normal (the
+catalog and moving-cut provenance audit compare it to
+`ClosedTriangulatedSurface::outward_unit_normal`), evaluates
+\(\sigma_f=-pI+\mu(\nabla u+\nabla u^T)\), then publishes
+\(-\sigma_f n_f\).  Retained points are filtered by the exact material
+boundary labels.  A bounded, single-partition consistent P1 surface-mass
+projection produces nodal traction while its unmodified right-hand side is the
+consistent nodal force; the kernel checks resultant and current-configuration
+moment conservation with compensated sums, explicit SI absolute tolerances,
+and a relative tolerance scaled by accumulated absolute force/moment
+contributions.  The selected interface must explicitly provide
+`TractionOnStructure`.  It rejects distributed layouts, incomplete/duplicate
+or reordered state-cell ownership, inconsistent coefficients at shared global
+IGA nodes, stale stamps, unrelated material/layout/current-content identity,
+and caller-supplied producer-state hashes that do not recompute from the
+supplied IGA state plus the bound Cartesian domain, element
+connectivity/extraction, and quadrature catalog.  Projection identity is
+derived from the projection form, exact field/material/layout identities,
+state, labels, and retained quadrature content.  Runtime publication and
+coupling remain deferred.
 
 ## Typed FSI edges and runtime capabilities (PR8.0b1)
 
@@ -195,7 +217,6 @@ belong on allocated resources rather than login nodes.
 
 ## Explicit exclusions
 
-PR8.0b2 excludes a structural solver, traction integration implementation,
-fluid-side surface extraction, MPI collectives, nonmatching transfer,
+PR8.1b excludes a structural solver, MPI collectives, nonmatching transfer,
 contact, ALE/remeshing, a monolithic FSI solve, production FSI runtime or
 coordinator/executor, and any claim of an operating FSI benchmark.
