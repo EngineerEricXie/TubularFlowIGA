@@ -12,7 +12,7 @@ HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-conf
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+PETSC_TARGETS := petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
 
 ifneq ($(strip $(filter $(PETSC_TARGETS),$(MAKECMDGOALS))),)
 ifeq ($(strip $(PETSC_DIR)),)
@@ -23,7 +23,7 @@ PETSC_VARIABLES ?= $(PETSC_PREFIX)/lib/petsc/conf/petscvariables
 include $(PETSC_VARIABLES)
 endif
 
-.PHONY: all petsc petsc-test test config-check-dispatch-test vtkhdf-paraview-test clean phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase7-focused-test phase7-lv-closure-test prescribed-surface-motion-test material-surface-patch-kinematics-test moving-cut-geometry-test immersed-transient-state-test immersed-transient-flow-test moving-immersed-transient-flow-test moving-immersed-transient-flow-fsi-runtime-test moving-immersed-flow-snapshot-test moving-immersed-flow-snapshot-publisher-test immersed-velocity-extension-test pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test
+.PHONY: all petsc petsc-test test config-check-dispatch-test vtkhdf-paraview-test clean phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase7-focused-test phase7-lv-closure-test phase8-compliant-channel-fsi-paraview prescribed-surface-motion-test material-surface-patch-kinematics-test moving-cut-geometry-test immersed-transient-state-test immersed-transient-flow-test moving-immersed-transient-flow-test moving-immersed-transient-flow-fsi-runtime-test moving-immersed-flow-snapshot-test moving-immersed-flow-snapshot-publisher-test immersed-velocity-extension-test pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test
 
 # Shared Cartesian spline-face ordering is part of all immersed cut/ghost and
 # wall paths; make header changes rebuild every affected executable.
@@ -278,6 +278,14 @@ compliant_channel_fsi_test: tests/test_compliant_channel_fsi.cpp tests/Compliant
 
 compliant-channel-fsi-test: compliant_channel_fsi_test
 	./compliant_channel_fsi_test
+
+phase8_compliant_channel_fsi_paraview: CPPFLAGS += -Itests
+phase8_compliant_channel_fsi_paraview: src/phase8_compliant_channel_fsi_paraview.cpp tests/CompliantChannelFsiFixture.hpp include/StrongFluidStructureCoupling.hpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshot.hpp include/PretensionedMembraneFsiRuntime.hpp include/PretensionedMembrane.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+PHASE8_PARAVIEW_DIR ?= ../../results/phase8_compliant_channel_fsi_paraview
+phase8-compliant-channel-fsi-paraview: phase8_compliant_channel_fsi_paraview
+	./phase8_compliant_channel_fsi_paraview "$(PHASE8_PARAVIEW_DIR)"
 
 pretensioned_membrane_test: tests/test_pretensioned_membrane.cpp include/PretensionedMembrane.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)

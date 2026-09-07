@@ -7,6 +7,7 @@
 #include "FluidSurfaceTraction.hpp"
 #include "FsiDomainRuntime.hpp"
 #include "MaterialSurfacePatchKinematics.hpp"
+#include "MovingImmersedFlowSnapshotCapture.hpp"
 #include "MovingImmersedTransientFlowRuntime.hpp"
 
 #include <algorithm>
@@ -65,6 +66,12 @@ public:
 	{ return moving_.CommittedDiagnostics(); }
 	const MovingCutGeometry& CommittedGeometry() const noexcept { return moving_.CommittedGeometry(); }
 	const ImmersedGlobalFlowState& CommittedGlobalState() const { return moving_.CommittedGlobalState(); }
+	// The committed snapshot is a read-only view of the exact idle FSI epoch;
+	// it retains the moving-transition endpoint semantics from the owned flow
+	// runtime rather than reconstructing them at an export call site.
+	MovingImmersedFlowSnapshot CommittedFlowSnapshot(
+		MovingImmersedFlowSnapshotOptions options = {}) const
+	{ return BuildCommittedMovingImmersedFlowSnapshot(moving_, std::move(options)); }
 	ImmersedTransientFlowDiagnostics TrialFlowDiagnostics() const
 	{
 		if (!trial_flow_diagnostics_.has_value() || !lifecycle_.HasTrialOutput())

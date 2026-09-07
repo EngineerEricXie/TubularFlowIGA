@@ -30,21 +30,13 @@ int main(int argc, char** argv)
 			iga::FsiCouplingLaw::FluidStructureTractionKinematics);
 		// SI material: positive inertia/damping, 20 N/m pretension and a modest
 		// 5 N/m^3 foundation give measurable (sub-mm) feedback in this .6 m patch.
-		const iga::PretensionedMembraneMaterial membrane_material{1.0,2.0,20.0,5.0};
-		const std::vector<std::uint64_t> clamped{11,12,13,14,16,17,18,19};
+		const auto membrane_material=iga::compliant_channel_fixture::MembraneMaterial();
+		const auto clamped=iga::compliant_channel_fixture::ClampedGlobalNodeIds();
 		iga::MovingImmersedTransientFlowFsiRuntime fluid("fluid","immersed",edge,fluid_surface,
 			map.Interface(),layout,layout,initial,map,iga::compliant_channel_fixture::FlowOptions());
 		iga::PretensionedMembraneFsiRuntime structure("structure","membrane",edge,map.Interface(),
 			fluid_surface,layout,layout,membrane_material,clamped);
-		iga::StrongFluidStructureCouplingOptions coupling_options;
-		coupling_options.maximum_iterations=16;
-		coupling_options.absolute_displacement_tolerance_m=1.e-8;
-		coupling_options.relative_displacement_tolerance=1.e-3;
-		coupling_options.reference_displacement_scale_m=1.e-6;
-		coupling_options.aitken_controls.initial_relaxation=.5;
-		coupling_options.aitken_controls.minimum_relaxation=.1;
-		coupling_options.aitken_controls.maximum_relaxation=.8;
-		coupling_options.aitken_controls.scaled_difference_threshold=1.e-14;
+		const auto coupling_options=iga::compliant_channel_fixture::CouplingOptions();
 		iga::StrongFluidStructureCoupling<iga::MovingImmersedTransientFlowFsiRuntime,
 			iga::PretensionedMembraneFsiRuntime> coordinator(fluid,structure,edge,layout,coupling_options);
 		const auto result=coordinator.Execute({1,1.0,.05});

@@ -73,6 +73,7 @@
 *.err
 *.log
 *.nsys-rep
+/results/phase8_compliant_channel_fsi_paraview/
 *.qdrep
 *.btr
 core

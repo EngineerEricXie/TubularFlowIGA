@@ -7,7 +7,9 @@
 // setup together so runtime and coupled benchmark coverage cannot drift.
 #include "MaterialSurfacePatchMap.hpp"
 #include "MovingImmersedTransientFlowRuntime.hpp"
+#include "PretensionedMembrane.hpp"
 #include "PrescribedSurfaceMotion.hpp"
+#include "StrongFluidStructureCoupling.hpp"
 
 #include <array>
 #include <cstdint>
@@ -88,6 +90,26 @@ inline MovingImmersedTransientFlowOptions FlowOptions()
 	v.flow.parameters={1.,1.,1.}; v.flow.wall_labels={7,9};
 	v.flow.ports={{"inlet",1,ImmersedFlowPortControlMode::Pressure,.10},{"outlet",2,ImmersedFlowPortControlMode::Pressure,0.}};
 	v.flow.ksp_relative_tolerance=1e-12; v.flow.lu_pivot_shift=1e-20; return v;
+}
+
+inline PretensionedMembraneMaterial MembraneMaterial()
+{ return {1.0,2.0,20.0,5.0}; }
+
+inline std::vector<std::uint64_t> ClampedGlobalNodeIds()
+{ return {11,12,13,14,16,17,18,19}; }
+
+inline StrongFluidStructureCouplingOptions CouplingOptions()
+{
+	StrongFluidStructureCouplingOptions v;
+	v.maximum_iterations=16;
+	v.absolute_displacement_tolerance_m=1.e-8;
+	v.relative_displacement_tolerance=1.e-3;
+	v.reference_displacement_scale_m=1.e-6;
+	v.aitken_controls.initial_relaxation=.5;
+	v.aitken_controls.minimum_relaxation=.1;
+	v.aitken_controls.maximum_relaxation=.8;
+	v.aitken_controls.scaled_difference_threshold=1.e-14;
+	return v;
 }
 
 } // namespace compliant_channel_fixture
