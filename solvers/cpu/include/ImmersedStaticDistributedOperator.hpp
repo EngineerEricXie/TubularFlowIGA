@@ -156,6 +156,55 @@ public:
 		});
 		diagnostics_ = std::move(*candidate);
 	}
+	ImmersedStaticFlowConservationDiagnostics ConservationDiagnostics() const
+	{
+		PhaseScope phase(ProfilePhase::Diagnostics);
+		std::vector<double> local,global;
+		std::vector<std::uint64_t> seen,global_seen;
+		CollectiveLocalStage(communicator_,"immersed conservation storage",[&] {
+			local.resize(wall_labels_.size()+1); global.resize(local.size());
+			seen.resize(wall_labels_.size()); global_seen.resize(seen.size());
+		});
+		assembly_->WithRequiredState([&] {
+			for (const auto& stencil : assembly_->OwnedStencils()) {
+				const auto& task = work_[stencil.id]; if (task.kind != Kind::Volume) continue;
+				const auto element = domain_.Background().MaterializeElement(task.cell); const auto nodal = Gather(element);
+				VolumePoints(task.cell,[&](const VolumeQuadraturePoint& point) {
+					const auto basis = EvaluateBasis(element,point.parametric[0],point.parametric[1],point.parametric[2],false);
+					double divergence = 0.0;
+					for (std::size_t a = 0; a < nodal.size(); ++a) for (int field = 0; field < 3; ++field)
+						AddImmersedFlowPortFinite(divergence,nodal[a][field]*basis.gradient[a][field],"distributed conservation divergence");
+					AddImmersedFlowPortFinite(local.back(),point.weight*basis.raw_determinant*divergence,"distributed volume divergence");
+				});
+				if (domain_.Cells()[task.cell].classification != CellClassification::Cut) continue;
+				for (const auto& point : surface_.UsableRule(domain_,task.cell).Points()) {
+					const auto basis = EvaluateBasis(element,point.parametric[0],point.parametric[1],point.parametric[2],false);
+					double flow = 0.0;
+					for (std::size_t a = 0; a < nodal.size(); ++a) for (int field = 0; field < 3; ++field)
+						AddImmersedFlowPortFinite(flow,nodal[a][field]*basis.value[a]*point.normal[field]*point.weight,"distributed surface flow");
+					const auto index = wall_labels_.at(point.boundary_id);
+					AddImmersedFlowPortFinite(local[index],flow,"distributed boundary flow"); ++seen[index];
+				}
+			}
+		});
+		MPI_Allreduce(local.data(),global.data(),static_cast<int>(local.size()),MPI_DOUBLE,MPI_SUM,communicator_);
+		MPI_Allreduce(seen.data(),global_seen.data(),static_cast<int>(seen.size()),MPI_UINT64_T,MPI_SUM,communicator_);
+		ImmersedStaticFlowConservationDiagnostics result;
+		CollectiveLocalStage(communicator_,"immersed global conservation",[&] {
+			for (double value : global) if (!std::isfinite(value)) throw std::runtime_error("nonfinite immersed global conservation");
+			result.volume_divergence_integral_m3_s = global.back();
+			for (const auto& entry : wall_labels_) if (global_seen[entry.second]) {
+				const auto flow = global[entry.second]; result.surface_flow_by_boundary_label_m3_s[entry.first] = flow;
+				AddImmersedFlowPortFinite(result.total_surface_outward_flow_m3_s,flow,"global conservation total surface flow");
+				if (std::binary_search(Options().wall_labels.begin(),Options().wall_labels.end(),entry.first))
+					AddImmersedFlowPortFinite(result.wall_outward_flow_m3_s,flow,"global conservation wall flow");
+				else if (std::any_of(Options().ports.begin(),Options().ports.end(),[&](const auto& port) { return port.boundary_label == entry.first; }))
+					AddImmersedFlowPortFinite(result.open_port_outward_flow_m3_s,flow,"global conservation open-port flow");
+				else throw std::runtime_error("immersed conservation diagnostics found an unconfigured surface label");
+			}
+		});
+		return result;
+	}
 	void Close()
 	{
 		ReleaseVectors();

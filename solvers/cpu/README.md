@@ -14,10 +14,13 @@ The immersed MPI assembly layer now supports uniquely owned cell/ghost
 integration, distributed sparse rows, scalar constraints, and required-state
 exchange. `ImmersedStaticDistributedOperator` now uses the shared serial/MPI
 geometry setup and existing physics kernels, with global port/wall/pressure
-diagnostics. Integration into nonlinear solves and graph paths remains in
-progress; their existing single-rank restrictions remain. See the
-[HPC-03A assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md) and
-[static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md).
+diagnostics. `ImmersedStaticDistributedRuntime` adds owned Newton/KSP updates,
+global convergence and conservation checks, and transactional commit/rollback.
+Its C++ interface supports steady solves; existing case/graph/transient entry
+points retain their single-rank restrictions pending HPC-03C integration. See
+the [assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md),
+[static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md),
+and [static runtime report](../../docs/progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md).
 
 | Executable | Purpose |
 | --- | --- |

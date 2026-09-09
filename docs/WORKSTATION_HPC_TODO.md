@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。接續開發浸入式 MPI 正式物理 operator 與全域診斷；
+最近更新：2026-09-09。完成 HPC-03A 靜態 MPI Newton、全域守恆與交易回復；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -47,11 +47,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（9 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C |
-| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-03A |
+| 已勾選完成（10 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A |
+| 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
 | 其餘待辦（26 項） | HPC-03B 至 HPC-09；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 29 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 28 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -473,17 +473,17 @@ F05 的原始診斷例外保存與恢復亦通過，見
 [ImmersedStaticFlowRuntime.hpp](../solvers/cpu/include/ImmersedStaticFlowRuntime.hpp)、
 [MovingImmersedTransientFlowRuntime.hpp](../solvers/cpu/include/MovingImmersedTransientFlowRuntime.hpp)。
 
-- [ ] **HPC-03A：靜態 owned rows 與 halo。** 分配 active cells／自由度，
+- [x] **HPC-03A：靜態 owned rows 與 halo。** 分配 active cells／自由度，
   建立精確稀疏配置與必要鄰接資料交換，保留單 rank 比較路徑。
   處理 pressure gauge、port multiplier、ghost penalty 跨分區貢獻與空 rank。
-  分散式 stencil 組裝層已完成 owned Mat／Vec、required-state scatter、唯一積分
-  與失敗後重試。27 cells／54 ghost faces 的完整體積、壁面、兩個 flow controller
-  與 gauge 在 1／2／4 ranks 對照既有序列殘差及 Jacobian action 通過；空 rank
-  及 split1+2 亦通過。正式 static operator 已接上共用幾何 preflight／active
-  編號、既有物理 kernels、全域 port／wall／pressure 診斷；nonlinear runtime
-  與守恆驗收仍待接入，故保持未勾選，見
-  [分散式組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md) 與
-  [正式 operator 進度](progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md)。
+  正式 operator 與 Newton runtime 已完成 owned Mat／Vec、required-state halo、
+  唯一積分、全域 convergence／port／wall／pressure／守恆診斷與交易回復。
+  27 cells／54 ghost faces 的 closed、flow、pressure 案例在 1／2／4 ranks
+  對照既有序列場解通過；零列／零工作配置、split 1+2、候選與 prepare 失敗
+  後重試亦通過。C++ 靜態介面已支援，case／graph／暫態入口依 HPC-03C
+  另行接入與放行。見 [組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md)、
+  [operator 進度](progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md) 與
+  [靜態 runtime 驗收](progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md)。
 - [ ] **HPC-03B：按計算量分區。** 以積分點、切割與穩定化工作量建立初始權重，
   比較加權／未加權分區的最大 rank 耗時與通訊成本；避免只按 cell 數量分配。
 - [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、

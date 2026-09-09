@@ -26,7 +26,7 @@ void Reject(MPI_Comm comm, Function&& function, const char* expected)
 	iga::RequireCollectiveSameText(comm, "distributed assembly test failure agreement", message);
 }
 
-void Exercise(MPI_Comm comm, bool empty)
+void Exercise(MPI_Comm comm, int empty)
 {
 	int rank = 0, size = 1;
 	MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
@@ -34,7 +34,7 @@ void Exercise(MPI_Comm comm, bool empty)
 	std::vector<PetscInt> offsets;
 	std::vector<iga::ImmersedAssemblyStencil> stencils;
 	iga::CollectiveLocalStage(comm, "distributed assembly test topology", [&] {
-		for (int r = 0; r <= size; ++r) offsets.push_back(empty ? (r ? rows : 0) : (r == size ? rows : 4*(nodes*r/size)));
+		for (int r = 0; r <= size; ++r) offsets.push_back(empty == 2 ? (r == size ? rows : 0) : empty ? (r ? rows : 0) : (r == size ? rows : 4*(nodes*r/size)));
 		const auto add = [&](int cell, iga::ImmersedStencilPattern pattern, std::vector<PetscInt> indices) {
 			stencils.push_back({stencils.size(), empty ? 0 : cell*size/16, pattern, std::move(indices)});
 		};
@@ -98,7 +98,12 @@ void Exercise(MPI_Comm comm, bool empty)
 	iga::CollectiveLocalStage(comm, "distributed assembly test sparsity", [&] {
 		Require(info.nz_used == static_cast<double>(assembly.SymbolicEntries()) && info.nz_allocated == info.nz_used && info.mallocs == 0.0,
 			"matrix does not have exact preallocation");
-		if (empty && rank) Require(assembly.OwnedStencils().empty() && assembly.RequiredRows().empty() && assembly.RowBegin() == assembly.RowEnd(), "empty rank owns work or state");
+		if (empty == 1 && rank) Require(assembly.OwnedStencils().empty() && assembly.RequiredRows().empty() && assembly.RowBegin() == assembly.RowEnd(), "empty rank owns work or state");
+		if (empty == 2 && size > 1) {
+			if (rank == 0) Require(assembly.RowBegin() == assembly.RowEnd() && !assembly.OwnedStencils().empty(), "worker unexpectedly owns rows");
+			else Require(assembly.OwnedStencils().empty() && assembly.RequiredRows().empty(), "row owner unexpectedly owns integration");
+			Require(assembly.RowEnd()-assembly.RowBegin() == (rank == size-1 ? rows : 0), "separate row ownership differs");
+		}
 	});
 	const int failed_rank = empty ? 0 : size-1;
 	int visits = 0;
@@ -142,7 +147,7 @@ int main(int argc, char** argv)
 	try {
 		const bool split = argc > 1 && std::string(argv[1]) == "split";
 		MPI_Comm_split(PETSC_COMM_WORLD, split && rank ? 1 : 0, rank, &comm);
-		Exercise(comm, false); Exercise(comm, true);
+		Exercise(comm, 0); Exercise(comm, 1); Exercise(comm, 2);
 	} catch (const std::exception& error) { std::cerr << "rank " << rank << ": " << error.what() << '\n'; status = 1; }
 	if (comm != MPI_COMM_NULL) MPI_Comm_free(&comm);
 	int global = 0; MPI_Allreduce(&status, &global, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);

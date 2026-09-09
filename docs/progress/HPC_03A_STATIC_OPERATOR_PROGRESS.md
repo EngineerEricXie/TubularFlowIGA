@@ -1,7 +1,8 @@
 # HPC-03A：正式靜態物理 operator 與全域診斷
 
 日期：2026-09-09。基準 HEAD `ed129fd` 加本批工作樹。
-狀態：正式 operator 組裝接入；HPC-03A 仍部分完成。
+狀態：本報告記錄 operator 組裝階段；後續 Newton／守恆與 HPC-03A 完成驗收見
+[靜態 runtime 報告](HPC_03A_STATIC_RUNTIME_PROGRESS.md)。
 
 ## 實作
 

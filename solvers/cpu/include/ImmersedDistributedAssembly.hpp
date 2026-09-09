@@ -149,12 +149,22 @@ public:
 	Mat Matrix() const { RequireAssembled(); return matrix_; }
 	Vec Residual() const { RequireAssembled(); return residual_; }
 
-	// Valid inside the local assembly callback, after the required-state scatter.
+	// Valid inside Assemble or WithRequiredState callbacks, after the scatter.
 	double StateAt(PetscInt row) const
 	{
 		const auto found = std::lower_bound(required_.begin(), required_.end(), row);
 		if (found == required_.end() || *found != row) throw std::out_of_range("row is outside immersed halo");
 		return halo_values_[static_cast<std::size_t>(found-required_.begin())];
+	}
+
+	// Collective read-only analysis of a fresh required-state halo. The callback
+	// uses StateAt and must not call MPI or change the matrix/state vectors.
+	template <class Function>
+	void WithRequiredState(Function&& function)
+	{
+		CollectiveLocalStage(communicator_, "immersed state analysis preparation", [&] { RequireOpen(); });
+		RefreshRequiredState();
+		CollectiveLocalStage(communicator_, "immersed owned state analysis", [&] { function(); });
 	}
 
 	// callback(stencil, matrix, negative_residual) performs only local work.
@@ -165,17 +175,7 @@ public:
 	{
 		CollectiveLocalStage(communicator_, "immersed assembly preparation", [&] { RequireOpen(); });
 		assembled_ = false;
-		Check("immersed halo begin", VecScatterBegin(scatter_, state_, halo_, INSERT_VALUES, SCATTER_FORWARD));
-		Check("immersed halo end", VecScatterEnd(scatter_, state_, halo_, INSERT_VALUES, SCATTER_FORWARD));
-		CollectiveLocalStage(communicator_, "immersed halo values", [&] {
-			PetscReadArray view;
-			view.Acquire(halo_);
-			for (std::size_t i = 0; i < required_.size(); ++i) {
-				halo_values_[i] = PetscRealPart(view.Data()[i]);
-				if (!std::isfinite(halo_values_[i])) throw std::runtime_error("nonfinite immersed halo state");
-			}
-			view.Restore();
-		});
+		RefreshRequiredState();
 		Check("immersed matrix reset", MatZeroEntries(matrix_));
 		Check("immersed residual reset", VecSet(residual_, 0.0));
 		std::exception_ptr error;
@@ -214,6 +214,21 @@ public:
 		cleanup_.Check(communicator_, "immersed assembly close");
 	}
 private:
+	void RefreshRequiredState()
+	{
+		Check("immersed halo begin", VecScatterBegin(scatter_, state_, halo_, INSERT_VALUES, SCATTER_FORWARD));
+		Check("immersed halo end", VecScatterEnd(scatter_, state_, halo_, INSERT_VALUES, SCATTER_FORWARD));
+		CollectiveLocalStage(communicator_, "immersed halo values", [&] {
+			PetscReadArray view;
+			view.Acquire(halo_);
+			for (std::size_t i = 0; i < required_.size(); ++i) {
+				halo_values_[i] = PetscRealPart(view.Data()[i]);
+				if (!std::isfinite(halo_values_[i])) throw std::runtime_error("nonfinite immersed halo state");
+			}
+			view.Restore();
+		});
+	}
+
 	void RequireOpen() const { if (closed_) throw std::logic_error("immersed assembly is closed"); }
 	void RequireAssembled() const { RequireOpen(); if (!assembled_) throw std::logic_error("immersed operator is not assembled"); }
 	void Check(const char* stage, PetscErrorCode code) const { RequireCollectivePetscSuccess(communicator_, stage, code); }

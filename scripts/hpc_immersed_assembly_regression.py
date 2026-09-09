@@ -58,7 +58,7 @@ def main():
                     raise RuntimeError(directory.name+': failed or unmeasured rank')
                 prefix = 'immersed_physics ' if kind == 'physics' else 'immersed_distributed_test '
                 lines = [line for line in (rd/'stdout.log').read_text().splitlines() if line.startswith(prefix)]
-                if len(lines) != (1 if kind == 'physics' else 2):
+                if len(lines) != (1 if kind == 'physics' else 3):
                     raise RuntimeError(directory.name+': missing completion observations')
                 for line in lines:
                     if not line.endswith(' passed'):
