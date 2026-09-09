@@ -106,14 +106,18 @@ capacitance、reference／distal pressure 與 boundary mapping 的配置身分�
   step、physical time、internal substeps。node／segment／cell 順序與 network 綁定。
 - 保存各 [OneDSpeciesState](../../solvers/one_d/include/OneDTransport.hpp) 的 concentration、
   root／outlet native flux、`boundary_flux_valid`、step initial mass、root／outlet／source
-  amounts 與 `step_accounting_valid`。definition、inlet waveform、wall kind／value／
-  coefficient／exterior value 由驗證過的配置恢復。保存完整 `LastInlet()`，包含 optional
+  amounts 與 `step_accounting_valid`。另保存動態 `inlet_value`、`inlet_waveform`：
+  `ApplyOneDCoupledInlet` 會更新入口值並清除該物種的 waveform，後續入口省略該物種時
+  仍沿用這些變動。definition、wall kind／value／coefficient／exterior value 由驗證過的
+  配置恢復。保存完整 `LastInlet()`，包含 optional
   flow／pressure、species、temperature、hematocrit 與 metadata；Ready-phase port 查詢
   會讀取這些 accepted 邊界資料。
 - 動態 vasodilation 改變 network segment 的 `radius0`、`area0`、`resistance`；保存
   accepted radius，按既有公式由 radius、length、viscosity 重建後兩者並驗證。
-  `baseline_radius0` 屬於不可變模型。`ApplyOneDVasodilation` 的 configuration 是 const，
-  此版沒有額外已變動的 configuration state；不必序列化整份 rollback snapshot。
+  `baseline_radius0` 屬於不可變模型。`ApplyOneDVasodilation` 的 configuration 雖為 const，
+  `ApplyOneDCoupledInlet` 會改寫 physiology 與 coupling perfusate oxygen 的
+  hematocrit／hemoglobin（共四個 scalar）；這些必須保存。後續入口可以不帶 Hct，
+  僅保存 `LastInlet()` 不足以重建先前的血液狀態。不必序列化整份 rollback snapshot。
 - 既有 integer configured substeps 與 adaptive internal substeps 保留原語義。
   hydraulic frames、trial inlet、trial outlet overrides、transport routing／rollback
   cache 在下一次 Begin／Solve 重建，不保存未接受的 substep。
@@ -123,6 +127,15 @@ capacitance、reference／distal pressure 與 boundary mapping 的配置身分�
 `RestoreCommittedState(flow, transports, network)` 也未恢復 `last_inlet_`。
 05C 必須補齊這些欄位及驗證，不能把 standalone checkpoint 直接包成 graph checkpoint。
 staged species adapter 目前拒絕 dynamic vasodilation；restart 不擴大它的物理支援範圍。
+
+05C 已補上 `OneDFlowCheckpointState`、Ready accepted capture／fresh-candidate restore，
+以及 [metadata／field codec](../../solvers/one_d/include/OneDAcceptedCheckpoint.hpp)。
+只支援本契約的固定 macro dt：保存 accepted macro count、最後 start／dt，並核對
+configured step count 的整數倍關係。provider 必須傳入涵蓋完整配置、selected system、
+network 與外部輸入的已驗證 SHA-256 identity；省略 identity 的 legacy owner 不能使用
+新 checkpoint API。metadata 與 fields 必須同屬一個完整 bundle，通過所有分片校驗、
+consumer Finish、runtime validation 與群組 agreement 後才發布候選 owners。
+詳見 [1D 狀態與串流驗收](../progress/HPC_05C_ONE_D_STATE_PROGRESS.md)。
 
 ### 4.3 貼體 3D hydraulic 與 transport
 

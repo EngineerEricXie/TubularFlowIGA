@@ -3,7 +3,8 @@
 日期：2026-09-09。基準 revision：`e4bffb34d94e87a6ac980d6062385f9172c8cfd7`
 加本批修改。狀態：**部分完成，HPC-05C 保持未勾選**。本批交付 accepted-state
 介面與 payload codec，並驗證新的執行程序可恢復真實 0D 模型；完整 MPI graph
-checkpoint／restart CLI 及 1D／3D state providers 尚未完成。
+checkpoint／restart CLI 及 1D／3D state providers 在本批尚未完成。後續 1D runtime
+與兩分片 codec 的進展另見 [1D 狀態進度](HPC_05C_ONE_D_STATE_PROGRESS.md)。
 
 ## 已實作介面
 

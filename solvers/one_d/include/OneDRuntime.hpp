@@ -5,6 +5,7 @@
 #include "CouplingPort.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <exception>
@@ -13,6 +14,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -21,6 +23,20 @@
 #include <vector>
 
 namespace iga {
+
+struct OneDFlowCheckpointState {
+	std::string configuration_identity_sha256;
+	OneDFlowState flow;
+	std::vector<OneDTransportState> transports;
+	std::vector<double> segment_radii_m;
+	VascularInletState last_inlet;
+	// Physiology Hct/Hb followed by perfusate oxygen Hct/Hb. Coupled inlet
+	// application mutates all four; the last inlet alone cannot reconstruct
+	// them when a subsequent inlet omits hematocrit.
+	std::array<double, 4> blood_state{};
+	int accepted_macro_steps = 0;
+	double last_macro_start_s = 0.0, last_macro_dt_s = 0.0;
+};
 
 // Owns all mutable native 1d state.  PETSc is deliberately injected for the
 // implicit scheme so the common lifecycle and its fast tests remain C++17-only.
@@ -59,16 +75,26 @@ public:
 
 	OneDFlowRuntime(OneDConfiguration configuration, OneDFlowSystemDefinition flow,
 		OneDNetwork network, OneDInletState inlet, std::filesystem::path case_directory,
-		ImplicitAdvance implicit_advance = {}, FailureAgreement failure_agreement = {})
+		ImplicitAdvance implicit_advance = {}, FailureAgreement failure_agreement = {},
+		std::string checkpoint_identity_sha256 = {})
 		: configuration_(std::move(configuration)), flow_(std::move(flow)),
 		  network_(std::move(network)), inlet_(std::move(inlet)),
 		  case_directory_(std::move(case_directory)), implicit_advance_(std::move(implicit_advance)),
-		  failure_agreement_(std::move(failure_agreement))
+		  failure_agreement_(std::move(failure_agreement)), checkpoint_identity_sha256_(std::move(checkpoint_identity_sha256))
 	{
+		// The embedding provider binds the verified configuration, selected
+		// system, network and external inputs before constructing this owner.
+		// Legacy callers can omit the identity but cannot use checkpoint APIs.
+		if (!checkpoint_identity_sha256_.empty() && (checkpoint_identity_sha256_.size() != 64
+			|| checkpoint_identity_sha256_.find_first_not_of("0123456789abcdef") != std::string::npos))
+			throw std::runtime_error("invalid 1d checkpoint configuration identity");
 		flow_state_.outlets = ResolveOneDOutlets(configuration_, network_);
 		for (const auto& transport : configuration_.transport_systems)
 			if (transport.flow_system == flow_.name)
 				transports_.push_back(InitializeOneDTransport(configuration_, transport, network_));
+		for (const auto& transport : transports_)
+			for (const auto& species : transport.species)
+				configured_species_waveforms_.emplace(species.definition.field, species.inlet_waveform);
 	}
 
 	void InitializeOpenLoop(double inlet_flow)
@@ -119,6 +145,8 @@ public:
 	void BeginStep(double time_s, double dt_s)
 	{
 		RequirePhase(Phase::Ready, "BeginStep");
+		if (accepted_macro_steps_ == std::numeric_limits<int>::max())
+			throw std::runtime_error("1d macro-step counter overflows");
 		if (!(dt_s > 0.0) || !std::isfinite(dt_s))
 			throw std::runtime_error("1d BeginStep requires a finite positive dt_s");
 		if (!Close(time_s, flow_state_.physical_time))
@@ -502,6 +530,8 @@ public:
 	void FinalizeCommitStep() noexcept
 	{
 		if (phase_ != Phase::CommitPrepared) std::terminate();
+		++accepted_macro_steps_;
+		last_macro_start_s_ = trial_time_s_; last_macro_dt_s_ = trial_dt_s_;
 		CloseTrialState();
 		phase_ = Phase::Ready;
 	}
@@ -638,6 +668,52 @@ public:
 		network_ = std::move(network);
 	}
 
+	OneDFlowCheckpointState CaptureCheckpointState() const
+	{
+		RequirePhase(Phase::Ready, "CaptureCheckpointState");
+		OneDFlowCheckpointState value;
+		value.configuration_identity_sha256 = checkpoint_identity_sha256_;
+		value.flow = flow_state_; value.transports = transports_; value.last_inlet = last_inlet_;
+		for (const auto& segment : network_.segments) value.segment_radii_m.push_back(segment.radius0);
+		value.blood_state = {{configuration_.physiology.hematocrit_percent, configuration_.physiology.hemoglobin_g_dl,
+			configuration_.coupling.perfusate.oxygen.hematocrit_percent, configuration_.coupling.perfusate.oxygen.hemoglobin_g_dl}};
+		value.accepted_macro_steps = accepted_macro_steps_;
+		value.last_macro_start_s = last_macro_start_s_; value.last_macro_dt_s = last_macro_dt_s_;
+		ValidateCheckpointState(value); return value;
+	}
+
+	// Initialize an unpublished, fresh candidate. No MPI calls are made here;
+	// the provider must coordinate all candidate owners before publication.
+	void RestoreCheckpointState(OneDFlowCheckpointState value)
+	{
+		RequirePhase(Phase::Ready, "RestoreCheckpointState");
+		if (accepted_macro_steps_ || flow_state_.completed_step)
+			throw std::runtime_error("1d checkpoint restore requires a fresh runtime");
+		ValidateCheckpointState(value);
+		auto configuration = configuration_; auto network = network_;
+		for (std::size_t i = 0; i < network.segments.size(); ++i) {
+			auto& segment = network.segments[i]; segment.radius0 = value.segment_radii_m[i];
+			segment.area0 = OneDPi*segment.radius0*segment.radius0;
+			segment.resistance = 8.0*flow_.dynamic_viscosity*segment.length/(OneDPi*std::pow(segment.radius0, 4.0));
+			if (!(segment.area0 > 0.0) || !std::isfinite(segment.area0)
+				|| !(segment.resistance > 0.0) || !std::isfinite(segment.resistance))
+				throw std::runtime_error("1d checkpoint radius produces invalid derived geometry");
+		}
+		configuration.physiology.hematocrit_percent = value.blood_state[0];
+		configuration.physiology.hemoglobin_g_dl = value.blood_state[1];
+		configuration.coupling.perfusate.oxygen.hematocrit_percent = value.blood_state[2];
+		configuration.coupling.perfusate.oxygen.hemoglobin_g_dl = value.blood_state[3];
+		static_assert(std::is_nothrow_move_assignable<OneDConfiguration>::value
+			&& std::is_nothrow_move_assignable<OneDNetwork>::value
+			&& std::is_nothrow_move_assignable<OneDFlowState>::value
+			&& std::is_nothrow_move_assignable<VascularInletState>::value, "1d checkpoint publication must not throw");
+		configuration_ = std::move(configuration); network_ = std::move(network);
+		flow_state_ = std::move(value.flow); transports_.swap(value.transports); last_inlet_ = std::move(value.last_inlet);
+		accepted_macro_steps_ = value.accepted_macro_steps;
+		last_macro_start_s_ = value.last_macro_start_s; last_macro_dt_s_ = value.last_macro_dt_s;
+	}
+
+	const std::string& CheckpointConfigurationIdentity() const { return checkpoint_identity_sha256_; }
 	const OneDConfiguration& Configuration() const { return configuration_; }
 	const OneDFlowSystemDefinition& FlowSystem() const { return flow_; }
 	const OneDNetwork& Network() const { return network_; }
@@ -675,6 +751,71 @@ public:
 	}
 
 private:
+	void ValidateCheckpointState(const OneDFlowCheckpointState& value) const
+	{
+		auto require = [](bool condition, const char* reason) {
+			if (!condition) throw std::runtime_error(std::string("1d checkpoint: ")+reason);
+		};
+		require(!checkpoint_identity_sha256_.empty() && value.configuration_identity_sha256 == checkpoint_identity_sha256_, "configuration identity differs or is unbound");
+		require(value.accepted_macro_steps > 0 && std::isfinite(value.last_macro_start_s)
+			&& value.last_macro_start_s >= 0.0
+			&& std::isfinite(value.last_macro_dt_s) && value.last_macro_dt_s > 0.0, "invalid macro clock");
+		const int substeps = ConfiguredSubsteps(value.last_macro_dt_s);
+		require(value.flow.completed_step > 0 && value.flow.completed_step <= configuration_.time.steps
+			&& static_cast<long long>(value.accepted_macro_steps)*substeps == value.flow.completed_step
+			&& std::isfinite(value.flow.physical_time) && value.flow.physical_time == value.last_macro_start_s+value.last_macro_dt_s
+			&& Close(value.flow.physical_time, value.accepted_macro_steps*value.last_macro_dt_s)
+			&& value.flow.internal_substeps >= 0 && std::isfinite(value.flow.inlet_flow), "inconsistent accepted counters or time");
+		auto field = [&](const std::vector<double>& values, std::size_t expected, bool positive) {
+			require(values.size() == expected, "field shape differs");
+			for (double entry : values) require(std::isfinite(entry) && (!positive || entry > 0.0), "invalid field value");
+		};
+		field(value.flow.area, network_.cells, true); field(value.flow.flow, network_.cells, false);
+		field(value.flow.pressure, network_.cells, false); field(value.flow.node_pressure, network_.nodes.size(), false);
+		field(value.flow.segment_flow, network_.segments.size(), false); field(value.segment_radii_m, network_.segments.size(), true);
+		for (std::size_t i = 0; i < network_.segments.size(); ++i)
+			if (!configuration_.physiology.vasodilation) require(value.segment_radii_m[i] == network_.segments[i].radius0, "fixed radius changed");
+		require(value.flow.outlets.size() == flow_state_.outlets.size(), "outlet count differs");
+		for (std::size_t i = 0; i < value.flow.outlets.size(); ++i) {
+			const auto& actual = value.flow.outlets[i]; const auto& expected = flow_state_.outlets[i];
+			require(actual.node == expected.node && actual.kind == expected.kind && actual.resistance == expected.resistance
+				&& actual.proximal_resistance == expected.proximal_resistance && actual.distal_resistance == expected.distal_resistance
+				&& actual.capacitance == expected.capacitance, "outlet model differs");
+			for (double scalar : {actual.pressure, actual.reference_pressure, actual.capacitor_pressure, actual.flow})
+				require(std::isfinite(scalar), "nonfinite outlet state");
+			if (actual.kind != OneDOutletKind::Pressure) require(actual.reference_pressure == expected.reference_pressure, "outlet reference pressure changed");
+		}
+		ValidateVascularInletState(value.last_inlet);
+		require(value.last_inlet.has_flow && Close(value.last_inlet.time_s, value.flow.physical_time), "last inlet clock differs");
+		for (double scalar : value.blood_state) require(std::isfinite(scalar) && scalar >= 0.0, "invalid blood state");
+		require(value.blood_state[0] <= 100.0 && value.blood_state[2] <= 100.0, "invalid hematocrit");
+		require(value.transports.size() == transports_.size(), "transport system count differs");
+		auto outlet_map = [&](const std::map<int, double>& values) {
+			require(values.size() == network_.outlet_nodes.size(), "outlet accounting coverage differs");
+			for (int node : network_.outlet_nodes) { const auto found = values.find(node);
+				require(found != values.end() && std::isfinite(found->second), "invalid outlet accounting entry"); }
+		};
+		std::set<std::string> species_names;
+		for (std::size_t i = 0; i < transports_.size(); ++i) {
+			const auto& actual = value.transports[i]; const auto& expected = transports_[i];
+			require(actual.name == expected.name && actual.species.size() == expected.species.size(), "transport catalog differs");
+			for (std::size_t j = 0; j < actual.species.size(); ++j) {
+				const auto& a = actual.species[j]; const auto& b = expected.species[j]; species_names.insert(b.definition.field);
+				require(a.definition.field == b.definition.field && a.definition.diffusivity == b.definition.diffusivity
+					&& a.definition.reaction_rate == b.definition.reaction_rate && a.definition.volume_source == b.definition.volume_source
+					&& a.wall_kind == b.wall_kind && a.wall_value == b.wall_value && a.wall_coefficient == b.wall_coefficient
+					&& a.exterior_value == b.exterior_value, "species model differs");
+				field(a.concentration, network_.cells, false);
+				for (double scalar : {a.inlet_value, a.root_native_flux, a.step_initial_mass, a.step_root_native_amount, a.step_source_amount})
+					require(std::isfinite(scalar), "nonfinite species boundary state");
+				require(a.inlet_value >= 0.0
+					&& (a.inlet_waveform.empty() || a.inlet_waveform == configured_species_waveforms_.at(b.definition.field)), "invalid species inlet state");
+				require(a.boundary_flux_valid && a.step_accounting_valid, "species accepted accounting is unavailable");
+				outlet_map(a.outlet_native_flux); outlet_map(a.step_outlet_native_amount);
+			}
+		}
+		for (const auto& species : value.last_inlet.species) require(species_names.count(species.first), "unknown last inlet species");
+	}
 	// Capture errors without converting the work lambda to std::function:
 	// such a conversion could allocate before entering the agreement protocol.
 	template<class Work>
@@ -739,6 +880,8 @@ private:
 	int ConfiguredSubsteps(double macro_dt_s) const
 	{
 		const long double ratio = static_cast<long double>(macro_dt_s)/configuration_.time.dt;
+		if (!std::isfinite(ratio) || ratio < 1.0L || ratio > std::numeric_limits<int>::max())
+			throw std::runtime_error("1d macro dt ratio is outside supported range");
 		const long long rounded = std::llround(ratio);
 		if (ratio < 1.0L || rounded < 1 || rounded > std::numeric_limits<int>::max()
 			|| std::abs(ratio-rounded) > 1.0e-12L*std::max(1.0L, std::abs(ratio)))
@@ -780,6 +923,10 @@ private:
 	std::filesystem::path case_directory_;
 	ImplicitAdvance implicit_advance_;
 	FailureAgreement failure_agreement_;
+	std::string checkpoint_identity_sha256_;
+	std::map<std::string, std::string> configured_species_waveforms_;
+	int accepted_macro_steps_ = 0;
+	double last_macro_start_s_ = 0.0, last_macro_dt_s_ = 0.0;
 	OneDFlowState flow_state_;
 	std::vector<OneDTransportState> transports_;
 	VascularInletState last_inlet_;

@@ -19,7 +19,7 @@ serializer／restore 的缺口和 05B／C／D 可執行的後續 gates。
 | graph clock／commit 順序 | 在 domain finalize、donor 發布、accepted result／pressure 更新與 accepted clock 更新全部完成後擷取；使用實際累加時間，保存 domain 自有 counters |
 | pressure-flow／species Aitken | residual／omega 在每次 macro-step 重建；外部下一步 pressure map 必須保存 |
 | donor hysteresis | 保存所有 `(edge,species)` donor；近零 flow 不能由空 map 重算 |
-| 1D | 完整 hydraulic state、substeps、species concentrations／flux／accounting、LastInlet 及 dynamic radius；area0／resistance 可重建，configuration 本身未被 vasodilation 修改 |
+| 1D | 完整 hydraulic state、substeps、species concentrations／flux／accounting、LastInlet 及 dynamic radius；area0／resistance 可重建，另保存 inlet value／waveform 及 physiology／perfusate 的四個 Hct／Hb scalar（05C 補正） |
 | body-fitted 3D | BE 下一步會從 accepted field 複製 previous velocity；transport 的 `previous_` 是每步重建的 matrix，真正持久化欄位為 concentration 與 step counter |
 | 0D／outlet／VCA | 保存 pressure storage、RCR capacitor、accepted ports／accounting、reservoir 與 last arterial species；輸出帳目不能用當前狀態猜測 |
 | immersed／moving | owned fields、controllers／gauge／clock、material source topology／kinematics、predecessor publication provenance、conservation primitives；trial extension／force 按下一步重建 |
@@ -74,3 +74,11 @@ sync、完成標記最後發布，以及混 epoch／截斷／缺片／錯配置�
 加入 immersed／moving／FSI 的 publication 與 repartition 恢復。
 
 契約第 6 節列出的所有 restart／故障／效能 gates 仍待上述實作後執行，未在本次勾選。
+
+## 05C 實作時的盤點補正
+
+2026-09-09：`ApplyOneDVasodilation` 使用 const configuration，但
+`ApplyOneDCoupledInlet` 會修改 physiology／perfusate 的 Hct／Hb，並更新 species
+inlet value、清除 waveform。先前從 vasodilation 單一函式推論「沒有其他 mutable
+configuration state」不完整。狀態契約已補正；新增的恢復測試包含後續入口省略
+Hct／species，確認仍保存此前變動，見 [1D 進度](HPC_05C_ONE_D_STATE_PROGRESS.md)。
