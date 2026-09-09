@@ -258,3 +258,5 @@ pressure_flow_collective_failure_test species_collective_failure_test: tests/Abo
 
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../cpu/include/ImmersedDistributedNewtonRuntime.hpp
+
+iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedDomain.hpp

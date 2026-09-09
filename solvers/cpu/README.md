@@ -49,8 +49,11 @@ committed/prepared fields with a transactional accepted clock. Frozen history
 survives Newton rollback; `AbortTrial` releases it before changing controls.
 The [runtime regression](../../docs/progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)
 covers two accepted steps, field/conservation parity, failures, split groups,
-and weighted work partitions. Transient case/graph integration remains pending;
-transient/moving entry restrictions still apply.
+and weighted work partitions.
+`ThreeDImmersedTransientDistributedFlowDomain` supplies graph transactions that
+restore accepted controls and discard frozen trial inputs before coupling retry;
+see the [adapter regression](../../docs/progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md).
+Transient case/native-graph integration remains pending; entry restrictions still apply.
 
 | Executable | Purpose |
 | --- | --- |
