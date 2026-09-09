@@ -1,4 +1,7 @@
 #include "CheckedText.hpp"
+#include "GraphAcceptedHistory.hpp"
+#include "NativeGraphCheckpoint.hpp"
+#include "NativeGraphCheckpointSignal.hpp"
 #include "ExecutionResources.hpp"
 #include "MultidomainRunner.hpp"
 #include "CollectiveFailure.hpp"
@@ -62,6 +65,9 @@ struct Options {
 	fs::path output_directory;
 	int stop_after_step = 0;
 	int maximum_newton = kMaximumNewtonIterations;
+	fs::path checkpoint_directory, restart_directory;
+	int checkpoint_every = 1;
+	bool checkpoint_interval_explicit = false;
 };
 
 int PositiveInteger(const std::string& text, const std::string& option)
@@ -81,10 +87,22 @@ Options ParseOptions(int argc, char** argv)
 	for (int i = 1; i < argc; ++i) {
 		const std::string argument(argv[i]);
 		if (argument == "--graph-case" || argument == "--output-dir"
-			|| argument == "--stop-after-step" || argument == "--three-d-max-newton") {
+			|| argument == "--stop-after-step" || argument == "--three-d-max-newton"
+			|| argument == "--checkpoint-dir" || argument == "--restart-dir" || argument == "--checkpoint-every") {
 			if (++i >= argc) throw std::runtime_error(argument+" requires a value");
 			if (argument == "--graph-case") options.graph_case = argv[i];
 			else if (argument == "--output-dir") options.output_directory = argv[i];
+			else if (argument == "--checkpoint-dir") {
+				options.checkpoint_directory = argv[i];
+				if (options.checkpoint_directory.empty()) throw std::runtime_error("--checkpoint-dir requires a nonempty path");
+			}
+			else if (argument == "--restart-dir") {
+				options.restart_directory = argv[i];
+				if (options.restart_directory.empty()) throw std::runtime_error("--restart-dir requires a nonempty path");
+			}
+			else if (argument == "--checkpoint-every") {
+				options.checkpoint_every = PositiveInteger(argv[i], argument); options.checkpoint_interval_explicit = true;
+			}
 			else if (argument == "--stop-after-step")
 				options.stop_after_step = PositiveInteger(argv[i], argument);
 			else options.maximum_newton = PositiveInteger(argv[i], argument);
@@ -99,7 +117,10 @@ Options ParseOptions(int argc, char** argv)
 	}
 	if (options.graph_case.empty() || options.output_directory.empty())
 		throw std::runtime_error("usage: iga_1d_3d_bifurcation --graph-case ROOT "
-			"--output-dir DIR [--stop-after-step N] [--three-d-max-newton N] [PETSc options]");
+			"--output-dir DIR [--stop-after-step N] [--three-d-max-newton N] "
+			"[--checkpoint-dir ROOT] [--checkpoint-every N] [--restart-dir ROOT] [PETSc options]");
+	if (options.checkpoint_interval_explicit && options.checkpoint_directory.empty())
+		throw std::runtime_error("--checkpoint-every requires --checkpoint-dir");
 	return options;
 }
 
@@ -273,7 +294,7 @@ void RequireOneDStagedTransport(const iga::OneDConfiguration& configuration,
 NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
 	const std::string& domain_id, bool species_mode, MPI_Comm communicator,
-	const std::string& configuration_text)
+	const std::string& configuration_text, const std::string& checkpoint_identity = {})
 {
 	const auto& definition = iga::GraphDomainDefinitionFor(graph, domain_id);
 	const auto case_directory = assets.at(domain_id).case_directory;
@@ -300,7 +321,7 @@ NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 			iga::CollectiveLocalStage(communicator, stage, [&] {
 				if (error) std::rethrow_exception(error);
 			});
-		});
+		}, checkpoint_identity);
 	(void)iga::MakeOneDSubcyclingPlan(configuration.time.dt, configuration.time.steps,
 		graph.time.dt_s, graph.time.steps);
 	const double seed = iga::EvaluateOneDInlet(runtime->Configuration(),
@@ -439,28 +460,8 @@ std::unique_ptr<NativeThreeD> BuildThreeDPreflight(
 	return native;
 }
 
-struct AcceptedStep {
-	int step = 0;
-	double time_s = 0.0;
-	int iterations = 0;
-	double three_d_mass_m3_s = 0.0;
-	double external_outward_flow_m3_s = 0.0;
-	std::map<std::string, std::pair<double, double>> three_d_balance;
-	std::map<std::string, iga::ZeroDFlowState> zero_d_states;
-	std::map<std::string, iga::ZeroDFlowStepAccounting> zero_d_accounting;
-	iga::PressureFlowStepResult result;
-};
-
-struct AcceptedSpeciesStep {
-	int step = 0;
-	double time_s = 0.0;
-	int hydraulic_iterations = 0;
-	double three_d_mass_m3_s = 0.0;
-	double external_outward_flow_m3_s = 0.0;
-	std::map<std::string, std::pair<double, double>> three_d_balance;
-	std::map<iga::PortRef, iga::PortState> transport_ports;
-	iga::SpeciesPressureFlowStepResult result;
-};
+using AcceptedStep = iga::GraphAcceptedFlowStep;
+using AcceptedSpeciesStep = iga::GraphAcceptedSpeciesStep;
 
 void WriteOutputs(const fs::path& directory,
 	const iga::MultidomainConfiguration& configuration,
@@ -819,15 +820,19 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			options = ParseOptions(argc, argv);
 			injected_failure_step = FailureInjectionStep();
 			execution_controls = std::to_string(options.stop_after_step)+"\n"
-				+std::to_string(options.maximum_newton)+"\n"+std::to_string(injected_failure_step);
+				+std::to_string(options.maximum_newton)+"\n"+std::to_string(injected_failure_step)
+				+"\n"+options.checkpoint_directory.generic_string()+"\n"+options.restart_directory.generic_string()
+				+"\n"+std::to_string(options.checkpoint_every);
 			// These application arguments are checked separately and are not
 			// read by KSP/PC. options_file is an already-loaded input location;
 			// its resulting entries, including prefixed/unused options, agree.
 			application_options = {"--graph-case", "--output-dir", "--stop-after-step",
-				"--three-d-max-newton", "-options_file"};
+				"--three-d-max-newton", "--checkpoint-dir", "--checkpoint-every", "--restart-dir", "-options_file"};
 		});
 		iga::RequireCollectiveSameText(communicator, "graph execution controls", execution_controls);
 		iga::RequireCollectivePetscOptions(communicator, nullptr, application_options);
+		std::optional<iga::NativeGraphCheckpointSignal> checkpoint_signal;
+		if (!options.checkpoint_directory.empty()) iga::CollectiveLocalStage(communicator, "graph checkpoint signal handler", [&] { checkpoint_signal.emplace(); });
 		std::map<std::string, std::string> input_texts;
 		std::optional<iga::MultidomainConfiguration> configuration_holder;
 		std::optional<iga::PressureFlowComponentPlan> plan_holder;
@@ -913,6 +918,17 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			}
 		});
 		iga::RequireCollectiveAssetFiles(communicator, input_assets);
+		const bool checkpoint_enabled = !options.checkpoint_directory.empty() || !options.restart_directory.empty();
+		iga::CoupledCheckpointCompatibility checkpoint_identity;
+		if (checkpoint_enabled) {
+			iga::CollectiveLocalStage(communicator, "graph checkpoint capability", [&] {
+				for (const auto& domain : configuration_holder->domains)
+					if (domain.kind != iga::DomainKind::OneDFlow && domain.kind != iga::DomainKind::ThreeDBodyFittedFlow && domain.kind != iga::DomainKind::ZeroDFlow)
+						throw std::runtime_error("native checkpoint currently supports 0D, 1D and body-fitted 3D graph domains");
+			});
+			checkpoint_identity = iga::BuildNativeGraphCheckpointIdentity(communicator, input_texts, input_assets, application_options, options.maximum_newton,
+				{kNonlinearRelativeTolerance, kNonlinearAbsoluteTolerance, kMassRelativeTolerance});
+		}
 		iga::CollectiveLocalStage(communicator, "graph 1D initialization", [&] {
 			const bool species_mode = configuration_holder->schema_version == 6;
 			for (const auto& domain_id : plan_holder->domain_order) {
@@ -932,7 +948,8 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						"1D inlet policy does not match its directed graph role");
 				one_d.emplace(domain_id,
 					BuildOneD(*configuration_holder, assets, domain_id, species_mode, communicator,
-						input_texts.at("domain configuration "+domain_id)));
+						input_texts.at("domain configuration "+domain_id),
+						checkpoint_enabled ? iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "one-d") : ""));
 			}
 		});
 
@@ -1006,12 +1023,19 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			if (!three_d.count(domain_id)) continue;
 			auto& native = *three_d.at(domain_id);
 			const auto& flow = iga::FirstNavierStokesSystem(native.configuration);
+			std::string flow_identity, transport_identity;
+			iga::CollectiveLocalStage(communicator, "graph checkpoint domain identities", [&] {
+				if (checkpoint_enabled) {
+					flow_identity = iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "flow");
+					transport_identity = iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "transport");
+				}
+			});
 			native.runtime = iga::AllocateCollectiveRuntime<iga::TransientFlowRuntime>(communicator, *native.database,
 				communicator, true, true,
 				iga::NavierStokesParameters{flow.density, flow.viscosity,
 					native.configuration.time.dt}, native.initial_boundaries,
 				native.mesh.labels, native.boundary_velocity, native.wall_trace_basis,
-				std::move(native.outlet_models), application_options);
+				std::move(native.outlet_models), application_options, flow_identity, configuration.time.dt_s);
 			iga::RequireValidGeometry(native.runtime->Elements(), rank, communicator);
 			for (const auto& port : configuration.graph.Domain(domain_id).ports) {
 				int label = 0;
@@ -1081,7 +1105,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				native.transport_runtime = iga::AllocateCollectiveRuntime<iga::TransientTransportRuntime>(communicator,
 					*native.database, communicator, native.configuration,
 					*native.transport_system, native.mesh.labels,
-					std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, application_options);
+					std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, application_options, transport_identity);
 				iga::RuntimeConstructionStage(communicator, "graph transport node agreement", [&] {
 					if (native.runtime->RequiredNodes() != native.transport_runtime->RequiredNodes())
 						throw std::runtime_error(
@@ -1215,7 +1239,34 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 		// committed by the preceding context.  Do not reconstruct it as n*dt:
 		// exact-clock runtimes deliberately reject that different rounding.
 		double accepted_time_s = 0.0;
-		for (int step = 1; step <= final_step; ++step) {
+		long long first_step = 1;
+		std::string previous_checkpoint;
+		std::unique_ptr<iga::NativeGraphCheckpoint> checkpoint;
+		if (checkpoint_enabled) {
+			iga::NativeGraphCheckpointOwners owners;
+			iga::CollectiveLocalStage(communicator, "graph checkpoint owner catalog", [&] {
+				for (const auto& item : one_d) owners.one_d.emplace(item.first, item.second.runtime.get());
+				for (const auto& item : three_d) {
+					owners.flow.emplace(item.first, item.second->runtime.get());
+					if (item.second->transport_runtime) owners.transport.emplace(item.first, item.second->transport_runtime.get());
+				}
+				owners.zero_d = zero_d;
+			});
+			checkpoint = iga::AllocateCollectiveRuntime<iga::NativeGraphCheckpoint>(communicator, communicator,
+				configuration.graph, checkpoint_identity, std::move(owners), bool(species_executor));
+			if (!options.restart_directory.empty()) {
+				iga::PressureFlowCheckpointControls restored;
+				const auto epoch = checkpoint->Restore(options.restart_directory, final_step, configuration.time.dt_s,
+					restored, accepted, accepted_species, species_executor.get());
+				iga::CollectiveLocalStage(communicator, "graph checkpoint activation", [&] {
+					pressure = std::move(restored.next_pressure_pa); accepted_time_s = epoch.time_s;
+					first_step = static_cast<long long>(epoch.accepted_steps)+1; previous_checkpoint = epoch.id;
+					if (rank == 0) { std::cout << "restored graph checkpoint step=" << epoch.accepted_steps << " epoch=" << epoch.id << '\n'; iga::FlushCheckedText(std::cout); }
+				});
+			}
+		}
+		for (long long step_number = first_step; step_number <= final_step; ++step_number) {
+			const int step = static_cast<int>(step_number);
 			const iga::DomainStepContext step_context{step-1, accepted_time_s,
 				configuration.time.dt_s};
 			const double time = step_context.EndTime();
@@ -1292,6 +1343,29 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			// accepted-result bookkeeping have completed.  A failed trial or
 			// precommit callback therefore leaves this accepted clock unchanged.
 			accepted_time_s = step_context.EndTime();
+			int stop_requested = 0;
+			if (checkpoint_signal) {
+				const int local_request = checkpoint_signal->Requested();
+				MPI_Allreduce(&local_request, &stop_requested, 1, MPI_INT, MPI_MAX, communicator);
+			}
+			if (checkpoint && !options.checkpoint_directory.empty() && (step % options.checkpoint_every == 0 || step == final_step || stop_requested)) {
+				iga::PressureFlowCheckpointControls saved;
+				iga::CollectiveLocalStage(communicator, "graph checkpoint accepted controls", [&] {
+					saved = species_executor
+						? iga::MakePressureFlowCheckpointControls(step_context, accepted_species.back().result.hydraulic_iterations.back(), species_executor->CaptureCheckpointDonors())
+						: iga::MakePressureFlowCheckpointControls(step_context, accepted.back().result.iterations.back());
+				});
+				const auto epoch = checkpoint->Save(options.checkpoint_directory, step_context, saved, accepted, accepted_species, previous_checkpoint);
+				iga::CollectiveLocalStage(communicator, "graph checkpoint completion", [&] {
+					previous_checkpoint = epoch.id;
+					if (rank == 0) {
+						std::cout << "saved graph checkpoint step=" << epoch.accepted_steps << " epoch=" << epoch.id << '\n';
+						if (stop_requested) std::cout << "stopped after checkpoint request step=" << step << '\n';
+						iga::FlushCheckedText(std::cout);
+					}
+				});
+			}
+			if (stop_requested) break;
 		}
 
 		for (auto& entry : three_d) {
@@ -1335,7 +1409,14 @@ int main(int argc, char** argv)
 {
 	PetscInitialize(&argc, &argv, nullptr,
 		"TubularFlowIGA multidomain coupling\n");
-	const int status = iga::RunMultidomainFlow(argc, argv, PETSC_COMM_WORLD);
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
+	int rank = 0, ranks = 1; MPI_Comm_rank(PETSC_COMM_WORLD, &rank); MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
+	int status = iga::RunMultidomainFlow(argc, argv, PETSC_COMM_WORLD);
+	try {
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "graph profile output", [&] {
+			iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, status); iga::FlushCheckedText(std::cout);
+		});
+	} catch (const std::exception& error) { if (rank == 0) std::cerr << error.what() << '\n'; status = 1; }
 	PetscFinalize();
 	return status;
 }

@@ -307,6 +307,12 @@ graph root containing `simulation_config.json` and its referenced native case
 assets. Its output directory must not already exist. For body-fitted domains,
 each packed database must match the MPI rank count.
 
+For native 0D/1D/body-fitted 3D graphs, `--checkpoint-dir ROOT` saves accepted
+steps and `--restart-dir ROOT` restores a complete checkpoint in a new MPI job.
+Use the same inputs, build, rank membership, and numerical options. See
+[graph restart](docs/COUPLED_RESTART.md) for save intervals, complete history
+output, and `SIGUSR1` handling at an accepted-step boundary.
+
 `SimulationGraph` validates topology and port capabilities;
 `DomainRuntimeRegistry` owns the native runtimes. Component executors exchange
 boundary data, converge trial states, and prepare every domain before

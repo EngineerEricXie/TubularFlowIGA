@@ -2,7 +2,8 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-05C 已加入貼體 3D 分片及新 MPI 作業的恢復驗收；
+最近更新：2026-09-09。HPC-05C 已接入完整 native graph／CLI，通過新作業續跑、
+三種中斷、1／2／4 ranks 與獨立子群；大型與跨節點排程驗收仍待完成。
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -100,6 +101,7 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 |---|---|---|
 | HPC-01C | F01／F03／F04 與 F02 的 CPU／1D／耦合／四個序列工具已驗證；CUDA stdout 亦已驗證；F05 診斷亦已驗證；接續 F06 完整入口覆蓋 | [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)、[本輪串行工具與 FSI 驗收](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | HPC-01D | 剩餘 embedding／工具入口、PETSc 型別、配置與後端能力矩陣；CUDA 啟動檢查已補入 | [資源檢查進度](progress/HPC_01D_PROGRESS.md)、[工具進度](progress/HPC_01CD_TOOLS_PROGRESS.md)、[CUDA 進度](progress/HPC_01D_CUDA_PROGRESS.md) |
+| HPC-05C | native graph／providers／完整歷史／CLI 的單機驗收完成；接續大型及跨節點 allocation 的 checkpoint／訊號轉送驗收 | [完整 graph 進度](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)、[使用說明](COUPLED_RESTART.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
 Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
@@ -573,8 +575,13 @@ F05 的原始診斷例外保存與恢復亦通過，見
   groups 精確接續，局部錯誤在發布前全群拒絕。另完成
   [3D 分片與新作業恢復](progress/HPC_05C_BODY_FITTED_BUNDLE_PROGRESS.md)：三種模式
   在新的三 rank 作業精確接續，寫分片中與 manifest 發布前終止後都回退到完整世代；
-  24 MiB 串流、910 個 codec 拒絕及 sanitizer 通過。1D／3D graph provider wiring、
-  完整歷史 prefix 與 native CLI／MPI graph 整合尚待完成。
+  24 MiB 串流、910 個 codec 拒絕及 sanitizer 通過。現已完成
+  [完整 native graph 整合](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)：providers、
+  來源／輸入／執行身分、完整 history prefix、CLI 與 accepted-step SIGUSR1 保存；
+  七種案例／方法、三個中斷點、1／2／4 ranks 及 split 1＋2 均通過新作業恢復。
+  所有輸出與分片 payload 精確一致，I/O／fsync／各 rank RSS 另行記錄。
+  依狀態契約的規模驗收要求，大型 graph／實際跨節點與 scheduler 訊號轉送仍待
+  compute allocation 驗收，故保持未勾選；操作見 [graph restart](COUPLED_RESTART.md)。
 - [ ] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。

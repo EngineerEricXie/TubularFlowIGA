@@ -130,6 +130,10 @@ communication phases 另存於 `measurements.json`，不重複加總 nested tota
 
 ## 剩餘工作
 
+後續更新：下列 native graph wiring／歷史／CLI 工作已由
+[完整 graph 整合](HPC_05C_NATIVE_GRAPH_PROGRESS.md) 接續完成單機驗收；
+原始段落保留本批完成時的範圍，大型／跨節點仍待排程驗收。
+
 下一步接入 0D／1D／3D native graph providers、完整 configuration／execution identity、
 accepted history prefix、pressure guess／donor 與全作業 candidate publication，加入
 CLI 保存／恢復與 commit 前中斷驗收。此批的 fixture identity 涵蓋輸入 bytes 與模式，

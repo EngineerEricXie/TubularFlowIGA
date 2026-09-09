@@ -1,13 +1,14 @@
 # 耦合 checkpoint 狀態契約
 
-狀態：HPC-05A 已完成的介面與狀態稽核；**本文件定義待實作的契約，並不表示
-graph 已可 checkpoint／restart**。程式基準為
+狀態：HPC-05A 已完成的介面與狀態稽核。下文缺口盤點保留原始程式基準
 `70b1715992912871eebb4a6458634bedb1b9a542`，2026-09-09。
 實作與驗收分別由 [HPC-05B／C／D](../WORKSTATION_HPC_TODO.md) 承接。
 更新：05B 已交付 [bundle v1 發布／載入元件](COUPLED_CHECKPOINT_BUNDLE.md)；
-以下 domain payload／restore 與完整 graph 續跑仍由 05C／D 實作。
-05C 已補上 [0D 與 pressure／donor state 的首批介面](../progress/HPC_05C_ACCEPTED_STATE_PROGRESS.md)；
-下文的程式缺口盤點以開頭的原始基準 revision 為準，最新交付見該進度報告。
+05C 已接入 0D／1D／貼體 3D payload、完整 graph histories、native CLI 與新的 MPI
+作業恢復。最新實作及 1／2／4-rank、split、fault／SIGUSR1 驗收見
+[native graph 進度](../progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md) 與
+[使用說明](../COUPLED_RESTART.md)。大型／跨節點驗收未完成，05C 保持部分完成；
+其他 runtime 與重分區由 05D 接續。不能將下文原始缺口當作目前完成狀態。
 
 ## 1. 唯一可保存的邊界
 

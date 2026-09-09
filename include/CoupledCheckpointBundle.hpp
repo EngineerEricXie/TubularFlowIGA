@@ -21,6 +21,8 @@ namespace coupled_checkpoint_detail {
 #ifdef IGA_COUPLED_CHECKPOINT_TESTING
 inline bool fail_next_sync = false;
 inline bool fail_next_write = false;
+inline std::function<void(const CoupledCheckpointEpoch&, const CoupledCheckpointShardSpec&, int)> before_shard_payload;
+inline std::function<void(const CoupledCheckpointEpoch&)> before_manifest_publication;
 #endif
 
 class Descriptor {
@@ -200,7 +202,11 @@ CoupledCheckpointShard WriteCoupledCheckpointShard(const std::filesystem::path& 
 	auto parent = Root(root); auto directory = Directory(parent.Get(), epoch.id); RequireUnpublished(directory.Get());
 	const auto temporary = spec.id+".tmp"; auto file = Output(directory.Get(), temporary);
 	const auto header = ShardHeader(epoch.id, spec, bytes); Write(file.Get(), header.data(), header.size());
-	CoupledCheckpointShardOutput output(file.Get(), bytes, header); std::forward<Writer>(writer)(output);
+	CoupledCheckpointShardOutput output(file.Get(), bytes, header);
+#ifdef IGA_COUPLED_CHECKPOINT_TESTING
+	if (before_shard_payload) before_shard_payload(epoch, spec, file.Get());
+#endif
+	std::forward<Writer>(writer)(output);
 	Require(output.Remaining() == 0, "writer omitted declared payload bytes"); file.Sync(); file.Close();
 	PublishFile(directory, temporary, spec.id+".shard"); return {spec, bytes, output.Sha256Hex()};
 }
@@ -226,6 +232,7 @@ inline CoupledCheckpointManifest PublishCoupledCheckpoint(const std::filesystem:
 #ifdef IGA_COUPLED_CHECKPOINT_TESTING
 	// Test binaries can terminate the whole writer after every file is durable
 	// but before the completion marker exists. Never enabled in production.
+	if (before_manifest_publication) before_manifest_publication(epoch);
 	if (std::getenv("IGA_CHECKPOINT_EXIT_BEFORE_MANIFEST")) ::_exit(86);
 #endif
 	PublishFile(directory, "manifest.tmp", "manifest"); return result;

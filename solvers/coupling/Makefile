@@ -205,6 +205,7 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
+	$(RM) graph_checkpoint_history_test native_graph_checkpoint_fault_test native_graph_checkpoint_fixture_test native_graph_checkpoint_groups_test
 	$(RM) zero_d_checkpoint_test
 	$(RM) coupled_checkpoint_bundle_test
 	$(RM) graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test
@@ -277,3 +278,23 @@ iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../cpu/in
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedDomain.hpp
 
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp ../cpu/include/ImmersedTransientDistributedRuntime.hpp ../cpu/include/ImmersedTransientDistributedOperator.hpp ../cpu/include/ImmersedDistributedTransientVolume.hpp ../cpu/include/ImmersedDistributedVelocityHistory.hpp ../cpu/include/ImmersedTransientFlowRuntime.hpp ../cpu/include/ImmersedTransientState.hpp
+
+# Native checkpoint codecs are shared by both graph entry points and embedded tests.
+NATIVE_CHECKPOINT_TARGETS := iga_1d_3d_bifurcation iga_multidomain_flow native_graph_checkpoint_fault_test native_graph_checkpoint_groups_test
+NATIVE_CHECKPOINT_SOURCE_SHA256 = $(shell python3 ../../scripts/native_checkpoint_source_identity.py)
+$(NATIVE_CHECKPOINT_TARGETS): CPPFLAGS += -DIGA_NATIVE_CHECKPOINT_SOURCE_SHA256='"$(NATIVE_CHECKPOINT_SOURCE_SHA256)"'
+$(NATIVE_CHECKPOINT_TARGETS): Makefile ../../scripts/native_checkpoint_source_identity.py $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/NativeGraphCheckpoint.hpp $(wildcard ../../include/*Checkpoint*.hpp ../../include/GraphAcceptedHistory.hpp ../cpu/include/*Checkpoint*.hpp ../one_d/include/*Checkpoint*.hpp)
+
+graph_checkpoint_history_test: tests/test_graph_checkpoint_history.cpp ../../include/GraphAcceptedHistory.hpp ../../include/CheckpointRecordStream.hpp ../../include/CheckpointMetadataCodec.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+
+native_graph_checkpoint_fault_test: tests/test_native_graph_checkpoint_fault.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+native_graph_checkpoint_fixture_test: tests/test_native_graph_checkpoint_fixture.cpp tests/test_multidomain_flow_smoke.cpp tests/test_bifurcation_coupling_smoke.cpp ../cpu/include/IgaDatabase.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_graph_checkpoint_groups_test: tests/test_native_graph_checkpoint_groups.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_native_graph_checkpoint_groups.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
