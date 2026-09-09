@@ -2,6 +2,7 @@
 #define IGA_ONE_D_TRANSPORT_HPP
 
 #include "OneDFlow.hpp"
+#include <exception>
 
 #include <algorithm>
 #include <cmath>
@@ -365,13 +366,21 @@ inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 					throw std::runtime_error("reversed 1d outlet flow requires a supplied concentration for species '"
 						+species.definition.field+"'");
 		}
+	// One slot per species: workers never race on exception storage. Exceptions
+	// must not leave an OpenMP region, even when it executes with one thread.
+	std::vector<std::exception_ptr> errors(transport.species.size());
 	#ifdef _OPENMP
 	#pragma omp parallel for schedule(static) if(transport.species.size() >= 4)
 	#endif
-	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i)
-		AdvanceOneDSpecies(configuration, network, flow,
-			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt,
-			initial_area, root_concentrations, outlet_concentrations, root_ownership);
+	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i) {
+		try {
+			AdvanceOneDSpecies(configuration, network, flow,
+				transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt,
+				initial_area, root_concentrations, outlet_concentrations, root_ownership);
+		} catch (...) { errors[static_cast<std::size_t>(i)] = std::current_exception(); }
+	}
+	for (const auto& error : errors)
+		if (error) std::rethrow_exception(error);
 }
 
 inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportState>& transports,

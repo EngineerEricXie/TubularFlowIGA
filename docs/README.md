@@ -15,6 +15,10 @@ vascular and neuron workflows. Then choose the document matching the task:
 | Run on PSC Bridges-2 | [BRIDGES2.md](BRIDGES2.md) |
 | Review mesh correctness evidence | [MESH_CPP_VALIDATION.md](MESH_CPP_VALIDATION.md) |
 | Review performance measurements | [BENCHMARKS.md](BENCHMARKS.md) |
+| Plan workstation multicore and HPC development with staged goals | [WORKSTATION_HPC_TODO.md](WORKSTATION_HPC_TODO.md) |
+| Check parallel node, element, halo, and surface ownership contracts | [PARALLEL_OWNERSHIP.md](architecture/PARALLEL_OWNERSHIP.md) |
+| Audit MPI failure boundaries, native tests, and remaining reliability gaps | [MPI_FAILURE_BOUNDARIES.md](architecture/MPI_FAILURE_BOUNDARIES.md) |
+| Record HPC provenance and repeat CPU MPI, serial fixture, and GPU benchmarks | [HPC_BENCHMARKS.md](HPC_BENCHMARKS.md) |
 
 Implementation-specific guides live next to their code:
 

@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <array>
+#include "PetscPhaseProfile.hpp"
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -161,6 +163,7 @@ public:
 		const CutCellGhostPenaltyCatalog& ghost, ImmersedStaticFlowOptions options = {})
 		: domain_(domain), volume_(volume), surface_(surface), ghost_(ghost), options_(std::move(options))
 	{
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		if (!options_.wall_velocity || !options_.body_force || !std::isfinite(options_.parameters.density) || !(options_.parameters.density > 0.0)
 			|| !std::isfinite(options_.parameters.dynamic_viscosity) || !(options_.parameters.dynamic_viscosity > 0.0)
 			|| !std::isfinite(options_.parameters.dt) || options_.parameters.dt != 0.0 || !std::isfinite(options_.wall_gamma0)
@@ -302,6 +305,7 @@ public:
 	// 64-node element and <=80-node face blocks supplied by the catalog APIs.
 	void Assemble()
 	{
+		PhaseScope assembly_phase(ProfilePhase::Assembly);
 		const auto assembly_start = std::chrono::steady_clock::now();
 		ValidateAllFlowCompatibility();
 		Check(MatZeroEntries(jacobian_), "MatZeroEntries"); Check(VecSet(rhs_, 0.0), "VecSet rhs");
@@ -355,8 +359,11 @@ public:
 		}
 		Check(MatAssemblyBegin(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyBegin physical"); Check(MatAssemblyEnd(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyEnd physical");
 		Check(VecAssemblyBegin(rhs_), "VecAssemblyBegin physical"); Check(VecAssemblyEnd(rhs_), "VecAssemblyEnd physical");
-		MeasurePorts();
-		MeasureConstantPressureDefect();
+		{
+			PhaseScope diagnostics_phase(ProfilePhase::Diagnostics);
+			MeasurePorts();
+			MeasureConstantPressureDefect();
+		}
 		if (options_.assemble_gauge && HasGauge()) InsertGauge();
 		Check(MatAssemblyBegin(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyBegin gauge"); Check(MatAssemblyEnd(jacobian_, MAT_FINAL_ASSEMBLY), "MatAssemblyEnd gauge");
 		Check(VecAssemblyBegin(rhs_), "VecAssemblyBegin gauge"); Check(VecAssemblyEnd(rhs_), "VecAssemblyEnd gauge");
@@ -391,7 +398,7 @@ public:
 				Check(VecCopy(rhs_, action_input_), "VecCopy linear right hand side");
 				Check(KSPSetOperators(ksp_, jacobian_, jacobian_), "KSPSetOperators");
 				const auto linear_solve_start = std::chrono::steady_clock::now();
-				Check(KSPSolve(ksp_, rhs_, update_), "KSPSolve");
+				Check(SolveProfiledKsp(ksp_, rhs_, update_), "KSPSolve with explicit setup");
 				const double linear_solve_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_solve_start).count();
 				if (!std::isfinite(linear_solve_elapsed) || linear_solve_elapsed < 0.0) throw std::runtime_error("immersed static-flow linear-solve timing is invalid");
 				diagnostics_.last_linear_solve_seconds = linear_solve_elapsed;

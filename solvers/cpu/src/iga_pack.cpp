@@ -1,6 +1,7 @@
 #include "IgaDatabase.hpp"
 #include "IgaPreprocessCache.hpp"
 #include "MeshConfig.hpp"
+#include "CheckedText.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,6 +30,7 @@ T Next(std::istream& in, const char* file, std::uint64_t element, const char* fi
 	T value{};
 	if (!(in >> value)) {
 		std::ostringstream msg;
+		msg.exceptions(std::ios::badbit | std::ios::failbit);
 		msg << file << " is truncated or malformed at element " << element << " (" << field << ')';
 		throw std::runtime_error(msg.str());
 	}
@@ -136,12 +138,13 @@ iga::GeometryTransform GeometryTransform(const ControlMesh& mesh, const fs::path
 	const auto configuration_path=directory/"simulation_config.json";
 	if(fs::exists(configuration_path)) {
 		std::ifstream input(configuration_path);
-		std::ostringstream contents;contents<<input.rdbuf();
+		if (!input) throw std::runtime_error("cannot open mesh configuration: "+configuration_path.string());
+		const auto contents = iga::ReadCheckedText(input);
 		const auto root=iga::config_detail::RequireObject(
-			iga::config_detail::JsonParser(contents.str()).Parse(),"root");
+			iga::config_detail::JsonParser(contents).Parse(),"root");
 		if(const auto* version=iga::config_detail::Find(root,"schema_version"))
 			if(iga::config_detail::RequireInteger(*version,"schema_version")==4)
-				length_scale_to_m=iga::ParseThreeDMeshCaseConfiguration(contents.str())
+				length_scale_to_m=iga::ParseThreeDMeshCaseConfiguration(contents)
 					.geometry.length_scale_to_m;
 	}
 	return {lower,scale,length_scale_to_m};
@@ -406,6 +409,7 @@ int main(int argc, char** argv)
 		iga::Write(out, rank_index_offset);
 		out.close();
 		std::cout << "wrote " << output << " with " << elements << " validated elements for " << ranks << " ranks\n";
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& e) {
 		std::cerr << "iga_pack: " << e.what() << '\n';

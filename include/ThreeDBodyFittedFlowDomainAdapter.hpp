@@ -78,68 +78,77 @@ public:
 
 	void BeginStep(const DomainStepContext& step) override
 	{
-		step.Validate();
-		step_ = step;
-		inputs_.clear();
+		CollectiveLocalStage(runtime_.Communicator(), "3d flow adapter begin preparation", [&] { step.Validate(); });
 		runtime_.BeginStep(step.step_index, step.EndTime(), controls_.maximum_newton,
 			controls_.nonlinear_relative_tolerance, controls_.nonlinear_absolute_tolerance,
 			controls_.mass_relative_tolerance);
+		step_ = step;
+		inputs_.clear();
 	}
 
 	void SetPortInput(const std::string& port_id,
 		const PortBoundaryData& input) override
 	{
-		if (runtime_.Phase() != FlowStepPhase::TrialReady)
-			throw std::runtime_error("3D domain adapter input requires an active trial-ready step");
-		const auto& port = Port(port_id);
-		ValidatePortBoundaryData(input);
-		const auto time_scale = std::max({1.0, std::abs(step_.EndTime()), std::abs(input.time_s)});
-		if (std::abs(input.time_s-step_.EndTime()) > 1.0e-12*time_scale)
-			throw std::runtime_error("3D domain adapter input time does not match the active step");
-		const int supplied = static_cast<int>(input.outward_flow_m3_s.has_value())
-			+static_cast<int>(input.mean_pressure_pa.has_value())
-			+static_cast<int>(input.mean_normal_traction_pa.has_value())
-			+static_cast<int>(input.total_pressure_pa.has_value());
-		if (supplied != 1 || !input.concentration.empty() || !input.outward_species_flux.empty())
-			throw std::runtime_error("3D flow domain input requires exactly one flow or pressure quantity");
-		if ((input.outward_flow_m3_s && !port.requires.count(PortQuantity::FlowRate))
-			|| (input.mean_pressure_pa && !port.requires.count(PortQuantity::MeanPressure))
-			|| (input.mean_normal_traction_pa
-				&& !port.requires.count(PortQuantity::MeanNormalTraction))
-			|| input.total_pressure_pa)
-			throw std::runtime_error("3D flow domain input quantity is not required by its port");
-		inputs_[port_id] = input;
+		decltype(inputs_) candidate;
+		CollectiveLocalStage(runtime_.Communicator(), "3d flow adapter input", [&] {
+			candidate = inputs_;
+			if (runtime_.Phase() != FlowStepPhase::TrialReady)
+				throw std::runtime_error("3D domain adapter input requires an active trial-ready step");
+			const auto& port = Port(port_id);
+			ValidatePortBoundaryData(input);
+			const auto time_scale = std::max({1.0, std::abs(step_.EndTime()), std::abs(input.time_s)});
+			if (std::abs(input.time_s-step_.EndTime()) > 1.0e-12*time_scale)
+				throw std::runtime_error("3D domain adapter input time does not match the active step");
+			const int supplied = static_cast<int>(input.outward_flow_m3_s.has_value())
+				+static_cast<int>(input.mean_pressure_pa.has_value())
+				+static_cast<int>(input.mean_normal_traction_pa.has_value())
+				+static_cast<int>(input.total_pressure_pa.has_value());
+			if (supplied != 1 || !input.concentration.empty() || !input.outward_species_flux.empty())
+				throw std::runtime_error("3D flow domain input requires exactly one flow or pressure quantity");
+			if ((input.outward_flow_m3_s && !port.requires.count(PortQuantity::FlowRate))
+				|| (input.mean_pressure_pa && !port.requires.count(PortQuantity::MeanPressure))
+				|| (input.mean_normal_traction_pa
+					&& !port.requires.count(PortQuantity::MeanNormalTraction))
+				|| input.total_pressure_pa)
+				throw std::runtime_error("3D flow domain input quantity is not required by its port");
+			candidate[port_id] = input;
+		});
+		inputs_.swap(candidate);
 	}
 
 	void SolveTrial() override
 	{
-		if (runtime_.Phase() != FlowStepPhase::TrialReady)
-			throw std::runtime_error("3D domain adapter solve requires an active trial-ready step");
-		for (const auto& port : ports_)
-			for (const auto quantity : port.requires)
-				if ((quantity == PortQuantity::FlowRate || quantity == PortQuantity::MeanPressure
-					|| quantity == PortQuantity::MeanNormalTraction) && !inputs_.count(port.id))
-					throw std::runtime_error("3D flow domain is missing trial input for port '"
-						+port.id+"'");
-		auto trial_configuration = MaterializeBoundaryWaveforms(base_configuration_,
-			case_directory_.string(), step_.EndTime());
-		for (const auto& input : inputs_) {
-			const auto& port = Port(input.first);
-			if (input.second.outward_flow_m3_s)
-				ApplyThreeDReferenceProfileInput(trial_configuration,
-					FlowSystem(trial_configuration), port, input.second,
-					reference_outward_flow_m3_s_.at(port.id));
-		}
-		runtime_.SetTrialBoundaryConfiguration(trial_configuration);
-		for (const auto& input : inputs_)
-			if (!input.second.outward_flow_m3_s)
-				runtime_.SetPortInput(Port(input.first), input.second);
+		CollectiveLocalStage(runtime_.Communicator(), "3d flow adapter solve preparation", [&] {
+			if (runtime_.Phase() != FlowStepPhase::TrialReady)
+				throw std::runtime_error("3D domain adapter solve requires an active trial-ready step");
+			for (const auto& port : ports_)
+				for (const auto quantity : port.requires)
+					if ((quantity == PortQuantity::FlowRate || quantity == PortQuantity::MeanPressure
+						|| quantity == PortQuantity::MeanNormalTraction) && !inputs_.count(port.id))
+						throw std::runtime_error("3D flow domain is missing trial input for port '"
+							+port.id+"'");
+			auto trial_configuration = MaterializeBoundaryWaveforms(base_configuration_,
+				case_directory_.string(), step_.EndTime());
+			for (const auto& input : inputs_) {
+				const auto& port = Port(input.first);
+				if (input.second.outward_flow_m3_s)
+					ApplyThreeDReferenceProfileInput(trial_configuration,
+						FlowSystem(trial_configuration), port, input.second,
+						reference_outward_flow_m3_s_.at(port.id));
+			}
+			runtime_.SetTrialBoundaryConfiguration(trial_configuration);
+			for (const auto& input : inputs_)
+				if (!input.second.outward_flow_m3_s)
+					runtime_.SetPortInput(Port(input.first), input.second);
+		});
 		runtime_.SolveTrial();
 	}
 
 	PortState GetPortState(const std::string& port_id) const override
 	{
-		return runtime_.GetPortState(Port(port_id));
+		const CouplingPort* selected = nullptr;
+		CollectiveLocalStage(runtime_.Communicator(), "3d flow adapter port lookup", [&] { selected = &Port(port_id); });
+		return runtime_.GetPortState(*selected);
 	}
 
 	void RollbackTrial() override { runtime_.RollbackTrial(); }

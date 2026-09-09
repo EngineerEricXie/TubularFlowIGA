@@ -12,14 +12,13 @@ int main(int argc, char** argv)
 	try {
 		if (argc != 2)
 			throw std::runtime_error("usage: iga_config_check SIMULATION_CONFIG.json|-");
-		std::ostringstream contents;
-		if (std::string(argv[1]) == "-") contents << std::cin.rdbuf();
+		std::string text;
+		if (std::string(argv[1]) == "-") text = iga::ReadCheckedText(std::cin);
 		else {
 			std::ifstream input(argv[1]);
 			if (!input) throw std::runtime_error("cannot open simulation configuration");
-			contents << input.rdbuf();
+			text = iga::ReadCheckedText(input);
 		}
-		const auto text = contents.str();
 		const auto root = iga::config_detail::RequireObject(
 			iga::config_detail::JsonParser(text).Parse(), "root");
 		const auto* version_value = iga::config_detail::Find(root, "schema_version");

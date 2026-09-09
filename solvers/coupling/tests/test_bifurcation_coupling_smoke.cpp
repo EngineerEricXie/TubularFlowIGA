@@ -273,14 +273,20 @@ double Value(const CsvRow& row, const std::string& name)
 	return std::stod(row.at(name));
 }
 
-void Validate(const fs::path& output)
+void Validate(const fs::path& output, bool multidomain = false)
 {
 	if (!fs::is_regular_file(output/"graph_binding_manifest.json"))
 		throw std::runtime_error("bifurcation completion marker is missing");
 	std::ifstream marker_input(output/"graph_binding_manifest.json");
 	const std::string marker((std::istreambuf_iterator<char>(marker_input)),
 		std::istreambuf_iterator<char>());
-	if (marker.find("\"benchmark\": \"one_d_three_d_bifurcation\"")
+	if (multidomain) {
+		if (marker.find("\"benchmark\": \"acyclic_multidomain_flow\"") == std::string::npos
+			|| marker.find("\"domain_count\": 4") == std::string::npos
+			|| marker.find("\"three_d_domain_count\": 1") == std::string::npos
+			|| marker.find("\"completed_steps\": 2") == std::string::npos)
+			throw std::runtime_error("multidomain bifurcation completion marker is invalid");
+	} else if (marker.find("\"benchmark\": \"one_d_three_d_bifurcation\"")
 		== std::string::npos
 		|| marker.find("\"three_d_domain\": \"junction\"") == std::string::npos
 		|| marker.find("\"branch_count\": 2") == std::string::npos

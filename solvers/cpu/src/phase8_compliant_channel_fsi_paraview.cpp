@@ -1,4 +1,5 @@
 #include "CompliantChannelFsiFixture.hpp"
+#include "CheckedText.hpp"
 #include "MovingImmersedTransientFlowFsiRuntime.hpp"
 #include "PretensionedMembraneFsiRuntime.hpp"
 #include "StrongFluidStructureCoupling.hpp"
@@ -45,9 +46,7 @@ std::string ReadAll(const fs::path& path)
 {
 	std::ifstream input(path,std::ios::binary);
 	if (!input) throw std::runtime_error("cannot read exported ParaView file");
-	std::ostringstream text; text<<input.rdbuf();
-	if (!input) throw std::runtime_error("cannot finish reading exported ParaView file");
-	return text.str();
+	return iga::ReadCheckedText(input);
 }
 
 void RequireContains(const std::string& text, const std::string& token, const char* message)
@@ -63,7 +62,9 @@ void Data(std::ostream& output, const char* type, const char* name, unsigned com
 
 template <class Writer> std::string Values(Writer&& writer)
 {
-	std::ostringstream values; values<<std::setprecision(17); writer(values); return values.str();
+	std::ostringstream values;
+	values.exceptions(std::ios::badbit | std::ios::failbit);
+	values<<std::setprecision(17); writer(values); return values.str();
 }
 
 void WriteFluidVtu(const fs::path& path, const iga::MovingImmersedFlowSnapshot& snapshot)
@@ -221,6 +222,9 @@ int main(int argc, char** argv)
 {
 	fs::path output_directory; PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	try {
+		int ranks = 1;
+		MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
+		Require(ranks == 1, "phase8_compliant_channel_fsi_paraview requires one MPI rank; distributed FSI is not supported by this exporter");
 		Require(argc==2,"usage: phase8_compliant_channel_fsi_paraview OUTPUT_DIRECTORY");
 		const fs::path root=argv[1]; output_directory=root; Require(!root.empty(),"ParaView output directory is empty"); fs::create_directories(root/"t1.05");
 		if(!fs::is_directory(root/"t1.05")) throw std::runtime_error("ParaView output directory is unavailable");

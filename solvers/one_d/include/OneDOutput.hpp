@@ -137,6 +137,7 @@ inline void WriteOneDVtp(const std::filesystem::path& path,
 	output << "\n        </DataArray>\n"
 		<< "      </Lines>\n"
 		<< "    </Piece>\n  </PolyData>\n</VTKFile>\n";
+	output.close();
 	if (!output) throw std::runtime_error("cannot write 1d VTP output: " + path.string());
 }
 
@@ -230,20 +231,31 @@ public:
 			}
 		}
 		std::ostringstream name;
+		name.exceptions(std::ios::badbit | std::ios::failbit);
 		name << "profile_1d_" << std::setw(6) << std::setfill('0') << step << ".vtp";
 		WriteOneDVtp(directory_/name.str(), network_, state, transports, derived);
+		for (auto* stream : {&flow_, &branch_, &profile_, &species_, &derived_}) {
+			stream->flush();
+			if (!*stream) throw std::runtime_error("cannot write 1d CSV output in " + directory_.string());
+		}
 		vtp_.push_back({time, name.str()});
 	}
 
 	void Finish(const OneDFlowState& state, double setup_seconds,
 		double solve_seconds, double output_seconds)
 	{
+		for (auto* stream : {&flow_, &branch_, &profile_, &species_, &derived_}) {
+			stream->close();
+			if (!*stream) throw std::runtime_error("cannot close 1d CSV output in " + directory_.string());
+		}
 		std::ofstream pvd(directory_/"profile_1d.pvd");
 		pvd << "<?xml version=\"1.0\"?>\n<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\">\n  <Collection>\n";
 		for (const auto& item : vtp_)
 			pvd << "    <DataSet timestep=\"" << std::setprecision(17) << item.first
 				<< "\" group=\"\" part=\"0\" file=\"" << OneDEscapeXml(item.second) << "\"/>\n";
 		pvd << "  </Collection>\n</VTKFile>\n";
+		pvd.close();
+		if (!pvd) throw std::runtime_error("cannot write 1d PVD output in " + directory_.string());
 		std::ofstream summary(directory_/"summary.json");
 		struct rusage usage {};
 		getrusage(RUSAGE_SELF, &usage);
@@ -270,6 +282,8 @@ public:
 			<< "  \"solve_seconds\": " << solve_seconds << ",\n"
 			<< "  \"output_seconds\": " << output_seconds << ",\n"
 			<< "  \"peak_rss_kib\": " << usage.ru_maxrss << "\n}\n";
+		summary.close();
+		if (!summary) throw std::runtime_error("cannot write 1d summary in " + directory_.string());
 	}
 
 private:

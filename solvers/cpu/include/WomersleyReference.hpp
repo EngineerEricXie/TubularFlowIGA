@@ -1,6 +1,7 @@
 #ifndef IGA_WOMERSLEY_REFERENCE_HPP
 #define IGA_WOMERSLEY_REFERENCE_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 
 #include <algorithm>
@@ -123,11 +124,10 @@ inline WomersleyReferenceConfiguration ReadWomersleyReferenceConfiguration(
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error(
 		"cannot open Womersley reference configuration: "+path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error(
 		"cannot read Womersley reference configuration: "+path.string());
-	return ParseWomersleyReferenceConfiguration(contents.str());
+	return ParseWomersleyReferenceConfiguration(contents);
 }
 
 inline std::complex<long double> ComplexBesselJ0(

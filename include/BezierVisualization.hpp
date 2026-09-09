@@ -129,6 +129,7 @@ inline void WriteBezierGeometryReport(const std::filesystem::path& path,
 	else output << '[' << validation.first_coincident_element_pair[0] << ", "
 		<< validation.first_coincident_element_pair[1] << ']';
 	output << "\n}\n";
+	output.close();
 	if (!output) throw std::runtime_error(
 		"cannot write Bezier geometry report: "+path.string());
 }

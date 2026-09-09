@@ -33,13 +33,23 @@ HEADERS += ../../include/PressureTraction.hpp ../cpu/include/PressureTractionFlo
 HEADERS += ../../include/TransportCheckpoint.hpp
 HEADERS += ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp
 HEADERS += ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
+HEADERS += include/DeviceAllocation.hpp
+HEADERS += ../cpu/include/BoundarySupport.hpp
+HEADERS += ../../include/PhaseProfile.hpp
+HEADERS += ../../include/CheckedText.hpp
 
-.PHONY: all clean
+.PHONY: all clean allocation-test
 
 all: $(TARGET)
 
 $(TARGET): $(SOURCES) Makefile $(HEADERS)
 	$(NVCC) $(CUDA_CPPFLAGS) $(HDF5_CFLAGS) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ $(LDLIBS) $(HDF5_LIBS)
 
+device_allocation_test: tests/test_device_allocation.cu include/CudaRuntime.hpp include/DeviceAllocation.hpp
+	$(NVCC) -Iinclude $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcublas
+
+allocation-test: device_allocation_test
+	./device_allocation_test
+
 clean:
-	$(RM) $(TARGET)
+	$(RM) $(TARGET) device_allocation_test

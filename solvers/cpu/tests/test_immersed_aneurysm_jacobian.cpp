@@ -1,5 +1,6 @@
 #include "ImmersedFlowCase.hpp"
 #include "SurfaceReaders.hpp"
+#include "ReferenceStateOutput.hpp"
 
 #include <algorithm>
 #include <array>
@@ -106,14 +107,23 @@ void CheckNonnegativeFinite(double value, const char* name)
 int main(int argc, char** argv)
 {
 	PetscInitialize(&argc, &argv, nullptr, nullptr);
+	int rank = 0, ranks = 1;
+	MPI_Comm_rank(PETSC_COMM_WORLD, &rank); MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
 	int status = 0;
 	try {
-		const bool solve_only = argc == 3 && std::string(argv[1]) == "--solve-only";
-		const bool supplied_case = argc == 2;
-		if (argc != 1 && !solve_only && !supplied_case)
+		std::vector<std::string> arguments;
+		for (int i = 1; i < argc; ++i) {
+			if (std::string(argv[i]) == "--reference-output") { ++i; continue; }
+			arguments.emplace_back(argv[i]);
+		}
+		const bool solve_only = arguments.size() == 2 && arguments[0] == "--solve-only";
+		const bool supplied_case = arguments.size() == 1 && !arguments[0].empty() && arguments[0].front() != '-';
+		if (!arguments.empty() && !solve_only && !supplied_case)
 			throw std::invalid_argument("usage: immersed_aneurysm_jacobian_test [case-directory|--solve-only case-directory]");
-		const auto root = solve_only ? std::filesystem::path(argv[2]) : supplied_case
-			? std::filesystem::path(argv[1])
+		auto reference = iga::test::ReferenceOutputFromArguments(argc, argv, "immersed", ranks);
+		const auto root = solve_only ? std::filesystem::path(arguments[1]) : supplied_case
+			? std::filesystem::path(arguments[0])
 			: std::filesystem::path("../../examples/vascular_flow/immersed_aneurysm_chain/immersed");
 		auto owner = iga::ImmersedFlowCase::Load(root, "immersed", {
 			Port("inlet", 1, iga::PortQuantity::FlowRate),
@@ -220,10 +230,30 @@ int main(int argc, char** argv)
 				<< " mean-traction=" << port.measurement.mean_normal_traction_pa << '\n';
 		if (!newton_ksp_closed)
 			throw std::runtime_error("aneurysm static Newton/KSP closure gate failed");
+		if (reference) {
+			iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+			const auto state = runtime.TrialState();
+			reference->Add("fluid_velocity", "m/s", runtime.ActiveNodes(), 3,
+				[&](std::size_t row, std::size_t column) { return PetscRealPart(state.at(4*row+column)); });
+			reference->Add("fluid_pressure", "pa", runtime.ActiveNodes(), 1,
+				[&](std::size_t row, std::size_t) { return PetscRealPart(state.at(4*row+3)); });
+			std::vector<std::pair<std::uint64_t, PetscInt>> controllers;
+			for (const auto& port : diagnostics.ports) if (port.multiplier_row >= 0)
+				controllers.emplace_back(static_cast<std::uint64_t>(port.boundary_label), port.multiplier_row);
+			std::sort(controllers.begin(), controllers.end());
+			std::vector<std::uint64_t> ids;
+			for (const auto& controller : controllers) ids.push_back(controller.first);
+			if (!ids.empty()) reference->Add("controller_pressure", "pa", ids, 1,
+				[&](std::size_t row, std::size_t) { return PetscRealPart(state.at(controllers.at(row).second)); });
+			if (runtime.HasGauge()) reference->Add("gauge_multiplier", "1/s", std::vector<int>{0}, 1,
+				[&](std::size_t, std::size_t) { return PetscRealPart(state.at(runtime.GaugeDof())); });
+			reference->Finish(0.0, 0);
+		}
 	} catch (const std::exception& error) {
 		std::cerr << "immersed_aneurysm_jacobian_test: " << error.what() << '\n';
 		status = 1;
 	}
+	iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, status);
 	PetscFinalize();
 	return status;
 }

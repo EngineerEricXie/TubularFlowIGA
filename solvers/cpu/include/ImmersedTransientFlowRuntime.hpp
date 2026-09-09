@@ -7,11 +7,15 @@
 #include "MovingCutGeometry.hpp"
 #include "ImmersedFlowPort.hpp"
 #include "ImmersedNitscheWall.hpp"
+#include "ElementAssemblyExecution.hpp"
+#include <iostream>
 
 #include <petscksp.h>
 
 #include <algorithm>
 #include <array>
+#include "PetscPhaseProfile.hpp"
+
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -147,6 +151,7 @@ public:
 	ImmersedTransientFlowRuntime(const MovingCutGeometry& geometry, ImmersedTransientFlowOptions options = {})
 		: geometry_(geometry), domain_(geometry.Domain()), volume_(geometry.Volume()), surface_(geometry.Surface()), ghost_(geometry.Ghost()), options_(std::move(options))
 	{
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		// A constructor whose body throws does not run this object's destructor.
 		// Keep all work following possible PETSc handle creation inside this guard.
 		try {
@@ -181,6 +186,7 @@ public:
 	PetscInt GaugeDof() const { if(!HasGauge()) throw std::logic_error("immersed transient gauge is absent"); return static_cast<PetscInt>(layout_.GaugeRow()); }
 	void FailNextPrepareForTesting() noexcept { fail_next_prepare_ = true; }
 #ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+	void SetVolumeProbeForTesting(std::function<void(std::uint64_t)> probe) { volume_probe_for_testing_=std::move(probe); }
 	// This fault injector exists only in the moving-runtime focused test build.
 	// It changes no production code path and is deliberately not a publication
 	// or convergence bypass.
@@ -312,14 +318,44 @@ public:
 	}
 	void Assemble()
 	{
+		assembly_execution_.RequireCaller();
+		PhaseScope assembly_phase(ProfilePhase::Assembly);
 		RequireTrial("assemble"); const auto start=std::chrono::steady_clock::now();
 		if(diagnostics_.converged) InvalidateSolved();
 		++diagnostics_.attempt_assembly_count;
+		// A failed batch can leave earlier MatSetValues contributions pending.
+		// PETSc rejects MatZeroEntries until these insertions are assembled.
+		// Complete the pending insertion phase, then discard all its values.
+		if(assembly_pending_) {
+			Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin recovery");
+			Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd recovery");
+			Check(VecAssemblyBegin(rhs_),"VecAssemblyBegin recovery");
+			Check(VecAssemblyEnd(rhs_),"VecAssemblyEnd recovery");
+		}
 		Check(MatZeroEntries(jacobian_),"MatZeroEntries"); Check(VecSet(rhs_,0.0),"VecSet rhs");
+		assembly_pending_=true;
 		std::size_t candidate_volume_cells=0, candidate_surface_cells=0, candidate_ghost_faces=0;
 		ImmersedNitscheWallDiagnostics candidate_wall_penalty;
-		for(std::uint64_t cell=0;cell<domain_.Cells().size();++cell) if(Usable(cell)) {
-			const auto element=domain_.Background().MaterializeElement(cell); const auto nodal=Gather(element); const auto volume_system=BuildVolume(element,nodal,cell);
+		std::vector<std::uint64_t> cells;
+		for(std::uint64_t cell=0;cell<domain_.Cells().size();++cell) if(Usable(cell)) cells.push_back(cell);
+		struct PreparedVolume {
+			std::uint64_t cell;
+			Element element;
+			std::vector<std::array<double,4>> nodal;
+		};
+		const auto batch = ForEachElementBatch(cells.size(), assembly_execution_.Options(),
+			[&](std::size_t index) {
+				auto element=domain_.Background().MaterializeElement(cells[index]);
+				auto nodal=Gather(element);
+				return PreparedVolume{cells[index],std::move(element),std::move(nodal)};
+			},
+			[this](const PreparedVolume& input, std::size_t) {
+				return BuildVolume(input.element,input.nodal,input.cell);
+			},
+			[&](const PreparedVolume& input, const NavierStokesSystem& volume_system, std::size_t) {
+			const auto cell=input.cell;
+			const auto& element=input.element;
+			const auto& nodal=input.nodal;
 			Scatter(element.connectivity,volume_system); ++candidate_volume_cells;
 			if(domain_.Cells()[cell].classification==CellClassification::Cut) {
 				const auto& rule=surface_.UsableRule(domain_,cell); Scatter(element.connectivity,BuildImmersedConservativeMixedTraceElement(element,rule,nodal));
@@ -329,10 +365,15 @@ public:
 					SubtractAndScatter(element.connectivity,wall.system,volume_system); ++candidate_surface_cells; }
 				for(std::size_t p=0;p<options_.ports.size();++p) if(RuleHasLabel(rule,options_.ports[p].boundary_label)) ScatterPort(element,nodal,rule,p);
 			}
-		}
+		});
+		if(CurrentPhaseProfile().Enabled())
+			std::cout << "element_assembly threads_requested=" << assembly_execution_.Options().threads
+				<< " team_size=" << batch.maximum_team_size << " cells=" << batch.items
+				<< " batches=" << batch.batches << " maximum_resident_items=" << batch.maximum_resident_items << '\n';
 		for(std::size_t f=0;f<ghost_.Faces().size();++f) { const auto block=ghost_.AssembleFaceLocal(f,domain_,volume_,[this](std::int32_t node,int q){return Value(state_,Dof(node,q));},options_.parameters.dynamic_viscosity); ScatterBlock(block.connectivity,block.jacobian,block.negative_residual); ++candidate_ghost_faces; }
 		Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin"); Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd"); Check(VecAssemblyBegin(rhs_),"VecAssemblyBegin"); Check(VecAssemblyEnd(rhs_),"VecAssemblyEnd");
 		MeasurePorts(); if(HasGauge()) InsertGauge(); Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin gauge"); Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd gauge"); Check(VecAssemblyBegin(rhs_),"VecAssemblyBegin gauge"); Check(VecAssemblyEnd(rhs_),"VecAssemblyEnd gauge");
+		assembly_pending_=false;
 		diagnostics_.volume_cells=candidate_volume_cells; diagnostics_.surface_cells=candidate_surface_cells; diagnostics_.ghost_faces=candidate_ghost_faces;
 		diagnostics_.wall_penalty=std::move(candidate_wall_penalty);
 		diagnostics_.last_assembly_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count(); RefreshHashes();
@@ -342,7 +383,7 @@ public:
 		RequireTrial("solve"); ResetAttemptWork(); double initial=-1.0; std::array<double,3> initial_blocks{{0.0,0.0,0.0}};
 		try { for(PetscInt it=0;it<options_.nonlinear_maximum_iterations;++it) { Assemble(); PetscReal norm=0; Check(VecNorm(rhs_,NORM_2,&norm),"VecNorm residual"); if(!std::isfinite(norm)) throw std::runtime_error("immersed transient nonlinear residual is not finite"); if(initial<0) { initial=norm; initial_blocks=ResidualBlockNorms(Copy(rhs_)); } diagnostics_.residual_norm=norm; diagnostics_.nonlinear_iterations=it;
 			if(norm<=std::max(options_.nonlinear_absolute_tolerance,options_.nonlinear_relative_tolerance*initial) && BlockReductionSatisfied(initial_blocks,Copy(rhs_),initial) && ControllersSatisfied()) { MarkSolved(); return true; }
-			Check(VecCopy(rhs_,action_input_),"VecCopy rhs"); Check(KSPSetOperators(ksp_,jacobian_,jacobian_),"KSPSetOperators"); const auto begin=std::chrono::steady_clock::now(); Check(KSPSolve(ksp_,rhs_,update_),"KSPSolve"); diagnostics_.last_linear_solve_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
+			Check(VecCopy(rhs_,action_input_),"VecCopy rhs"); Check(KSPSetOperators(ksp_,jacobian_,jacobian_),"KSPSetOperators"); const auto begin=std::chrono::steady_clock::now(); Check(SolveProfiledKsp(ksp_,rhs_,update_),"KSPSolve with explicit setup"); diagnostics_.last_linear_solve_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
 			PetscInt ki=0; Check(KSPGetIterationNumber(ksp_,&ki),"KSPGetIterationNumber"); diagnostics_.ksp_iterations+=ki; Check(KSPGetConvergedReason(ksp_,&diagnostics_.ksp_reason),"KSPGetConvergedReason"); if(diagnostics_.ksp_reason<=0) throw std::runtime_error("immersed transient KSP failed");
 			Check(MatMult(jacobian_,update_,action_output_),"MatMult"); Check(VecAXPY(action_output_,-1.0,action_input_),"VecAXPY"); PetscReal linear=0,up=0; Check(VecNorm(action_output_,NORM_2,&linear),"VecNorm linear"); Check(VecNorm(update_,NORM_2,&up),"VecNorm update");
 			ImmersedTransientFlowNewtonStep step; step.iteration=it; step.ksp_iterations=ki; step.ksp_reason=diagnostics_.ksp_reason; step.residual_norm=norm; step.update_norm=up; step.linear_relative_residual=norm>0?linear/norm:linear; diagnostics_.true_linear_relative_residual=step.linear_relative_residual;
@@ -474,7 +515,10 @@ private:
 	// This transaction intentionally has no PETSc command-line override path:
 	// every effective solver setting below is fixed or an explicit option and is
 	// included in InputHash.  In particular, no untracked options prefix exists.
-	void CreatePetsc() { const PetscInt n=static_cast<PetscInt>(layout_.Rows()); try { Check(MatCreateSeqAIJ(PETSC_COMM_SELF,n,n,300,nullptr,&jacobian_),"MatCreateSeqAIJ"); Check(MatSetOption(jacobian_,MAT_NEW_NONZERO_ALLOCATION_ERR,PETSC_FALSE),"MatSetOption"); Check(MatSetOption(jacobian_,MAT_IGNORE_ZERO_ENTRIES,PETSC_FALSE),"MatSetOption retain scalar diagonals"); for(const auto row:AppendedScalarRows()) Check(MatSetValue(jacobian_,row,row,0.0,INSERT_VALUES),"MatSetValue scalar structural diagonal"); Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin scalar structural diagonals");Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd scalar structural diagonals"); AuditAppendedScalarDiagonals(); Check(MatSetOption(jacobian_,MAT_IGNORE_ZERO_ENTRIES,PETSC_TRUE),"MatSetOption ignore zero entries"); Check(VecCreateSeq(PETSC_COMM_SELF,n,&state_),"VecCreateSeq"); Check(VecDuplicate(state_,&committed_),"VecDuplicate");Check(VecDuplicate(state_,&prepared_),"VecDuplicate");Check(VecDuplicate(state_,&base_),"VecDuplicate");Check(VecDuplicate(state_,&rhs_),"VecDuplicate");Check(VecDuplicate(state_,&update_),"VecDuplicate");Check(VecDuplicate(state_,&action_input_),"VecDuplicate");Check(VecDuplicate(state_,&action_output_),"VecDuplicate"); Check(KSPCreate(PETSC_COMM_SELF,&ksp_),"KSPCreate"); Check(KSPSetType(ksp_,KSPGMRES),"KSPSetType"); Check(KSPGMRESSetRestart(ksp_,30),"KSPGMRESSetRestart"); Check(KSPSetPCSide(ksp_,PC_RIGHT),"KSPSetPCSide"); Check(KSPSetNormType(ksp_,KSP_NORM_UNPRECONDITIONED),"KSPSetNormType"); Check(KSPSetTolerances(ksp_,options_.ksp_relative_tolerance,1e-50,1e5,options_.ksp_maximum_iterations),"KSPSetTolerances"); PC pc=nullptr;Check(KSPGetPC(ksp_,&pc),"KSPGetPC");Check(PCSetType(pc,PCLU),"PCSetType");if(options_.lu_pivot_shift>0){Check(PCFactorSetShiftType(pc,MAT_SHIFT_NONZERO),"PCFactorSetShiftType");Check(PCFactorSetShiftAmount(pc,options_.lu_pivot_shift),"PCFactorSetShiftAmount");} }catch(...){Destroy();throw;} }
+	// Store the right-preconditioned Krylov directions in FGMRES. Applying
+	// a shifted, ill-conditioned LU only to the final combined direction
+	// can lose accuracy even when GMRES reports a tiny recursive residual.
+	void CreatePetsc() { const PetscInt n=static_cast<PetscInt>(layout_.Rows()); try { Check(MatCreateSeqAIJ(PETSC_COMM_SELF,n,n,300,nullptr,&jacobian_),"MatCreateSeqAIJ"); Check(MatSetOption(jacobian_,MAT_NEW_NONZERO_ALLOCATION_ERR,PETSC_FALSE),"MatSetOption"); Check(MatSetOption(jacobian_,MAT_IGNORE_ZERO_ENTRIES,PETSC_FALSE),"MatSetOption retain scalar diagonals"); for(const auto row:AppendedScalarRows()) Check(MatSetValue(jacobian_,row,row,0.0,INSERT_VALUES),"MatSetValue scalar structural diagonal"); Check(MatAssemblyBegin(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin scalar structural diagonals");Check(MatAssemblyEnd(jacobian_,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd scalar structural diagonals"); AuditAppendedScalarDiagonals(); Check(MatSetOption(jacobian_,MAT_IGNORE_ZERO_ENTRIES,PETSC_TRUE),"MatSetOption ignore zero entries"); Check(VecCreateSeq(PETSC_COMM_SELF,n,&state_),"VecCreateSeq"); Check(VecDuplicate(state_,&committed_),"VecDuplicate");Check(VecDuplicate(state_,&prepared_),"VecDuplicate");Check(VecDuplicate(state_,&base_),"VecDuplicate");Check(VecDuplicate(state_,&rhs_),"VecDuplicate");Check(VecDuplicate(state_,&update_),"VecDuplicate");Check(VecDuplicate(state_,&action_input_),"VecDuplicate");Check(VecDuplicate(state_,&action_output_),"VecDuplicate"); Check(KSPCreate(PETSC_COMM_SELF,&ksp_),"KSPCreate"); Check(KSPSetType(ksp_,KSPFGMRES),"KSPSetType"); Check(KSPGMRESSetRestart(ksp_,30),"KSPGMRESSetRestart"); Check(KSPSetPCSide(ksp_,PC_RIGHT),"KSPSetPCSide"); Check(KSPSetNormType(ksp_,KSP_NORM_UNPRECONDITIONED),"KSPSetNormType"); Check(KSPSetTolerances(ksp_,options_.ksp_relative_tolerance,1e-50,1e5,options_.ksp_maximum_iterations),"KSPSetTolerances"); PC pc=nullptr;Check(KSPGetPC(ksp_,&pc),"KSPGetPC");Check(PCSetType(pc,PCLU),"PCSetType");if(options_.lu_pivot_shift>0){Check(PCFactorSetShiftType(pc,MAT_SHIFT_NONZERO),"PCFactorSetShiftType");Check(PCFactorSetShiftAmount(pc,options_.lu_pivot_shift),"PCFactorSetShiftAmount");} }catch(...){Destroy();throw;} }
 	std::vector<PetscInt> AppendedScalarRows() const {std::vector<PetscInt> rows;for(const auto& p:diagnostics_.ports)if(p.multiplier_row>=0)rows.push_back(p.multiplier_row);if(HasGauge())rows.push_back(GaugeDof());return rows;}
 	void AuditAppendedScalarDiagonals(){for(const auto row:AppendedScalarRows()){PetscInt count=0;const PetscInt* columns=nullptr;const PetscScalar* values=nullptr;Check(MatGetRow(jacobian_,row,&count,&columns,&values),"MatGetRow scalar structural diagonal");bool found=false,zero=false;for(PetscInt i=0;i<count;++i)if(columns[i]==row){found=true;zero=PetscRealPart(values[i])==0.0;break;}Check(MatRestoreRow(jacobian_,row,&count,&columns,&values),"MatRestoreRow scalar structural diagonal");if(!found||!zero)throw std::runtime_error("immersed transient scalar row lacks an exact-zero structural diagonal");}diagnostics_.scalar_diagonal_structure_verified=true;}
 	void Destroy() noexcept {if(ksp_)KSPDestroy(&ksp_);if(action_output_)VecDestroy(&action_output_);if(action_input_)VecDestroy(&action_input_);if(update_)VecDestroy(&update_);if(rhs_)VecDestroy(&rhs_);if(base_)VecDestroy(&base_);if(prepared_)VecDestroy(&prepared_);if(committed_)VecDestroy(&committed_);if(state_)VecDestroy(&state_);if(jacobian_)MatDestroy(&jacobian_);}
@@ -509,6 +553,9 @@ private:
 		std::vector<std::array<double,4>> old(local.size()); for(std::size_t i=0;i<old.size();++i) for(int q=0;q<3;++q) old[i][q]=local[i][q];
 		const auto result=BuildNavierStokesElementFromPoints(e,n,old,options_.parameters,[this,cell](const auto& consume){ForEachUsableVolumePoint(cell,consume);},frozen,NavierStokesResolvedMixedForm::Conservative);
 		if(point!=forces.size()) throw std::logic_error("immersed transient frozen body-force point order is invalid");
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+		if(volume_probe_for_testing_) volume_probe_for_testing_(cell);
+#endif
 		return result;
 	}
 	void Scatter(const std::vector<std::int32_t>&nodes,const NavierStokesSystem&s){std::vector<PetscInt>r;for(auto n:nodes)for(int q=0;q<4;++q)r.push_back(Dof(n,q));Check(MatSetValues(jacobian_,r.size(),r.data(),r.size(),r.data(),s.jacobian.data(),ADD_VALUES),"MatSetValues");Check(VecSetValues(rhs_,r.size(),r.data(),s.negative_residual.data(),ADD_VALUES),"VecSetValues");}
@@ -685,7 +732,7 @@ private:
 	static void AppendPorts(Sha256& h,const std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) { h.AppendLittleEndian64(ports.size()); for(const auto&p:ports){immersed_transient_detail::AppendString(h,p.id);h.AppendLittleEndian32(static_cast<std::uint32_t>(p.boundary_label));h.AppendLittleEndian32(static_cast<std::uint32_t>(p.control_mode));h.AppendNormalizedDouble(p.target);h.AppendNormalizedDouble(p.multiplier);h.AppendNormalizedDouble(p.controller_error);h.AppendLittleEndian64(static_cast<std::uint64_t>(p.multiplier_row));h.AppendNormalizedDouble(p.measurement.area_m2);h.AppendNormalizedDouble(p.measurement.outward_flow_m3_s);h.AppendNormalizedDouble(p.measurement.mean_pressure_pa);h.AppendNormalizedDouble(p.measurement.mean_normal_traction_pa);h.AppendNormalizedDouble(p.measurement.mean_velocity_squared_m2_s2);h.AppendLittleEndian32(p.measurement_valid?1:0);}}
 	static void AppendFrozenBodyForce(Sha256& h,const std::vector<std::vector<std::array<double,3>>>& forces) { h.AppendLittleEndian64(forces.size()); for(const auto& cell:forces) { h.AppendLittleEndian64(cell.size()); for(const auto& force:cell) for(double value:force) h.AppendNormalizedDouble(value); } }
 	void AppendFrozenBodyForce(Sha256& h) const { AppendFrozenBodyForce(h,frozen_body_force_); }
-	static void AppendFixedSolverConfiguration(Sha256& h) { immersed_transient_detail::AppendString(h,"KSPGMRES"); h.AppendLittleEndian64(30); immersed_transient_detail::AppendString(h,"PCLU"); immersed_transient_detail::AppendString(h,"PC_RIGHT"); immersed_transient_detail::AppendString(h,"KSP_NORM_UNPRECONDITIONED"); h.AppendNormalizedDouble(1e-50); h.AppendNormalizedDouble(1e5); }
+	static void AppendFixedSolverConfiguration(Sha256& h) { immersed_transient_detail::AppendString(h,"KSPFGMRES"); h.AppendLittleEndian64(30); immersed_transient_detail::AppendString(h,"PCLU"); immersed_transient_detail::AppendString(h,"PC_RIGHT"); immersed_transient_detail::AppendString(h,"KSP_NORM_UNPRECONDITIONED"); h.AppendNormalizedDouble(1e-50); h.AppendNormalizedDouble(1e5); }
 	std::array<double,3> ResidualBlockNorms(const std::vector<PetscScalar>& residual) const { if(residual.size()!=diagnostics_.total_dofs) throw std::invalid_argument("immersed transient residual block vector size is invalid"); std::array<double,3> norms{{0.0,0.0,0.0}}; for(std::size_t row=0;row<residual.size();++row){const double value=PetscRealPart(residual[row]);const std::size_t block=row>=diagnostics_.physical_dofs?2:((row%4)==3?1:0);norms[block]+=value*value;}for(auto& value:norms)value=std::sqrt(value);return norms; }
 	bool BlockReductionSatisfied(const std::array<double,3>& initial,const std::vector<PetscScalar>& residual,double global_initial) const { if(options_.nonlinear_block_reduction==0.0)return true; const auto current=ResidualBlockNorms(residual); const double zero_block_tolerance=options_.nonlinear_absolute_tolerance+options_.nonlinear_relative_tolerance*global_initial; for(std::size_t block=0;block<current.size();++block)if(initial[block]>0.0?current[block]>initial[block]/options_.nonlinear_block_reduction:current[block]>zero_block_tolerance)return false;return true; }
 	std::string InputHash(const NavierStokesParameters& parameters,const ImmersedVelocityHistory& history,double target_time_s,std::uint64_t target_index,const std::vector<ImmersedTransientFlowDiagnostics::Port>& frozen_ports,const std::vector<std::vector<std::array<double,3>>>& frozen_forces,const std::vector<PetscScalar>& frozen_seed) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientInput/v5"); immersed_transient_detail::AppendString(h,layout_.HashSha256()); immersed_transient_detail::AppendString(h,geometry_.GeometryIdentitySha256()); h.AppendLittleEndian32(static_cast<std::uint32_t>(volume_.StorageMode())); immersed_transient_detail::AppendString(h,history.HashSha256()); h.AppendNormalizedDouble(committed_global_->TimeS());h.AppendLittleEndian64(committed_global_->Index());h.AppendNormalizedDouble(target_time_s);h.AppendLittleEndian64(target_index);h.AppendNormalizedDouble(parameters.density);h.AppendNormalizedDouble(parameters.dynamic_viscosity);h.AppendNormalizedDouble(parameters.dt);h.AppendNormalizedDouble(options_.wall_gamma0);h.AppendNormalizedDouble(options_.wall_inertial_gamma0);h.AppendLittleEndian32(options_.include_pressure_gauge?1:0);h.AppendLittleEndian64(options_.nonlinear_maximum_iterations);h.AppendLittleEndian64(options_.ksp_maximum_iterations);h.AppendNormalizedDouble(options_.ksp_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_relative_tolerance);h.AppendNormalizedDouble(options_.nonlinear_absolute_tolerance);h.AppendNormalizedDouble(options_.flow_controller_relative_tolerance);h.AppendNormalizedDouble(options_.flow_controller_absolute_tolerance_m3_s);h.AppendNormalizedDouble(options_.flow_controller_reference_flow_m3_s);h.AppendNormalizedDouble(options_.minimum_damping);h.AppendNormalizedDouble(options_.lu_pivot_shift);h.AppendNormalizedDouble(options_.nonlinear_block_reduction);AppendFixedSolverConfiguration(h);AppendPorts(h,frozen_ports);AppendFrozenBodyForce(h,frozen_forces);for(auto x:frozen_seed)h.AppendNormalizedDouble(PetscRealPart(x));return h.Hex(); }
@@ -693,6 +740,11 @@ private:
 	std::string InputHash() const { if(!history_) return {}; return InputHash(options_.parameters,*history_,target_time_s_,target_index_,frozen_ports_,frozen_body_force_,frozen_seed_); }
 	std::string AttemptHash() const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientAttempt/v2"); immersed_transient_detail::AppendString(h,diagnostics_.input_hash_sha256); immersed_transient_detail::AppendString(h,HashVector(state_)); AppendPorts(h,trial_ports_); h.AppendLittleEndian64(diagnostics_.attempt_assembly_count);h.AppendLittleEndian64(diagnostics_.newton_steps.size());for(const auto&s:diagnostics_.newton_steps){h.AppendLittleEndian64(s.iteration);h.AppendLittleEndian64(s.ksp_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(s.ksp_reason));h.AppendNormalizedDouble(s.residual_norm);h.AppendNormalizedDouble(s.update_norm);h.AppendNormalizedDouble(s.linear_relative_residual);h.AppendNormalizedDouble(s.damping);} h.AppendLittleEndian64(diagnostics_.ksp_iterations);h.AppendLittleEndian64(diagnostics_.nonlinear_iterations);h.AppendLittleEndian32(static_cast<std::uint32_t>(diagnostics_.ksp_reason));h.AppendNormalizedDouble(diagnostics_.residual_norm);h.AppendNormalizedDouble(diagnostics_.true_linear_relative_residual);return h.Hex(); }
 	std::string PreparedHash(const ImmersedGlobalFlowState& global,const std::vector<ImmersedTransientFlowDiagnostics::Port>& ports) const { Sha256 h; immersed_transient_detail::AppendString(h,"ImmersedTransientPrepared/v2"); immersed_transient_detail::AppendString(h,diagnostics_.attempt_hash_sha256); immersed_transient_detail::AppendString(h,global.HashSha256());AppendPorts(h,ports);return h.Hex(); }
+	ElementAssemblyExecution assembly_execution_;
+	bool assembly_pending_=false;
+#ifdef IGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+	std::function<void(std::uint64_t)> volume_probe_for_testing_;
+#endif
 	const MovingCutGeometry& geometry_; const CartesianDomainClassification& domain_; const CutCellVolumeQuadratureCatalog& volume_; const ImmersedSurfaceQuadratureCatalog& surface_; const CutCellGhostPenaltyCatalog& ghost_; ImmersedTransientFlowOptions options_; ImmersedActiveLayout layout_; std::vector<double> gauge_weights_; std::unique_ptr<ImmersedGlobalFlowState> committed_global_,prepared_global_; std::unique_ptr<ImmersedVelocityHistory> history_; std::unique_ptr<ImmersedMovingTrialMapIdentity> moving_map_; std::vector<PetscScalar> frozen_seed_; std::vector<std::vector<std::array<double,3>>> frozen_body_force_; std::vector<ImmersedTransientFlowDiagnostics::Port> frozen_ports_,trial_ports_,prepared_ports_; std::string prepared_global_hash_; double target_time_s_=0; std::uint64_t target_index_=0; Mat jacobian_=nullptr;Vec state_=nullptr,committed_=nullptr,prepared_=nullptr,base_=nullptr,rhs_=nullptr,update_=nullptr,action_input_=nullptr,action_output_=nullptr;KSP ksp_=nullptr;ImmersedTransientFlowDiagnostics diagnostics_{};bool moving_trial_=false,fail_next_prepare_=false;
 };
 

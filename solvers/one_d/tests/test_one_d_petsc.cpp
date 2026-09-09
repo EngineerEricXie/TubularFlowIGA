@@ -87,6 +87,53 @@ int main(int argc, char** argv)
 	assert(parsed.network_fingerprint == metadata.network_fingerprint);
 	assert(parsed.internal_substeps == metadata.internal_substeps);
 	assert(parsed.inlet_flow == metadata.inlet_flow);
+	// Independent groups perform different numbers of checkpoint operations.
+	// A world collective inside either API would hang this test.
+	MPI_Comm group = MPI_COMM_NULL;
+	const int color = rank == 0 ? 0 : 1;
+	MPI_Comm_split(PETSC_COMM_WORLD, color, rank, &group);
+	int local_rank = 0, local_ranks = 1;
+	MPI_Comm_rank(group, &local_rank);
+	MPI_Comm_size(group, &local_ranks);
+	const auto prefix = fs::temp_directory_path()
+		/("tubularflowiga-one-d-checkpoint-group-"+std::to_string(color));
+	auto group_metadata = metadata;
+	group_metadata.state_file = iga::OneDCheckpointStatePath(prefix).filename().string();
+	for (int round = 0; round <= color; ++round) {
+		auto group_state = state;
+		for (auto& pressure : group_state.pressure) pressure += color+round;
+		iga::WriteOneDCheckpoint(prefix, group_metadata, group_state, no_transports,
+			network, local_rank, group);
+		auto loaded = state;
+		auto loaded_network = network;
+		const auto loaded_metadata = iga::ReadOneDCheckpoint(prefix, loaded, no_transports,
+			loaded_network, flow.dynamic_viscosity, group);
+		assert(loaded_metadata.completed_step == group_metadata.completed_step);
+		assert(iga::PackOneDCheckpointState(loaded, no_transports, loaded_network)
+			== iga::PackOneDCheckpointState(group_state, no_transports, network));
+	}
+	if (local_ranks > 1) {
+		int caught = 0;
+		try {
+			auto loaded = state;
+			auto loaded_network = network;
+			// The deliberately absent file lives below the fixture SWC file,
+			// ensuring that no previous test can accidentally create it.
+			iga::ReadOneDCheckpoint(local_rank == 1 ? swc/"absent" : prefix,
+				loaded, no_transports, loaded_network, flow.dynamic_viscosity, group);
+		} catch (const std::runtime_error& error) {
+			caught = std::string(error.what()).find("1d checkpoint metadata read: rank 1:") != std::string::npos;
+		}
+		int all_caught = 0;
+		MPI_Allreduce(&caught, &all_caught, 1, MPI_INT, MPI_MIN, group);
+		assert(all_caught == 1);
+	}
+	MPI_Barrier(group);
+	if (local_rank == 0) {
+		fs::remove(iga::OneDCheckpointStatePath(prefix));
+		fs::remove(iga::OneDCheckpointMetadataPath(prefix));
+	}
+	MPI_Comm_free(&group);
 	MPI_Barrier(PETSC_COMM_WORLD);
 	if (rank == 0) fs::remove(swc);
 	if (rank == 0) std::cout << "one-dimensional PETSc tests passed\n";

@@ -3,11 +3,15 @@
 
 #include "OneDImplicit.hpp"
 #include "OneDOutput.hpp"
+#include "CollectiveFailure.hpp"
+#include "CheckedText.hpp"
 
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <limits>
+#include <exception>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -45,6 +49,7 @@ inline std::uint64_t OneDFingerprint(const std::string& text)
 inline std::uint64_t OneDNetworkFingerprint(const OneDNetwork& network)
 {
 	std::ostringstream text;
+	text.exceptions(std::ios::badbit | std::ios::failbit);
 	text << std::setprecision(17);
 	for (const auto& node : network.nodes)
 		text << node.id << ' ' << node.parent_id << ' ' << node.position[0] << ' '
@@ -82,13 +87,28 @@ inline std::vector<double> PackOneDCheckpointState(const OneDFlowState& flow,
 	return values;
 }
 
+inline std::size_t OneDCheckpointValueCount(const OneDCheckpointMetadata& metadata)
+{
+	if (metadata.cells < 1 || metadata.nodes < 1 || metadata.segments < 1 || metadata.outlets < 1)
+		throw std::runtime_error("1d checkpoint counts must be positive");
+	const auto cells = static_cast<std::uint64_t>(metadata.cells);
+	const auto limit = static_cast<std::uint64_t>(std::numeric_limits<PetscInt>::max());
+	const auto fixed = 3*cells+static_cast<std::uint64_t>(metadata.nodes)
+		+2*static_cast<std::uint64_t>(metadata.segments)+3*static_cast<std::uint64_t>(metadata.outlets);
+	if (fixed > limit || metadata.species.size() > (limit-fixed)/cells)
+		throw std::runtime_error("1d checkpoint state exceeds PETSc index capacity");
+	const auto count = fixed+cells*metadata.species.size();
+	if (count > std::numeric_limits<std::size_t>::max()/sizeof(double))
+		throw std::runtime_error("1d checkpoint state exceeds addressable size");
+	return static_cast<std::size_t>(count);
+}
+
 inline void UnpackOneDCheckpointState(const std::vector<double>& values,
 	OneDFlowState& flow, std::vector<OneDTransportState>& transports,
 	const OneDCheckpointMetadata& metadata, OneDNetwork& network,
 	double dynamic_viscosity)
 {
-	const std::size_t expected = static_cast<std::size_t>(3*metadata.cells+metadata.nodes
-		+2*metadata.segments+3*metadata.outlets+metadata.cells*metadata.species.size());
+	const std::size_t expected = OneDCheckpointValueCount(metadata);
 	if (values.size() != expected) throw std::runtime_error("1d checkpoint state size is invalid");
 	std::size_t offset = 0;
 	auto assign = [&](std::vector<double>& target, std::size_t count) {
@@ -142,6 +162,7 @@ inline std::filesystem::path OneDCheckpointStatePath(const std::filesystem::path
 inline std::string SerializeOneDCheckpointMetadata(const OneDCheckpointMetadata& metadata)
 {
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << std::setprecision(17)
 		<< "{\n  \"schema_version\": " << metadata.schema_version << ",\n"
 		<< "  \"completed_step\": " << metadata.completed_step << ",\n"
@@ -211,54 +232,158 @@ inline OneDCheckpointMetadata ParseOneDCheckpointMetadata(const std::string& tex
 	return result;
 }
 
+namespace one_d_checkpoint_detail {
+
+// Only used with COMM_SELF. Explicit Close reports errors; the destructor
+// releases partially created objects during exception unwinding.
+struct LocalPetscFile {
+	LocalPetscFile()
+	{
+		OneDPetscCheck(PetscPushErrorHandler(PetscReturnErrorHandler, nullptr), "checkpoint error handler");
+	}
+	LocalPetscFile(const LocalPetscFile&) = delete;
+	LocalPetscFile& operator=(const LocalPetscFile&) = delete;
+	~LocalPetscFile()
+	{
+		if (array) VecRestoreArrayRead(state, &array);
+		if (viewer) PetscViewerDestroy(&viewer);
+		if (state) VecDestroy(&state);
+		PetscPopErrorHandler();
+	}
+	void Open(const std::string& path, PetscFileMode mode)
+	{
+		OneDPetscCheck(PetscViewerCreate(PETSC_COMM_SELF, &viewer), "checkpoint viewer create");
+		OneDPetscCheck(PetscViewerSetType(viewer, PETSCVIEWERBINARY), "checkpoint viewer type");
+		// A checkpoint has its own fixed filename/header contract. Do not let
+		// a viewer option or an adjacent .info file silently redirect it.
+		OneDPetscCheck(PetscViewerBinarySetSkipOptions(viewer, PETSC_TRUE), "checkpoint skip options");
+		OneDPetscCheck(PetscViewerBinarySetSkipInfo(viewer, PETSC_TRUE), "checkpoint skip info");
+		OneDPetscCheck(PetscViewerFileSetMode(viewer, mode), "checkpoint file mode");
+		OneDPetscCheck(PetscViewerFileSetName(viewer, path.c_str()), "checkpoint file name");
+	}
+	void Close()
+	{
+		OneDPetscCheck(PetscViewerDestroy(&viewer), "checkpoint viewer close");
+		OneDPetscCheck(VecDestroy(&state), "checkpoint vector destroy");
+	}
+	Vec state = nullptr;
+	PetscViewer viewer = nullptr;
+	const PetscScalar* array = nullptr;
+};
+
+inline void ValidateValues(const std::vector<double>& values, const OneDCheckpointMetadata& metadata)
+{
+	if (values.size() != OneDCheckpointValueCount(metadata))
+		throw std::runtime_error("1d checkpoint state size is invalid");
+	for (double value : values)
+		if (!std::isfinite(value)) throw std::runtime_error("1d checkpoint state contains a nonfinite value");
+	for (int cell = 0; cell < metadata.cells; ++cell)
+		if (!(values[static_cast<std::size_t>(cell)] > 0.0))
+			throw std::runtime_error("1d checkpoint state contains a nonpositive area");
+}
+
+inline std::string_view Bytes(const std::vector<double>& values)
+{
+	return {reinterpret_cast<const char*>(values.data()), values.size()*sizeof(double)};
+}
+
+} // namespace one_d_checkpoint_detail
+
+// The native 1D runtime already holds complete state on each rank. File I/O
+// uses COMM_SELF so a local PETSc I/O error cannot strand peers in a viewer
+// collective. Group agreement is performed only after every local call returns.
 inline void WriteOneDCheckpoint(const std::filesystem::path& prefix,
 	const OneDCheckpointMetadata& metadata, const OneDFlowState& flow,
 	const std::vector<OneDTransportState>& transports, const OneDNetwork& network,
-	int rank)
+	int rank, MPI_Comm communicator = PETSC_COMM_WORLD)
 {
-	const auto values = PackOneDCheckpointState(flow, transports, network);
-	Vec state = nullptr;
-	VecCreateMPI(PETSC_COMM_WORLD, PETSC_DECIDE, static_cast<PetscInt>(values.size()), &state);
-	OneDSetInitialVector(state, values);
-	PetscViewer viewer = nullptr;
-	PetscViewerBinaryOpen(PETSC_COMM_WORLD, OneDCheckpointStatePath(prefix).string().c_str(), FILE_MODE_WRITE, &viewer);
-	VecView(state, viewer);
-	PetscViewerDestroy(&viewer);
-	VecDestroy(&state);
-	int failed = 0;
+	std::vector<double> values;
+	std::string text, state_path, metadata_path;
+	CollectiveLocalStage(communicator, "1d checkpoint write preparation", [&] {
+		int actual_rank = 0;
+		MPI_Comm_rank(communicator, &actual_rank);
+		if (rank != actual_rank) throw std::runtime_error("checkpoint writer rank does not match communicator");
+		values = PackOneDCheckpointState(flow, transports, network);
+		one_d_checkpoint_detail::ValidateValues(values, metadata);
+		text = SerializeOneDCheckpointMetadata(metadata);
+		ParseOneDCheckpointMetadata(text);
+		state_path = OneDCheckpointStatePath(prefix).string();
+		metadata_path = OneDCheckpointMetadataPath(prefix).string();
+	});
+	RequireCollectiveSameText(communicator, "1d checkpoint metadata agreement", text);
+	RequireCollectiveSameText(communicator, "1d checkpoint state agreement", one_d_checkpoint_detail::Bytes(values));
+	std::exception_ptr error;
 	if (rank == 0) {
 		try {
-			std::ofstream output(OneDCheckpointMetadataPath(prefix));
-			if (!output) throw std::runtime_error("cannot create 1d checkpoint metadata");
-			output << SerializeOneDCheckpointMetadata(metadata);
-			if (!output) throw std::runtime_error("cannot write 1d checkpoint metadata");
-		} catch (const std::exception&) { failed = 1; }
+			one_d_checkpoint_detail::LocalPetscFile file;
+			OneDPetscCheck(VecCreateSeq(PETSC_COMM_SELF, static_cast<PetscInt>(values.size()), &file.state),
+				"checkpoint vector create");
+			OneDSetInitialVector(file.state, values);
+			file.Open(state_path, FILE_MODE_WRITE);
+			OneDPetscCheck(VecView(file.state, file.viewer), "checkpoint state write");
+			file.Close();
+		} catch (...) { error = std::current_exception(); }
 	}
-	MPI_Bcast(&failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-	if (failed) throw std::runtime_error("cannot write 1d checkpoint metadata");
+	CollectiveLocalStage(communicator, "1d checkpoint state write", [&] {
+		if (error) std::rethrow_exception(error);
+	});
+	CollectiveLocalStage(communicator, "1d checkpoint metadata write", [&] {
+		if (rank != 0) return;
+		std::ofstream output(metadata_path);
+		if (!output) throw std::runtime_error("cannot create 1d checkpoint metadata");
+		output << text;
+		output.close();
+		if (!output) throw std::runtime_error("cannot write 1d checkpoint metadata");
+	});
 }
 
 inline OneDCheckpointMetadata ReadOneDCheckpoint(const std::filesystem::path& prefix,
 	OneDFlowState& flow, std::vector<OneDTransportState>& transports,
-	OneDNetwork& network, double dynamic_viscosity)
+	OneDNetwork& network, double dynamic_viscosity, MPI_Comm communicator = PETSC_COMM_WORLD)
 {
-	std::ifstream input(OneDCheckpointMetadataPath(prefix));
-	if (!input) throw std::runtime_error("cannot open 1d checkpoint metadata");
-	std::ostringstream contents; contents << input.rdbuf();
-	auto metadata = ParseOneDCheckpointMetadata(contents.str());
-	Vec state = nullptr;
-	VecCreate(PETSC_COMM_WORLD, &state);
-	PetscViewer viewer = nullptr;
-	PetscViewerBinaryOpen(PETSC_COMM_WORLD, OneDCheckpointStatePath(prefix).string().c_str(), FILE_MODE_READ, &viewer);
-	VecLoad(state, viewer);
-	PetscViewerDestroy(&viewer);
-	std::vector<double> values; OneDGetVectorAll(state, values);
-	VecDestroy(&state);
-	UnpackOneDCheckpointState(values, flow, transports, metadata, network, dynamic_viscosity);
-	flow.completed_step = metadata.completed_step;
-	flow.internal_substeps = metadata.internal_substeps;
-	flow.physical_time = metadata.physical_time;
-	flow.inlet_flow = metadata.inlet_flow;
+	OneDCheckpointMetadata metadata;
+	std::string text, state_path;
+	std::size_t count = 0;
+	CollectiveLocalStage(communicator, "1d checkpoint metadata read", [&] {
+		std::ifstream input(OneDCheckpointMetadataPath(prefix));
+		if (!input) throw std::runtime_error("cannot open 1d checkpoint metadata");
+		text = ReadCheckedText(input);
+		metadata = ParseOneDCheckpointMetadata(text);
+		count = OneDCheckpointValueCount(metadata);
+		if (metadata.cells != network.cells || static_cast<std::size_t>(metadata.nodes) != network.nodes.size()
+			|| static_cast<std::size_t>(metadata.segments) != network.segments.size()
+			|| static_cast<std::size_t>(metadata.outlets) != flow.outlets.size()
+			|| metadata.species != OneDCheckpointSpecies(transports))
+			throw std::runtime_error("1d checkpoint layout does not match configuration");
+		state_path = OneDCheckpointStatePath(prefix).string();
+	});
+	RequireCollectiveSameText(communicator, "1d checkpoint metadata agreement", text);
+	std::vector<double> values;
+	std::exception_ptr error;
+	try {
+		one_d_checkpoint_detail::LocalPetscFile file;
+		OneDPetscCheck(VecCreateSeq(PETSC_COMM_SELF, static_cast<PetscInt>(count), &file.state),
+			"checkpoint vector create");
+		file.Open(state_path, FILE_MODE_READ);
+		OneDPetscCheck(VecLoad(file.state, file.viewer), "checkpoint state load");
+		OneDPetscCheck(VecGetArrayRead(file.state, &file.array), "checkpoint vector read");
+		values.resize(count);
+		for (std::size_t i = 0; i < count; ++i) values[i] = PetscRealPart(file.array[i]);
+		OneDPetscCheck(VecRestoreArrayRead(file.state, &file.array), "checkpoint vector restore");
+		file.Close();
+		one_d_checkpoint_detail::ValidateValues(values, metadata);
+	} catch (...) { error = std::current_exception(); }
+	CollectiveLocalStage(communicator, "1d checkpoint state read", [&] {
+		if (error) std::rethrow_exception(error);
+	});
+	RequireCollectiveSameText(communicator, "1d checkpoint state agreement", one_d_checkpoint_detail::Bytes(values));
+	CollectiveLocalStage(communicator, "1d checkpoint unpack", [&] {
+		UnpackOneDCheckpointState(values, flow, transports, metadata, network, dynamic_viscosity);
+		flow.completed_step = metadata.completed_step;
+		flow.internal_substeps = metadata.internal_substeps;
+		flow.physical_time = metadata.physical_time;
+		flow.inlet_flow = metadata.inlet_flow;
+	});
 	return metadata;
 }
 

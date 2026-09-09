@@ -7,6 +7,7 @@
 #include "DynamicWeightedAitkenRelaxation.hpp"
 #include "FsiCouplingEdge.hpp"
 #include "FsiDomainRuntime.hpp"
+#include "PhaseProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -138,6 +139,7 @@ public:
 
 	StrongFluidStructureCouplingResult Execute(const DomainStepContext& step)
 	{
+		PhaseScope coupling_phase(ProfilePhase::Coupling);
 		static_assert(std::is_nothrow_move_constructible<StrongFluidStructureCouplingResult>::value,
 			"strong FSI result return must not throw after paired finalization");
 		if (active_) throw std::runtime_error("strong FSI coordinator already has an active macro step");

@@ -33,16 +33,20 @@ public:
 
 	void BeginStep(const DomainStepContext& step) override
 	{
-		step.Validate();
-		runtime_.BeginStep(step.start_time_s, step.dt_s);
-		if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop)
-			runtime_.SetConfiguredOpenLoopInlet();
+		runtime_.RunLocalAdapterStage("1d flow adapter begin step", [&] {
+			step.Validate();
+			runtime_.BeginStep(step.start_time_s, step.dt_s);
+			if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop)
+				runtime_.SetConfiguredOpenLoopInlet();
+		});
 	}
 
 	void SetPortInput(const std::string& port_id,
 		const PortBoundaryData& input) override
 	{
-		runtime_.SetPortInput(Port(port_id).locator, input);
+		runtime_.RunLocalAdapterStage("1d flow adapter input", [&] {
+			runtime_.SetPortInput(Port(port_id).locator, input);
+		});
 	}
 
 	void SolveTrial() override { runtime_.SolveTrial(); }
@@ -52,9 +56,24 @@ public:
 		return runtime_.GetPortState(Port(port_id).locator);
 	}
 
-	void RollbackTrial() override { runtime_.RollbackTrial(); }
-	void AbortStep() override { runtime_.AbortStep(); }
-	void PrepareCommitStep() override { runtime_.PrepareCommitStep(); }
+	void RollbackTrial() override
+	{
+		runtime_.RunLocalAdapterStage("1d flow adapter rollback", [&] {
+			runtime_.RollbackTrial();
+		});
+	}
+	void AbortStep() override
+	{
+		runtime_.RunLocalAdapterStage("1d flow adapter abort", [&] {
+			runtime_.AbortStep();
+		});
+	}
+	void PrepareCommitStep() override
+	{
+		runtime_.RunLocalAdapterStage("1d flow adapter prepare commit", [&] {
+			runtime_.PrepareCommitStep();
+		});
+	}
 	void FinalizeCommitStep() noexcept override { runtime_.FinalizeCommitStep(); }
 
 private:
@@ -123,41 +142,52 @@ public:
 
 	void BeginStep(const DomainStepContext& step) override
 	{
-		step.Validate();
-		if (runtime_.Configuration().physiology.vasodilation)
-			throw std::runtime_error(
-				"staged 1D flow/transport rejects enabled concentration-driven vasodilation");
-		runtime_.BeginStep(step.start_time_s, step.dt_s);
-		if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop)
-			runtime_.SetConfiguredOpenLoopInlet();
-		step_ = step;
-		hydraulic_inputs_.clear();
-		concentration_inputs_.clear();
-		hydraulic_trial_succeeded_ = false;
-		transport_trial_succeeded_ = false;
+		runtime_.RunLocalAdapterStage("1d staged adapter begin step", [&] {
+			step.Validate();
+			if (runtime_.Configuration().physiology.vasodilation)
+				throw std::runtime_error(
+					"staged 1D flow/transport rejects enabled concentration-driven vasodilation");
+			runtime_.BeginStep(step.start_time_s, step.dt_s);
+			if (inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop)
+				runtime_.SetConfiguredOpenLoopInlet();
+			step_ = step;
+			hydraulic_inputs_.clear();
+			concentration_inputs_.clear();
+			hydraulic_trial_succeeded_ = false;
+			transport_trial_succeeded_ = false;
+		});
 	}
 
 	void SetPortInput(const std::string& port_id, const PortBoundaryData& input) override
 	{
-		RequireOpen("1D flow/transport input");
-		const auto& port = Port(port_id);
-		ValidatePortBoundaryData(input);
-		ValidateTime(input.time_s);
-		if (!input.outward_species_flux.empty())
-			throw std::runtime_error("1D peer species flux is executor-owned, not a boundary input");
-		const auto hydraulic = HydraulicInput(input);
-		if (HydraulicValueCount(hydraulic) > 0) {
-			if (hydraulic_inputs_.count(port_id))
-				throw std::runtime_error("1D staged hydraulic input was supplied more than once");
-			hydraulic_inputs_.emplace(port_id, hydraulic);
-		}
-		if (!input.concentration.empty()) {
-			if (!port.requires.count(PortQuantity::SpeciesConcentration))
-				throw std::runtime_error("1D staged port does not accept concentration input");
-			if (concentration_inputs_.count(port_id))
-				throw std::runtime_error("1D staged concentration was supplied more than once");
-			concentration_inputs_.emplace(port_id, input.concentration);
-		}
+		decltype(hydraulic_inputs_) hydraulics;
+		decltype(concentration_inputs_) concentrations;
+		runtime_.RunLocalAdapterStage("1d staged adapter input", [&] {
+			hydraulics = hydraulic_inputs_;
+			concentrations = concentration_inputs_;
+
+			RequireOpen("1D flow/transport input");
+			const auto& port = Port(port_id);
+			ValidatePortBoundaryData(input);
+			ValidateTime(input.time_s);
+			if (!input.outward_species_flux.empty())
+				throw std::runtime_error("1D peer species flux is executor-owned, not a boundary input");
+			const auto hydraulic = HydraulicInput(input);
+			if (HydraulicValueCount(hydraulic) > 0) {
+				if (hydraulics.count(port_id))
+					throw std::runtime_error("1D staged hydraulic input was supplied more than once");
+				hydraulics.emplace(port_id, hydraulic);
+			}
+			if (!input.concentration.empty()) {
+				if (!port.requires.count(PortQuantity::SpeciesConcentration))
+					throw std::runtime_error("1D staged port does not accept concentration input");
+				if (concentrations.count(port_id))
+					throw std::runtime_error("1D staged concentration was supplied more than once");
+				concentrations.emplace(port_id, input.concentration);
+			}
+		});
+		hydraulic_inputs_.swap(hydraulics);
+		concentration_inputs_.swap(concentrations);
 	}
 
 	void SolveTrial() override
@@ -173,26 +203,32 @@ public:
 
 	void RollbackTrial() override
 	{
-		if (!hydraulic_trial_succeeded_)
-			throw std::runtime_error("1D staged rollback requires a hydraulic trial");
+		runtime_.RunLocalAdapterStage("1d staged adapter rollback preparation", [&] {
+			if (!hydraulic_trial_succeeded_)
+				throw std::runtime_error("1D staged rollback requires a hydraulic trial");
+		});
 		if (transport_trial_succeeded_) RollbackTransportTrial();
 		RollbackHydraulicTrial();
 	}
 
 	void AbortStep() override
 	{
-		runtime_.AbortStep();
-		hydraulic_inputs_.clear();
-		concentration_inputs_.clear();
-		hydraulic_trial_succeeded_ = false;
-		transport_trial_succeeded_ = false;
+		runtime_.RunLocalAdapterStage("1d staged adapter abort", [&] {
+			runtime_.AbortStep();
+			hydraulic_inputs_.clear();
+			concentration_inputs_.clear();
+			hydraulic_trial_succeeded_ = false;
+			transport_trial_succeeded_ = false;
+		});
 	}
 
 	void PrepareCommitStep() override
 	{
-		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
-			throw std::runtime_error("1D staged prepare requires hydraulic and transport trials");
-		runtime_.PrepareCommitStep();
+		runtime_.RunLocalAdapterStage("1d staged adapter prepare commit", [&] {
+			if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+				throw std::runtime_error("1D staged prepare requires hydraulic and transport trials");
+			runtime_.PrepareCommitStep();
+		});
 	}
 
 	void FinalizeCommitStep() noexcept override
@@ -206,14 +242,16 @@ public:
 
 	void SolveHydraulicTrial() override
 	{
-		RequireOpen("1D staged hydraulic solve");
-		for (const auto& port : ports_) {
-			const auto found = hydraulic_inputs_.find(port.id);
-			const int supplied = found == hydraulic_inputs_.end() ? 0 : HydraulicValueCount(found->second);
-			if (HydraulicRequirementCount(port) != supplied)
-				throw std::runtime_error("1D staged hydraulic input is missing or extra for port '"+port.id+"'");
-			if (supplied) runtime_.SetPortInput(port.locator, found->second);
-		}
+		runtime_.RunLocalAdapterStage("1d staged adapter hydraulic preparation", [&] {
+			RequireOpen("1D staged hydraulic solve");
+			for (const auto& port : ports_) {
+				const auto found = hydraulic_inputs_.find(port.id);
+				const int supplied = found == hydraulic_inputs_.end() ? 0 : HydraulicValueCount(found->second);
+				if (HydraulicRequirementCount(port) != supplied)
+					throw std::runtime_error("1D staged hydraulic input is missing or extra for port '"+port.id+"'");
+				if (supplied) runtime_.SetPortInput(port.locator, found->second);
+			}
+		});
 		hydraulic_trial_succeeded_ = false;
 		runtime_.SolveHydraulicTrial();
 		hydraulic_trial_succeeded_ = true;
@@ -232,9 +270,11 @@ public:
 
 	void RollbackHydraulicTrial() override
 	{
-		if (!hydraulic_trial_succeeded_
-			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
-			throw std::runtime_error("1D staged hydraulic rollback requires a solved hydraulic trial");
+		runtime_.RunLocalAdapterStage("1d staged adapter hydraulic rollback preparation", [&] {
+			if (!hydraulic_trial_succeeded_
+				|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+				throw std::runtime_error("1D staged hydraulic rollback requires a solved hydraulic trial");
+		});
 		runtime_.RollbackHydraulicTrial();
 		hydraulic_inputs_.clear();
 		hydraulic_trial_succeeded_ = false;
@@ -243,65 +283,77 @@ public:
 	void SetTransportConcentration(const std::string& port_id, double time_s,
 		const std::map<std::string, double>& concentration) override
 	{
-		if (!hydraulic_trial_succeeded_
-			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
-			throw std::runtime_error("1D staged concentration requires accepted hydraulics");
-		const auto& port = Port(port_id);
-		if (!port.requires.count(PortQuantity::SpeciesConcentration)
-			|| port.species.empty() || SpeciesKeys(concentration) != port.species)
-			throw std::runtime_error("1D staged concentration requires the complete logical species map");
-		for (const auto& value : concentration)
-			if (!std::isfinite(value.second))
-				throw std::runtime_error("1D staged concentration must be finite");
-		ValidateTime(time_s);
-		if (concentration_inputs_.count(port_id))
-			throw std::runtime_error("1D staged concentration was supplied more than once");
-		concentration_inputs_.emplace(port_id, concentration);
+		decltype(concentration_inputs_) candidate;
+		runtime_.RunLocalAdapterStage("1d staged adapter concentration", [&] {
+			candidate = concentration_inputs_;
+
+			if (!hydraulic_trial_succeeded_
+				|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+				throw std::runtime_error("1D staged concentration requires accepted hydraulics");
+			const auto& port = Port(port_id);
+			if (!port.requires.count(PortQuantity::SpeciesConcentration)
+				|| port.species.empty() || SpeciesKeys(concentration) != port.species)
+				throw std::runtime_error("1D staged concentration requires the complete logical species map");
+			for (const auto& value : concentration)
+				if (!std::isfinite(value.second))
+					throw std::runtime_error("1D staged concentration must be finite");
+			ValidateTime(time_s);
+			if (candidate.count(port_id))
+				throw std::runtime_error("1D staged concentration was supplied more than once");
+			candidate.emplace(port_id, concentration);
+		});
+		concentration_inputs_.swap(candidate);
 	}
 
 	void SolveTransportTrial() override
 	{
-		if (!hydraulic_trial_succeeded_
-			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
-			throw std::runtime_error("1D staged transport requires accepted hydraulics");
+		// An illegal phase is not a new scalar attempt: preserve the previous
+		// input/acceptance image, including when another group member rejects it.
+		runtime_.RunLocalAdapterStage("1d staged adapter transport state", [&] {
+			if (!hydraulic_trial_succeeded_
+				|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::HydraulicSolved)
+				throw std::runtime_error("1D staged transport requires accepted hydraulics");
+		});
 		try {
 			std::map<std::string, double> root;
 			std::map<int, std::map<std::string, double>> outlets;
 			OneDStagedRootTransportOwnership root_ownership
 				= OneDStagedRootTransportOwnership::Legacy;
-			for (const auto& port : ports_) {
-				if (port.species.empty()
-					|| !port.requires.count(PortQuantity::SpeciesConcentration)) continue;
-				const auto found = concentration_inputs_.find(port.id);
-				const bool supplied = found != concentration_inputs_.end();
-				const auto flow = GetHydraulicPortState(port.id).outward_flow_m3_s;
-				if (!flow) throw std::runtime_error("1D staged species port omitted outward flow");
-				const double epsilon = SpeciesFlowEpsilon();
-				const bool configured_root = inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop
-					&& port.locator == "root";
-				if (configured_root && supplied)
-					throw std::runtime_error(
-						"1D configured-open-loop root owns its scheduled concentration");
-				const bool receiver = configured_root || *flow < -epsilon
-					|| (std::abs(*flow) <= epsilon && supplied);
-				if (!configured_root && *flow < -epsilon && !supplied)
-					throw std::runtime_error("1D inward species port requires a complete concentration");
-				if (*flow > epsilon && supplied)
-					throw std::runtime_error("1D outward species port must not impose concentration");
-				ValidateFrameOwnership(port, receiver, epsilon);
-				if (port.locator == "root") {
-					root_ownership = receiver
-						? OneDStagedRootTransportOwnership::BoundaryConcentration
-						: OneDStagedRootTransportOwnership::InteriorDonor;
+			runtime_.RunLocalAdapterStage("1d staged adapter transport preparation", [&] {
+				for (const auto& port : ports_) {
+					if (port.species.empty()
+						|| !port.requires.count(PortQuantity::SpeciesConcentration)) continue;
+					const auto found = concentration_inputs_.find(port.id);
+					const bool supplied = found != concentration_inputs_.end();
+					const auto flow = GetHydraulicPortState(port.id).outward_flow_m3_s;
+					if (!flow) throw std::runtime_error("1D staged species port omitted outward flow");
+					const double epsilon = SpeciesFlowEpsilon();
+					const bool configured_root = inlet_policy_ == OneDInletPolicy::ConfiguredOpenLoop
+						&& port.locator == "root";
+					if (configured_root && supplied)
+						throw std::runtime_error(
+							"1D configured-open-loop root owns its scheduled concentration");
+					const bool receiver = configured_root || *flow < -epsilon
+						|| (std::abs(*flow) <= epsilon && supplied);
+					if (!configured_root && *flow < -epsilon && !supplied)
+						throw std::runtime_error("1D inward species port requires a complete concentration");
+					if (*flow > epsilon && supplied)
+						throw std::runtime_error("1D outward species port must not impose concentration");
+					ValidateFrameOwnership(port, receiver, epsilon);
+					if (port.locator == "root") {
+						root_ownership = receiver
+							? OneDStagedRootTransportOwnership::BoundaryConcentration
+							: OneDStagedRootTransportOwnership::InteriorDonor;
+					}
+					if (!supplied) continue;
+					std::map<std::string, double> native;
+					for (const auto& logical : port.species)
+						native.emplace(species_bindings_.at(logical), found->second.at(logical));
+					if (port.locator == "root") root = std::move(native);
+					else outlets.emplace(NativeOutletNode(port), std::move(native));
 				}
-				if (!supplied) continue;
-				std::map<std::string, double> native;
-				for (const auto& logical : port.species)
-					native.emplace(species_bindings_.at(logical), found->second.at(logical));
-				if (port.locator == "root") root = std::move(native);
-				else outlets.emplace(NativeOutletNode(port), std::move(native));
-			}
-			transport_trial_succeeded_ = false;
+				transport_trial_succeeded_ = false;
+			});
 			runtime_.SolveStagedTransportTrial(root, outlets, root_ownership);
 			transport_trial_succeeded_ = true;
 		} catch (...) {
@@ -326,9 +378,11 @@ public:
 
 	void RollbackTransportTrial() override
 	{
-		if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_
-			|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::TrialSolved)
-			throw std::runtime_error("1D staged transport rollback requires successful trials");
+		runtime_.RunLocalAdapterStage("1d staged adapter transport rollback preparation", [&] {
+			if (!hydraulic_trial_succeeded_ || !transport_trial_succeeded_
+				|| runtime_.CurrentPhase() != OneDFlowRuntime::Phase::TrialSolved)
+				throw std::runtime_error("1D staged transport rollback requires successful trials");
+		});
 		runtime_.RollbackStagedTransportTrial();
 		concentration_inputs_.clear();
 		transport_trial_succeeded_ = false;

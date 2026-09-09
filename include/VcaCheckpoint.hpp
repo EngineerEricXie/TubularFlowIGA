@@ -1,6 +1,7 @@
 #ifndef IGA_VCA_CHECKPOINT_HPP
 #define IGA_VCA_CHECKPOINT_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "VascularCoupling.hpp"
 
@@ -47,7 +48,9 @@ inline std::string VcaConfigurationFingerprint(const std::filesystem::path& path
 		hash ^= static_cast<unsigned char>(value);
 		hash *= 1099511628211ULL;
 	}
+	if (input.bad() || !input.eof()) throw std::runtime_error("cannot read VCA configuration for fingerprint");
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << std::hex << std::setw(16) << std::setfill('0') << hash;
 	return output.str();
 }
@@ -55,6 +58,7 @@ inline std::string VcaConfigurationFingerprint(const std::filesystem::path& path
 inline std::string VcaDeviceModelIdentity(const CouplingDefinition& definition)
 {
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << "pump=" << definition.external_circuit.pump.mode
 		<< ";oxygenator=" << (definition.external_circuit.oxygenator.enabled
 			? definition.external_circuit.oxygenator.mode : "disabled")
@@ -78,6 +82,7 @@ inline std::filesystem::path VcaCheckpointTransportStatePath(const std::filesyst
 inline std::string SerializeVcaCheckpointMetadata(const VcaCheckpointMetadata& metadata)
 {
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << std::setprecision(17)
 		<< "{\n  \"schema_version\": " << metadata.schema_version
 		<< ",\n  \"completed_step\": " << metadata.completed_step
@@ -192,9 +197,8 @@ inline VcaCheckpointMetadata ReadVcaCheckpointMetadata(const std::filesystem::pa
 {
 	std::ifstream input(VcaCheckpointMetadataPath(prefix));
 	if (!input) throw std::runtime_error("cannot open VCA checkpoint metadata");
-	std::ostringstream text;
-	text << input.rdbuf();
-	return ParseVcaCheckpointMetadata(text.str());
+	const auto text = iga::ReadCheckedText(input);
+	return ParseVcaCheckpointMetadata(text);
 }
 
 inline void ValidateVcaCheckpoint(const VcaCheckpointMetadata& metadata, int completed_step,

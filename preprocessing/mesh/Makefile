@@ -19,6 +19,7 @@ $(TEST_TARGET): $(OBJECTS) tests/test_core.o
 	$(CXX) $^ -o $@ $(LDLIBS)
 
 src/SwcGraph.o: ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp
+src/main.o tests/test_core.o: ../../include/MeshConfig.hpp ../../include/CheckedText.hpp
 
 test: $(TEST_TARGET)
 	./$(TEST_TARGET) ../../meshgeneration/template

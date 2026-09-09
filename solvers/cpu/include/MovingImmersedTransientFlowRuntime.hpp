@@ -86,6 +86,7 @@ public:
 		MovingImmersedTransientFlowOptions options)
 		: options_(std::move(options))
 	{
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		auto geometry = MovingCutGeometry::Build(options_.grid, std::move(initial), options_.geometry);
 		std::unique_ptr<Epoch> epoch(new Epoch(std::move(geometry), options_.flow));
 		committed_.swap(epoch); RefreshCommittedDiagnostics();
@@ -135,6 +136,7 @@ public:
 
 	void BeginTrial(MaterialSurfaceKinematics target, std::uint64_t target_index, double dt_s)
 	{
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		RequireIdle("begin trial");
 		const auto& old_state = committed_->runtime->CommittedGlobalState();
 		if (old_state.Index() == std::numeric_limits<std::uint64_t>::max())

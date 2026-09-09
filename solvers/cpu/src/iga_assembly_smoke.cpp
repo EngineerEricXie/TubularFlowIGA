@@ -1,3 +1,7 @@
+#include "ExecutionResources.hpp"
+#include "CollectiveAssetInput.hpp"
+#include "CollectivePetscOptions.hpp"
+#include <memory>
 #include "IgaDatabase.hpp"
 #include "OwnedRowAssembler.hpp"
 
@@ -6,38 +10,91 @@
 #include <iostream>
 #include <vector>
 
+namespace {
+class ReturnErrors {
+public:
+	void Enable(MPI_Comm communicator)
+	{
+		iga::CollectiveLocalStage(communicator, "assembly smoke error handler", [&] {
+			if (PetscPushErrorHandler(PetscReturnErrorHandler, nullptr))
+				throw std::runtime_error("cannot install returning PETSc error handler");
+			active_ = true;
+		});
+	}
+	~ReturnErrors() { if (active_) PetscPopErrorHandler(); }
+private:
+	bool active_ = false;
+};
+
+struct MatrixOwner {
+	MatrixOwner() = default;
+	MatrixOwner(const MatrixOwner&) = delete;
+	MatrixOwner& operator=(const MatrixOwner&) = delete;
+	Mat value = nullptr;
+	~MatrixOwner() { if (value) MatDestroy(&value); }
+};
+}
+
 int main(int argc, char** argv)
 {
 	PetscInitialize(&argc, &argv, nullptr, "Owned-row IGA assembly smoke test\n");
-	int rank = 0;
+	int rank = 0, ranks = 1;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+	MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
 	int status = 0;
 	try {
-		if (argc != 3) throw std::runtime_error("usage: iga_assembly_smoke DATABASE.ntiga FIELDS");
-		iga::Database database(argv[1]);
-		const auto fields = static_cast<PetscInt>(std::stol(argv[2]));
+		iga::RequireExecutionResources(PETSC_COMM_WORLD, &std::cout);
+		ReturnErrors errors;
+		errors.Enable(PETSC_COMM_WORLD);
+		std::unique_ptr<iga::Database> database_owner;
+		PetscInt fields = 0;
+		std::string field_description;
+		std::string database_fingerprint;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "assembly smoke input", [&] {
+			if (argc != 3) throw std::runtime_error("usage: iga_assembly_smoke DATABASE.ntiga FIELDS");
+			const std::string text(argv[2]); std::size_t used = 0;
+			const auto parsed = std::stoll(text, &used);
+			if (used != text.size() || parsed <= 0 || static_cast<unsigned long long>(parsed)
+				> static_cast<unsigned long long>(std::numeric_limits<PetscInt>::max()))
+				throw std::runtime_error("FIELDS must be a positive integer within PetscInt capacity");
+			fields = static_cast<PetscInt>(parsed);
+			field_description = std::to_string(fields);
+			database_fingerprint = iga::ReadAssetFingerprint(argv[1]);
+			database_owner = std::make_unique<iga::Database>(argv[1]);
+			iga::ValidatePackedExecution(database_owner->header().ranks, database_owner->header().nodes, fields, ranks);
+		});
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "assembly smoke field agreement", field_description);
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "assembly smoke asset database", database_fingerprint);
+		iga::RequireCollectivePetscOptions(PETSC_COMM_WORLD);
+		auto& database = *database_owner;
 		iga::OwnedRowAssembler assembler(database, PETSC_COMM_WORLD, fields);
-		Mat matrix = assembler.CreateMatrix();
-		for (const auto& element : assembler.elements()) {
-			const auto n = element.connectivity.size() * static_cast<std::size_t>(fields);
-			std::vector<PetscScalar> values(n * n, 1.0);
-			assembler.AddElementMatrix(matrix, element, values);
-		}
-		iga::OwnedRowAssembler::Assemble(matrix);
+		MatrixOwner owner;
+		owner.value = assembler.CreateMatrix();
+		const auto matrix = owner.value;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "assembly smoke element insertion", [&] {
+			for (const auto& element : assembler.elements()) {
+				const auto n = element.connectivity.size() * static_cast<std::size_t>(fields);
+				std::vector<PetscScalar> values(n * n, 1.0);
+				assembler.AddElementMatrix(matrix, element, values);
+			}
+		});
+		iga::OwnedRowAssembler::Assemble(matrix, PETSC_COMM_WORLD);
 		PetscBool missing = PETSC_FALSE;
 		PetscInt row = -1;
-		MatMissingDiagonal(matrix, &missing, &row);
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke diagonal", MatMissingDiagonal(matrix, &missing, &row));
 		MatInfo info{};
-		MatGetInfo(matrix, MAT_GLOBAL_SUM, &info);
-		if (rank == 0) {
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke matrix info", MatGetInfo(matrix, MAT_GLOBAL_SUM, &info));
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke destroy", MatDestroy(&owner.value));
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "assembly smoke result logging", [&] {
+			if (rank != 0) return;
 			std::cout << "global_rows=" << assembler.global_rows()
 				<< " nz_used=" << static_cast<long long>(info.nz_used)
 				<< " nz_allocated=" << static_cast<long long>(info.nz_allocated)
 				<< " mallocs=" << static_cast<long long>(info.mallocs)
 				<< " missing_diagonal=" << static_cast<int>(missing) << '\n';
-		}
+			iga::FlushCheckedText(std::cout);
+		});
 		if (missing || info.mallocs != 0.0) status = 1;
-		MatDestroy(&matrix);
 	} catch (const std::exception& e) {
 		std::cerr << "rank " << rank << ": " << e.what() << '\n';
 		status = 1;

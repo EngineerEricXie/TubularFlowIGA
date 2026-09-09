@@ -1,6 +1,7 @@
 #ifndef IGA_ONE_D_CONFIG_HPP
 #define IGA_ONE_D_CONFIG_HPP
 
+#include "CheckedText.hpp"
 #include "SimulationConfig.hpp"
 #include "RadiusAnnotatedObj.hpp"
 #include "CouplingConfig.hpp"
@@ -721,10 +722,9 @@ inline OneDConfiguration ReadOneDConfiguration(const std::filesystem::path& path
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open 1d simulation configuration: " + path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read 1d simulation configuration: " + path.string());
-	return ParseOneDConfiguration(contents.str());
+	return ParseOneDConfiguration(contents);
 }
 
 inline const FieldDefinition& FindOneDField(const OneDConfiguration& configuration,

@@ -1,6 +1,13 @@
+#include "CheckedText.hpp"
+#include "ExecutionResources.hpp"
+#include "MultidomainRunner.hpp"
+#include "CollectiveFailure.hpp"
+#include "CollectiveAssetInput.hpp"
+#include "CollectivePetscOptions.hpp"
 #include "BifurcationMultidomainCase.hpp"
 #include "BoundarySupport.hpp"
 #include "DomainRuntimeRegistry.hpp"
+#include "CollectiveDomainRuntimeRegistry.hpp"
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
 #include "ImmersedFlowCase.hpp"
@@ -8,6 +15,8 @@
 #include "OneDImplicit.hpp"
 #include "OneDRuntime.hpp"
 #include "PressureFlowComponentExecutor.hpp"
+#include "CollectivePressureFlowExecution.hpp"
+#include "CollectiveSpeciesPressureFlowExecution.hpp"
 #include "SpeciesPressureFlowComponentExecutor.hpp"
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "ThreeDBodyFittedFlowTransportDomainAdapter.hpp"
@@ -98,9 +107,8 @@ std::string ReadText(const fs::path& path)
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open file: "+path.string());
-	std::ostringstream text;
-	text << input.rdbuf();
-	return text.str();
+	const auto text = iga::ReadCheckedText(input);
+	return text;
 }
 
 void CanonicalizePeriodicTableAssets(std::vector<iga::TemporalFunctionDefinition>& functions,
@@ -159,6 +167,7 @@ double RequireValue(const std::optional<double>& value, const std::string& conte
 std::string JsonEscape(const std::string& value)
 {
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	for (const unsigned char character : value) {
 		switch (character) {
 		case '"': output << "\\\""; break;
@@ -263,13 +272,12 @@ void RequireOneDStagedTransport(const iga::OneDConfiguration& configuration,
 
 NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
-	const std::string& domain_id, bool species_mode)
+	const std::string& domain_id, bool species_mode, MPI_Comm communicator,
+	const std::string& configuration_text)
 {
 	const auto& definition = iga::GraphDomainDefinitionFor(graph, domain_id);
 	const auto case_directory = assets.at(domain_id).case_directory;
-	auto configuration = iga::ParseOneDConfiguration(ReadText(
-		iga::ResolveContainedCaseFile(case_directory, "simulation_config.json",
-			"1D configuration")));
+	auto configuration = iga::ParseOneDConfiguration(configuration_text);
 	CanonicalizePeriodicTableAssets(configuration.temporal_functions, case_directory, domain_id);
 	if (species_mode)
 		RequireOneDStagedTransport(configuration, definition.species_bindings);
@@ -284,10 +292,14 @@ NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 	auto inlet = iga::ResolveOneDInlet(configuration);
 	auto runtime = std::make_unique<iga::OneDFlowRuntime>(configuration, flow,
 		std::move(network), inlet, case_directory,
-		[](const iga::OneDNetwork& network_definition,
+		[communicator](const iga::OneDNetwork& network_definition,
 			const iga::OneDFlowSystemDefinition& flow_definition,
 			iga::OneDFlowState& state, double inlet_flow, double dt) {
-			iga::AdvanceImplicitOneD(network_definition, flow_definition, state, inlet_flow, dt);
+			iga::AdvanceImplicitOneD(network_definition, flow_definition, state, inlet_flow, dt, communicator);
+		}, [communicator](const char* stage, std::exception_ptr error) {
+			iga::CollectiveLocalStage(communicator, stage, [&] {
+				if (error) std::rethrow_exception(error);
+			});
 		});
 	(void)iga::MakeOneDSubcyclingPlan(configuration.time.dt, configuration.time.steps,
 		graph.time.dt_s, graph.time.steps);
@@ -323,7 +335,8 @@ std::unique_ptr<NativeThreeD> BuildThreeDPreflight(
 	const iga::MultidomainConfiguration& graph,
 	const iga::PressureFlowComponentPlan& plan,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
-	const std::string& domain_id, int rank, bool species_mode)
+	const std::string& domain_id, int rank, bool species_mode,
+	const std::string& configuration_text)
 {
 	auto native = std::make_unique<NativeThreeD>();
 	native->domain_id = domain_id;
@@ -331,9 +344,7 @@ std::unique_ptr<NativeThreeD> BuildThreeDPreflight(
 	native->database = std::make_unique<iga::Database>(assets.at(domain_id).database.string());
 	const auto required_elements = native->database->LoadRequired(rank);
 	const auto owned_elements = native->database->LoadOwned(rank);
-	native->configuration = iga::ReadSimulationConfiguration(
-		iga::ResolveContainedCaseFile(native->case_directory, "simulation_config.json",
-			domain_id+" 3D configuration").string());
+	native->configuration = iga::ParseSimulationConfiguration(configuration_text);
 	CanonicalizePeriodicTableAssets(native->configuration.temporal_functions,
 		native->case_directory, domain_id);
 	int flow_count = 0;
@@ -788,29 +799,36 @@ int FailureInjectionStep()
 		"TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP") : 0;
 }
 
-void RequireCollectivePreflight(const std::string& local_error)
-{
-	const int local_failed = local_error.empty() ? 0 : 1;
-	int any_failed = 0;
-	MPI_Allreduce(&local_failed, &any_failed, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);
-	if (!any_failed) return;
-	if (!local_error.empty()) throw std::runtime_error(local_error);
-	throw std::runtime_error("bifurcation graph preflight failed on another MPI rank");
-}
 
 } // namespace
 
-int main(int argc, char** argv)
+int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 {
-	PetscInitialize(&argc, &argv, nullptr,
-		"TubularFlowIGA schema-v5 1D--3D bifurcation coupling\n");
 	int rank = 0;
 	int mpi_size = 1;
-	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
-	MPI_Comm_size(PETSC_COMM_WORLD, &mpi_size);
+	MPI_Comm_rank(communicator, &rank);
+	MPI_Comm_size(communicator, &mpi_size);
 	int status = 0;
 	try {
-		const auto options = ParseOptions(argc, argv);
+		iga::RequireExecutionResources(communicator, &std::cout);
+		Options options;
+		int injected_failure_step = 0;
+		std::string execution_controls;
+		std::set<std::string> application_options;
+		iga::CollectiveLocalStage(communicator, "graph arguments", [&] {
+			options = ParseOptions(argc, argv);
+			injected_failure_step = FailureInjectionStep();
+			execution_controls = std::to_string(options.stop_after_step)+"\n"
+				+std::to_string(options.maximum_newton)+"\n"+std::to_string(injected_failure_step);
+			// These application arguments are checked separately and are not
+			// read by KSP/PC. options_file is an already-loaded input location;
+			// its resulting entries, including prefixed/unused options, agree.
+			application_options = {"--graph-case", "--output-dir", "--stop-after-step",
+				"--three-d-max-newton", "-options_file"};
+		});
+		iga::RequireCollectiveSameText(communicator, "graph execution controls", execution_controls);
+		iga::RequireCollectivePetscOptions(communicator, nullptr, application_options);
+		std::map<std::string, std::string> input_texts;
 		std::optional<iga::MultidomainConfiguration> configuration_holder;
 		std::optional<iga::PressureFlowComponentPlan> plan_holder;
 		std::optional<iga::OneDThreeDBifurcationDefinition> bifurcation_holder;
@@ -820,14 +838,13 @@ int main(int argc, char** argv)
 		std::map<std::string, std::unique_ptr<NativeImmersed>> immersed;
 		std::map<std::string, const NativeImmersed*> immersed_audit;
 		fs::path graph_root;
-		std::string local_error;
-		try {
+		iga::CollectiveLocalStage(communicator, "graph input", [&] {
 			if (fs::exists(options.output_directory))
 				throw std::runtime_error("bifurcation output directory must not already exist");
 			graph_root = iga::CanonicalGraphCaseRoot(options.graph_case);
 			configuration_holder.emplace(iga::ReadMultidomainConfiguration(
 				iga::ResolveContainedCaseFile(graph_root, "simulation_config.json",
-					"multidomain manifest").string()));
+					"multidomain manifest").string(), input_texts));
 #ifdef IGA_BIFURCATION_ENTRY
 			if (configuration_holder->schema_version != 5)
 				throw std::runtime_error("bifurcation runner supports schema version 5 only");
@@ -836,7 +853,6 @@ int main(int argc, char** argv)
 				&& configuration_holder->schema_version != 6)
 				throw std::runtime_error("multidomain flow runner supports schema version 5 or 6");
 #endif
-			const bool species_mode = configuration_holder->schema_version == 6;
 			plan_holder.emplace(iga::MakeAcyclicPressureFlowPlan(
 				configuration_holder->graph, configuration_holder->start_domain_id));
 #ifdef IGA_BIFURCATION_ENTRY
@@ -844,6 +860,61 @@ int main(int argc, char** argv)
 				iga::ResolveOneDThreeDBifurcation(*configuration_holder));
 #endif
 			assets = iga::ResolveGraphDomainAssets(*configuration_holder, graph_root);
+
+		});
+		iga::RequireCollectiveSameText(communicator, "graph manifest", input_texts.at("graph manifest"));
+		iga::CollectiveLocalStage(communicator, "graph configuration input", [&] {
+			if (options.stop_after_step > configuration_holder->time.steps)
+				throw std::runtime_error("--stop-after-step exceeds configured steps");
+			for (const auto& domain : configuration_holder->domains) {
+				if (domain.kind != iga::DomainKind::OneDFlow
+					&& domain.kind != iga::DomainKind::ThreeDBodyFittedFlow) continue;
+				input_texts["domain configuration "+domain.id] = ReadText(
+					iga::ResolveContainedCaseFile(assets.at(domain.id).case_directory,
+						"simulation_config.json", domain.id+" configuration"));
+			}
+		});
+		// The manifest has already agreed, so all ranks visit the same logical
+		// inputs in the same order. Parsed 1D/3D settings use these snapshots.
+		for (const auto& input : input_texts)
+			iga::RequireCollectiveSameText(communicator, input.first.c_str(), input.second);
+		iga::AssetFileCatalog input_assets;
+		iga::CollectiveLocalStage(communicator, "graph asset catalog", [&] {
+			for (const auto& domain : configuration_holder->domains) {
+				if (domain.kind != iga::DomainKind::OneDFlow
+					&& domain.kind != iga::DomainKind::ThreeDBodyFittedFlow) continue;
+				const auto& directory = assets.at(domain.id).case_directory;
+				const auto prefix = "graph asset " + domain.id + " / ";
+				const auto add_asset = [&](const std::string& role, const fs::path& path) {
+					if (!input_assets.emplace(prefix + role, path).second)
+						throw std::runtime_error("duplicate logical graph asset: " + prefix + role);
+				};
+				const auto add_tables = [&](const auto& functions) {
+					for (const auto& function : functions)
+						if (function.kind == iga::TemporalFunctionKind::PeriodicTable)
+							add_asset("temporal " + function.name,
+								iga::ResolveContainedCaseFile(directory, function.file,
+									domain.id + " temporal " + function.name));
+				};
+				if (domain.kind == iga::DomainKind::OneDFlow) {
+					const auto input = iga::ParseOneDConfiguration(input_texts.at("domain configuration " + domain.id));
+					add_asset("network", iga::ResolveContainedCaseFile(
+						directory, input.geometry.file, domain.id + " network"));
+					add_tables(input.temporal_functions);
+				} else {
+					const auto input = iga::ParseSimulationConfiguration(input_texts.at("domain configuration " + domain.id));
+					add_asset("database", assets.at(domain.id).database);
+					add_asset("control mesh", iga::ResolveContainedCaseFile(
+						directory, "controlmesh.vtk", domain.id + " control mesh"));
+					add_asset("initial velocity", iga::ResolveContainedCaseFile(
+						directory, "initial_velocityfield.txt", domain.id + " initial velocity"));
+					add_tables(input.temporal_functions);
+				}
+			}
+		});
+		iga::RequireCollectiveAssetFiles(communicator, input_assets);
+		iga::CollectiveLocalStage(communicator, "graph 1D initialization", [&] {
+			const bool species_mode = configuration_holder->schema_version == 6;
 			for (const auto& domain_id : plan_holder->domain_order) {
 				if (configuration_holder->graph.Domain(domain_id).kind
 					!= iga::DomainKind::OneDFlow) continue;
@@ -860,16 +931,14 @@ int main(int argc, char** argv)
 					throw std::runtime_error(
 						"1D inlet policy does not match its directed graph role");
 				one_d.emplace(domain_id,
-					BuildOneD(*configuration_holder, assets, domain_id, species_mode));
+					BuildOneD(*configuration_holder, assets, domain_id, species_mode, communicator,
+						input_texts.at("domain configuration "+domain_id)));
 			}
-		} catch (const std::exception& error) {
-			local_error = error.what();
-		}
-		RequireCollectivePreflight(local_error);
+		});
+
 		auto& configuration = *configuration_holder;
 		const auto& plan = *plan_holder;
-		local_error.clear();
-		try {
+		iga::CollectiveLocalStage(communicator, "graph domain preflight", [&] {
 			for (const auto& item : one_d)
 				for (const auto& port : configuration.graph.Domain(item.first).ports)
 					if (port.locator_kind == "runtime_port")
@@ -879,7 +948,8 @@ int main(int argc, char** argv)
 					== iga::DomainKind::ThreeDBodyFittedFlow)
 					three_d.emplace(domain_id, BuildThreeDPreflight(
 						configuration, plan, assets, domain_id, rank,
-						configuration.schema_version == 6));
+						configuration.schema_version == 6,
+						input_texts.at("domain configuration "+domain_id)));
 			for (const auto& domain_id : plan.domain_order)
 				if (configuration.graph.Domain(domain_id).kind
 					== iga::DomainKind::ThreeDImmersedFlow) {
@@ -906,82 +976,92 @@ int main(int argc, char** argv)
 							!= volume.second->RuntimeParameters().dynamic_viscosity)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
-		} catch (const std::exception& error) {
-			local_error = error.what();
-		}
-		RequireCollectivePreflight(local_error);
+		});
 		for (const auto& domain_id : plan.domain_order) {
 			if (!three_d.count(domain_id)) continue;
 			auto& native = *three_d.at(domain_id);
 			const auto& flow = iga::FirstNavierStokesSystem(native.configuration);
-			native.runtime = std::make_unique<iga::TransientFlowRuntime>(*native.database,
-				PETSC_COMM_WORLD, true, true,
+			native.runtime = iga::AllocateCollectiveRuntime<iga::TransientFlowRuntime>(communicator, *native.database,
+				communicator, true, true,
 				iga::NavierStokesParameters{flow.density, flow.viscosity,
 					native.configuration.time.dt}, native.initial_boundaries,
 				native.mesh.labels, native.boundary_velocity, native.wall_trace_basis,
-				std::move(native.outlet_models));
-			iga::RequireValidGeometry(native.runtime->Elements(), rank, PETSC_COMM_WORLD);
+				std::move(native.outlet_models), application_options);
+			iga::RequireValidGeometry(native.runtime->Elements(), rank, communicator);
 			for (const auto& port : configuration.graph.Domain(domain_id).ports) {
-				const int label = iga::ParseThreeDFlowBoundaryLabel(port);
+				int label = 0;
+				iga::RuntimeConstructionStage(communicator, "graph boundary label", [&] {
+					label = iga::ParseThreeDFlowBoundaryLabel(port);
+				});
 				long long local_faces = 0;
 				for (const auto& element : native.runtime->OwnedElements())
 					local_faces += static_cast<long long>(std::count(
 						element.boundary_labels.begin(), element.boundary_labels.end(), label));
 				long long global_faces = 0;
 				MPI_Allreduce(&local_faces, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
-					PETSC_COMM_WORLD);
-				if (global_faces == 0)
-					throw std::runtime_error("3D logical port has no database boundary face");
+					communicator);
+				iga::RuntimeConstructionStage(communicator, "graph boundary coverage", [&] {
+					if (global_faces == 0)
+						throw std::runtime_error("3D logical port has no database boundary face");
+				});
 				if (!port.requires.count(iga::PortQuantity::FlowRate)) continue;
 				const double reference = port.orientation.ToOutward(
 					native.runtime->ReferenceBoundaryFlow(label));
-				native.reference_outward_flow_m3_s.emplace(port.id, reference);
-				const auto interface = std::find_if(plan.interfaces.begin(), plan.interfaces.end(),
-					[&](const iga::PressureFlowInterfacePlan& edge) {
-						return edge.flow_receiver == iga::PortRef{domain_id, port.id};
-					});
-				if (interface == plan.interfaces.end())
-					throw std::runtime_error("3D flow receiver is not bound to a graph edge");
-				iga::PortBoundaryData input;
-				input.time_s = 0.0;
-				if (one_d.count(interface->flow_provider.domain_id)) {
-					const auto& provider = one_d.at(interface->flow_provider.domain_id);
-					const auto provider_state = provider.runtime->GetPortState(
-						configuration.graph.Port(interface->flow_provider).locator);
-					input.outward_flow_m3_s = -RequireValue(
-						provider_state.outward_flow_m3_s, "initial upstream provider flow");
-				} else {
-					const auto& provider = iga::GraphDomainDefinitionFor(configuration,
-						interface->flow_provider.domain_id);
-					if (provider.kind != iga::DomainKind::ZeroDFlow
-						|| !provider.zero_d_flow_model
-						|| provider.zero_d_flow_model->model.role
-							!= iga::ZeroDFlowRole::SourceReservoir)
-						throw std::runtime_error(
-							"flow-controlled 3D inlet requires a 1D or source-0D flow provider");
-					const auto& source = provider.zero_d_flow_model->model.source;
-					const double edge_pressure = configuration.initial_pressure_pa.at(
-						interface->edge_id);
-					// This is an initialization-only boundary seed.  It uses the
-					// committed compliant pressure and coupling-edge pressure directly;
-					// do not publish or commit a speculative 0D trial here.
-					input.outward_flow_m3_s = -(provider.zero_d_flow_model->initial_state
-						.stored_pressure_pa-edge_pressure)/source.resistance_pa_s_m3;
-				}
-				iga::ApplyThreeDReferenceProfileInput(native.initial_configuration,
-					iga::FirstNavierStokesSystem(native.initial_configuration), port, input,
-					reference);
+				iga::RuntimeConstructionStage(communicator, "graph initial port catalog", [&] {
+					native.reference_outward_flow_m3_s.emplace(port.id, reference);
+					const auto interface = std::find_if(plan.interfaces.begin(), plan.interfaces.end(),
+						[&](const iga::PressureFlowInterfacePlan& edge) {
+							return edge.flow_receiver.domain_id == domain_id
+								&& edge.flow_receiver.port_id == port.id;
+						});
+					if (interface == plan.interfaces.end())
+						throw std::runtime_error("3D flow receiver is not bound to a graph edge");
+					iga::PortBoundaryData input;
+					input.time_s = 0.0;
+					if (one_d.count(interface->flow_provider.domain_id)) {
+						const auto& provider = one_d.at(interface->flow_provider.domain_id);
+						const auto provider_state = provider.runtime->GetPortState(
+							configuration.graph.Port(interface->flow_provider).locator);
+						input.outward_flow_m3_s = -RequireValue(
+							provider_state.outward_flow_m3_s, "initial upstream provider flow");
+					} else {
+						const auto& provider = iga::GraphDomainDefinitionFor(configuration,
+							interface->flow_provider.domain_id);
+						if (provider.kind != iga::DomainKind::ZeroDFlow
+							|| !provider.zero_d_flow_model
+							|| provider.zero_d_flow_model->model.role
+								!= iga::ZeroDFlowRole::SourceReservoir)
+							throw std::runtime_error(
+								"flow-controlled 3D inlet requires a 1D or source-0D flow provider");
+						const auto& source = provider.zero_d_flow_model->model.source;
+						const double edge_pressure = configuration.initial_pressure_pa.at(
+							interface->edge_id);
+						// This is an initialization-only boundary seed.  It uses the
+						// committed compliant pressure and coupling-edge pressure directly;
+						// do not publish or commit a speculative 0D trial here.
+						input.outward_flow_m3_s = -(provider.zero_d_flow_model->initial_state
+							.stored_pressure_pa-edge_pressure)/source.resistance_pa_s_m3;
+					}
+					iga::ApplyThreeDReferenceProfileInput(native.initial_configuration,
+						iga::FirstNavierStokesSystem(native.initial_configuration), port, input,
+						reference);
+				});
 			}
 			native.runtime->InitializeState(native.initial_configuration);
 			if (configuration.schema_version == 6) {
-				if (!native.transport_system)
-					throw std::runtime_error("schema-v6 3D transport system was not preflighted");
-				native.transport_runtime = std::make_unique<iga::TransientTransportRuntime>(
-					*native.database, PETSC_COMM_WORLD, native.configuration,
-					*native.transport_system, native.mesh.labels);
-				if (native.runtime->RequiredNodes() != native.transport_runtime->RequiredNodes())
-					throw std::runtime_error(
-						"schema-v6 3D flow and transport runtimes require identical ordered nodes");
+				iga::RuntimeConstructionStage(communicator, "graph transport preflight", [&] {
+					if (!native.transport_system)
+						throw std::runtime_error("schema-v6 3D transport system was not preflighted");
+				});
+				native.transport_runtime = iga::AllocateCollectiveRuntime<iga::TransientTransportRuntime>(communicator,
+					*native.database, communicator, native.configuration,
+					*native.transport_system, native.mesh.labels,
+					std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, application_options);
+				iga::RuntimeConstructionStage(communicator, "graph transport node agreement", [&] {
+					if (native.runtime->RequiredNodes() != native.transport_runtime->RequiredNodes())
+						throw std::runtime_error(
+							"schema-v6 3D flow and transport runtimes require identical ordered nodes");
+				});
 			}
 		}
 
@@ -992,79 +1072,91 @@ int main(int argc, char** argv)
 		controls.nonlinear_relative_tolerance = kNonlinearRelativeTolerance;
 		controls.nonlinear_absolute_tolerance = kNonlinearAbsoluteTolerance;
 		controls.mass_relative_tolerance = kMassRelativeTolerance;
-		for (const auto& domain_id : plan.domain_order) {
-			if (one_d.count(domain_id)) {
-				auto& native = one_d.at(domain_id);
-				if (configuration.schema_version == 6)
-				{
-					iga::OneDFlowTransportDomainControls species_controls;
-					species_controls.species_flow_epsilon_m3_s =
-						configuration.execution.species_routing->flow_switch_m3_s;
-					runtimes.push_back(std::make_unique<iga::OneDFlowTransportDomainAdapter>(
-						domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
-						native.inlet_policy,
-						configuration.graph.Domain(domain_id).species_bindings,
-						species_controls));
-				}
-				else runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(domain_id,
-					*native.runtime, configuration.graph.Domain(domain_id).ports,
-					native.inlet_policy));
-			} else if (three_d.count(domain_id)) {
-				auto& native = *three_d.at(domain_id);
-				if (configuration.schema_version == 6) {
-					iga::ThreeDFlowTransportDomainControls species_controls;
-					species_controls.flow = controls;
-					species_controls.species_flow_epsilon_m3_s =
-						configuration.execution.species_routing->flow_switch_m3_s;
-					runtimes.push_back(
-						std::make_unique<iga::ThreeDBodyFittedFlowTransportDomainAdapter>(
-							domain_id, *native.runtime, *native.transport_runtime,
-							configuration.graph.Domain(domain_id).ports, native.configuration,
-							native.case_directory,
+		iga::RuntimeConstructionStage(communicator, "graph adapter catalog", [&] {
+			runtimes.reserve(plan.domain_order.size());
+			for (const auto& domain_id : plan.domain_order) {
+				if (one_d.count(domain_id)) {
+					auto& native = one_d.at(domain_id);
+					if (configuration.schema_version == 6)
+					{
+						iga::OneDFlowTransportDomainControls species_controls;
+						species_controls.species_flow_epsilon_m3_s =
+							configuration.execution.species_routing->flow_switch_m3_s;
+						runtimes.push_back(std::make_unique<iga::OneDFlowTransportDomainAdapter>(
+							domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
+							native.inlet_policy,
 							configuration.graph.Domain(domain_id).species_bindings,
-							native.reference_outward_flow_m3_s, species_controls));
-				} else runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
-					domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
-					native.configuration, native.case_directory,
-					native.reference_outward_flow_m3_s, controls));
-			} else if (immersed.count(domain_id)) {
-				auto native = std::move(immersed.at(domain_id));
-				immersed_audit.emplace(domain_id, native.get());
-				runtimes.push_back(std::move(native));
-			} else {
-				const auto& definition = iga::GraphDomainDefinitionFor(configuration, domain_id);
-				if (definition.kind != iga::DomainKind::ZeroDFlow
-					|| !definition.zero_d_flow_model)
-					throw std::runtime_error("multidomain graph has no runtime owner for domain '"
-						+domain_id+"'");
-				auto runtime = std::make_unique<iga::ZeroDFlowDomainRuntime>(domain_id,
-					definition.zero_d_flow_model->model,
-					definition.zero_d_flow_model->initial_state,
-					configuration.graph.Domain(domain_id).ports);
-				zero_d.emplace(domain_id, runtime.get());
-				runtimes.push_back(std::move(runtime));
+							species_controls));
+					}
+					else runtimes.push_back(std::make_unique<iga::OneDFlowDomainAdapter>(domain_id,
+						*native.runtime, configuration.graph.Domain(domain_id).ports,
+						native.inlet_policy));
+				} else if (three_d.count(domain_id)) {
+					auto& native = *three_d.at(domain_id);
+					if (configuration.schema_version == 6) {
+						iga::ThreeDFlowTransportDomainControls species_controls;
+						species_controls.flow = controls;
+						species_controls.species_flow_epsilon_m3_s =
+							configuration.execution.species_routing->flow_switch_m3_s;
+						runtimes.push_back(
+							std::make_unique<iga::ThreeDBodyFittedFlowTransportDomainAdapter>(
+								domain_id, *native.runtime, *native.transport_runtime,
+								configuration.graph.Domain(domain_id).ports, native.configuration,
+								native.case_directory,
+								configuration.graph.Domain(domain_id).species_bindings,
+								native.reference_outward_flow_m3_s, species_controls));
+					} else runtimes.push_back(std::make_unique<iga::ThreeDBodyFittedFlowDomainAdapter>(
+						domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
+						native.configuration, native.case_directory,
+						native.reference_outward_flow_m3_s, controls));
+				} else if (immersed.count(domain_id)) {
+					// Immersed owners are currently restricted to one rank by Load.
+					// Allocate the audit entry before transferring that owner.
+					immersed_audit.emplace(domain_id, immersed.at(domain_id).get());
+					runtimes.push_back(std::move(immersed.at(domain_id)));
+				} else {
+					const auto& definition = iga::GraphDomainDefinitionFor(configuration, domain_id);
+					if (definition.kind != iga::DomainKind::ZeroDFlow
+						|| !definition.zero_d_flow_model)
+						throw std::runtime_error("multidomain graph has no runtime owner for domain '"
+							+domain_id+"'");
+					auto runtime = std::make_unique<iga::ZeroDFlowDomainRuntime>(domain_id,
+						definition.zero_d_flow_model->model,
+						definition.zero_d_flow_model->initial_state,
+						configuration.graph.Domain(domain_id).ports);
+					zero_d.emplace(domain_id, runtime.get());
+					runtimes.push_back(std::move(runtime));
+				}
 			}
-		}
-		iga::DomainRuntimeRegistry registry(configuration.graph, std::move(runtimes));
+		});
+		auto registry_owner = iga::CreateCollectiveDomainRuntimeRegistry(communicator,
+			configuration.graph, runtimes);
+		auto& registry = *registry_owner;
 		std::unique_ptr<iga::PressureFlowComponentExecutor> flow_executor;
 		std::unique_ptr<iga::SpeciesPressureFlowComponentExecutor> species_executor;
-		if (configuration.schema_version == 6)
-			species_executor = std::make_unique<iga::SpeciesPressureFlowComponentExecutor>(registry,
-				configuration.start_domain_id, iga::SpeciesPressureFlowControlsFor(configuration));
-		else flow_executor = std::make_unique<iga::PressureFlowComponentExecutor>(registry,
-			configuration.start_domain_id, iga::PressureFlowControlsFor(configuration.execution));
+		iga::CollectiveLocalStage(communicator, "graph executor construction", [&] {
+			if (configuration.schema_version == 6)
+				species_executor = std::make_unique<iga::SpeciesPressureFlowComponentExecutor>(registry,
+					configuration.start_domain_id, iga::SpeciesPressureFlowControlsFor(configuration),
+					iga::CollectiveSpeciesPressureFlowExecution(communicator));
+			else flow_executor = std::make_unique<iga::PressureFlowComponentExecutor>(registry,
+				configuration.start_domain_id, iga::PressureFlowControlsFor(configuration.execution),
+					iga::CollectivePressureFlowExecution(communicator));
+		});
 
 		const int final_step = options.stop_after_step > 0
 			? options.stop_after_step : configuration.time.steps;
-		if (final_step > configuration.time.steps)
-			throw std::runtime_error("--stop-after-step exceeds configured steps");
-		const int injected_failure_step = FailureInjectionStep();
-		auto pressure = configuration.initial_pressure_pa;
+		std::map<std::string, double> pressure;
 		std::set<iga::PortRef> coupled_ports;
-		for (const auto& edge : configuration.graph.Edges()) {
-			coupled_ports.insert(edge.first);
-			coupled_ports.insert(edge.second);
-		}
+		iga::CollectiveLocalStage(communicator, "graph step catalog", [&] {
+			if (final_step > configuration.time.steps)
+				throw std::runtime_error("--stop-after-step exceeds configured steps");
+			pressure = configuration.initial_pressure_pa;
+			for (const auto& edge : configuration.graph.Edges()) {
+				coupled_ports.insert(edge.first);
+				coupled_ports.insert(edge.second);
+			}
+		});
 		auto VerifyHydraulicBalance = [&](const auto& trial,
 			std::map<std::string, std::pair<double, double>>& pending_balance,
 			double& pending_mass, double& pending_external) {
@@ -1107,43 +1199,48 @@ int main(int argc, char** argv)
 			double pending_mass = 0.0;
 			double pending_external = 0.0;
 			if (species_executor) {
-				std::map<iga::PortRef, iga::PortState> pending_transport_ports;
-				auto result = species_executor->Advance(step_context, pressure,
-					[&](const iga::SpeciesPressureFlowStepResult& trial) {
-						VerifyHydraulicBalance(trial, pending_balance, pending_mass,
-							pending_external);
-						for (const auto& domain : configuration.graph.Domains())
-							for (const auto& port : domain.second.ports)
-								pending_transport_ports.emplace(iga::PortRef{domain.first, port.id},
-									registry.Runtime(domain.first).GetPortState(port.id));
+				std::function<void(const iga::SpeciesPressureFlowStepResult&)> before_commit;
+				iga::CollectiveLocalStage(communicator, "graph species precommit callback", [&] {
+					before_commit = [&](const iga::SpeciesPressureFlowStepResult& trial) {
+						VerifyHydraulicBalance(trial, pending_balance, pending_mass, pending_external);
 						if (step == injected_failure_step)
 							throw std::runtime_error("injected bifurcation failure before commit");
-					});
-				accepted_species.push_back({step, time,
-					static_cast<int>(result.hydraulic_iterations.size()), pending_mass,
-					pending_external, std::move(pending_balance),
-					std::move(pending_transport_ports), std::move(result)});
-				for (const auto& edge : accepted_species.back().result.hydraulic_iterations.back().edges)
-					pressure[edge.edge_id] = edge.measured_pressure_pa;
+					};
+				});
+				auto result = species_executor->Advance(step_context, pressure, before_commit);
+				iga::CollectiveLocalStage(communicator, "graph accepted species result", [&] {
+					auto transport_ports = std::move(result.transport_ports);
+					accepted_species.push_back({step, time,
+						static_cast<int>(result.hydraulic_iterations.size()), pending_mass,
+						pending_external, std::move(pending_balance),
+						std::move(transport_ports), std::move(result)});
+					for (const auto& edge : accepted_species.back().result.hydraulic_iterations.back().edges)
+						pressure[edge.edge_id] = edge.measured_pressure_pa;
+				});
 			} else {
-				auto result = flow_executor->Advance(step_context, pressure,
-					[&](const iga::PressureFlowStepResult& trial) {
+				std::function<void(const iga::PressureFlowStepResult&)> before_commit;
+				iga::CollectiveLocalStage(communicator, "graph precommit callback", [&] {
+					before_commit = [&](const iga::PressureFlowStepResult& trial) {
 						VerifyHydraulicBalance(trial, pending_balance, pending_mass,
 							pending_external);
 						if (step == injected_failure_step)
 							throw std::runtime_error("injected bifurcation failure before commit");
-					});
-				AcceptedStep accepted_step{step, time, static_cast<int>(result.iterations.size()),
-					pending_mass, pending_external, std::move(pending_balance), {}, {},
-					std::move(result)};
-				for (const auto& zero : zero_d) {
-					accepted_step.zero_d_states.emplace(zero.first, zero.second->CommittedState());
-					accepted_step.zero_d_accounting.emplace(zero.first,
-						*zero.second->CommittedStepAccounting());
-				}
-				accepted.push_back(std::move(accepted_step));
-				for (const auto& edge : accepted.back().result.iterations.back().edges)
-					pressure[edge.edge_id] = edge.measured_pressure_pa;
+					};
+				});
+				auto result = flow_executor->Advance(step_context, pressure, before_commit);
+				iga::CollectiveLocalStage(communicator, "graph accepted flow result", [&] {
+					AcceptedStep accepted_step{step, time, static_cast<int>(result.iterations.size()),
+						pending_mass, pending_external, std::move(pending_balance), {}, {},
+						std::move(result)};
+					for (const auto& zero : zero_d) {
+						accepted_step.zero_d_states.emplace(zero.first, zero.second->CommittedState());
+						accepted_step.zero_d_accounting.emplace(zero.first,
+							*zero.second->CommittedStepAccounting());
+					}
+					accepted.push_back(std::move(accepted_step));
+					for (const auto& edge : accepted.back().result.iterations.back().edges)
+						pressure[edge.edge_id] = edge.measured_pressure_pa;
+				});
 			}
 			// Advance only after the executor's transactional commit and all
 			// accepted-result bookkeeping have completed.  A failed trial or
@@ -1151,23 +1248,14 @@ int main(int argc, char** argv)
 			accepted_time_s = step_context.EndTime();
 		}
 
-		int output_failed = 0;
-		std::string output_error;
-		if (rank == 0) try {
+		iga::CollectiveLocalStage(communicator, "graph output", [&] {
+			if (rank != 0) return;
 			if (species_executor)
 				WriteSpeciesOutputs(options.output_directory, configuration, graph_root, assets,
 					one_d, three_d, accepted_species);
 			else WriteOutputs(options.output_directory, configuration, graph_root, assets,
 				bifurcation_holder, one_d, immersed_audit, accepted);
-		} catch (const std::exception& error) {
-			output_failed = 1;
-			output_error = error.what();
-		}
-		MPI_Bcast(&output_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-		if (output_failed) {
-			if (rank == 0) throw std::runtime_error(output_error);
-			throw std::runtime_error("bifurcation output failed on rank 0");
-		}
+		});
 		if (rank == 0) {
 #ifdef IGA_BIFURCATION_ENTRY
 			std::cout << "completed schema-v5 1D--3D bifurcation steps="
@@ -1185,6 +1273,16 @@ int main(int argc, char** argv)
 		if (rank == 0) std::cerr << error.what() << '\n';
 		status = 1;
 	}
+	return status;
+}
+
+#ifndef IGA_MULTIDOMAIN_NO_MAIN
+int main(int argc, char** argv)
+{
+	PetscInitialize(&argc, &argv, nullptr,
+		"TubularFlowIGA multidomain coupling\n");
+	const int status = iga::RunMultidomainFlow(argc, argv, PETSC_COMM_WORLD);
 	PetscFinalize();
 	return status;
 }
+#endif

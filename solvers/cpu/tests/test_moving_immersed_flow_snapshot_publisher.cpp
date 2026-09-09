@@ -1,4 +1,5 @@
 #include "MovingImmersedFlowSnapshotPublisher.hpp"
+#include "PrescribedSurfaceMotion.hpp"
 
 #include <cstdint>
 #include <filesystem>

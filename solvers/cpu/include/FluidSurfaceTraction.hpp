@@ -10,6 +10,7 @@
 #include "MaterialSurfacePatchMap.hpp"
 #include "MaterialSurfaceKinematics.hpp"
 #include "NavierStokesElement.hpp"
+#include "PhaseProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -255,6 +256,7 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 	double dynamic_viscosity_pa_s, const std::vector<FluidSurfaceElementState>& state,
 	FluidSurfaceTractionProjectionOptions options = {})
 {
+	PhaseScope assembly_phase(ProfilePhase::Assembly);
 	using namespace fluid_surface_traction_detail;
 	material.Validate(); ValidateDistributedSurfaceInterface(surface); ValidateDistributedSurfaceLayout(layout);
 	if (!std::isfinite(dynamic_viscosity_pa_s) || !(dynamic_viscosity_pa_s > 0.0)

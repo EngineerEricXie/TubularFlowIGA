@@ -1,5 +1,6 @@
 #include "IgaDatabase.hpp"
 #include "WomersleyReference.hpp"
+#include "CheckedText.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,7 @@ int main(int argc, char** argv)
 		manifest << std::setprecision(17) << "time,file\n";
 		for (std::size_t index = 0; index < configuration.sample_times.size(); ++index) {
 			std::ostringstream name;
+			name.exceptions(std::ios::badbit | std::ios::failbit);
 			name << configuration.file_prefix << ".step"
 				<< std::setw(6) << std::setfill('0') << index+1 << ".txt";
 			std::ofstream output(output_directory/name.str());
@@ -42,14 +44,17 @@ int main(int argc, char** argv)
 					configuration, point, configuration.sample_times[index]);
 				output << velocity[0] << ' ' << velocity[1] << ' ' << velocity[2] << '\n';
 			}
+			output.close();
 			if (!output) throw std::runtime_error(
 				"cannot write Womersley velocity field: "+name.str());
 			manifest << configuration.sample_times[index] << ',' << name.str() << '\n';
 		}
+		manifest.close();
 		if (!manifest) throw std::runtime_error("cannot write Womersley manifest");
 		std::cout << "womersley_nodes=" << points.size()
 			<< " snapshots=" << configuration.sample_times.size()
 			<< " manifest=" << (output_directory/manifest_name).string() << '\n';
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << "iga_womersley_reference: " << error.what() << '\n';

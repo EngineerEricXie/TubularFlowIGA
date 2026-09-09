@@ -359,4 +359,5 @@ int main()
 		}
 	}
 	std::cout << "species pressure-flow executor tests passed\n";
+	return 0;
 }

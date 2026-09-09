@@ -2,6 +2,7 @@
 #include "MovingImmersedTransientFlowFsiRuntime.hpp"
 #include "PretensionedMembraneFsiRuntime.hpp"
 #include "StrongFluidStructureCoupling.hpp"
+#include "ReferenceStateOutput.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -21,7 +22,11 @@ bool Finite(double value) { return std::isfinite(value); }
 int main(int argc, char** argv)
 {
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
+	int rank=0, ranks=1;
+	MPI_Comm_rank(PETSC_COMM_WORLD,&rank); MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
 	try {
+		auto reference = iga::test::ReferenceOutputFromArguments(argc, argv, "fsi", ranks);
 		const auto initial=iga::compliant_channel_fixture::InitialMaterial();
 		const auto map=iga::compliant_channel_fixture::PatchMap(initial);
 		const auto& layout=map.Layout();
@@ -129,6 +134,38 @@ int main(int argc, char** argv)
 			<<" wall_leakage="<<conservation.normalized_wall_relative_leakage
 			<<" continuity="<<conservation.normalized_discrete_moving_wall_continuity_defect
 			<<" traction_resultant_n="<<Norm(audit.nodal_resultant_n)<<"\n";
+		if (reference) {
+			iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+			const auto& state = fluid.CommittedGlobalState();
+			reference->Add("fluid_velocity", "m/s", state.NodeIds(), 3,
+				[&](std::size_t row, std::size_t column) { return state.Coefficients().at(row).at(column); });
+			reference->Add("fluid_pressure", "pa", state.NodeIds(), 1,
+				[&](std::size_t row, std::size_t) { return state.Coefficients().at(row).at(3); });
+			if (!state.PortIds().empty()) reference->Add("controller_pressure", "pa", state.PortIds(), 1,
+				[&](std::size_t row, std::size_t) { return state.PortMultipliers().at(row); });
+			if (state.HasGaugeMultiplier()) reference->Add("gauge_multiplier", "1/s", std::vector<int>{0}, 1,
+				[&](std::size_t, std::size_t) { return state.GaugeMultiplier(); });
+			reference->Add("membrane_displacement", "m", layout.owned_global_node_ids, 1,
+				[&](std::size_t row, std::size_t) { return membrane_state.displacement_m.at(row); });
+			reference->Add("membrane_velocity", "m/s", layout.owned_global_node_ids, 1,
+				[&](std::size_t row, std::size_t) { return membrane_state.velocity_m_per_s.at(row); });
+			reference->Add("surface_traction", "pa", layout.owned_global_node_ids, 3,
+				[&](std::size_t row, std::size_t column) { return traction->traction_on_structure_pa.at(row).at(column); });
+			reference->Add("surface_force", "n", layout.owned_global_node_ids, 3,
+				[&](std::size_t row, std::size_t column) { return traction->consistent_nodal_force_n.at(row).at(column); });
+			std::vector<std::uint64_t> vertices(full.SourceVerticesM().size());
+			for (std::size_t i = 0; i < vertices.size(); ++i) vertices[i] = i;
+			reference->Add("material_position", "m", vertices, 3,
+				[&](std::size_t row, std::size_t column) { return full.SourceVerticesM().at(row).at(column); });
+			reference->Add("material_displacement", "m", vertices, 3,
+				[&](std::size_t row, std::size_t column) {
+					return full.SourceVerticesM().at(row).at(column)-full.ReferenceMaterialVerticesM().at(row).at(column);
+				});
+			reference->Add("material_velocity", "m/s", vertices, 3,
+				[&](std::size_t row, std::size_t column) { return full.SourceVertexVelocitiesMPerS().at(row).at(column); });
+			reference->Finish(state.TimeS(), state.Index());
+		}
 	} catch(const std::exception& error) { std::cerr<<error.what()<<"\n"; status=1; }
+	iga::CurrentPhaseProfile().Write(std::cout,rank,ranks,status);
 	PetscFinalize(); return status;
 }

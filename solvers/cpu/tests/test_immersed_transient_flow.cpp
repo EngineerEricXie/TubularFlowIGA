@@ -1,5 +1,6 @@
 #include "ImmersedTransientFlowRuntime.hpp"
 #include "ImmersedVelocityExtension.hpp"
+#include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
 #include <array>
@@ -565,16 +566,19 @@ void PrintFirstSolveDiagnostic(const iga::ImmersedTransientFlowDiagnostics& diag
 
 int RunNewtonDiagnostic()
 {
+	if(iga::CurrentPhaseProfile().Enabled()) std::cout << "fixed_newton_stage=geometry\n";
 	const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
 	iga::MovingCutGeometryOptions geometry_options;
 	geometry_options.volume.max_depth=4; geometry_options.volume.max_nodes=500000;
 	geometry_options.volume.max_leaves=500000; geometry_options.volume.max_points=3000000;
 	const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
 	auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	if(iga::CurrentPhaseProfile().Enabled()) std::cout << "fixed_newton_stage=runtime\n";
 	const auto options=Options(); iga::ImmersedTransientFlowRuntime runtime(*geometry,options);
 	runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,runtime.Layout(),
 		NonconstantFields(runtime.Layout()),{.019,-.023},true,.031));
 	runtime.BeginTrial(1.0,1,1.0);
+	if(iga::CurrentPhaseProfile().Enabled()) std::cout << "fixed_newton_stage=solve\n";
 	const bool solved=runtime.SolveTrial(); const auto& diagnostics=runtime.Diagnostics();
 	const auto gate=EvaluateFirstSolveFormulationGate(diagnostics,options);
 	PrintFirstSolveDiagnostic(diagnostics,options,gate);
@@ -589,6 +593,8 @@ int main(int argc,char** argv)
 	bool newton_diagnostic=false;
 	for(int i=1;i<argc;++i) if(std::string(argv[i])=="--newton-diagnostic") newton_diagnostic=true;
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
+	if(newton_diagnostic) std::cout << std::unitbuf;
 	try {
 		if(newton_diagnostic) status=RunNewtonDiagnostic();
 		else {
@@ -726,5 +732,7 @@ int main(int argc,char** argv)
 		std::cout << "immersed_transient_flow_tests=passed active_nodes=" << runtime.Diagnostics().active_nodes << " fd_max=" << fd_max << " zero_block_max=" << zero_block_max << " newton_updates=" << nonlinear_steps.size() << " linear_relative=" << runtime.Diagnostics().true_linear_relative_residual << " open_balance=" << conservation.normalized_open_balance << " wall_leakage=" << conservation.normalized_wall_leakage << '\n';
 		}
 	} catch(const std::exception& error) { std::cerr << "immersed_transient_flow_test: " << error.what() << '\n'; status=1; }
+	int rank=0,ranks=1; MPI_Comm_rank(PETSC_COMM_WORLD,&rank); MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
+	iga::CurrentPhaseProfile().Write(std::cout,rank,ranks,status);
 	PetscFinalize(); return status;
 }

@@ -1,6 +1,7 @@
 #ifndef IGA_FLOW_CHECKPOINT_HPP
 #define IGA_FLOW_CHECKPOINT_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 
 #include <algorithm>
@@ -54,6 +55,7 @@ inline std::filesystem::path TimeIndexedPath(const std::filesystem::path& base, 
 {
 	if (step < 0) throw std::runtime_error("time-indexed output step cannot be negative");
 	std::ostringstream suffix;
+	suffix.exceptions(std::ios::badbit | std::ios::failbit);
 	suffix << ".step" << std::setw(6) << std::setfill('0') << step;
 	const auto extension = base.extension().string();
 	if (extension.empty()) return base.string() + suffix.str();
@@ -74,6 +76,7 @@ inline std::string SerializeFlowCheckpointMetadata(const FlowCheckpointMetadata&
 		return result;
 	};
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << std::setprecision(17)
 		<< "{\n"
 		<< "  \"schema_version\": " << metadata.schema_version << ",\n"
@@ -185,11 +188,10 @@ inline FlowCheckpointMetadata ReadFlowCheckpointMetadata(const std::filesystem::
 	const auto path = FlowCheckpointMetadataPath(prefix);
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open flow checkpoint metadata: " + path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof())
 		throw std::runtime_error("cannot read flow checkpoint metadata: " + path.string());
-	return ParseFlowCheckpointMetadata(contents.str());
+	return ParseFlowCheckpointMetadata(contents);
 }
 
 inline void ValidateFlowCheckpoint(const FlowCheckpointMetadata& metadata,

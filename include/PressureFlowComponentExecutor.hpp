@@ -92,15 +92,28 @@ private:
 	PressureFlowStepResult result_;
 };
 
+// Optional execution-boundary policy keeps this executor usable without MPI.
+// Distributed callers must provide both callbacks on every participant, with
+// identical graph/control inputs. Runtime methods still coordinate their own
+// internal collectives: synchronizing their returned outcomes cannot rescue a
+// rank stuck inside a runtime. before_commit must perform local work only.
+struct PressureFlowExecutionSynchronization {
+	std::function<void(const char*, std::exception_ptr)> outcome;
+	std::function<bool(bool)> all_converged;
+};
+
 class PressureFlowComponentExecutor {
 public:
 	PressureFlowComponentExecutor(DomainRuntimeRegistry& registry,
-		std::string start_domain_id, PressureFlowExecutionControls controls)
+		std::string start_domain_id, PressureFlowExecutionControls controls,
+		PressureFlowExecutionSynchronization synchronization = {})
 		: registry_(registry),
 		  plan_(MakeAcyclicPressureFlowPlan(registry.Graph(), start_domain_id)),
-		  controls_(controls)
+		  controls_(controls), synchronization_(std::move(synchronization))
 	{
 		ValidatePressureFlowExecutionControls(controls_);
+		if (bool(synchronization_.outcome) != bool(synchronization_.all_converged))
+			throw std::runtime_error("pressure-flow synchronization requires both callbacks");
 		interfaces_ = plan_.interfaces;
 	}
 
@@ -110,26 +123,30 @@ public:
 		const std::map<std::string, double>& initial_pressure_pa,
 		const std::function<void(const PressureFlowStepResult&)>& before_commit = {})
 	{
-		step.Validate();
 		std::vector<double> pressure;
-		pressure.reserve(interfaces_.size());
-		for (const auto& interface : interfaces_) {
-			const auto found = initial_pressure_pa.find(interface.edge_id);
-			if (found == initial_pressure_pa.end() || !std::isfinite(found->second))
-				throw std::runtime_error("pressure-flow executor requires a finite initial pressure for edge '"
-					+interface.edge_id+"'");
-			pressure.push_back(found->second);
-		}
+		std::vector<std::exception_ptr> abort_errors;
+		Stage("pressure-flow step input", [&] {
+			step.Validate();
+			abort_errors.resize(plan_.domain_order.size());
+			pressure.reserve(interfaces_.size());
+			for (const auto& interface : interfaces_) {
+				const auto found = initial_pressure_pa.find(interface.edge_id);
+				if (found == initial_pressure_pa.end() || !std::isfinite(found->second))
+					throw std::runtime_error("pressure-flow executor requires a finite initial pressure for edge '"
+						+interface.edge_id+"'");
+				pressure.push_back(found->second);
+			}
+		});
 		PressureFlowStepResult result;
 		try {
 			for (const auto& domain_id : plan_.domain_order)
-				registry_.Runtime(domain_id).BeginStep(step);
+				Stage("pressure-flow begin", [&] { registry_.Runtime(domain_id).BeginStep(step); });
 			std::vector<double> previous_residual;
 			double aitken_relaxation = controls_.relaxation_factor;
 			for (int iteration = 1; iteration <= controls_.maximum_iterations; ++iteration) {
 				if (iteration > 1)
 					for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain)
-						registry_.Runtime(*domain).RollbackTrial();
+						Stage("pressure-flow rollback", [&] { registry_.Runtime(*domain).RollbackTrial(); });
 				// Pressure conditions are the iteration unknowns and may live on a
 				// downstream port of a domain.  Supply every one before the
 				// topological flow sweep so a multi-port 3D/1D runtime sees all of
@@ -138,23 +155,29 @@ public:
 					PortBoundaryData input;
 					input.time_s = step.EndTime();
 					input.mean_pressure_pa = pressure[edge_index];
-					registry_.Runtime(interfaces_[edge_index].pressure_receiver.domain_id)
-						.SetPortInput(interfaces_[edge_index].pressure_receiver.port_id, input);
+					Stage("pressure-flow pressure input", [&] {
+						registry_.Runtime(interfaces_[edge_index].pressure_receiver.domain_id)
+							.SetPortInput(interfaces_[edge_index].pressure_receiver.port_id, input);
+					});
 				}
 				for (const auto& domain_id : plan_.domain_order) {
 					auto& runtime = registry_.Runtime(domain_id);
-					runtime.SolveTrial();
+					Stage("pressure-flow solve", [&] { runtime.SolveTrial(); });
 					for (const auto& interface : interfaces_) {
 						if (interface.flow_provider.domain_id != domain_id) continue;
 						const auto state = PortStateFor(interface.flow_provider);
-						if (!state.outward_flow_m3_s)
-							throw std::runtime_error("pressure-flow provider omitted outward flow on edge '"
-								+interface.edge_id+"'");
+						Stage("pressure-flow provider validation", [&] {
+							if (!state.outward_flow_m3_s)
+								throw std::runtime_error("pressure-flow provider omitted outward flow on edge '"
+									+interface.edge_id+"'");
+						});
 						PortBoundaryData input;
 						input.time_s = step.EndTime();
 						input.outward_flow_m3_s = -*state.outward_flow_m3_s;
-						registry_.Runtime(interface.flow_receiver.domain_id).SetPortInput(
-							interface.flow_receiver.port_id, input);
+						Stage("pressure-flow flow input", [&] {
+							registry_.Runtime(interface.flow_receiver.domain_id).SetPortInput(
+								interface.flow_receiver.port_id, input);
+						});
 					}
 				}
 
@@ -169,82 +192,95 @@ public:
 					const auto first = PortStateFor(edge.first);
 					const auto second = PortStateFor(edge.second);
 					const auto measured = PortStateFor(interface.pressure_provider);
-					if (!first.outward_flow_m3_s || !second.outward_flow_m3_s
-						|| !measured.mean_pressure_pa)
-						throw std::runtime_error("pressure-flow edge state is incomplete for edge '"
-							+interface.edge_id+"'");
-					PressureFlowEdgeState edge_state;
-					edge_state.edge_id = interface.edge_id;
-					edge_state.applied_pressure_pa = pressure[edge_index];
-					edge_state.measured_pressure_pa = *measured.mean_pressure_pa;
-					edge_state.pressure_residual_pa = edge_state.measured_pressure_pa-pressure[edge_index];
-					edge_state.normalized_pressure_residual = std::abs(edge_state.pressure_residual_pa)
-						/std::max({controls_.pressure_reference_pa,
-							std::abs(edge_state.applied_pressure_pa),
-							std::abs(edge_state.measured_pressure_pa)});
-					edge_state.first_outward_flow_m3_s = *first.outward_flow_m3_s;
-					edge_state.second_outward_flow_m3_s = *second.outward_flow_m3_s;
-					edge_state.flow_residual_m3_s = edge_state.first_outward_flow_m3_s
-						+edge_state.second_outward_flow_m3_s;
-					const double flow_scale = std::max(std::abs(edge_state.first_outward_flow_m3_s),
-						std::abs(edge_state.second_outward_flow_m3_s));
-					edge_state.normalized_flow_residual = flow_scale == 0.0 ? 0.0
-						: std::abs(edge_state.flow_residual_m3_s)/flow_scale;
-					residual.push_back(edge_state.pressure_residual_pa);
-					if (edge_state.normalized_pressure_residual > controls_.pressure_relative_tolerance
-						|| edge_state.normalized_flow_residual > controls_.flow_relative_tolerance)
-						converged = false;
-					iteration_state.edges.push_back(edge_state);
-					result.accepted_ports[edge.first] = first;
-					result.accepted_ports[edge.second] = second;
+					Stage("pressure-flow edge result", [&] {
+						if (!first.outward_flow_m3_s || !second.outward_flow_m3_s
+							|| !measured.mean_pressure_pa)
+							throw std::runtime_error("pressure-flow edge state is incomplete for edge '"
+								+interface.edge_id+"'");
+						PressureFlowEdgeState edge_state;
+						edge_state.edge_id = interface.edge_id;
+						edge_state.applied_pressure_pa = pressure[edge_index];
+						edge_state.measured_pressure_pa = *measured.mean_pressure_pa;
+						edge_state.pressure_residual_pa = edge_state.measured_pressure_pa-pressure[edge_index];
+						edge_state.normalized_pressure_residual = std::abs(edge_state.pressure_residual_pa)
+							/std::max({controls_.pressure_reference_pa,
+								std::abs(edge_state.applied_pressure_pa),
+								std::abs(edge_state.measured_pressure_pa)});
+						edge_state.first_outward_flow_m3_s = *first.outward_flow_m3_s;
+						edge_state.second_outward_flow_m3_s = *second.outward_flow_m3_s;
+						edge_state.flow_residual_m3_s = edge_state.first_outward_flow_m3_s
+							+edge_state.second_outward_flow_m3_s;
+						const double flow_scale = std::max(std::abs(edge_state.first_outward_flow_m3_s),
+							std::abs(edge_state.second_outward_flow_m3_s));
+						edge_state.normalized_flow_residual = flow_scale == 0.0 ? 0.0
+							: std::abs(edge_state.flow_residual_m3_s)/flow_scale;
+						residual.push_back(edge_state.pressure_residual_pa);
+						if (edge_state.normalized_pressure_residual > controls_.pressure_relative_tolerance
+							|| edge_state.normalized_flow_residual > controls_.flow_relative_tolerance)
+							converged = false;
+						iteration_state.edges.push_back(edge_state);
+						result.accepted_ports[edge.first] = first;
+						result.accepted_ports[edge.second] = second;
+					});
 				}
-				iteration_state.converged = converged;
-				result.iterations.push_back(iteration_state);
+				if (synchronization_.all_converged)
+					converged = synchronization_.all_converged(converged);
+				Stage("pressure-flow iteration result", [&] {
+					iteration_state.converged = converged;
+					result.iterations.push_back(iteration_state);
+				});
 				if (controls_.method == PressureFlowIterationMethod::Explicit || converged) break;
 				if (iteration == controls_.maximum_iterations)
 					throw PressureFlowConvergenceError(
 						"pressure-flow component failed to converge", result);
-				if (controls_.method == PressureFlowIterationMethod::Fixed) {
-					for (std::size_t i = 0; i < pressure.size(); ++i)
-						pressure[i] += controls_.relaxation_factor*residual[i];
-				} else {
-					if (!previous_residual.empty()) {
-						double numerator = 0.0;
-						double denominator = 0.0;
-						double scale = controls_.pressure_reference_pa;
-						for (std::size_t i = 0; i < residual.size(); ++i)
-							scale = std::max({scale, std::abs(residual[i]), std::abs(previous_residual[i])});
-						for (std::size_t i = 0; i < residual.size(); ++i) {
-							const double difference = (residual[i]-previous_residual[i])/scale;
-							numerator += previous_residual[i]/scale*difference;
-							denominator += difference*difference;
+				Stage("pressure-flow relaxation", [&] {
+					if (controls_.method == PressureFlowIterationMethod::Fixed) {
+						for (std::size_t i = 0; i < pressure.size(); ++i)
+							pressure[i] += controls_.relaxation_factor*residual[i];
+					} else {
+						if (!previous_residual.empty()) {
+							double numerator = 0.0;
+							double denominator = 0.0;
+							double scale = controls_.pressure_reference_pa;
+							for (std::size_t i = 0; i < residual.size(); ++i)
+								scale = std::max({scale, std::abs(residual[i]), std::abs(previous_residual[i])});
+							for (std::size_t i = 0; i < residual.size(); ++i) {
+								const double difference = (residual[i]-previous_residual[i])/scale;
+								numerator += previous_residual[i]/scale*difference;
+								denominator += difference*difference;
+							}
+							if (denominator > 64.0*std::numeric_limits<double>::epsilon()) {
+								const double candidate = -aitken_relaxation*numerator/denominator;
+								if (std::isfinite(candidate)) aitken_relaxation = std::max(
+									controls_.minimum_relaxation,
+									std::min(controls_.maximum_relaxation, candidate));
+							}
 						}
-						if (denominator > 64.0*std::numeric_limits<double>::epsilon()) {
-							const double candidate = -aitken_relaxation*numerator/denominator;
-							if (std::isfinite(candidate)) aitken_relaxation = std::max(
-								controls_.minimum_relaxation,
-								std::min(controls_.maximum_relaxation, candidate));
-						}
+						for (std::size_t i = 0; i < pressure.size(); ++i)
+							pressure[i] += aitken_relaxation*residual[i];
+						previous_residual = residual;
 					}
-					for (std::size_t i = 0; i < pressure.size(); ++i)
-						pressure[i] += aitken_relaxation*residual[i];
-					previous_residual = residual;
-				}
+				});
 			}
 			for (const auto& domain_id : plan_.domain_order)
-				for (const auto& port : registry_.Graph().Domain(domain_id).ports)
-					result.accepted_ports[{domain_id, port.id}]
-						= PortStateFor({domain_id, port.id});
-			if (before_commit) before_commit(result);
+				for (const auto& port : registry_.Graph().Domain(domain_id).ports) {
+					PortRef reference;
+					Stage("pressure-flow observation reference", [&] { reference = {domain_id, port.id}; });
+					auto state = PortStateFor(reference);
+					Stage("pressure-flow accepted port", [&] {
+						result.accepted_ports[reference] = std::move(state);
+					});
+				}
+			Stage("pressure-flow before commit", [&] { if (before_commit) before_commit(result); });
 			for (const auto& domain_id : plan_.domain_order)
-				registry_.Runtime(domain_id).PrepareCommitStep();
+				Stage("pressure-flow prepare commit", [&] { registry_.Runtime(domain_id).PrepareCommitStep(); });
 			for (const auto& domain_id : plan_.domain_order)
 				registry_.Runtime(domain_id).FinalizeCommitStep();
 			return result;
 		} catch (...) {
 			const auto primary = std::current_exception();
 			std::string cleanup;
-			try { cleanup = AbortAll(); }
+			try { cleanup = AbortAll(abort_errors); }
 			catch (...) { cleanup = "cleanup reporting failed: "+ExceptionText(std::current_exception()); }
 			if (cleanup.empty()) std::rethrow_exception(primary);
 			throw std::runtime_error(ExceptionText(primary)+"; abort failures: "+cleanup);
@@ -254,24 +290,49 @@ public:
 private:
 	PortState PortStateFor(const PortRef& reference) const
 	{
-		auto state = registry_.Runtime(reference.domain_id).GetPortState(reference.port_id);
-		ValidatePortState(state);
+		PortState state;
+		Stage("pressure-flow port state", [&] {
+			state = registry_.Runtime(reference.domain_id).GetPortState(reference.port_id);
+		});
+		Stage("pressure-flow port validation", [&] { ValidatePortState(state); });
 		return state;
 	}
 
-	std::string AbortAll()
+	// Invoke at most one runtime method per stage. Runtime implementations own
+	// their internal failure protocol; executor-only callbacks are local.
+	template<class Work>
+	void Stage(const char* name, Work&& work) const
 	{
-		std::ostringstream errors;
-		bool first = true;
-		for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain) {
-			try { registry_.Runtime(*domain).AbortStep(); }
-			catch (...) {
-				if (!first) errors << "; ";
-				first = false;
-				errors << *domain << ": " << ExceptionText(std::current_exception());
-			}
+		std::exception_ptr error;
+		try { std::forward<Work>(work)(); }
+		catch (...) { error = std::current_exception(); }
+		if (synchronization_.outcome) synchronization_.outcome(name, error);
+		if (error) std::rethrow_exception(error);
+	}
+
+	std::string AbortAll(std::vector<std::exception_ptr>& errors)
+	{
+		// Storage was prepared before BeginStep. Recording a failure does not
+		// allocate and cannot skip later abort calls, even under memory pressure.
+		std::size_t index = 0;
+		for (auto domain = plan_.domain_order.rbegin(); domain != plan_.domain_order.rend(); ++domain, ++index) {
+			try { Stage("pressure-flow abort", [&] { registry_.Runtime(*domain).AbortStep(); }); }
+			catch (...) { errors[index] = std::current_exception(); }
 		}
-		return errors.str();
+		std::string result;
+		Stage("pressure-flow abort reporting", [&] {
+			std::ostringstream report;
+			report.exceptions(std::ios::badbit | std::ios::failbit);
+			bool first = true;
+			for (std::size_t i = 0; i < errors.size(); ++i) {
+				if (!errors[i]) continue;
+				if (!first) report << "; ";
+				first = false;
+				report << plan_.domain_order[errors.size()-1-i] << ": " << ExceptionText(errors[i]);
+			}
+			result = report.str();
+		});
+		return result;
 	}
 
 	static std::string ExceptionText(const std::exception_ptr& exception)
@@ -285,6 +346,7 @@ private:
 	DomainRuntimeRegistry& registry_;
 	PressureFlowComponentPlan plan_;
 	PressureFlowExecutionControls controls_;
+	PressureFlowExecutionSynchronization synchronization_;
 	std::vector<PressureFlowInterfacePlan> interfaces_;
 };
 

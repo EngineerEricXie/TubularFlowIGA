@@ -63,7 +63,8 @@ public:
 	void Write(const std::string& backend = {}) const
 	{
 		std::filesystem::create_directories(directory_);
-		std::ofstream output(directory_/"coupling_manifest.json");
+		const auto path = directory_/"coupling_manifest.json";
+		std::ofstream output(path);
 		if (!output) throw std::runtime_error("cannot create coupling manifest");
 		output << std::setprecision(17)
 			<< "{\n  \"schema_version\": 1,\n  \"mode\": \""
@@ -131,6 +132,8 @@ public:
 		}
 		if (!reports_.empty()) output << '\n';
 		output << "  ]\n}\n";
+		output.close();
+		if (!output) throw std::runtime_error("cannot write coupling manifest: "+path.string());
 	}
 
 private:

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "purpose": "Predeclared complete accepted-state comparison for the immersed and FSI fixtures before assembly parallelization",
+  "relative_l2_max": 0.000001,
+  "zero_reference_absolute_l2_max": 0.000000000001,
+  "comparison": "Compare each physical field separately using stable integer IDs; no pressure shift, reordering, rescaling, or normalization by unrelated fields",
+  "fixtures": {
+    "immersed": {
+      "time_s": 0.0,
+      "step": 0,
+      "fields": {
+        "fluid_velocity": {"units": "m/s", "columns": 3},
+        "fluid_pressure": {"units": "pa", "columns": 1},
+        "controller_pressure": {"units": "pa", "columns": 1}
+      },
+      "identity": "Background node IDs and controller boundary labels; converged static trial, not a restart image"
+    },
+    "fsi": {
+      "time_s": 1.05,
+      "step": 1,
+      "fields": {
+        "fluid_velocity": {"units": "m/s", "columns": 3},
+        "fluid_pressure": {"units": "pa", "columns": 1},
+        "membrane_displacement": {"units": "m", "columns": 1},
+        "membrane_velocity": {"units": "m/s", "columns": 1},
+        "surface_traction": {"units": "pa", "columns": 3},
+        "surface_force": {"units": "n", "columns": 3},
+        "material_position": {"units": "m", "columns": 3},
+        "material_displacement": {"units": "m", "columns": 3},
+        "material_velocity": {"units": "m/s", "columns": 3}
+      },
+      "identity": "Background node IDs, immutable membrane global node IDs, and original source material vertex indices; accepted macro-step"
+    }
+  },
+  "notes": [
+    "These selected fixtures have pressure-controlled outlets and therefore no pressure gauge multiplier. The immersed fixture additionally has one flow-rate controller; FSI has two pressure ports and no controller unknowns.",
+    "The exporter includes any actual gauge or controller unknowns. A changed set of fields is a model/protocol change and requires an explicit policy review.",
+    "Initial material coordinates must not mask a small moving-wall error; material displacement is also compared independently.",
+    "Native nonlinear, centered-FD, conservation, force, moment, strong-coupling, and commit assertions remain mandatory.",
+    "References are numerical regression states, not experimental truth or checkpoints. Collection with field output is not a timing matrix."
+  ]
+}

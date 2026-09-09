@@ -1,5 +1,6 @@
 #include "BlockCsr.hpp"
 #include "BoundaryFlow.hpp"
+#include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
 #include "GenericCaseInput.hpp"
 #include "CudaRuntime.hpp"
@@ -311,6 +312,7 @@ void CheckAvailableMemory(std::size_t required)
 
 void WriteTransport(const fs::path& path, const std::vector<double>& values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create "+path.string());
 	output << std::setprecision(17);
@@ -320,6 +322,7 @@ void WriteTransport(const fs::path& path, const std::vector<double>& values)
 
 void WriteTransportVtk(const fs::path& mesh_path, const fs::path& path, const std::vector<double>& values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::ifstream mesh(mesh_path);
 	std::ofstream output(path);
 	if (!mesh) throw std::runtime_error("cannot open VTK mesh "+mesh_path.string());
@@ -333,6 +336,7 @@ void WriteTransportVtk(const fs::path& mesh_path, const fs::path& path, const st
 
 void WriteNavierStokesVtk(const fs::path& mesh_path, const fs::path& path, const std::vector<double>& values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::ifstream mesh(mesh_path);
 	std::ofstream output(path);
 	if (!mesh) throw std::runtime_error("cannot open VTK mesh "+mesh_path.string());
@@ -350,6 +354,7 @@ void WriteNavierStokesVtu(const fs::path& mesh_path, const fs::path& path,
 	iga::VisualizationFormat visualization_format,
 	iga::TemporalVtkHdfWriter* vtkhdf)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::vector<double> velocity(3*values.size()/4), pressure(values.size()/4);
 	for (std::size_t node = 0; node < values.size()/4; ++node) {
 		for (int component = 0; component < 3; ++component)
@@ -369,6 +374,7 @@ void WriteNavierStokesVtu(const fs::path& mesh_path, const fs::path& path,
 
 void WriteNavierStokes(const fs::path& path, const std::vector<double>& values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::ofstream velocity(path), pressure(path.string()+".pressure");
 	if (!velocity || !pressure) throw std::runtime_error("cannot create Navier-Stokes output");
 	velocity << std::setprecision(17);
@@ -563,6 +569,7 @@ void WriteCudaFlowCheckpoint(const fs::path& prefix,
 	iga::FlowCheckpointMetadata metadata, const DeviceBuffer<double>& state,
 	std::size_t values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::vector<double> host(values);
 	state.CopyToHost(host.data(), host.size());
 	const auto state_path = iga::FlowCheckpointStatePath(prefix);
@@ -597,6 +604,7 @@ int MeshCheck(const std::string& database_path)
 
 int Transport(int argc, char** argv)
 {
+	PhaseScope input_phase(ProfilePhase::Input);
 	if (argc < 4)
 		throw std::runtime_error("usage: iga_cuda transport DATABASE.ntiga CASE_DIR [STEPS] [OUTPUT] [VELOCITY]");
 	const auto total_start = Clock::now();
@@ -612,6 +620,8 @@ int Transport(int argc, char** argv)
 	std::cout << "boundary_config=" << (case_configuration.present ? "case_config.json" : "legacy-defaults")
 		<< " transport_nodes=" << boundaries.transport_nodes << '\n';
 
+	input_phase.Stop();
+	PhaseScope geometry_phase(ProfilePhase::Geometry);
 	FlatMesh host(database);
 	BlockPattern pattern_host(host);
 	PrintMesh(host, &pattern_host);
@@ -621,6 +631,7 @@ int Transport(int argc, char** argv)
 	ReferenceData reference;
 	GeometryData geometry(mesh, reference, false);
 	RequireGeometry(geometry);
+	geometry_phase.Stop();
 	ElementTiles tiles(host);
 	auto boundary_mask = CopyLabels(boundaries.transport_constrained);
 	auto boundary_n0 = CopyScalars(boundaries.n0);
@@ -634,6 +645,7 @@ int Transport(int argc, char** argv)
 	DeviceBuffer<double> current(host.nodes*2), next(host.nodes*2), rhs(host.nodes*2);
 	left.Clear(); previous.Clear(); current.Clear(); next.Clear(); rhs.Clear();
 
+	PhaseScope assembly_phase(ProfilePhase::Assembly);
 	const auto assembly_start = Clock::now();
 	AssembleTransportKernel<<<tiles.view().count,kPairTile>>>(
 		mesh.view(), reference.view(), geometry.view(), tiles.view(), pattern.view(),
@@ -648,6 +660,7 @@ int Transport(int argc, char** argv)
 		boundary_nplus.data(), current.data());
 	CheckKernel("SetTransportBoundaryVectorKernel current");
 	Check(cudaDeviceSynchronize(), "transport assembly synchronize");
+	assembly_phase.Stop();
 	const auto assembly_end = Clock::now();
 
 	long long total_iterations = 0;
@@ -702,15 +715,28 @@ int Transport(int argc, char** argv)
 
 int NavierStokes(int argc, char** argv)
 {
+	PhaseScope input_phase(ProfilePhase::Input);
 	const auto options = ParseCudaFlowOptions(argc, argv);
 	const auto total_start = Clock::now();
 	iga::Database database(options.database.string());
 	BezierVtkHdfOutput vtkhdf;
 	const auto& case_dir = options.case_dir;
 	const int maximum_newton = options.maximum_newton;
-	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
+	const auto labeled_mesh = iga::ReadLabeledHexMesh((case_dir/"controlmesh.vtk").string(),
+		database.header().nodes, database.header().elements);
+	const auto& labels = labeled_mesh.labels;
+	const auto wall_trace_basis = iga::WallTraceBasis(database, labeled_mesh);
 	const auto boundary_velocity_host = iga::ReadVelocity((case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
 	iga::ResolvedBoundaryConditions boundaries;
+	// Match the CPU runtime's no-slip constraint on every basis with a wall
+	// trace, including control nodes whose point label alone is not wall.
+	const auto apply_wall_trace = [&]() {
+		for (const auto node : wall_trace_basis) {
+			if (!boundaries.velocity_constrained.at(node)) ++boundaries.velocity_nodes;
+			boundaries.velocity_constrained.at(node) = 1;
+			boundaries.velocity.at(node) = {{0.0, 0.0, 0.0}};
+		}
+	};
 	iga::SimulationConfiguration simulation_configuration;
 	std::vector<iga::OutletModelState> outlet_models;
 	std::map<int, double> pressure_tractions;
@@ -746,6 +772,7 @@ int NavierStokes(int argc, char** argv)
 		boundaries = iga::ResolveBoundaryConditions(case_configuration, labels, boundary_velocity_host, parameters);
 		boundary_config = case_configuration.present ? "case_config.json" : "legacy-defaults";
 	}
+	apply_wall_trace();
 	if (!transient)
 		for (const auto& model : outlet_models)
 			if (model.kind != iga::FieldBoundaryKind::Resistance)
@@ -766,6 +793,8 @@ int NavierStokes(int argc, char** argv)
 		|| options.output_every > 0 || options.checkpoint_every > 0))
 		throw std::runtime_error("restart, checkpoint, and time-indexed output require transient flow");
 
+	input_phase.Stop();
+	PhaseScope geometry_phase(ProfilePhase::Geometry);
 	FlatMesh host(database);
 	const auto boundary_elements = LoadBoundaryElements(database);
 	const auto pressure_traction_elements = iga::LoadPressureTractionElements(
@@ -798,6 +827,7 @@ int NavierStokes(int argc, char** argv)
 	ReferenceData reference;
 	GeometryData geometry(mesh, reference, true);
 	RequireGeometry(geometry);
+	geometry_phase.Stop();
 	ElementTiles tiles(host);
 	auto velocity_mask = CopyLabels(boundaries.velocity_constrained);
 	auto pressure_mask = CopyLabels(boundaries.pressure_constrained);
@@ -888,6 +918,7 @@ int NavierStokes(int argc, char** argv)
 				boundaries = iga::ResolveFlowBoundaries(boundary_configuration,
 					iga::FirstNavierStokesSystem(boundary_configuration), labels,
 					boundary_velocity_host);
+				apply_wall_trace();
 				boundary_velocity.CopyFromHost(
 					reinterpret_cast<const double*>(boundaries.velocity.data()), host.nodes*3);
 				boundary_pressure.CopyFromHost(boundaries.pressure.data(), host.nodes);
@@ -901,6 +932,7 @@ int NavierStokes(int argc, char** argv)
 			CudaFlowConvergenceMetrics last_convergence;
 			bool converged = false;
 			for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
+			PhaseScope assembly_phase(ProfilePhase::Assembly);
 			const auto assembly_start = Clock::now();
 			jacobian.Clear();
 			rhs.Clear();
@@ -915,8 +947,10 @@ int NavierStokes(int argc, char** argv)
 			"Navier-Stokes pressure traction rhs");
 			rhs.CopyToHost(raw_rhs.data(), raw_rhs.size());
 			state.CopyToHost(convergence_state.data(), convergence_state.size());
+			PhaseScope diagnostics_phase(ProfilePhase::Diagnostics);
 			const auto convergence = MeasureFlowConvergence(
 				boundary_elements, convergence_state, raw_rhs);
+			diagnostics_phase.Stop();
 			last_convergence = convergence;
 		ApplyNavierStokesBoundaryKernel<<<node_blocks,256>>>(
 			pattern.view(), velocity_mask.data(), pressure_mask.data(), jacobian.values());
@@ -926,6 +960,7 @@ int NavierStokes(int argc, char** argv)
 			boundary_velocity.data(), boundary_pressure.data(), state.data(), rhs.data());
 		CheckKernel("SetNavierStokesBoundaryRhsKernel");
 		Check(cudaDeviceSynchronize(), "Navier-Stokes assembly synchronize");
+		assembly_phase.Stop();
 		const auto assembly_end = Clock::now();
 		total_assembly += std::chrono::duration<double>(assembly_end-assembly_start).count();
 		double residual_norm = 0.0;
@@ -1084,6 +1119,7 @@ int NavierStokes(int argc, char** argv)
 			iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output),
 				velocity_snapshots_written);
 	}
+	if (vtkhdf.writer) vtkhdf.writer->Close();
 	std::cout << "navier_stokes_cuda nodes=" << host.nodes << " elements=" << host.elements()
 		<< " steps=" << physical_steps << " run_end_step=" << run_end_step
 		<< " preprocess_s=" << std::chrono::duration<double>(preprocess_end-total_start).count()
@@ -1098,6 +1134,7 @@ int NavierStokes(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
 	try {
 		if (argc < 2)
 			throw std::runtime_error("usage: iga_cuda device-info|mesh-check|solve|transport|navier-stokes ...");
@@ -1111,12 +1148,22 @@ int main(int argc, char** argv)
 			if (argc != 3) throw std::runtime_error("usage: iga_cuda mesh-check DATABASE.ntiga");
 			return iga::cuda::MeshCheck(argv[2]);
 		}
-		if (command == "transport") return iga::cuda::Transport(argc, argv);
-		if (command == "solve") return iga::cuda::SolveConfigured(argc, argv);
-		if (command == "navier-stokes") return iga::cuda::NavierStokes(argc, argv);
-		throw std::runtime_error("unknown command: "+command);
+		int status = 0;
+		if (command == "transport") status = iga::cuda::Transport(argc, argv);
+		else if (command == "solve") status = iga::cuda::SolveConfigured(argc, argv);
+		else if (command == "navier-stokes") status = iga::cuda::NavierStokes(argc, argv);
+		else throw std::runtime_error("unknown command: "+command);
+		std::cout << "cuda_allocations scope=project_device_buffers requested_peak_bytes="
+			<< iga::cuda::DeviceAllocationCounter::Peak() << " requested_live_bytes="
+			<< iga::cuda::DeviceAllocationCounter::Current() << '\n';
+		iga::CurrentPhaseProfile().Write(std::cout, 0, 1, status);
+		return status;
 	} catch (const std::exception& error) {
 		std::cerr << "iga_cuda: " << error.what() << '\n';
+		std::cerr << "cuda_allocations scope=project_device_buffers requested_peak_bytes="
+			<< iga::cuda::DeviceAllocationCounter::Peak() << " requested_live_bytes="
+			<< iga::cuda::DeviceAllocationCounter::Current() << '\n';
+		iga::CurrentPhaseProfile().Write(std::cerr, 0, 1, 1);
 		return 1;
 	}
 }

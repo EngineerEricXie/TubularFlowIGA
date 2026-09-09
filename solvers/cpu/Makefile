@@ -1,4 +1,5 @@
 CXX ?= g++
+.DEFAULT_GOAL := all
 CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 CPPFLAGS ?= -Iinclude -I../../include
 SPECIES_COUPLING_HEADER := ../../include/SpeciesCoupling.hpp
@@ -12,7 +13,57 @@ HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-conf
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+
+PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
+PETSC_TARGETS += collective_failure_test
+PETSC_TARGETS += collective_petsc_options_test
+PETSC_TARGETS += petsc_gather_test
+PETSC_TARGETS += petsc_checkpoint_read_test
+PETSC_TARGETS += petsc_checkpoint_write_test
+PETSC_TARGETS += execution_resources_test execution_resources_serial_test
+PETSC_TARGETS += parallel_immersed_volume_test parallel_immersed_volume_serial_test element_assembly_execution_test element_assembly_execution_openmp_test
+PETSC_TARGETS += geometry_inspection_failure_test compliant_channel_fsi_openmp_test immersed_transient_flow_openmp_test
+PETSC_TARGETS += parallel_body_fitted_flow_test iga_navier_stokes_openmp
+PETSC_TARGETS += flow_output_failure_test
+PETSC_TARGETS += flow_step_failure_test legacy_transport_failure_test
+PETSC_TARGETS += text_helper_failure_test text-helper-failure-test
+PETSC_TARGETS += snapshot_publication_failure_test
+PETSC_TARGETS += mesh_stdout_failure_test assembly_stdout_failure_test
+PETSC_TARGETS += womersley_stream_failure_test transport_budget_stream_failure_test
+PETSC_TARGETS += fsi_export_stream_failure_test
+
+fsi_export_stream_failure_test: tests/test_fsi_export_stream_failure.cpp tests/StringStreamFailure.hpp src/phase8_compliant_channel_fsi_paraview.cpp $(wildcard include/*.hpp ../../include/*.hpp tests/*.hpp)
+	$(CXX) $(CPPFLAGS) -Itests $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+text_read_preload.so: tests/text_read_preload.cpp
+	$(CXX) -shared -fPIC -Wall -Wextra -Wpedantic $< -o $@ -ldl
+
+womersley_stream_failure_test: CPPFLAGS += -DIGA_TEST_WOMERSLEY_STREAM
+womersley_stream_failure_test transport_budget_stream_failure_test: tests/test_serial_tool_stream_failure.cpp tests/StringStreamFailure.hpp src/iga_womersley_reference.cpp src/iga_transport_validate.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+mesh_stdout_failure_test: tests/test_tool_stdout_failure.cpp src/iga_mesh_check.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) -DIGA_TEST_MESH_STDOUT $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+assembly_stdout_failure_test: tests/test_tool_stdout_failure.cpp src/iga_assembly_smoke.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+snapshot_publication_failure_test: tests/test_snapshot_publication_failure.cpp tests/test_moving_immersed_flow_snapshot_publisher.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) -DIGA_MOVING_IMMERSED_FLOW_SNAPSHOT_PUBLISHER_TESTING $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+text_helper_failure_test: tests/test_text_helper_failure.cpp $(wildcard include/*.hpp ../one_d/include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) -I../one_d/include $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
+
+.PHONY: text-helper-failure-test
+text-helper-failure-test: text_helper_failure_test
+	OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 90s mpiexec -np 3 ./text_helper_failure_test
+
+flow_step_failure_test: tests/test_flow_step_failure.cpp src/iga_navier_stokes.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
+
+flow_output_failure_test: tests/test_flow_output_failure.cpp src/iga_navier_stokes.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 ifneq ($(strip $(filter $(PETSC_TARGETS),$(MAKECMDGOALS))),)
 ifeq ($(strip $(PETSC_DIR)),)
@@ -25,12 +76,91 @@ endif
 
 .PHONY: all petsc petsc-test test config-check-dispatch-test vtkhdf-paraview-test clean phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase7-focused-test phase7-lv-closure-test phase8-compliant-channel-fsi-paraview prescribed-surface-motion-test material-surface-patch-kinematics-test moving-cut-geometry-test immersed-transient-state-test immersed-transient-flow-test moving-immersed-transient-flow-test moving-immersed-transient-flow-fsi-runtime-test moving-immersed-flow-snapshot-test moving-immersed-flow-snapshot-publisher-test immersed-velocity-extension-test pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test
 
+# PETSc-backed runtimes share opt-in phase accounting and explicit KSP setup.
+$(PETSC_TARGETS): include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
+$(PETSC_TARGETS): include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
+$(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp
+$(PETSC_TARGETS): include/PetscGather.hpp
+$(PETSC_TARGETS): include/PetscCheckpointRead.hpp
+$(PETSC_TARGETS): include/PetscCheckpointWrite.hpp
+$(PETSC_TARGETS) iga_pack iga_transport_validate iga_config_check iga_case_check iga_womersley_reference case_config_test simulation_config_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test womersley_reference_test boundary_support_test temporal_vtkhdf_test: ../../include/CheckedText.hpp
+
+checked_text_test: tests/test_checked_text.cpp ../../include/CheckedText.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+.PHONY: checked-text-test
+checked-text-test: checked_text_test
+	./checked_text_test
+
+test: checked-text-test
+$(PETSC_TARGETS): include/ExecutionResources.hpp include/ElementAssemblyExecution.hpp include/ParallelElementBatch.hpp
+
+parallel_body_fitted_flow_test: tests/test_parallel_body_fitted_flow.cpp include/TransientFlowRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fopenmp -UNDEBUG -DIGA_FLOW_RUNTIME_TESTING $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+geometry_inspection_failure_test: tests/test_geometry_inspection_failure.cpp include/TransportElement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+execution_resources_test: tests/test_execution_resources.cpp include/ExecutionResources.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fopenmp $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+execution_resources_serial_test: tests/test_execution_resources.cpp include/ExecutionResources.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+petsc_checkpoint_write_test: tests/test_petsc_checkpoint_write.cpp include/PetscCheckpointWrite.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+petsc_checkpoint_read_test: tests/test_petsc_checkpoint_read.cpp include/PetscCheckpointRead.hpp include/CollectiveAssetInput.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+petsc_gather_test: tests/test_petsc_gather.cpp include/PetscGather.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+collective_failure_test: tests/test_collective_failure.cpp tests/test_parallel_ownership.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+collective_petsc_options_test: tests/test_collective_petsc_options.cpp include/CollectivePetscOptions.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+parallel_ownership_test: tests/test_parallel_ownership.cpp include/OwnedRowAssembler.hpp include/IgaDatabase.hpp include/SurfaceOwnershipValidation.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+.PHONY: parallel-ownership-test
+parallel-ownership-test: parallel_ownership_test
+	OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout 30 $(MPIEXEC) -np 3 ./parallel_ownership_test
+strong_fluid_structure_coupling_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test: ../../include/PhaseProfile.hpp
+
 # Shared Cartesian spline-face ordering is part of all immersed cut/ghost and
 # wall paths; make header changes rebuild every affected executable.
 immersed_face_targets := navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_flow_snapshot_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test phase5_closure_test moving_cut_geometry_test
 $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
 
-all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference
+all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
+
+compliant_channel_fsi_test compliant_channel_fsi_openmp_test immersed_aneurysm_jacobian_test: tests/ReferenceStateOutput.hpp include/Sha256.hpp
+
+reference_state_output_test: tests/test_reference_state_output.cpp tests/ReferenceStateOutput.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+element_assembly_execution_openmp_test: CXXFLAGS += -fopenmp
+element_assembly_execution_test element_assembly_execution_openmp_test: tests/test_element_assembly_execution.cpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+parallel_immersed_volume_test: CXXFLAGS += -fopenmp
+parallel_immersed_volume_test parallel_immersed_volume_serial_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+parallel_immersed_volume_test parallel_immersed_volume_serial_test: tests/test_parallel_immersed_volume.cpp tests/CompliantChannelFsiFixture.hpp include/ImmersedTransientFlowRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+parallel_element_batch_test: tests/test_parallel_element_batch.cpp include/ParallelElementBatch.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+parallel_element_batch_openmp_test: tests/test_parallel_element_batch.cpp include/ParallelElementBatch.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fopenmp $< -o $@ $(LDLIBS)
+
+.PHONY: parallel-element-batch-test
+parallel-element-batch-test: parallel_element_batch_test parallel_element_batch_openmp_test
+	./parallel_element_batch_test
+	OMP_THREAD_LIMIT=4 ./parallel_element_batch_openmp_test
 
 petsc: iga_assembly_smoke iga_solve iga_transport iga_navier_stokes iga_mesh_check
 
@@ -50,6 +180,18 @@ config-check-dispatch-test: iga_config_check tests/test_iga_config_check.sh
 
 iga_flow_validate: src/iga_flow_validate.cpp include/BoundaryFlow.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/WomersleyReference.hpp ../../include/VelocitySeries.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+iga_transport_validate: src/iga_transport_validate.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+transport_budget_test: tests/test_transport_budget.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+.PHONY: transport-budget-test
+transport-budget-test: transport_budget_test iga_transport_validate
+	./transport_budget_test
+
+test: transport-budget-test
 
 iga_womersley_reference: src/iga_womersley_reference.cpp include/WomersleyReference.hpp include/IgaDatabase.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -99,7 +241,8 @@ immersed-velocity-extension-test: immersed_velocity_extension_test
 immersed_static_flow_test: tests/test_immersed_static_flow.cpp include/ImmersedStaticFlowRuntime.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/NavierStokesElement.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/ElementGeometry.hpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-immersed_transient_flow_test: tests/test_immersed_transient_flow.cpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/NavierStokesElement.hpp
+immersed_transient_flow_openmp_test: CXXFLAGS += -fopenmp -UNDEBUG
+immersed_transient_flow_test immersed_transient_flow_openmp_test: tests/test_immersed_transient_flow.cpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/NavierStokesElement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed-transient-flow-test: immersed_transient_flow_test
@@ -123,6 +266,7 @@ moving_immersed_flow_snapshot_publisher_test: tests/test_moving_immersed_flow_sn
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving_immersed_flow_snapshot_publisher_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_FLOW_SNAPSHOT_PUBLISHER_TESTING
+moving_immersed_flow_snapshot_publisher_test: include/PrescribedSurfaceMotion.hpp ../../include/CheckedText.hpp
 
 moving-immersed-flow-snapshot-publisher-test: moving_immersed_flow_snapshot_publisher_test
 	./moving_immersed_flow_snapshot_publisher_test
@@ -272,8 +416,10 @@ moving_immersed_transient_flow_fsi_runtime_test: tests/test_moving_immersed_tran
 moving-immersed-transient-flow-fsi-runtime-test: moving_immersed_transient_flow_fsi_runtime_test
 	./moving_immersed_transient_flow_fsi_runtime_test
 
-compliant_channel_fsi_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
-compliant_channel_fsi_test: tests/test_compliant_channel_fsi.cpp tests/CompliantChannelFsiFixture.hpp include/StrongFluidStructureCoupling.hpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/PretensionedMembraneFsiRuntime.hpp include/PretensionedMembrane.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
+compliant_channel_fsi_test compliant_channel_fsi_openmp_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+compliant_channel_fsi_openmp_test: CXXFLAGS += -fopenmp
+compliant_channel_fsi_test compliant_channel_fsi_openmp_test: include/ImmersedTransientFlowRuntime.hpp
+compliant_channel_fsi_test compliant_channel_fsi_openmp_test: tests/test_compliant_channel_fsi.cpp tests/CompliantChannelFsiFixture.hpp include/StrongFluidStructureCoupling.hpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/PretensionedMembraneFsiRuntime.hpp include/PretensionedMembrane.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 compliant-channel-fsi-test: compliant_channel_fsi_test
@@ -334,11 +480,29 @@ surface_vtp_test: tests/test_surface_vtp.cpp include/SurfaceReaders.hpp include/
 vtk_output_test: tests/test_vtk_output.cpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
+text_output_failure_test: tests/test_text_output_failure.cpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/VelocitySeries.hpp ../../include/SimulationConfig.hpp ../../include/OxygenCapacity.hpp ../../include/BezierVisualization.hpp ../../include/CouplingHistory.hpp ../../include/VascularCoupling.hpp include/IgaDatabase.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+.PHONY: text-output-failure-test
+text-output-failure-test: text_output_failure_test
+	@directory=$$(mktemp -d) || exit 1; trap 'rm -rf "$$directory"' EXIT; timeout 30 ./text_output_failure_test "$$directory/results"
+
+test: text-output-failure-test
+
 bezier_visualization_test: tests/test_bezier_visualization.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 temporal_vtkhdf_test: tests/test_temporal_vtkhdf.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ $(HDF5_LIBS) $(LDLIBS)
+
+# Error-return injection requires a linker supporting GNU --wrap.
+vtkhdf_close_failure_test: tests/test_vtkhdf_close_failure.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp ../../include/VtkOutput.hpp
+	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ -Wl,--wrap=H5Fflush,--wrap=H5Gclose,--wrap=H5Fclose,--wrap=H5Dclose,--wrap=H5Fget_obj_count $(HDF5_LIBS) $(LDLIBS)
+
+.PHONY: vtkhdf-close-failure-test
+vtkhdf-close-failure-test: vtkhdf_close_failure_test
+	@directory=$$(mktemp -d) || exit 1; trap 'rm -rf "$$directory"' EXIT; timeout 30 ./vtkhdf_close_failure_test "$$directory/results"
+
 
 PVPYTHON ?= pvpython
 vtkhdf-paraview-test: temporal_vtkhdf_test
@@ -388,17 +552,54 @@ transport_boundary_preflight_test: tests/test_transport_boundary_preflight.cpp i
 iga_assembly_smoke: src/iga_assembly_smoke.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-iga_solve: src/iga_solve.cpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
+body_fitted_subcommunicator_test: tests/test_body_fitted_subcommunicator.cpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/OwnedRowAssembler.hpp include/BoundarySupport.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+phase_profile_test: tests/test_phase_profile.cpp ../../include/PhaseProfile.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+.PHONY: phase-profile-test
+phase-profile-test: phase_profile_test
+	./phase_profile_test
+
+iga_solve: src/iga_solve.cpp ../../include/PhaseProfile.hpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 iga_transport: src/iga_transport.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/TransportElement.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-iga_navier_stokes: src/iga_navier_stokes.cpp include/BoundarySupport.hpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/TransportElement.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/PressureTractionFlow.hpp ../../include/CaseConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/VascularCoupling.hpp ../../include/CouplingConfig.hpp ../../include/TemporalFunction.hpp ../../include/FlowCheckpoint.hpp ../../include/VcaCheckpoint.hpp ../../include/CouplingHistory.hpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/PressureTraction.hpp ../../include/VelocitySeries.hpp ../../include/VtkOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
+iga_navier_stokes_openmp: CXXFLAGS += -fopenmp
+iga_navier_stokes iga_navier_stokes_openmp: include/CollectiveAssetInput.hpp include/Sha256.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp
+iga_navier_stokes iga_navier_stokes_openmp: src/iga_navier_stokes.cpp include/BoundarySupport.hpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/TransportElement.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/PressureTractionFlow.hpp ../../include/CaseConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/VascularCoupling.hpp ../../include/CouplingConfig.hpp ../../include/TemporalFunction.hpp ../../include/FlowCheckpoint.hpp ../../include/VcaCheckpoint.hpp ../../include/CouplingHistory.hpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/PressureTraction.hpp ../../include/VelocitySeries.hpp ../../include/VtkOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/TransportElement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
+iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
+
 clean:
-	$(RM) iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) snapshot_publication_failure_test mesh_stdout_failure_test assembly_stdout_failure_test
+	$(RM) womersley_stream_failure_test transport_budget_stream_failure_test fsi_export_stream_failure_test text_read_preload.so
+	$(RM) checked_text_test
+	$(RM) parallel_body_fitted_flow_test iga_navier_stokes_openmp parallel_immersed_volume_serial_test element_assembly_execution_test element_assembly_execution_openmp_test parallel_immersed_volume_test compliant_channel_fsi_openmp_test immersed_transient_flow_openmp_test
+	$(RM) iga_transport_validate transport_budget_test reference_state_output_test parallel_element_batch_test parallel_element_batch_openmp_test
+	$(RM) petsc_checkpoint_read_test
+	$(RM) petsc_checkpoint_write_test
+	$(RM) execution_resources_test execution_resources_serial_test
+	$(RM) text_helper_failure_test
+	$(RM) geometry_inspection_failure_test
+	$(RM) petsc_gather_test
+	$(RM) collective_petsc_options_test
+	$(RM) collective_failure_test
+	$(RM) parallel_ownership_test
+	$(RM) phase_profile_test body_fitted_subcommunicator_test
+	$(RM) legacy_transport_failure_test vtkhdf_close_failure_test flow_step_failure_test flow_output_failure_test text_output_failure_test iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+
+iga_transport: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/PetscGather.hpp include/PetscReadArray.hpp
+
+iga_mesh_check iga_assembly_smoke: include/CollectiveAssetInput.hpp include/Sha256.hpp
+iga_assembly_smoke: include/CollectivePetscOptions.hpp
+
+legacy_transport_failure_test: tests/test_legacy_transport_failure.cpp src/iga_transport.cpp include/ExecutionResources.hpp include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/CollectiveFailure.hpp include/OwnedRowAssembler.hpp include/PetscGather.hpp include/PetscReadArray.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ -Wl,--wrap=MatCreateAIJ,--wrap=VecCreateMPI,--wrap=KSPCreate,--wrap=VecScatterCreateToZero,--wrap=MatAssemblyEnd,--wrap=MatZeroRows,--wrap=MatMult,--wrap=VecCopy,--wrap=KSPSetFromOptions,--wrap=KSPSolve,--wrap=VecNorm,--wrap=VecScatterEnd,--wrap=KSPDestroy,--wrap=MatSetValues,--wrap=VecSetValues,--wrap=VecGetArrayRead,--wrap=VecRestoreArrayRead $(PETSC_LIB)

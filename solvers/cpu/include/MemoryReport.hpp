@@ -1,6 +1,7 @@
 #ifndef IGA_MEMORY_REPORT_HPP
 #define IGA_MEMORY_REPORT_HPP
 
+#include "CollectiveFailure.hpp"
 #include <petscsys.h>
 
 #include <algorithm>
@@ -24,51 +25,59 @@ public:
 		if (path_.empty()) return;
 		PetscCallThrow(PetscMemorySetGetMaximumUsage(), "PetscMemorySetGetMaximumUsage");
 		if (rank_ == 0) {
+			if (std::filesystem::exists(path_) && !std::filesystem::is_regular_file(path_))
+				throw std::runtime_error("memory report must be a regular file: "+path_.string());
 			output_.open(path_, std::ios::trunc);
 			if (!output_) throw std::runtime_error("cannot create memory report: "+path_.string());
 			output_ << std::setprecision(17);
 		}
 	}
 
-	void Record(const std::string& stage, int step = -1)
+	void Record(const char* stage, int step = -1)
 	{
 		if (path_.empty()) return;
 		PetscLogDouble petsc_current = 0.0, petsc_peak = 0.0;
 		PetscLogDouble process_current = 0.0, process_peak = 0.0;
-		PetscCallThrow(PetscMallocGetCurrentUsage(&petsc_current), "PetscMallocGetCurrentUsage");
-		PetscCallThrow(PetscMallocGetMaximumUsage(&petsc_peak), "PetscMallocGetMaximumUsage");
-		PetscCallThrow(PetscMemoryGetCurrentUsage(&process_current), "PetscMemoryGetCurrentUsage");
-		PetscCallThrow(PetscMemoryGetMaximumUsage(&process_peak), "PetscMemoryGetMaximumUsage");
-		const double local[6] = {ReadStatusBytes("VmRSS:"), ReadStatusBytes("VmHWM:"),
-			static_cast<double>(petsc_current), static_cast<double>(petsc_peak),
-			static_cast<double>(process_current), static_cast<double>(process_peak)};
+		double local[6]{};
 		std::vector<double> gathered;
-		if (rank_ == 0) gathered.resize(static_cast<std::size_t>(size_)*6);
+		CollectiveLocalStage(communicator_, "memory report measurement", [&] {
+			PetscCallThrow(PetscMallocGetCurrentUsage(&petsc_current), "PetscMallocGetCurrentUsage");
+			PetscCallThrow(PetscMallocGetMaximumUsage(&petsc_peak), "PetscMallocGetMaximumUsage");
+			PetscCallThrow(PetscMemoryGetCurrentUsage(&process_current), "PetscMemoryGetCurrentUsage");
+			PetscCallThrow(PetscMemoryGetMaximumUsage(&process_peak), "PetscMemoryGetMaximumUsage");
+			const double measured[6] = {ReadStatusBytes("VmRSS:"), ReadStatusBytes("VmHWM:"),
+				static_cast<double>(petsc_current), static_cast<double>(petsc_peak),
+				static_cast<double>(process_current), static_cast<double>(process_peak)};
+			std::copy(std::begin(measured), std::end(measured), local);
+			if (rank_ == 0) gathered.resize(static_cast<std::size_t>(size_)*6);
+		});
 		MPI_Gather(local, 6, MPI_DOUBLE, rank_ == 0 ? gathered.data() : nullptr,
 			6, MPI_DOUBLE, 0, communicator_);
-		if (rank_ != 0) return;
+		CollectiveLocalStage(communicator_, "memory report output", [&] {
+			if (rank_ != 0) return;
 
-		const auto rss_max = Maximum(gathered, 0);
-		const auto rss_sum = Sum(gathered, 0);
-		const auto petsc_max = Maximum(gathered, 2);
-		const auto petsc_sum = Sum(gathered, 2);
-		std::cout << "memory stage=" << stage;
-		if (step >= 0) std::cout << " step=" << step;
-		std::cout << " rss_max_gib=" << rss_max/kGiB
-			<< " rss_sum_gib=" << rss_sum/kGiB
-			<< " petsc_alloc_max_gib=" << petsc_max/kGiB
-			<< " petsc_alloc_sum_gib=" << petsc_sum/kGiB << '\n';
-		output_ << "{\"stage\":\"" << stage << "\",\"step\":" << step
-			<< ",\"mpi_ranks\":" << size_;
-		WriteMetric("rss_current_bytes", gathered, 0);
-		WriteMetric("rss_peak_bytes", gathered, 1);
-		WriteMetric("petsc_alloc_current_bytes", gathered, 2);
-		WriteMetric("petsc_alloc_peak_bytes", gathered, 3);
-		WriteMetric("petsc_process_current_bytes", gathered, 4);
-		WriteMetric("petsc_process_peak_bytes", gathered, 5);
-		output_ << "}\n";
-		output_.flush();
-		if (!output_) throw std::runtime_error("cannot write memory report: "+path_.string());
+			const auto rss_max = Maximum(gathered, 0);
+			const auto rss_sum = Sum(gathered, 0);
+			const auto petsc_max = Maximum(gathered, 2);
+			const auto petsc_sum = Sum(gathered, 2);
+			std::cout << "memory stage=" << stage;
+			if (step >= 0) std::cout << " step=" << step;
+			std::cout << " rss_max_gib=" << rss_max/kGiB
+				<< " rss_sum_gib=" << rss_sum/kGiB
+				<< " petsc_alloc_max_gib=" << petsc_max/kGiB
+				<< " petsc_alloc_sum_gib=" << petsc_sum/kGiB << '\n';
+			output_ << "{\"stage\":\"" << stage << "\",\"step\":" << step
+				<< ",\"mpi_ranks\":" << size_;
+			WriteMetric("rss_current_bytes", gathered, 0);
+			WriteMetric("rss_peak_bytes", gathered, 1);
+			WriteMetric("petsc_alloc_current_bytes", gathered, 2);
+			WriteMetric("petsc_alloc_peak_bytes", gathered, 3);
+			WriteMetric("petsc_process_current_bytes", gathered, 4);
+			WriteMetric("petsc_process_peak_bytes", gathered, 5);
+			output_ << "}\n";
+			output_.flush();
+			if (!output_) throw std::runtime_error("cannot write memory report: "+path_.string());
+		});
 	}
 
 private:

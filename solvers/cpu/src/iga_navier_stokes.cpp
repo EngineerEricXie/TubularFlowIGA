@@ -1,10 +1,15 @@
+#include "ExecutionResources.hpp"
 #include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
+#include "CollectiveAssetInput.hpp"
 #include "CouplingHistory.hpp"
 #include "FlowCheckpoint.hpp"
 #include "GenericCaseInput.hpp"
 #include "IgaDatabase.hpp"
 #include "OutletCheckpoint.hpp"
+#include "PetscCheckpointRead.hpp"
+#include "PetscCheckpointWrite.hpp"
+#include "PetscGather.hpp"
 #include "TemporalFunction.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -22,8 +27,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
+#include <optional>
+#include <sstream>
+#include <type_traits>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -45,6 +55,91 @@ struct FlowOptions {
 	double nonlinear_absolute_tolerance = 1e-10;
 	double mass_relative_tolerance = 1e-3;
 };
+
+// Construct defaults and read local data within coordinated stages, before
+// any runtime constructor enters PETSc collectives.
+struct FlowCaseInput {
+	iga::LabeledHexMesh mesh;
+	std::set<std::int32_t> wall_trace_basis;
+	std::vector<std::array<double, 3>> boundary_velocity;
+	iga::SimulationConfiguration configuration;
+	iga::ResolvedBoundaryConditions boundaries;
+	std::vector<iga::OutletModelState> outlet_models;
+	iga::NavierStokesParameters parameters{1.0, 0.1, 0.0};
+	bool configured = false;
+	bool transient = false;
+	std::string boundary_config;
+	std::unique_ptr<iga::VcaExternalCircuit> vca_circuit;
+	iga::CompiledLinearSystem vca_transport_system;
+	bool vca_has_transport = false;
+	int physical_steps = 1;
+	int run_end_step = 1;
+	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
+};
+
+struct FlowStepInput {
+	iga::SimulationConfiguration configuration;
+	iga::VascularInletState inlet;
+};
+
+FlowStepInput PrepareFlowStepInput(MPI_Comm communicator, const char* stage,
+	bool configured, bool transient, const iga::SimulationConfiguration& configuration,
+	const fs::path& case_directory, double physical_time, double inlet_time,
+	iga::VcaExternalCircuit* circuit, const iga::CompiledLinearSystem* transport,
+	double reference_inlet_flow)
+{
+	static_assert(std::is_nothrow_move_constructible<FlowStepInput>::value,
+		"step input must leave its coordinated stage without another allocation");
+	std::optional<FlowStepInput> input;
+	iga::CollectiveLocalStage(communicator, stage, [&] {
+		input.emplace();
+		if (configured)
+			input->configuration = transient
+				? iga::MaterializeBoundaryWaveforms(configuration, case_directory, physical_time)
+				: configuration;
+		if (circuit) {
+			input->inlet = circuit->InletState(inlet_time);
+			iga::ApplyThreeDVascularInlet(input->configuration,
+				iga::FirstNavierStokesSystem(input->configuration), input->inlet, reference_inlet_flow);
+			if (transport)
+				iga::ApplyThreeDVascularSpeciesInlet(input->configuration, *transport, input->inlet);
+		}
+	});
+	return std::move(*input);
+}
+
+iga::VascularStepResult PrepareFlowVcaResult(MPI_Comm communicator, double physical_time,
+	double dt, const iga::VascularInletState& inlet, const iga::ThreeDVascularPortDefinition& definition,
+	const iga::FlowPortMeasurements& ports, double flow_epsilon)
+{
+	static_assert(std::is_nothrow_move_constructible<iga::VascularStepResult>::value,
+		"VCA result must leave its coordinated stage without another allocation");
+	std::optional<iga::VascularStepResult> result;
+	iga::CollectiveLocalStage(communicator, "flow VCA result preparation", [&] {
+		result.emplace(iga::BuildThreeDFlowPortResult(physical_time, dt, inlet,
+			definition, ports.flows, ports.pressures));
+		for (auto& outlet : result->outlets) {
+			const auto flux = ports.species_fluxes.find(outlet.outlet_id);
+			if (flux == ports.species_fluxes.end()) continue;
+			outlet.species_flux = flux->second;
+			outlet.average_valid = std::abs(outlet.flow_m3_s) > flow_epsilon;
+			const auto concentration = ports.species_concentrations.find(outlet.outlet_id);
+			if (concentration != ports.species_concentrations.end())
+				outlet.flux_weighted_concentration = concentration->second;
+		}
+	});
+	return std::move(*result);
+}
+
+void AdvanceFlowVcaCircuit(MPI_Comm communicator, iga::VcaExternalCircuit& circuit,
+	iga::CouplingHistoryWriter& history, const iga::VascularStepResult& result, double flow_epsilon)
+{
+	iga::CollectiveLocalStage(communicator, "flow VCA circuit advance", [&] {
+		const auto venous = iga::AggregateVascularOutlets(result.outlets, flow_epsilon);
+		const auto report = circuit.Advance(venous, result.dt_s, result.time_s);
+		history.Add(result, venous, report);
+	});
+}
 
 int ParsePositiveInteger(const std::string& text, const std::string& option)
 {
@@ -113,7 +208,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--visualization-format")
 			options.visualization_format = iga::ParseVisualizationFormat(value);
 		else throw std::runtime_error("unknown option: "+argument);
-		PetscOptionsClearValue(nullptr, argument.c_str());
+		if (PetscOptionsClearValue(nullptr, argument.c_str()))
+			throw std::runtime_error("cannot consume application option: "+argument);
 	}
 	if (options.output_every > 0 && options.output.empty())
 		throw std::runtime_error("--output-every requires --output or legacy OUTPUT");
@@ -122,23 +218,44 @@ FlowOptions ParseOptions(int argc, char** argv)
 	return options;
 }
 
+void RequireRegularOutput(const fs::path& path)
+{
+	if (fs::exists(path) && !fs::is_regular_file(path))
+		throw std::runtime_error("output target is not a regular file: "+path.string());
+}
+
 void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
 	const fs::path& mesh_path, const fs::path& vtk_path, double physical_time, int rank,
 	iga::VisualizationFormat visualization_format,
 	iga::TemporalVtkHdfWriter* vtkhdf)
 {
-	Vec root = nullptr;
-	VecScatter scatter = nullptr;
-	VecScatterCreateToZero(state, &scatter, &root);
-	VecScatterBegin(scatter, state, root, INSERT_VALUES, SCATTER_FORWARD);
-	VecScatterEnd(scatter, state, root, INSERT_VALUES, SCATTER_FORWARD);
-	int write_failed = 0;
-	if (rank == 0) {
-		try {
-			const PetscScalar* values = nullptr;
-			VecGetArrayRead(root, &values);
+	iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+	const auto communicator = PetscObjectComm(reinterpret_cast<PetscObject>(state));
+	iga::CollectiveLocalStage(communicator, "flow output layout", [&] {
+		PetscInt rows = 0;
+		if (VecGetSize(state, &rows)) throw std::runtime_error("cannot query flow output rows");
+		if (rows < 0 || nodes > static_cast<std::uint64_t>(std::numeric_limits<PetscInt>::max())/4
+			|| static_cast<std::uint64_t>(rows) != 4*nodes)
+			throw std::runtime_error("flow output state size differs from database nodes");
+	});
+	iga::PetscGatherObjects objects;
+	iga::PhaseScope gather_phase(iga::ProfilePhase::Communication);
+	iga::RequireCollectivePetscSuccess(communicator, "flow output gather create",
+		VecScatterCreateToZero(state, &objects.scatter, &objects.all));
+	iga::RequireCollectivePetscSuccess(communicator, "flow output gather begin",
+		VecScatterBegin(objects.scatter, state, objects.all, INSERT_VALUES, SCATTER_FORWARD));
+	iga::RequireCollectivePetscSuccess(communicator, "flow output gather end",
+		VecScatterEnd(objects.scatter, state, objects.all, INSERT_VALUES, SCATTER_FORWARD));
+	gather_phase.Stop();
+	iga::CollectiveLocalStage(communicator, "flow field output", [&] {
+		if (rank == 0) {
+			iga::PetscReadArray view;
+			view.Acquire(objects.all);
+			const auto* values = view.Data();
 			std::vector<double> velocity(3*static_cast<std::size_t>(nodes));
 			std::vector<double> pressure(static_cast<std::size_t>(nodes));
+			RequireRegularOutput(path);
+			RequireRegularOutput(path.string()+".pressure");
 			std::ofstream output(path);
 			std::ofstream pressure_output(path.string()+".pressure");
 			if (!output || !pressure_output) throw std::runtime_error("cannot create Navier-Stokes output");
@@ -154,60 +271,63 @@ void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
 					<< velocity[3*static_cast<std::size_t>(node)+2] << '\n';
 				pressure_output << pressure[static_cast<std::size_t>(node)] << '\n';
 			}
-			VecRestoreArrayRead(root, &values);
+			view.Restore();
+			output.close();
+			pressure_output.close();
 			if (!output || !pressure_output) throw std::runtime_error("cannot write Navier-Stokes output");
 			std::vector<iga::VtkPointArray> arrays{
 				{"velocity", 3, std::move(velocity)},
 				{"pressure", 1, std::move(pressure)}};
-			if (visualization_format == iga::VisualizationFormat::Vtu)
+			if (visualization_format == iga::VisualizationFormat::Vtu) {
+				RequireRegularOutput(vtk_path);
 				iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
-			else {
+			} else {
 				if (!vtkhdf) throw std::runtime_error("VTKHDF writer is unavailable");
 				vtkhdf->Append(physical_time, arrays);
 			}
-		} catch (const std::exception& error) {
-			std::cerr << "rank 0: " << error.what() << '\n';
-			write_failed = 1;
 		}
-	}
-	MPI_Bcast(&write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-	VecScatterDestroy(&scatter);
-	VecDestroy(&root);
-	if (write_failed) throw std::runtime_error("cannot write Navier-Stokes output: "+path.string());
+	});
+	objects.Close(communicator);
+}
+
+void WriteCheckpointMetadataText(const fs::path& path, const std::string& text)
+{
+	std::ofstream output(path);
+	output << text;
+	output.close();
+	if (!output) throw std::runtime_error("cannot write checkpoint metadata: "+path.string());
 }
 
 void WriteCheckpoint(Vec state, const fs::path& prefix,
 	const iga::FlowCheckpointMetadata& metadata, int rank)
 {
-	PetscViewer viewer = nullptr;
-	const auto state_path = iga::FlowCheckpointStatePath(prefix);
-	PetscViewerBinaryOpen(PETSC_COMM_WORLD, state_path.string().c_str(), FILE_MODE_WRITE, &viewer);
-	VecView(state, viewer);
-	PetscViewerDestroy(&viewer);
-	int write_failed = 0;
-	if (rank == 0) {
-		try {
-			iga::WriteFlowCheckpointMetadata(prefix, metadata);
-		} catch (const std::exception&) {
-			write_failed = 1;
-		}
-	}
-	MPI_Bcast(&write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-	if (write_failed) throw std::runtime_error(
-		"cannot write flow checkpoint metadata: "+iga::FlowCheckpointMetadataPath(prefix).string());
+	iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+	const auto communicator = PetscObjectComm(reinterpret_cast<PetscObject>(state));
+	fs::path state_path;
+	std::string metadata_text;
+	iga::CollectiveLocalStage(communicator, "flow checkpoint write preparation", [&] {
+		state_path = iga::FlowCheckpointStatePath(prefix);
+		metadata_text = iga::SerializeFlowCheckpointMetadata(metadata);
+	});
+	iga::RequireCollectiveSameText(communicator, "flow checkpoint write agreement", metadata_text);
+	iga::WritePetscCheckpointVector(state, communicator, state_path);
+	iga::CollectiveLocalStage(communicator, "flow checkpoint metadata write", [&] {
+		if (rank == 0) WriteCheckpointMetadataText(iga::FlowCheckpointMetadataPath(prefix), metadata_text);
+	});
 }
 
 void ReadCheckpoint(Vec state, const fs::path& prefix,
 	const iga::FlowCheckpointMetadata& metadata)
 {
-	if (metadata.state_format != "petsc_binary")
-		throw std::runtime_error("CPU flow restart requires petsc_binary checkpoint state");
-	fs::path path(metadata.state_file);
-	if (path.is_relative()) path = iga::FlowCheckpointMetadataPath(prefix).parent_path()/path;
-	PetscViewer viewer = nullptr;
-	PetscViewerBinaryOpen(PETSC_COMM_WORLD, path.string().c_str(), FILE_MODE_READ, &viewer);
-	VecLoad(state, viewer);
-	PetscViewerDestroy(&viewer);
+	const auto communicator = PetscObjectComm(reinterpret_cast<PetscObject>(state));
+	fs::path path;
+	iga::CollectiveLocalStage(communicator, "flow checkpoint path", [&] {
+		if (metadata.state_format != "petsc_binary")
+			throw std::runtime_error("CPU flow restart requires petsc_binary checkpoint state");
+		path = metadata.state_file;
+		if (path.is_relative()) path = iga::FlowCheckpointMetadataPath(prefix).parent_path()/path;
+	});
+	iga::ReadPetscCheckpointVector(state, communicator, path);
 }
 
 } // namespace
@@ -218,102 +338,177 @@ int main(int argc, char** argv)
 		"TubularFlowIGA stabilized steady/transient Navier-Stokes solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+	int ranks = 1;
+	MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
+	iga::CurrentPhaseProfile().EnableFromEnvironment();
 	int status = 0;
 	try {
-		const auto options = ParseOptions(argc, argv);
-		iga::Database database(options.database.string());
+		iga::PhaseScope input_phase(iga::ProfilePhase::Input);
+		iga::RequireExecutionResources(PETSC_COMM_WORLD, &std::cout);
+		FlowOptions options;
+		std::string controls, database_fingerprint;
+		std::unique_ptr<iga::Database> database_owner;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow arguments", [&] {
+			options = ParseOptions(argc, argv);
+			std::ostringstream text;
+			text.exceptions(std::ios::badbit | std::ios::failbit);
+			text << std::setprecision(std::numeric_limits<double>::max_digits10)
+				<< options.max_newton << ' ' << options.output_every << ' '
+				<< options.checkpoint_every << ' ' << options.stop_after_step << ' '
+				<< static_cast<int>(options.visualization_format) << ' '
+				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
+				<< options.mass_relative_tolerance << ' ' << !options.output.empty() << ' '
+				<< !options.checkpoint.empty() << ' ' << !options.restart.empty();
+			controls = text.str();
+		});
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow execution controls", controls);
+		iga::RequireCollectivePetscOptions(PETSC_COMM_WORLD);
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow database preflight", [&] {
+			// Reject special files before Database can open a blocking stream.
+			database_fingerprint = iga::ReadAssetFingerprint(options.database);
+			database_owner = std::make_unique<iga::Database>(options.database.string());
+			iga::ValidatePackedExecution(database_owner->header().ranks, database_owner->header().nodes, 4, ranks);
+		});
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow asset database", database_fingerprint);
+		auto& database = *database_owner;
 		std::unique_ptr<iga::BezierVisualizationMesh> bezier_mesh;
 		std::unique_ptr<iga::TemporalVtkHdfWriter> vtkhdf;
-		const auto mesh = iga::ReadLabeledHexMesh((options.case_dir/"controlmesh.vtk").string(),
-			database.header().nodes, database.header().elements);
-		const auto& labels = mesh.labels;
-		const auto wall_trace_basis = iga::WallTraceBasis(database, mesh);
-		const auto boundary_velocity = iga::ReadVelocity(
-			(options.case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
-		iga::SimulationConfiguration configuration;
-		iga::ResolvedBoundaryConditions boundaries;
-		std::vector<iga::OutletModelState> outlet_models;
-		iga::NavierStokesParameters parameters{1.0, 0.1, 0.0};
-		bool configured = false;
-		bool transient = false;
-		std::string boundary_config;
-		std::unique_ptr<iga::VcaExternalCircuit> vca_circuit;
-		std::unique_ptr<iga::TransientTransportRuntime> vca_transport;
-		iga::CompiledLinearSystem vca_transport_system;
-		iga::VcaCheckpointIdentity vca_checkpoint_identity;
-		bool vca_has_transport = false;
-		if (fs::exists(options.case_dir/"simulation_config.json")) {
-			configuration = iga::ReadSimulationConfiguration(
-				(options.case_dir/"simulation_config.json").string());
-			const auto& flow = iga::FirstNavierStokesSystem(configuration);
-			configured = true;
-			transient = flow.time_integration == "backward_euler";
-			if (configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly) {
-				iga::RequireThreeDVascularPorts(configuration.coupling, "CPU 3D VCA flow bridge");
-				if (configuration.coupling.external_circuit.reservoir.species.empty())
-					iga::RequireThreeDFlowOnlyCircuit(configuration.coupling);
-				else {
-					vca_transport_system = iga::RequireThreeDVcaTransportSystem(configuration);
-					vca_has_transport = true;
-				}
-				if (!transient)
-					throw std::runtime_error("CPU 3D VCA flow bridge requires backward_euler Navier-Stokes");
-				vca_circuit = std::make_unique<iga::VcaExternalCircuit>(configuration.coupling);
+		std::optional<FlowCaseInput> input;
+		iga::AssetFileCatalog case_assets;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow input catalog", [&] {
+			input.emplace();
+			input->configured = fs::exists(options.case_dir/"simulation_config.json");
+			case_assets.emplace("flow asset mesh", options.case_dir/"controlmesh.vtk");
+			case_assets.emplace("flow asset velocity", options.case_dir/"initial_velocityfield.txt");
+			if (input->configured)
+				case_assets.emplace("flow asset configuration", options.case_dir/"simulation_config.json");
+			else {
+				case_assets.emplace("flow asset parameters", options.case_dir/"simulation_parameter.txt");
+				if (fs::exists(options.case_dir/"case_config.json"))
+					case_assets.emplace("flow asset legacy configuration", options.case_dir/"case_config.json");
 			}
-			parameters = {flow.density, flow.viscosity, transient ? configuration.time.dt : 0.0};
-			const auto waveform = transient
-				? iga::MaterializeBoundaryWaveforms(configuration, options.case_dir.string(), 0.0)
-				: configuration;
-			outlet_models = iga::InitializeOutletModels(configuration, flow);
-			const auto initial = iga::MaterializeOutletPressures(waveform, outlet_models);
-			boundaries = iga::ResolveFlowBoundaries(initial, iga::FirstNavierStokesSystem(initial),
-				labels, boundary_velocity);
-			boundary_config = "simulation_config.json";
-		} else {
-			const auto transport = iga::ReadTransportParameters(
-				(options.case_dir/"simulation_parameter.txt").string());
-			const auto case_config = iga::ReadCaseConfiguration((options.case_dir/"case_config.json").string());
-			boundaries = iga::ResolveBoundaryConditions(case_config, labels, boundary_velocity, transport);
-			boundary_config = case_config.present ? "case_config.json" : "legacy-defaults";
-		}
-		const auto physical_steps = transient ? configuration.time.steps : 1;
-		if (options.stop_after_step > physical_steps)
-			throw std::runtime_error("--stop-after-step exceeds configured physical steps");
-		const auto run_end_step = options.stop_after_step > 0 ? options.stop_after_step : physical_steps;
-		const auto visualization_format = iga::ResolveVisualizationFormat(
-			options.visualization_format, transient);
-		if (vca_circuit && !vca_has_transport
-			&& (!options.restart.empty() || !options.checkpoint.empty()))
-			throw std::runtime_error("VCA flow-only checkpoint/restart requires a transport state and is unavailable");
-		if (!transient)
-			for (const auto& model : outlet_models)
-				if (model.kind != iga::FieldBoundaryKind::Resistance)
-					throw std::runtime_error("RC/RCR outlets require backward_euler flow");
-		if (!transient && (!options.restart.empty() || !options.checkpoint.empty()
-			|| options.output_every > 0 || options.checkpoint_every > 0))
-			throw std::runtime_error("restart, checkpoint, and time-indexed output require transient flow");
-		if (rank == 0) std::cout << "boundary_config=" << boundary_config
-			<< " viscosity=" << parameters.dynamic_viscosity << " density=" << parameters.density
-			<< " time_integration=" << (transient ? "backward_euler" : "steady")
-			<< " dt=" << parameters.dt << " steps=" << physical_steps
-			<< " run_end_step=" << run_end_step << " velocity_nodes=" << boundaries.velocity_nodes
-			<< " pressure_nodes=" << boundaries.pressure_nodes
-			<< " wall_trace_velocity_nodes=" << wall_trace_basis.size() << '\n';
+		});
+		iga::RequireCollectiveAssetFiles(PETSC_COMM_WORLD, case_assets);
+		auto& mesh = input->mesh;
+		auto& wall_trace_basis = input->wall_trace_basis;
+		auto& boundary_velocity = input->boundary_velocity;
+		auto& configuration = input->configuration;
+		auto& boundaries = input->boundaries;
+		auto& outlet_models = input->outlet_models;
+		auto& parameters = input->parameters;
+		auto& configured = input->configured;
+		auto& transient = input->transient;
+		auto& boundary_config = input->boundary_config;
+		auto& vca_circuit = input->vca_circuit;
+		auto& vca_transport_system = input->vca_transport_system;
+		auto& vca_has_transport = input->vca_has_transport;
+		auto& physical_steps = input->physical_steps;
+		auto& run_end_step = input->run_end_step;
+		auto& visualization_format = input->visualization_format;
+		const auto& labels = mesh.labels;
+		iga::AssetFileCatalog waveform_assets;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow case input", [&] {
+			mesh = iga::ReadLabeledHexMesh((options.case_dir/"controlmesh.vtk").string(),
+				database.header().nodes, database.header().elements);
+			wall_trace_basis = iga::WallTraceBasis(database, mesh);
+			boundary_velocity = iga::ReadVelocity(
+				(options.case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
+			if (configured) {
+				configuration = iga::ReadSimulationConfiguration(
+					(options.case_dir/"simulation_config.json").string());
+				transient = iga::FirstNavierStokesSystem(configuration).time_integration == "backward_euler";
+				// MaterializeBoundaryWaveforms evaluates referenced boundary functions.
+				if (transient)
+					for (const auto& boundary : configuration.boundaries)
+						for (const auto& condition : boundary.conditions) {
+							if (condition.waveform.empty()) continue;
+							const auto& function = iga::FindTemporalFunction(configuration, condition.waveform);
+							if (function.kind == iga::TemporalFunctionKind::PeriodicTable)
+								waveform_assets.emplace("flow asset temporal " + function.name,
+									options.case_dir/function.file);
+						}
+			}
+		});
+		iga::RequireCollectiveAssetFiles(PETSC_COMM_WORLD, waveform_assets);
+		std::unique_ptr<iga::TransientTransportRuntime> vca_transport;
+		iga::VcaCheckpointIdentity vca_checkpoint_identity;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow boundary input", [&] {
+			if (configured) {
+				const auto& flow = iga::FirstNavierStokesSystem(configuration);
+				configured = true;
+				transient = flow.time_integration == "backward_euler";
+				if (configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly) {
+					iga::RequireThreeDVascularPorts(configuration.coupling, "CPU 3D VCA flow bridge");
+					if (configuration.coupling.external_circuit.reservoir.species.empty())
+						iga::RequireThreeDFlowOnlyCircuit(configuration.coupling);
+					else {
+						vca_transport_system = iga::RequireThreeDVcaTransportSystem(configuration);
+						vca_has_transport = true;
+					}
+					if (!transient)
+						throw std::runtime_error("CPU 3D VCA flow bridge requires backward_euler Navier-Stokes");
+					vca_circuit = std::make_unique<iga::VcaExternalCircuit>(configuration.coupling);
+				}
+				parameters = {flow.density, flow.viscosity, transient ? configuration.time.dt : 0.0};
+				const auto waveform = transient
+					? iga::MaterializeBoundaryWaveforms(configuration, options.case_dir.string(), 0.0)
+					: configuration;
+				outlet_models = iga::InitializeOutletModels(configuration, flow);
+				const auto initial = iga::MaterializeOutletPressures(waveform, outlet_models);
+				boundaries = iga::ResolveFlowBoundaries(initial, iga::FirstNavierStokesSystem(initial),
+					labels, boundary_velocity);
+				boundary_config = "simulation_config.json";
+			} else {
+				const auto transport = iga::ReadTransportParameters(
+					(options.case_dir/"simulation_parameter.txt").string());
+				const auto case_config = iga::ReadCaseConfiguration((options.case_dir/"case_config.json").string());
+				boundaries = iga::ResolveBoundaryConditions(case_config, labels, boundary_velocity, transport);
+				boundary_config = case_config.present ? "case_config.json" : "legacy-defaults";
+			}
+			physical_steps = transient ? configuration.time.steps : 1;
+			if (options.stop_after_step > physical_steps)
+				throw std::runtime_error("--stop-after-step exceeds configured physical steps");
+			run_end_step = options.stop_after_step > 0 ? options.stop_after_step : physical_steps;
+			visualization_format = iga::ResolveVisualizationFormat(
+				options.visualization_format, transient);
+			if (vca_circuit && !vca_has_transport
+				&& (!options.restart.empty() || !options.checkpoint.empty()))
+				throw std::runtime_error("VCA flow-only checkpoint/restart requires a transport state and is unavailable");
+			if (!transient)
+				for (const auto& model : outlet_models)
+					if (model.kind != iga::FieldBoundaryKind::Resistance)
+						throw std::runtime_error("RC/RCR outlets require backward_euler flow");
+			if (!transient && (!options.restart.empty() || !options.checkpoint.empty()
+				|| options.output_every > 0 || options.checkpoint_every > 0))
+				throw std::runtime_error("restart, checkpoint, and time-indexed output require transient flow");
+			if (rank == 0) std::cout << "boundary_config=" << boundary_config
+				<< " viscosity=" << parameters.dynamic_viscosity << " density=" << parameters.density
+				<< " time_integration=" << (transient ? "backward_euler" : "steady")
+				<< " dt=" << parameters.dt << " steps=" << physical_steps
+				<< " run_end_step=" << run_end_step << " velocity_nodes=" << boundaries.velocity_nodes
+				<< " pressure_nodes=" << boundaries.pressure_nodes
+				<< " wall_trace_velocity_nodes=" << wall_trace_basis.size() << '\n';
+		});
 
+		input_phase.Stop();
+		iga::PhaseScope geometry_phase(iga::ProfilePhase::Geometry);
 		iga::TransientFlowRuntime flow(database, PETSC_COMM_WORLD, configured, transient,
 			parameters, boundaries, labels, boundary_velocity, wall_trace_basis,
 			std::move(outlet_models));
 		iga::RequireValidGeometry(flow.Elements(), rank, PETSC_COMM_WORLD);
+		geometry_phase.Stop();
 		if (vca_circuit) {
 			std::map<int, long long> port_faces;
-			port_faces.emplace(configuration.coupling.three_d_ports.inlet_label, 0);
-			for (const auto label : configuration.coupling.three_d_ports.outlet_labels)
-				port_faces.emplace(label, 0);
-			for (const auto& element : flow.OwnedElements())
-				for (const auto label : element.boundary_labels) {
-					auto found = port_faces.find(label);
-					if (found != port_faces.end()) ++found->second;
-				}
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow VCA face catalog", [&] {
+				port_faces.emplace(configuration.coupling.three_d_ports.inlet_label, 0);
+				for (const auto label : configuration.coupling.three_d_ports.outlet_labels)
+					port_faces.emplace(label, 0);
+				for (const auto& element : flow.OwnedElements())
+					for (const auto label : element.boundary_labels) {
+						auto found = port_faces.find(label);
+						if (found != port_faces.end()) ++found->second;
+					}
+			});
 			for (auto& item : port_faces) {
 				long long global_faces = 0;
 				MPI_Allreduce(&item.second, &global_faces, 1, MPI_LONG_LONG, MPI_SUM,
@@ -333,10 +528,13 @@ int main(int argc, char** argv)
 				+std::to_string(model.label)+" has no boundary faces in the .ntiga database; repack with iga_pack");
 		}
 		if (configured) {
-			const auto traction_configuration = iga::MaterializeOutletPressures(
-				configuration, flow.OutletModels());
-			const auto tractions = iga::ExtractPressureTractions(traction_configuration,
-				iga::FirstNavierStokesSystem(traction_configuration));
+			std::map<int, double> tractions;
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow traction catalog", [&] {
+				const auto traction_configuration = iga::MaterializeOutletPressures(
+					configuration, flow.OutletModels());
+				tractions = iga::ExtractPressureTractions(traction_configuration,
+					iga::FirstNavierStokesSystem(traction_configuration));
+			});
 			for (const auto& traction : tractions) {
 				long long local_faces = 0;
 				for (const auto& element : flow.OwnedElements())
@@ -357,63 +555,77 @@ int main(int argc, char** argv)
 				throw std::runtime_error("VCA inlet initial_velocityfield.txt profile has zero integrated flow");
 		}
 		if (vca_has_transport)
-			vca_transport = std::make_unique<iga::TransientTransportRuntime>(database,
+			vca_transport = iga::AllocateCollectiveRuntime<iga::TransientTransportRuntime>(PETSC_COMM_WORLD, database,
 				PETSC_COMM_WORLD, configuration, vca_transport_system, labels);
-		if (vca_transport && vca_transport->RequiredNodes() != flow.RequiredNodes())
-			throw std::runtime_error("VCA flow and transport required-node layouts differ");
-		if (vca_circuit) {
+		std::unique_ptr<iga::CouplingHistoryWriter> vca_history;
+		fs::path vca_history_path;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow VCA identity and history", [&] {
+			if (vca_transport && vca_transport->RequiredNodes() != flow.RequiredNodes())
+				throw std::runtime_error("VCA flow and transport required-node layouts differ");
+			if (!vca_circuit) return;
 			vca_checkpoint_identity.configuration_fingerprint = iga::VcaConfigurationFingerprint(
 				options.case_dir/"simulation_config.json");
 			vca_checkpoint_identity.transport_system = vca_transport_system.name;
 			vca_checkpoint_identity.inlet_label = configuration.coupling.three_d_ports.inlet_label;
 			vca_checkpoint_identity.outlet_labels = configuration.coupling.three_d_ports.outlet_labels;
 			vca_checkpoint_identity.device_model = iga::VcaDeviceModelIdentity(configuration.coupling);
-		}
-		std::unique_ptr<iga::CouplingHistoryWriter> vca_history;
-		if (vca_circuit) {
 			fs::path directory = options.output.empty() ? options.case_dir/"results"/"vca_flow"
 				: options.output.parent_path();
 			if (directory.empty()) directory = ".";
+			vca_history_path = directory/"coupling_manifest.json";
 			vca_history = std::make_unique<iga::CouplingHistoryWriter>(directory, configuration.coupling.mode);
-		}
+		});
 
 		int start_step = 0;
 		std::vector<double> vca_species_state;
 		std::map<std::string, double> vca_previous_mass;
 		if (transient && !options.restart.empty()) {
-			const auto metadata = iga::ReadFlowCheckpointMetadata(options.restart);
-			iga::ValidateFlowCheckpoint(metadata, database.header().nodes, physical_steps,
-				parameters.dt, parameters.density, parameters.dynamic_viscosity);
+			iga::FlowCheckpointMetadata metadata;
+			std::string metadata_text;
+			std::vector<iga::OutletModelState> restored_outlets;
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow checkpoint metadata", [&] {
+				metadata = iga::ReadFlowCheckpointMetadata(options.restart);
+				iga::ValidateFlowCheckpoint(metadata, database.header().nodes, physical_steps,
+					parameters.dt, parameters.density, parameters.dynamic_viscosity);
+				metadata_text = iga::SerializeFlowCheckpointMetadata(metadata);
+				restored_outlets = flow.OutletModels();
+				iga::RestoreOutletCheckpoint(metadata, restored_outlets);
+			});
+			iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow checkpoint metadata agreement", metadata_text);
 			ReadCheckpoint(flow.State(), options.restart, metadata);
-			iga::RestoreOutletCheckpoint(metadata, flow.OutletModels());
+			flow.OutletModels().swap(restored_outlets);
 			start_step = metadata.completed_step;
 			if (vca_circuit) {
-				if (!vca_transport) throw std::runtime_error("VCA checkpoint requires in-process transport state");
-				const auto vca_metadata = iga::ReadVcaCheckpointMetadata(options.restart);
-				iga::ValidateVcaCheckpoint(vca_metadata, start_step, parameters.dt,
-					vca_transport->System().fields, vca_checkpoint_identity);
-				fs::path transport_path(vca_metadata.transport_state_file);
-				if (transport_path.is_relative())
-					transport_path = iga::VcaCheckpointMetadataPath(options.restart).parent_path()/transport_path;
+				iga::VcaCheckpointMetadata vca_metadata;
+				fs::path transport_path;
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "VCA checkpoint metadata", [&] {
+					if (!vca_transport) throw std::runtime_error("VCA checkpoint requires in-process transport state");
+					vca_metadata = iga::ReadVcaCheckpointMetadata(options.restart);
+					iga::ValidateVcaCheckpoint(vca_metadata, start_step, parameters.dt,
+						vca_transport->System().fields, vca_checkpoint_identity);
+					metadata_text = iga::SerializeVcaCheckpointMetadata(vca_metadata);
+					transport_path = vca_metadata.transport_state_file;
+					if (transport_path.is_relative())
+						transport_path = iga::VcaCheckpointMetadataPath(options.restart).parent_path()/transport_path;
+				});
+				iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "VCA checkpoint metadata agreement", metadata_text);
 				vca_transport->ReadState(transport_path);
-				vca_circuit->RestoreState(vca_metadata.reservoir);
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "VCA checkpoint reservoir", [&] {
+					vca_circuit->RestoreState(vca_metadata.reservoir);
+				});
 				vca_species_state = vca_transport->GatherRequiredState();
 				vca_previous_mass = vca_transport->TotalMass();
 			}
-			if (rank == 0) std::cout << "restart=" << options.restart.string()
-				<< " completed_step=" << start_step << " physical_time=" << metadata.physical_time << '\n';
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "checkpoint restart logging", [&] {
+				if (rank == 0) std::cout << "restart=" << options.restart.string()
+					<< " completed_step=" << start_step << " physical_time=" << metadata.physical_time << '\n';
+			});
 		} else {
 			if (vca_circuit) {
-				auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration,
-					options.case_dir.string(), 0.0);
-				const auto initial_inlet = vca_circuit->InletState(0.0);
-				iga::ApplyThreeDVascularInlet(initial_configuration,
-					iga::FirstNavierStokesSystem(initial_configuration), initial_inlet,
-					vca_reference_inlet_flow);
-				if (vca_transport)
-					iga::ApplyThreeDVascularSpeciesInlet(initial_configuration,
-						vca_transport->System(), initial_inlet);
-				flow.InitializeState(initial_configuration);
+				const auto initial = PrepareFlowStepInput(PETSC_COMM_WORLD, "flow initial VCA input",
+					true, true, configuration, options.case_dir, 0.0, 0.0, vca_circuit.get(),
+					vca_transport ? &vca_transport->System() : nullptr, vca_reference_inlet_flow);
+				flow.InitializeState(initial.configuration);
 			} else {
 				flow.InitializeState();
 			}
@@ -421,208 +633,196 @@ int main(int argc, char** argv)
 		flow.CopyStateToPrevious();
 		if (!options.output.empty()
 			&& visualization_format == iga::VisualizationFormat::BezierVtkHdf) {
-			int initialization_failed = 0;
-			if (rank == 0) {
-				try {
-					bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
-						iga::BuildBezierVisualizationMesh(database, false));
-					const auto report = iga::BezierGeometryReportPath(options.output);
-					iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
-					iga::RequireValidBezierGeometry(bezier_mesh->validation);
-					vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
-						iga::VtkHdfPath(options.output), *bezier_mesh,
-						!options.restart.empty());
-					std::cout << "bezier_geometry_points=" << bezier_mesh->points.size()
-						<< " local_point_references=" << bezier_mesh->validation.local_points
-						<< " geometry_report=" << report.string()
-						<< " vtkhdf=" << vtkhdf->path().string() << '\n';
-				} catch (const std::exception& error) {
-					std::cerr << "rank 0: " << error.what() << '\n';
-					initialization_failed = 1;
-				}
-			}
-			MPI_Bcast(&initialization_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-			if (initialization_failed)
-				throw std::runtime_error("cannot initialize Bezier VTKHDF output");
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow visualization initialization", [&] {
+				if (rank != 0) return;
+				bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
+					iga::BuildBezierVisualizationMesh(database, false));
+				const auto report = iga::BezierGeometryReportPath(options.output);
+				RequireRegularOutput(report);
+				RequireRegularOutput(iga::VtkHdfPath(options.output));
+				iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
+				iga::RequireValidBezierGeometry(bezier_mesh->validation);
+				vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
+					iga::VtkHdfPath(options.output), *bezier_mesh,
+					!options.restart.empty());
+				std::cout << "bezier_geometry_points=" << bezier_mesh->points.size()
+					<< " local_point_references=" << bezier_mesh->validation.local_points
+					<< " geometry_report=" << report.string()
+					<< " vtkhdf=" << vtkhdf->path().string() << '\n';
+			});
 		}
 
 		const auto start = std::chrono::steady_clock::now();
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
 		std::vector<iga::VelocitySnapshot> velocity_snapshots;
-		if (transient && options.output_every > 0) {
-			const auto text_path = iga::TimeIndexedPath(options.output, start_step);
-			const auto vtk_path = iga::VtuStepPath(options.output, start_step);
+		auto write_output = [&](int step, double physical_time, bool final_output) {
+			fs::path text_path, vtk_path, mesh_path;
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output preparation", [&] {
+				text_path = final_output ? options.output : iga::TimeIndexedPath(options.output, step);
+				vtk_path = final_output ? iga::VtuFinalPath(options.output) : iga::VtuStepPath(options.output, step);
+				mesh_path = options.case_dir/"controlmesh.vtk";
+			});
 			WriteFlowOutput(flow.State(), database.header().nodes, text_path,
-				options.case_dir/"controlmesh.vtk", vtk_path, start_step*parameters.dt, rank,
-				visualization_format, vtkhdf.get());
-			if (visualization_format == iga::VisualizationFormat::Vtu)
-				vtk_snapshots.push_back({start_step*parameters.dt, vtk_path});
-			velocity_snapshots.push_back({start_step*parameters.dt, text_path});
-		}
+				mesh_path, vtk_path, physical_time, rank, visualization_format, vtkhdf.get());
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output bookkeeping", [&] {
+				if (!final_output) {
+					if (visualization_format == iga::VisualizationFormat::Vtu)
+						vtk_snapshots.push_back({physical_time, vtk_path});
+					velocity_snapshots.push_back({physical_time, text_path});
+				}
+			});
+		};
+		if (transient && options.output_every > 0)
+			write_output(start_step, start_step*parameters.dt, false);
 		for (int step = start_step; step < run_end_step; ++step) {
 			const auto physical_time = transient ? (step+1)*parameters.dt : 0.0;
-			iga::SimulationConfiguration step_configuration;
-			if (configured)
-				step_configuration = transient
-					? iga::MaterializeBoundaryWaveforms(configuration, options.case_dir.string(), physical_time)
-					: configuration;
-			iga::VascularInletState inlet;
-			if (vca_circuit) {
-				inlet = vca_circuit->InletState(step*parameters.dt);
-				iga::ApplyThreeDVascularInlet(step_configuration,
-					iga::FirstNavierStokesSystem(step_configuration), inlet, vca_reference_inlet_flow);
-				if (vca_transport)
-					iga::ApplyThreeDVascularSpeciesInlet(step_configuration,
-						vca_transport->System(), inlet);
-			}
+			const auto step_input = PrepareFlowStepInput(PETSC_COMM_WORLD, "flow step input",
+				configured, transient, configuration, options.case_dir, physical_time, step*parameters.dt,
+				vca_circuit.get(), vca_transport ? &vca_transport->System() : nullptr, vca_reference_inlet_flow);
+			const auto& step_configuration = step_input.configuration;
+			const auto& inlet = step_input.inlet;
 			flow.BeginStep(step, physical_time, options.max_newton,
 				options.nonlinear_relative_tolerance, options.nonlinear_absolute_tolerance,
 				options.mass_relative_tolerance);
-			if (configured) flow.SetTrialBoundaryConfiguration(step_configuration);
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow step boundaries", [&] {
+				if (configured) flow.SetTrialBoundaryConfiguration(step_configuration);
+			});
 			flow.SolveTrial();
 			flow.CommitStep();
 			if (vca_transport) {
-				vca_transport->Advance(step_configuration, flow.RequiredNodes(),
-					flow.GatherRequiredVelocity());
+				const auto velocity = flow.GatherRequiredVelocity();
+				vca_transport->Advance(step_configuration, flow.RequiredNodes(), velocity);
 				vca_species_state = vca_transport->GatherRequiredState();
 			}
 			if (vca_circuit) {
+				const std::vector<std::string> empty_fields;
+				const auto& species_fields = vca_transport ? vca_transport->System().fields : empty_fields;
 				const auto ports = flow.MeasurePorts(configuration.coupling.three_d_ports,
-					vca_transport ? vca_transport->System().fields : std::vector<std::string>{},
-					vca_species_state, vca_transport ? &vca_transport->System() : nullptr);
-				auto result = iga::BuildThreeDFlowPortResult(physical_time, parameters.dt, inlet,
-					configuration.coupling.three_d_ports, ports.flows, ports.pressures);
-				for (auto& outlet : result.outlets) {
-					const auto flux = ports.species_fluxes.find(outlet.outlet_id);
-					if (flux == ports.species_fluxes.end()) continue;
-					outlet.species_flux = flux->second;
-					outlet.average_valid = std::abs(outlet.flow_m3_s)
-						> configuration.coupling.flow_epsilon_m3_s;
-					const auto concentration
-						= ports.species_concentrations.find(outlet.outlet_id);
-					if (concentration != ports.species_concentrations.end())
-						outlet.flux_weighted_concentration = concentration->second;
-				}
+					species_fields, vca_species_state, vca_transport ? &vca_transport->System() : nullptr);
+				auto result = PrepareFlowVcaResult(PETSC_COMM_WORLD, physical_time, parameters.dt, inlet,
+					configuration.coupling.three_d_ports, ports, configuration.coupling.flow_epsilon_m3_s);
 				if (vca_transport) {
-					result.total_mass = vca_transport->TotalMass();
-					result.source_integrals = vca_transport->SourceIntegrals();
-					for (const auto& mass : result.total_mass) {
-						const auto old = vca_previous_mass.find(mass.first);
-						if (old == vca_previous_mass.end()) continue;
-						double boundary_flux = 0.0;
-						const auto inlet_flux = ports.species_fluxes.find(
-							configuration.coupling.three_d_ports.inlet_label);
-						if (inlet_flux != ports.species_fluxes.end()) {
-							const auto species = inlet_flux->second.find(mass.first);
-							if (species != inlet_flux->second.end()) boundary_flux += species->second;
+					auto total_mass = vca_transport->TotalMass();
+					auto source_integrals = vca_transport->SourceIntegrals();
+					iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow VCA transport budget", [&] {
+						result.total_mass = std::move(total_mass);
+						result.source_integrals = std::move(source_integrals);
+						for (const auto& mass : result.total_mass) {
+							const auto old = vca_previous_mass.find(mass.first);
+							if (old == vca_previous_mass.end()) continue;
+							double boundary_flux = 0.0;
+							const auto inlet_flux = ports.species_fluxes.find(
+								configuration.coupling.three_d_ports.inlet_label);
+							if (inlet_flux != ports.species_fluxes.end()) {
+								const auto species = inlet_flux->second.find(mass.first);
+								if (species != inlet_flux->second.end()) boundary_flux += species->second;
+							}
+							for (const auto& outlet : result.outlets) {
+								const auto flux = outlet.species_flux.find(mass.first);
+								if (flux != outlet.species_flux.end()) boundary_flux += flux->second;
+							}
+							const auto source = result.source_integrals.find(mass.first);
+							result.balance_residuals[mass.first]
+								= (mass.second-old->second)/parameters.dt+boundary_flux
+								-(source == result.source_integrals.end() ? 0.0 : source->second);
 						}
-						for (const auto& outlet : result.outlets) {
-							const auto flux = outlet.species_flux.find(mass.first);
-							if (flux != outlet.species_flux.end()) boundary_flux += flux->second;
-						}
-						const auto source = result.source_integrals.find(mass.first);
-						result.balance_residuals[mass.first]
-							= (mass.second-old->second)/parameters.dt+boundary_flux
-							-(source == result.source_integrals.end() ? 0.0 : source->second);
-					}
-					vca_previous_mass = result.total_mass;
+						vca_previous_mass = result.total_mass;
+					});
 				}
-				const auto venous = iga::AggregateVascularOutlets(result.outlets,
-					configuration.coupling.flow_epsilon_m3_s);
-				const auto report = vca_circuit->Advance(venous, parameters.dt, physical_time);
-				vca_history->Add(result, venous, report);
+				AdvanceFlowVcaCircuit(PETSC_COMM_WORLD, *vca_circuit, *vca_history,
+					result, configuration.coupling.flow_epsilon_m3_s);
 			}
 			const auto completed_step = step+1;
-			if (options.output_every > 0 && completed_step%options.output_every == 0) {
-				const auto text_path = iga::TimeIndexedPath(options.output, completed_step);
-				const auto vtk_path = iga::VtuStepPath(options.output, completed_step);
-				WriteFlowOutput(flow.State(), database.header().nodes, text_path,
-					options.case_dir/"controlmesh.vtk", vtk_path, physical_time, rank,
-					visualization_format, vtkhdf.get());
-				if (visualization_format == iga::VisualizationFormat::Vtu)
-					vtk_snapshots.push_back({physical_time, vtk_path});
-				velocity_snapshots.push_back({physical_time, text_path});
-			}
+			if (options.output_every > 0 && completed_step%options.output_every == 0)
+				write_output(completed_step, physical_time, false);
 			if (!options.checkpoint.empty() && (completed_step == run_end_step
 				|| (options.checkpoint_every > 0 && completed_step%options.checkpoint_every == 0))) {
 				iga::FlowCheckpointMetadata metadata;
-				metadata.nodes = database.header().nodes;
-				metadata.completed_step = completed_step;
-				metadata.physical_time = completed_step*parameters.dt;
-				metadata.dt = parameters.dt;
-				metadata.density = parameters.density;
-				metadata.viscosity = parameters.dynamic_viscosity;
-				metadata.state_file = iga::FlowCheckpointStatePath(options.checkpoint).filename().string();
-				metadata.state_format = "petsc_binary";
-				iga::AppendOutletCheckpoint(flow.OutletModels(), metadata);
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow checkpoint metadata preparation", [&] {
+					metadata.nodes = database.header().nodes;
+					metadata.completed_step = completed_step;
+					metadata.physical_time = completed_step*parameters.dt;
+					metadata.dt = parameters.dt;
+					metadata.density = parameters.density;
+					metadata.viscosity = parameters.dynamic_viscosity;
+					metadata.state_file = iga::FlowCheckpointStatePath(options.checkpoint).filename().string();
+					metadata.state_format = "petsc_binary";
+					iga::AppendOutletCheckpoint(flow.OutletModels(), metadata);
+				});
 				WriteCheckpoint(flow.State(), options.checkpoint, metadata, rank);
 				if (vca_circuit) {
-					if (!vca_transport)
-						throw std::runtime_error("VCA checkpoint requires in-process transport state");
-					vca_transport->WriteState(iga::VcaCheckpointTransportStatePath(options.checkpoint));
-					int write_failed = 0;
-					if (rank == 0) {
-						try {
-							iga::VcaCheckpointMetadata vca_metadata;
-							vca_metadata.completed_step = completed_step;
-							vca_metadata.physical_time = completed_step*parameters.dt;
-							vca_metadata.dt = parameters.dt;
-							vca_metadata.fields = vca_transport->System().fields;
-							vca_metadata.identity = vca_checkpoint_identity;
-							vca_metadata.transport_state_file
-								= iga::VcaCheckpointTransportStatePath(options.checkpoint).filename().string();
-							vca_metadata.reservoir = vca_circuit->State();
-							iga::WriteVcaCheckpointMetadata(options.checkpoint, vca_metadata);
-						} catch (const std::exception&) {
-							write_failed = 1;
-						}
-					}
-					MPI_Bcast(&write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-					if (write_failed) throw std::runtime_error("cannot write VCA checkpoint metadata");
+					iga::VcaCheckpointMetadata vca_metadata;
+					fs::path transport_path;
+					std::string metadata_text;
+					iga::CollectiveLocalStage(PETSC_COMM_WORLD, "VCA checkpoint write preparation", [&] {
+						if (!vca_transport) throw std::runtime_error("VCA checkpoint requires in-process transport state");
+						transport_path = iga::VcaCheckpointTransportStatePath(options.checkpoint);
+						vca_metadata.completed_step = completed_step;
+						vca_metadata.physical_time = completed_step*parameters.dt;
+						vca_metadata.dt = parameters.dt;
+						vca_metadata.fields = vca_transport->System().fields;
+						vca_metadata.identity = vca_checkpoint_identity;
+						vca_metadata.transport_state_file = transport_path.filename().string();
+						vca_metadata.reservoir = vca_circuit->State();
+						metadata_text = iga::SerializeVcaCheckpointMetadata(vca_metadata);
+					});
+					iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "VCA checkpoint write agreement", metadata_text);
+					vca_transport->WriteState(transport_path);
+					iga::CollectiveLocalStage(PETSC_COMM_WORLD, "VCA checkpoint metadata write", [&] {
+						if (rank == 0) WriteCheckpointMetadataText(iga::VcaCheckpointMetadataPath(options.checkpoint), metadata_text);
+					});
 				}
-				if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
-					<< " completed_step=" << completed_step << '\n';
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "checkpoint write logging", [&] {
+					if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
+						<< " completed_step=" << completed_step << '\n';
+				});
 			}
 		}
 		if (vca_circuit) {
-			int write_failed = 0;
-			if (rank == 0) {
-				try {
-					vca_history->Write("cpu_3d_navier_stokes");
-				} catch (const std::exception&) {
-					write_failed = 1;
-				}
-			}
-			MPI_Bcast(&write_failed, 1, MPI_INT, 0, PETSC_COMM_WORLD);
-			if (write_failed) throw std::runtime_error("cannot write VCA coupling manifest");
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow VCA history output", [&] {
+				if (rank != 0) return;
+				RequireRegularOutput(vca_history_path);
+				vca_history->Write("cpu_3d_navier_stokes");
+			});
 		}
 		const auto summary = flow.Summary();
-		if (rank == 0) std::cout << "navier_stokes_v2 seconds="
-			<< std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count()
-			<< " total_linear_iterations=" << summary.linear_iterations
-			<< " state_l2=" << summary.state_l2 << " velocity_l2=" << summary.velocity_l2
-			<< " pressure_l2=" << summary.pressure_l2 << '\n';
+		// Preserve the existing timing interval while publishing success only
+		// after the final field and index writers have returned successfully.
+		const auto solve_seconds = std::chrono::duration<double>(
+			std::chrono::steady_clock::now()-start).count();
 		if (!options.output.empty()) {
 			const auto final_time = transient ? run_end_step*parameters.dt : 0.0;
-			WriteFlowOutput(flow.State(), database.header().nodes, options.output,
-				options.case_dir/"controlmesh.vtk", iga::VtuFinalPath(options.output), final_time, rank,
-				visualization_format, vtkhdf.get());
-			if (rank == 0) {
+			write_output(run_end_step, final_time, true);
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output index", [&] {
+				if (rank != 0) return;
 				if (visualization_format == iga::VisualizationFormat::Vtu) {
 					if (vtk_snapshots.empty())
 						vtk_snapshots.push_back({final_time, iga::VtuFinalPath(options.output)});
+					RequireRegularOutput(iga::PvdPath(options.output));
 					iga::WritePvd(iga::PvdPath(options.output), vtk_snapshots);
 				}
-				if (!velocity_snapshots.empty())
+				if (!velocity_snapshots.empty()) {
+					RequireRegularOutput(iga::VelocityManifestPath(options.output));
 					iga::WriteVelocityManifest(iga::VelocityManifestPath(options.output), velocity_snapshots);
-			}
+				}
+			});
 		}
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow visualization close", [&] {
+			if (rank == 0 && vtkhdf) vtkhdf->Close();
+		});
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow completion logging", [&] {
+			if (rank == 0) std::cout << "navier_stokes_v2 seconds=" << solve_seconds
+				<< " total_linear_iterations=" << summary.linear_iterations
+				<< " state_l2=" << summary.state_l2 << " velocity_l2=" << summary.velocity_l2
+				<< " pressure_l2=" << summary.pressure_l2 << '\n';
+		});
 	} catch (const std::exception& error) {
 		std::cerr << "rank " << rank << ": " << error.what() << '\n';
 		status = 1;
 	}
 	int global_status = 0;
 	MPI_Allreduce(&status, &global_status, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);
+	iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, global_status);
 	PetscFinalize();
 	return global_status;
 }

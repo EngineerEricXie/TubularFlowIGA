@@ -44,6 +44,12 @@ public:
 	~Handle() { Close(); }
 	hid_t get() const { return value_; }
 	explicit operator bool() const { return value_ >= 0; }
+	void CloseChecked(const std::string& message)
+	{
+		if (value_ < 0) return;
+		if (closer_ && closer_(value_) < 0) throw std::runtime_error(message);
+		value_ = -1;
+	}
 private:
 	void Close()
 	{
@@ -303,6 +309,7 @@ inline std::string ArraySchema(const std::vector<VtkPointArray>& arrays)
 {
 	std::set<std::string> names;
 	std::ostringstream result;
+	result.exceptions(std::ios::badbit | std::ios::failbit);
 	for (const auto& array : arrays) {
 		if (array.name.empty() || array.name.find('/') != std::string::npos
 			|| array.name.find('\n') != std::string::npos
@@ -343,6 +350,7 @@ public:
 
 	void Append(double physical_time, const std::vector<VtkPointArray>& control_arrays)
 	{
+		if (closing_ || !file_) throw std::runtime_error("VTKHDF writer is closing or closed: "+path_.string());
 		if (!std::isfinite(physical_time))
 			throw std::runtime_error("VTKHDF physical time is not finite");
 		const auto arrays = ExtractBezierPointArrays(mesh_, control_arrays);
@@ -378,6 +386,23 @@ public:
 		}
 		hdf_detail::Require(H5Fflush(file_.get(), H5F_SCOPE_GLOBAL),
 			"cannot flush VTKHDF output "+path_.string());
+	}
+
+	// Call before reporting successful output. The handle destructors remain
+	// best-effort cleanup during unwinding; they cannot report close failures.
+	void Close()
+	{
+		if (!file_) return;
+		closing_ = true;
+		hdf_detail::Require(H5Fflush(file_.get(), H5F_SCOPE_GLOBAL),
+			"cannot finalize VTKHDF output "+path_.string());
+		root_.CloseChecked("cannot close VTKHDF root group "+path_.string());
+		// H5Fclose may succeed while an object keeps the file alive. Check only
+		// identifiers opened through this writer's file ID, not other readers.
+		const auto objects = H5Fget_obj_count(file_.get(), H5F_OBJ_ALL | H5F_OBJ_LOCAL);
+		if (objects != 1) throw std::runtime_error(
+			"VTKHDF finalization requires only the file handle to remain open: "+path_.string());
+		file_.CloseChecked("cannot close VTKHDF output "+path_.string());
 	}
 
 	const BezierGeometryValidation& validation() const { return mesh_.validation; }
@@ -546,6 +571,7 @@ private:
 	std::filesystem::path path_;
 	const BezierVisualizationMesh& mesh_;
 	int compression_ = 4;
+	bool closing_ = false;
 	hdf_detail::Handle file_;
 	hdf_detail::Handle root_;
 };

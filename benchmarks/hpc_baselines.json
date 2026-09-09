@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "purpose": "Pre-optimization HPC baseline inputs; measured results live outside source fixtures",
+  "comparison_policy": {
+    "cpu_rank_field_relative_l2_max": 0.000001,
+    "cpu_cuda_field_relative_l2_max": 0.00001,
+    "zero_reference_absolute_l2_max": 0.000000000001,
+    "reference": "Fresh single-rank run of the recorded source snapshot, alongside existing independent numerical gates",
+    "speedup_claim": "Median end-to-end time reduction at least 10 percent across at least three fresh-process repetitions, with no numerical gate regression",
+    "memory_regression_limit_ratio": 1.25,
+    "memory_scope": "Maximum per-rank and aggregate peak RSS; scope and sum-of-peaks caveat must be recorded",
+    "note": "These cross-configuration comparison limits supplement, never replace or loosen, native fixture assertions. Pressure references must use identical gauge and units."
+  },
+  "cases": [
+    {
+      "id": "body_fitted_flow",
+      "source_inputs": ["examples/vascular_flow/straight_tube", "scripts/prepare_example.sh"],
+      "build_targets": ["mesh", "spline", "cpu", "cpu-petsc"],
+      "prepare": "RANKS=2 ./scripts/prepare_example.sh vascular_flow/straight_tube EMPTY_WORK_DIR",
+      "run": "mpiexec -np RANKS ./solvers/cpu/iga_navier_stokes DATABASE WORK_DIR --output OUTPUT --nonlinear-rtol 1e-8 --nonlinear-atol 1e-12 --mass-rtol 1e-6",
+      "solver_environment": {"PETSC_OPTIONS": "-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps"},
+      "precision_note": "The small numerical reference uses direct MUMPS on both rank configurations. Default-solver pressure comparison measured 1.20546e-6 and failed the unchanged 1e-6 gate. Tightened iterative single-rank solve timed out at 240 s; both failed observations are preserved. This reference choice is not a scalable-preconditioner claim or a change to production defaults.",
+      "generated_inputs": ["controlmesh.vtk", "spline_cache.igacache", "geometry_transform.json", "initial_velocityfield.txt", "DATABASE.ntiga"],
+      "native_gate_sources": ["solvers/cpu/src/iga_mesh_check.cpp", "solvers/cpu/src/iga_flow_validate.cpp", "solvers/cpu/include/TransientFlowRuntime.hpp"],
+      "reference_evidence": ["examples/VALIDATION.md", "examples/vascular_flow/VALIDATION.md"],
+      "modes": {"mpi": "supported; repack for each rank count", "openmp": "not implemented for CPU body-fitted assembly", "cuda": "single GPU supported"},
+      "note": "mpmetis requires at least two partitions; a one-rank packing fixture must explicitly construct a valid all-zero element partition."
+    },
+    {
+      "id": "body_fitted_transport",
+      "source_inputs": ["examples/neuron_transport/straight_neurite", "scripts/prepare_example.sh"],
+      "build_targets": ["mesh", "spline", "cpu", "cpu-petsc"],
+      "prepare": "RANKS=2 ./scripts/prepare_example.sh neuron_transport/straight_neurite EMPTY_WORK_DIR",
+      "run": "mpiexec -np RANKS ./solvers/cpu/iga_solve DATABASE WORK_DIR --system neuron_transport --output OUTPUT",
+      "generated_inputs": ["controlmesh.vtk", "spline_cache.igacache", "geometry_transform.json", "initial_velocityfield.txt", "DATABASE.ntiga"],
+      "native_gate_sources": ["solvers/cpu/src/iga_mesh_check.cpp", "solvers/cpu/src/iga_solve.cpp"],
+      "reference_evidence": ["examples/VALIDATION.md"],
+      "modes": {"mpi": "supported; repack for each rank count", "openmp": "not implemented for CPU body-fitted assembly", "cuda": "single GPU supported"}
+    },
+    {
+      "id": "immersed_aneurysm_depth2",
+      "source_inputs": ["examples/vascular_flow/immersed_aneurysm_chain/immersed", "solvers/cpu/tests/test_immersed_aneurysm_jacobian.cpp"],
+      "build_targets": ["phase6-aneurysm-depth2-regression"],
+      "prepare": "Use the existing depth-2 Make target; retain source depth 3 unchanged",
+      "run": "make -C solvers/cpu phase6-aneurysm-depth2-regression PETSC_DIR=PETSC_PREFIX",
+      "generated_inputs": ["isolated depth-2 immersed_geometry.json"],
+      "native_gate_sources": ["solvers/cpu/tests/test_immersed_aneurysm_jacobian.cpp"],
+      "reference_evidence": ["docs/progress/PHASE_6_REPORT.md", "docs/progress/PHASE_9_REPORT.md"],
+      "modes": {"mpi": "N/A until HPC-03", "openmp": "N/A until HPC-02", "cuda": "unsupported"},
+      "gates": {"centered_fd_relative_defect_max": 1e-8, "newton_residual_max": 1e-11},
+      "note": "Build and fixture preparation time must be separate from numerical work; this gate includes FD assembly and is not solve-only timing."
+    },
+    {
+      "id": "compliant_channel_fsi",
+      "source_inputs": ["solvers/cpu/tests/CompliantChannelFsiFixture.hpp", "solvers/cpu/tests/test_compliant_channel_fsi.cpp"],
+      "build_targets": ["compliant_channel_fsi_test"],
+      "prepare": "make -C solvers/cpu compliant_channel_fsi_test PETSC_DIR=PETSC_PREFIX",
+      "run": "./solvers/cpu/compliant_channel_fsi_test",
+      "generated_inputs": ["in-memory material geometry and runtime state"],
+      "native_gate_sources": ["solvers/cpu/tests/test_compliant_channel_fsi.cpp", "solvers/cpu/tests/CompliantChannelFsiFixture.hpp"],
+      "reference_evidence": ["docs/progress/PHASE_8_REPORT.md"],
+      "modes": {"mpi": "N/A until HPC-07", "openmp": "N/A until HPC-02", "cuda": "unsupported"},
+      "gates": {"traction_resultant_component_absolute_max_n": 1e-11, "traction_moment_component_absolute_max_n_m": 1e-11, "normalized_moving_mass_defect_strict_max": 0.03, "normalized_wall_leakage_strict_max": 0.03, "normalized_discrete_continuity_strict_max": 1e-8},
+      "note": "Native fixture convergence thresholds and all other assertions remain authoritative; this is one accepted macro-step with strong trials."
+    }
+  ]
+}

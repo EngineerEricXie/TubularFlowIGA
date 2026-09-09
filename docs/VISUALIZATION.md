@@ -14,6 +14,11 @@ meshes. A completed epoch that survives an interruption before the PVD update
 is incorporated by the next rebuild. Static geometry continues to use the
 Bézier VTKHDF path described below.
 
+The standalone `phase8_compliant_channel_fsi_paraview` exporter requires one
+MPI rank and rejects larger communicators before creating or modifying output.
+It runs the single-process compliant-channel FSI fixture; distributed FSI is
+tracked in [HPC-07](WORKSTATION_HPC_TODO.md#hpc-07分散式-fsi).
+
 ## Default format
 
 `--visualization-format auto` is the default:
@@ -39,6 +44,17 @@ point solution. A global extraction-signature registry gives shared Bézier
 points one visualization point ID. Coordinate equality alone never merges
 points with different solution-space identities. `controlmesh.vtk` is not
 rewritten and remains the canonical preprocessing/pipeline interface.
+
+CPU and CUDA flow/transport CLIs explicitly close VTKHDF before printing their
+final success summaries. CPU close errors are shared across ranks. Configured CPU
+transport also coordinates root visualization initialization failures, including
+nonstandard exceptions, before peers continue. When embedding
+`TemporalVtkHdfWriter`, call `Close()` before reporting success: it checks flush,
+root-group close, remaining local file objects, and file close. Repeated successful
+`Close()` calls are harmless; `Append()` is rejected once closing has started.
+Destructors provide best-effort cleanup during unwinding. These checks do not
+provide atomic publication or crash durability. See the
+[finalization validation report](progress/HPC_01C_IO_FINALIZATION_PROGRESS.md).
 
 ## Geometry report
 
@@ -71,3 +87,6 @@ installed, run the actual reader test:
 ```bash
 make -C solvers/cpu vtkhdf-paraview-test
 ```
+
+On Linux with a linker supporting GNU `--wrap`, exercise returned HDF5 close
+errors and retry behavior with `make -C solvers/cpu vtkhdf-close-failure-test`.

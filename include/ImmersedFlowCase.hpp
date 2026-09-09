@@ -5,6 +5,7 @@
 // the catalog dependencies in declaration order: the runtime borrows ghost,
 // surface and volume, ghost borrows classification and volume, and all of
 // them ultimately retain the classified surface.
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "FlowDomainPortMetadata.hpp"
 #include "SimulationConfig.hpp"
@@ -36,6 +37,7 @@ public:
 	static std::unique_ptr<ImmersedFlowCase> Load(const std::filesystem::path& case_directory,
 		const std::string& domain_id, const std::vector<CouplingPort>& ports, int mpi_size)
 	{
+		PhaseScope input_phase(ProfilePhase::Input);
 		if (mpi_size != 1)
 			throw std::runtime_error("immersed flow cases require MPI size 1");
 		ValidateThreeDImmersedFlowDomainMetadata(domain_id, ports);
@@ -55,6 +57,8 @@ public:
 			Required(object, "surface"), "immersed_geometry.json.surface");
 		const std::string boundary_array = OptionalString(object, "boundary_array", "boundary_id");
 		const auto surface_path = Contained(result->case_directory_, surface_file);
+		input_phase.Stop();
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		result->classification_ = std::make_unique<CartesianDomainClassification>(
 			CubicCartesianBackground(ParseGrid(Required(object, "grid"))),
 			SurfaceSpatialIndex(SurfaceReaders::ReadVtpPath(surface_path.string(), {}, boundary_array)));
@@ -128,7 +132,7 @@ private:
 	static config_detail::JsonValue ParseJson(const std::filesystem::path& path)
 	{
 		std::ifstream input(path); if (!input) throw std::runtime_error("cannot open immersed geometry configuration");
-		std::ostringstream text; text << input.rdbuf(); return config_detail::JsonParser(text.str()).Parse();
+		return config_detail::JsonParser(ReadCheckedText(input)).Parse();
 	}
 	static std::string OptionalString(const std::map<std::string, config_detail::JsonValue>& object,
 		const std::string& key, const std::string& fallback)

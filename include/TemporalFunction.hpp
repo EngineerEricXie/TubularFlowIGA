@@ -1,6 +1,7 @@
 #ifndef IGA_TEMPORAL_FUNCTION_HPP
 #define IGA_TEMPORAL_FUNCTION_HPP
 
+#include "CheckedText.hpp"
 #include "SimulationConfig.hpp"
 
 #include <algorithm>
@@ -80,10 +81,9 @@ inline std::vector<TemporalSample> ReadTemporalCsv(const std::string& path, doub
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open temporal CSV: " + path);
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read temporal CSV: " + path);
-	return ParseTemporalCsv(contents.str(), period, path);
+	return ParseTemporalCsv(contents, period, path);
 }
 
 inline double PeriodicTime(double time, double period)

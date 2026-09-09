@@ -22,10 +22,26 @@ make one-d-test
 ./solvers/one_d/iga_1d CASE_DIR --output-dir OUTPUT_DIR
 ```
 
-`--check` parses the complete schema, reads and validates the SWC tree, resolves
-topological boundaries, and checks referenced node IDs without advancing time.
+`--check` parses the complete schema, reads and validates the SWC or
+radius-annotated OBJ tree, resolves topological boundaries, and checks referenced
+node IDs without advancing time. It also performs the input consistency checks
+described below.
 Without `--system`, a case must have exactly one 1D flow system; the solver then
 runs every transport system whose `flow_system` names it.
+
+Inputs must remain unchanged throughout a run. Ranks may use different local
+case directories, but configuration text and the contents of the network,
+referenced flow/species periodic tables, and active replay file must agree.
+Missing files, non-regular files (including FIFOs), and differing contents are
+rejected collectively before time stepping or output creation. Unused temporal
+function definitions do not cause their files to be opened. Startup includes
+an additional full scan of each checked asset on every rank; this Linux/WSL
+validation has not been measured on a large shared filesystem.
+
+These checks compare inputs within the current job. They do not add waveform
+or replay hashes to checkpoint identity; complete restart identity remains
+part of HPC-05. See the [1D asset validation report](progress/HPC_01C_ONE_D_ASSET_PROGRESS.md)
+for coverage and the immutable-input contract.
 
 PETSc options remain command-line options rather than JSON keys:
 
@@ -222,6 +238,26 @@ is included in the checkpoint format.
 
 ## Checkpoint and restart
 
+The CLI coordinates local step-input, trial and diagnostic errors before peers
+advance to the next phase. `OneDFlowRuntime` accepts an optional
+`FailureAgreement` callback for local phases of combined and staged trials;
+the default remains usable without MPI. A failed trial cannot be committed.
+Staged transport publishes its candidate only after group agreement, so a failed
+scalar replay can retry using the completed hydraulic frames. Species worker
+exceptions are captured inside OpenMP and rethrown after the parallel region.
+Implicit PETSc local assembly, returned errors and SNES callback exceptions are
+also coordinated; successful state updates publish after group agreement.
+Both 1D adapters also coordinate local mutations and solve preparation through
+the injected agreement. Every group member must call these mutations in the same
+order; constructors and port queries remain local. Staged input maps publish only
+after agreement, allowing rejected inputs to be corrected and resent.
+Executor bookkeeping and failures inside backend collectives still need separate handling.
+See the [trial regression report](progress/HPC_01C_ONE_D_TRIAL_PROGRESS.md) and
+[staged/OpenMP report](progress/HPC_01C_ONE_D_STAGED_PROGRESS.md) and
+[implicit PETSc report](progress/HPC_01C_ONE_D_IMPLICIT_PROGRESS.md) for the tested scope and limits.
+The [adapter report](progress/HPC_01C_ONE_D_ADAPTER_PROGRESS.md) records local-query,
+input-retry, rollback and graph precommit-failure coverage.
+
 ```bash
 ./solvers/one_d/iga_1d CASE_DIR \
   --checkpoint OUTPUT/checkpoint --checkpoint-every 50 --stop-after-step 100
@@ -236,6 +272,20 @@ step, physical time, `dt`, and explicit substep count. Restart rejects a changed
 config, changed SWC geometry, mismatched species ordering, inconsistent time,
 truncated state, and corrupt metadata using config/network fingerprints and
 strict size checks.
+
+Checkpoint I/O coordinates metadata, state and restore errors within a borrowed
+communicator (the existing API defaults to `PETSC_COMM_WORLD`). Each rank loads
+its local state copy using `COMM_SELF`; rank 0 writes the already replicated 1D
+state. The group compares metadata and packed values before accepting the data.
+Viewer options and `.info` options cannot override the checkpoint file contract.
+The JSON schema and PETSc binary state format remain compatible with the original
+distributed VecLoad/VecView path.
+
+This provides controlled error exits, not atomic checkpoint publication or a
+checksum against identical corruption on all ranks. A failed overwrite can still
+damage the previous checkpoint; the versioned publication protocol remains an
+HPC-05 task. See the [checkpoint regression report](progress/HPC_01C_ONE_D_CHECKPOINT_PROGRESS.md)
+for fault coverage, complete multispecies restart comparisons and communicator tests.
 
 ## Outputs
 

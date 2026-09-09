@@ -110,6 +110,8 @@ inline void WritePhysiologyManifest(const std::filesystem::path& path,
 	}
 	if (!first) output << '\n';
 	output << "  }\n}\n";
+	output.close();
+	if (!output) throw std::runtime_error("cannot write physiology manifest: "+path.string());
 }
 
 } // namespace iga

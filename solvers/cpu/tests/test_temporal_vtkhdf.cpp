@@ -95,6 +95,7 @@ int main()
 		iga::TemporalVtkHdfWriter writer(path, mesh, true);
 		for (auto& value : scalar) value += 10.0;
 		writer.Append(1.0, {{"scalar", 1, scalar}, {"velocity", 3, velocity}});
+		writer.Close();
 	}
 	const auto file = H5Fopen(path.string().c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
 	assert(file >= 0);

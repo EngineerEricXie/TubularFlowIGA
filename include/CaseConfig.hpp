@@ -1,6 +1,7 @@
 #ifndef IGA_CASE_CONFIG_HPP
 #define IGA_CASE_CONFIG_HPP
 
+#include "CheckedText.hpp"
 #include <array>
 #include <cerrno>
 #include <cmath>
@@ -380,10 +381,9 @@ inline CaseConfiguration ReadCaseConfiguration(const std::string& path)
 		if (!exists) return {};
 		throw std::runtime_error("cannot open case configuration: " + path);
 	}
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read case configuration: " + path);
-	return ParseCaseConfiguration(contents.str());
+	return ParseCaseConfiguration(contents);
 }
 
 inline const char* BoundaryTypeName(BoundaryType type)

@@ -1,6 +1,7 @@
 #ifndef IGA_MESH_CONFIG_HPP
 #define IGA_MESH_CONFIG_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 
 #include <cmath>
@@ -252,9 +253,8 @@ inline ThreeDMeshCaseConfiguration ReadThreeDMeshCaseConfiguration(
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open mesh case configuration: " + path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
-	return ParseThreeDMeshCaseConfiguration(contents.str());
+	const auto contents = iga::ReadCheckedText(input);
+	return ParseThreeDMeshCaseConfiguration(contents);
 }
 
 } // namespace iga

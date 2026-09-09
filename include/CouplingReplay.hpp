@@ -1,6 +1,7 @@
 #ifndef IGA_COUPLING_REPLAY_HPP
 #define IGA_COUPLING_REPLAY_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "VascularCoupling.hpp"
 
@@ -108,9 +109,8 @@ inline std::vector<VascularInletState> ReadReplayJson(const std::filesystem::pat
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open coupling replay file: "+path.string());
-	std::ostringstream text;
-	text << input.rdbuf();
-	const auto root = config_detail::JsonParser(text.str()).Parse();
+	const auto text = iga::ReadCheckedText(input);
+	const auto root = config_detail::JsonParser(text).Parse();
 	const std::vector<config_detail::JsonValue>* rows = nullptr;
 	if (root.type == config_detail::JsonValue::Type::Array) rows = &root.array;
 	else {

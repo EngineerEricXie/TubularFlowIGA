@@ -548,7 +548,7 @@ void RequireManifestSubcycling(const fs::path& path, const std::vector<CsvRow>& 
 }
 
 void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<CsvRow>& iterations,
-	const fs::path& manifest, bool fixed_mode = true)
+	const fs::path& manifest, bool fixed_mode = true, int first_step_veto_iteration = 0)
 {
 	if (history.size() != static_cast<std::size_t>(kSteps) || iterations.size() <= history.size())
 		throw std::runtime_error("strong coupling smoke did not perform more than one sweep per step");
@@ -564,6 +564,7 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 	if (by_step.size() != history.size()) throw std::runtime_error("strong iteration history has wrong physical-step groups");
 	long long sum_all_ksp = 0;
 	long long sum_accepted_ksp = 0;
+	bool observed_veto = false;
 	for (const auto& entry : by_step) {
 		const auto& rows = entry.second;
 		if (rows.empty() || rows.size() > 50) throw std::runtime_error("strong iteration count is invalid");
@@ -613,7 +614,17 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 				&& normalized_downstream_pressure <= pressure_relative_tolerance
 				&& std::abs(normalized_upstream_flow_residual) <= flow_relative_tolerance
 				&& std::abs(normalized_downstream_flow_residual) <= flow_relative_tolerance;
-			if (Value(rows[index], "converged") != (expected_converged ? 1.0 : 0.0))
+			// A test may veto exactly one otherwise converged trial on another rank.
+			// Its serialized flag must reflect the global decision, with another
+			// iteration following it. All numerical checks above remain unchanged.
+			const bool veto = first_step_veto_iteration > 0 && entry.first == 1
+				&& static_cast<int>(index+1) == first_step_veto_iteration;
+			if (veto) {
+				if (!expected_converged || index+1 == rows.size())
+					throw std::runtime_error("strong injected veto did not reject a converged trial");
+				observed_veto = true;
+			}
+			if (Value(rows[index], "converged") != (expected_converged && !veto ? 1.0 : 0.0))
 				throw std::runtime_error("strong serialized convergence flag is incorrect");
 			if (fixed_mode && (!Close(Value(rows[index], "next_upstream_terminal_pressure_pa"),
 				Value(rows[index], "applied_upstream_terminal_pressure_pa")+0.5*(Value(rows[index], "measured_three_d_inlet_pressure_pa")-Value(rows[index], "applied_upstream_terminal_pressure_pa")))
@@ -698,6 +709,8 @@ void ValidateStrongRun(const std::vector<CsvRow>& history, const std::vector<Csv
 			|| (updates > 0.0 && !Close(Value(row, "last_applied_relaxation_factor"), 0.5))))
 			throw std::runtime_error("strong step relaxation summary is invalid");
 	}
+	if (first_step_veto_iteration > 0 && !observed_veto)
+		throw std::runtime_error("strong injected veto is missing from iteration history");
 	if (!observed_multiple_iterations)
 		throw std::runtime_error("strong coupling smoke never required a fixed-point correction");
 	if (static_cast<long long>(ManifestNumber(manifest, "total_coupling_iterations"))

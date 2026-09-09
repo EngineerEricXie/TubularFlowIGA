@@ -1,6 +1,7 @@
 #ifndef IGA_TRANSPORT_CHECKPOINT_HPP
 #define IGA_TRANSPORT_CHECKPOINT_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 
 #include <algorithm>
@@ -60,6 +61,7 @@ inline std::string SerializeTransportCheckpointMetadata(
 	const TransportCheckpointMetadata& metadata)
 {
 	std::ostringstream output;
+	output.exceptions(std::ios::badbit | std::ios::failbit);
 	output << std::setprecision(17)
 		<< "{\n"
 		<< "  \"schema_version\": " << metadata.schema_version << ",\n"
@@ -153,11 +155,10 @@ inline TransportCheckpointMetadata ReadTransportCheckpointMetadata(
 	std::ifstream input(path);
 	if (!input)
 		throw std::runtime_error("cannot open transport checkpoint metadata: "+path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof())
 		throw std::runtime_error("cannot read transport checkpoint metadata: "+path.string());
-	return ParseTransportCheckpointMetadata(contents.str());
+	return ParseTransportCheckpointMetadata(contents);
 }
 
 inline void ValidateTransportCheckpoint(const TransportCheckpointMetadata& metadata,

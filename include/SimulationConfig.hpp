@@ -1,6 +1,7 @@
 #ifndef IGA_SIMULATION_CONFIG_HPP
 #define IGA_SIMULATION_CONFIG_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "CouplingConfig.hpp"
 #include "MeshConfig.hpp"
@@ -685,10 +686,9 @@ inline SimulationConfiguration ReadSimulationConfiguration(const std::string& pa
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open simulation configuration: " + path);
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read simulation configuration: " + path);
-	return ParseSimulationConfiguration(contents.str());
+	return ParseSimulationConfiguration(contents);
 }
 
 inline CompiledLinearSystem CompileLinearSystem(const SimulationConfiguration& configuration,

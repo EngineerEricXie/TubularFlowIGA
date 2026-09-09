@@ -74,6 +74,7 @@ void WriteCudaTransportCheckpoint(const fs::path& prefix,
 	iga::TransportCheckpointMetadata metadata, const DeviceBuffer<double>& state,
 	std::size_t values)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::vector<double> host(values);
 	state.CopyToHost(host.data(), host.size());
 	const auto state_path = iga::TransportCheckpointStatePath(prefix);
@@ -101,6 +102,7 @@ void WriteCudaConfiguredOutput(const fs::path& path,
 	iga::VisualizationFormat visualization_format,
 	iga::TemporalVtkHdfWriter* vtkhdf)
 {
+	PhaseScope output_phase(ProfilePhase::Output);
 	std::vector<double> output(nodes*Fields);
 	state.CopyToHost(output.data(), output.size());
 	std::ofstream values(path), metadata(path.string()+".fields");
@@ -142,6 +144,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 {
 	static_assert(Fields >= 1 && Fields <= 8, "supported CUDA field block width");
 	if (system.fields.size() != Fields) throw std::runtime_error("internal CUDA field dispatch mismatch");
+	PhaseScope input_phase(ProfilePhase::Input);
 	const auto total_start = Clock::now();
 	if (options.stop_after_step > system.steps)
 		throw std::runtime_error("--stop-after-step exceeds configured transport steps");
@@ -181,6 +184,8 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		host_supg[system.field_index.at(stabilization.equation)] = 1;
 	}
 
+	input_phase.Stop();
+	PhaseScope geometry_phase(ProfilePhase::Geometry);
 	FlatMesh host(database);
 	std::vector<int> required_surface_labels;
 	for (const auto& boundary : configuration.boundaries)
@@ -243,6 +248,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	ReferenceData reference;
 	GeometryData geometry(mesh, reference, false);
 	RequireGeometry(geometry);
+	geometry_phase.Stop();
 	ElementTiles tiles(host);
 	DeviceBuffer<DeviceWeakTerm> terms(host_terms.size());
 	terms.CopyFromHost(host_terms.data(), host_terms.size());
@@ -302,6 +308,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	const int node_blocks = (static_cast<int>(host.nodes)+255)/256;
 	double assembly_seconds = 0.0;
 	auto assemble_operators = [&](const std::vector<std::array<double, 3>>& host_velocity) {
+		PhaseScope assembly_phase(ProfilePhase::Assembly);
 		const auto start = Clock::now();
 		velocity.CopyFromHost(reinterpret_cast<const double*>(host_velocity.data()), host.nodes*3);
 		left.Clear(); previous.Clear(); forcing.Clear();
@@ -323,6 +330,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		assembly_seconds += std::chrono::duration<double>(Clock::now()-start).count();
 	};
 	auto velocity_at = [&](double time) {
+		PhaseScope input_phase(ProfilePhase::Input);
 		const auto interpolation = iga::ResolveVelocityInterpolation(
 			velocity_snapshots, time, velocity_source->out_of_range);
 		auto lower = iga::ReadVelocity(
@@ -435,6 +443,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		iga::WritePhysiologyManifest(options.output.parent_path()/"physiology_fields.json",
 			configuration.physiology, system.fields);
 	}
+	if (vtkhdf.writer) vtkhdf.writer->Close();
 	std::cout << "iga_cuda_solve system=" << system.name << " fields=" << Fields
 		<< " steps=" << system.steps << " run_end_step=" << run_end_step
 		<< " preprocess_s=" << std::chrono::duration<double>(preprocess_end-total_start).count()

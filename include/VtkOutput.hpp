@@ -150,12 +150,14 @@ inline void WriteVtu(const std::filesystem::path& mesh_path,
 	output << "\n        </DataArray>\n"
 		<< "      </Cells>\n"
 		<< "    </Piece>\n  </UnstructuredGrid>\n</VTKFile>\n";
+	output.close();
 	if (!output) throw std::runtime_error("cannot write VTU output: "+output_path.string());
 }
 
 inline std::filesystem::path VtuStepPath(const std::filesystem::path& base, int step)
 {
 	std::ostringstream name;
+	name.exceptions(std::ios::badbit | std::ios::failbit);
 	name << base.stem().string() << ".step" << std::setw(6) << std::setfill('0')
 		<< step << ".vtu";
 	return base.parent_path()/name.str();
@@ -184,6 +186,7 @@ inline void WritePvd(const std::filesystem::path& path,
 			<< "\" group=\"\" part=\"0\" file=\""
 			<< EscapeVtkXml(snapshot.second.filename().string()) << "\"/>\n";
 	output << "  </Collection>\n</VTKFile>\n";
+	output.close();
 	if (!output) throw std::runtime_error("cannot write PVD output: "+path.string());
 }
 

@@ -9,6 +9,8 @@
 #include <exception>
 #include <filesystem>
 #include <iterator>
+#include <iomanip>
+#include <sstream>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -117,23 +119,32 @@ public:
 
 	void BeginStep(const DomainStepContext& step) override
 	{
-		step.Validate();
-		const auto dt_scale = std::max({1.0, std::abs(step.dt_s),
-			std::abs(transport_runtime_.System().dt)});
-		if (std::abs(step.dt_s-transport_runtime_.System().dt) > 1.0e-12*dt_scale)
-			throw std::runtime_error(
-				"3D staged macro timestep must match the compiled transport timestep");
+		std::string plan;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged begin preparation", [&] {
+			step.Validate();
+			if (transport_runtime_.Phase() != TransportStepPhase::Committed)
+				throw std::runtime_error("3D staged BeginStep requires committed transport");
+			plan = PlanSignature(step);
+			const auto dt_scale = std::max({1.0, std::abs(step.dt_s),
+				std::abs(transport_runtime_.System().dt)});
+			if (std::abs(step.dt_s-transport_runtime_.System().dt) > 1.0e-12*dt_scale)
+				throw std::runtime_error(
+					"3D staged macro timestep must match the compiled transport timestep");
+		});
+		RequireCollectiveSameText(flow_runtime_.Communicator(), "3d staged plan agreement", plan);
+		std::map<std::string, double> initial_mass;
 		flow_adapter_.BeginStep(step);
 		try {
 			transport_runtime_.BeginStep();
+			initial_mass = LogicalMass(transport_runtime_.TotalMass());
 		} catch (...) {
-			flow_adapter_.AbortStep();
+			AbortStep();
 			throw;
 		}
 		step_ = step;
 		hydraulic_inputs_.clear();
 		concentration_inputs_.clear();
-		initial_species_mass_ = LogicalMass(transport_runtime_.TotalMass());
+		initial_species_mass_.swap(initial_mass);
 		hydraulic_trial_succeeded_ = false;
 		transport_trial_succeeded_ = false;
 	}
@@ -141,30 +152,41 @@ public:
 	void SetPortInput(const std::string& port_id,
 		const PortBoundaryData& input) override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialReady
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
-			throw std::runtime_error(
-				"3D flow/transport input requires an active trial-open step");
-		const auto& port = Port(port_id);
-		ValidatePortBoundaryData(input);
-		const auto time_scale = std::max({1.0, std::abs(step_.EndTime()),
-			std::abs(input.time_s)});
-		if (std::abs(input.time_s-step_.EndTime()) > 1.0e-12*time_scale)
-			throw std::runtime_error(
-				"3D flow/transport input time does not match the active step");
-		ValidateInputCapabilities(port, input);
-		const auto hydraulic = HydraulicInput(input);
-		if (HydraulicValueCount(hydraulic) > 0) {
-			auto found = hydraulic_inputs_.find(port_id);
-			if (found == hydraulic_inputs_.end()) hydraulic_inputs_.emplace(port_id, hydraulic);
-			else MergeInput(found->second, hydraulic);
-		}
-		if (!input.concentration.empty()) {
-			if (concentration_inputs_.count(port_id))
+		decltype(hydraulic_inputs_) hydraulic_candidate;
+		decltype(concentration_inputs_) concentration_candidate;
+		std::string signature;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged input", [&] {
+			hydraulic_candidate = hydraulic_inputs_;
+			concentration_candidate = concentration_inputs_;
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialReady
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
 				throw std::runtime_error(
-					"3D flow/transport concentration was supplied more than once");
-			concentration_inputs_.emplace(port_id, input.concentration);
-		}
+					"3D flow/transport input requires an active trial-open step");
+			const auto& port = Port(port_id);
+			ValidatePortBoundaryData(input);
+			const auto time_scale = std::max({1.0, std::abs(step_.EndTime()),
+				std::abs(input.time_s)});
+			if (std::abs(input.time_s-step_.EndTime()) > 1.0e-12*time_scale)
+				throw std::runtime_error(
+					"3D flow/transport input time does not match the active step");
+			ValidateInputCapabilities(port, input);
+			const auto hydraulic = HydraulicInput(input);
+			if (HydraulicValueCount(hydraulic) > 0) {
+				auto found = hydraulic_candidate.find(port_id);
+				if (found == hydraulic_candidate.end()) hydraulic_candidate.emplace(port_id, hydraulic);
+				else MergeInput(found->second, hydraulic);
+			}
+			if (!input.concentration.empty()) {
+				if (concentration_candidate.count(port_id))
+					throw std::runtime_error(
+						"3D flow/transport concentration was supplied more than once");
+				concentration_candidate.emplace(port_id, input.concentration);
+			}
+			signature = InputSignature(port_id, input);
+		});
+		RequireCollectiveSameText(flow_runtime_.Communicator(), "3d staged input agreement", signature);
+		hydraulic_inputs_.swap(hydraulic_candidate);
+		concentration_inputs_.swap(concentration_candidate);
 	}
 
 	void SolveTrial() override
@@ -180,10 +202,12 @@ public:
 
 	void RollbackTrial() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved)
-			throw std::runtime_error(
-				"3D flow/transport rollback requires two solved trial phases");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged rollback preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved)
+				throw std::runtime_error(
+					"3D flow/transport rollback requires two solved trial phases");
+		});
 		RollbackTransportTrial();
 		RollbackHydraulicTrial();
 	}
@@ -205,11 +229,13 @@ public:
 
 	void PrepareCommitStep() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
-			|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
-			throw std::runtime_error(
-				"3D flow/transport prepare requires two successful trial solves");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged prepare commit", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
+				|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+				throw std::runtime_error(
+					"3D flow/transport prepare requires two successful trial solves");
+		});
 		transport_runtime_.PrepareCommitStep();
 		flow_adapter_.PrepareCommitStep();
 	}
@@ -227,39 +253,47 @@ public:
 
 	void SolveHydraulicTrial() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialReady
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
-			throw std::runtime_error(
-				"3D staged hydraulic solve requires flow trial-ready and transport trial-open");
+		std::vector<std::pair<std::string, PortBoundaryData>> pending;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged hydraulic preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialReady
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
+				throw std::runtime_error(
+					"3D staged hydraulic solve requires flow trial-ready and transport trial-open");
+			for (const auto& port : ports_) {
+				const auto found = hydraulic_inputs_.find(port.id);
+				const int supplied = found == hydraulic_inputs_.end()
+					? 0 : HydraulicValueCount(found->second);
+				if (HydraulicRequirementCount(port) != supplied)
+					throw std::runtime_error("3D flow/transport domain is missing or has an extra hydraulic input for port '"
+						+port.id+"'");
+				if (supplied == 1) pending.emplace_back(port.id, found->second);
+			}
+		});
 		hydraulic_trial_succeeded_ = false;
-		for (const auto& port : ports_) {
-			const auto found = hydraulic_inputs_.find(port.id);
-			const int supplied = found == hydraulic_inputs_.end()
-				? 0 : HydraulicValueCount(found->second);
-			if (HydraulicRequirementCount(port) != supplied)
-				throw std::runtime_error("3D flow/transport domain is missing or has an extra hydraulic input for port '"
-					+port.id+"'");
-			if (supplied == 1) flow_adapter_.SetPortInput(port.id, found->second);
-		}
+		for (const auto& input : pending) flow_adapter_.SetPortInput(input.first, input.second);
 		flow_adapter_.SolveTrial();
 		hydraulic_trial_succeeded_ = true;
 	}
 
 	PortState GetHydraulicPortState(const std::string& port_id) const override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| !hydraulic_trial_succeeded_)
-			throw std::runtime_error(
-				"3D staged hydraulic port state requires a successful hydraulic trial");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged hydraulic port preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| !hydraulic_trial_succeeded_)
+				throw std::runtime_error(
+					"3D staged hydraulic port state requires a successful hydraulic trial");
+		});
 		return flow_adapter_.GetPortState(port_id);
 	}
 
 	void RollbackHydraulicTrial() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
-			throw std::runtime_error(
-				"3D staged hydraulic rollback requires solved flow and open transport");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged hydraulic rollback preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen)
+				throw std::runtime_error(
+					"3D staged hydraulic rollback requires solved flow and open transport");
+		});
 		// The flow-only adapter deliberately retains its legacy rollback behavior.
 		// Reopen only the flow transaction so its compatibility input cache is
 		// fresh, while the independently open transport transaction is untouched.
@@ -272,33 +306,47 @@ public:
 	void SetTransportConcentration(const std::string& port_id, double time_s,
 		const std::map<std::string, double>& concentration) override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen
-			|| !hydraulic_trial_succeeded_)
-			throw std::runtime_error(
-				"3D staged concentration input requires accepted hydraulic trial and open transport");
-		const auto& port = Port(port_id);
-		if (!port.requires.count(PortQuantity::SpeciesConcentration)
-			|| port.species.empty() || SpeciesKeys(concentration) != port.species)
-			throw std::runtime_error(
-				"3D staged concentration input requires the complete declared logical species map");
-		for (const auto& value : concentration) RequireFinitePortValue("3D staged concentration", value.second);
-		ValidateTransportInputTime(time_s);
-		if (concentration_inputs_.count(port_id))
-			throw std::runtime_error("3D staged concentration was supplied more than once");
-		concentration_inputs_.emplace(port_id, concentration);
+		decltype(concentration_inputs_) candidate;
+		std::string signature;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged concentration", [&] {
+			candidate = concentration_inputs_;
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen
+				|| !hydraulic_trial_succeeded_)
+				throw std::runtime_error(
+					"3D staged concentration input requires accepted hydraulic trial and open transport");
+			const auto& port = Port(port_id);
+			if (!port.requires.count(PortQuantity::SpeciesConcentration)
+				|| port.species.empty() || SpeciesKeys(concentration) != port.species)
+				throw std::runtime_error(
+					"3D staged concentration input requires the complete declared logical species map");
+			for (const auto& value : concentration) RequireFinitePortValue("3D staged concentration", value.second);
+			ValidateTransportInputTime(time_s);
+			if (candidate.count(port_id))
+				throw std::runtime_error("3D staged concentration was supplied more than once");
+			candidate.emplace(port_id, concentration);
+			PortBoundaryData input;
+			input.time_s = time_s; input.concentration = concentration;
+			signature = InputSignature(port_id, input);
+		});
+		RequireCollectiveSameText(flow_runtime_.Communicator(), "3d staged concentration agreement", signature);
+		concentration_inputs_.swap(candidate);
 	}
 
 	void SolveTransportTrial() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen
-			|| !hydraulic_trial_succeeded_)
-			throw std::runtime_error(
-				"3D staged transport solve requires a successful hydraulic trial and open transport");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged transport solve preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialOpen
+				|| !hydraulic_trial_succeeded_)
+				throw std::runtime_error(
+					"3D staged transport solve requires a successful hydraulic trial and open transport");
+		});
 		transport_trial_succeeded_ = false;
-		auto trial_configuration = MaterializeBoundaryWaveforms(base_configuration_,
-			case_directory_, step_.EndTime());
+		SimulationConfiguration trial_configuration;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged transport configuration", [&] {
+			trial_configuration = MaterializeBoundaryWaveforms(base_configuration_, case_directory_, step_.EndTime());
+		});
 		for (const auto& port : ports_) ConfigureTransportPort(trial_configuration, port);
 		transport_runtime_.SolveTrial(trial_configuration,
 			flow_runtime_.RequiredNodes(), flow_runtime_.GatherRequiredVelocity());
@@ -307,21 +355,26 @@ public:
 
 	PortState GetTransportPortState(const std::string& port_id) const override
 	{
-		const auto& port = Port(port_id);
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
-			|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
-			throw std::runtime_error(
-				"3D staged transport port state requires successful hydraulic and transport trials");
-		return LogicalTransportPortState(port);
+		const CouplingPort* port = nullptr;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged transport port preparation", [&] {
+			port = &Port(port_id);
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
+				|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+				throw std::runtime_error(
+					"3D staged transport port state requires successful hydraulic and transport trials");
+		});
+		return LogicalTransportPortState(*port);
 	}
 
 	void RollbackTransportTrial() override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved)
-			throw std::runtime_error(
-				"3D staged transport rollback requires accepted flow and solved transport");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged transport rollback preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved)
+				throw std::runtime_error(
+					"3D staged transport rollback requires accepted flow and solved transport");
+		});
 		transport_runtime_.RollbackTrial();
 		concentration_inputs_.clear();
 		transport_trial_succeeded_ = false;
@@ -330,34 +383,85 @@ public:
 	std::map<std::string, SpeciesStepAccounting>
 	GetSpeciesStepAccounting() const override
 	{
-		if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
-			|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
-			|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
-			throw std::runtime_error(
-				"3D species accounting requires successful hydraulic and transport trials");
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d accounting preparation", [&] {
+			if (flow_runtime_.Phase() != FlowStepPhase::TrialSolved
+				|| transport_runtime_.Phase() != TransportStepPhase::TrialSolved
+				|| !hydraulic_trial_succeeded_ || !transport_trial_succeeded_)
+				throw std::runtime_error(
+					"3D species accounting requires successful hydraulic and transport trials");
+		});
 		const auto final_mass = LogicalMass(transport_runtime_.TotalMass());
 		const auto source_rate = LogicalSourceRate();
-		std::map<std::string, SpeciesStepAccounting> result;
-		for (const auto& binding : species_bindings_) {
-			SpeciesStepAccounting accounting;
-			accounting.initial_mass = initial_species_mass_.at(binding.first);
-			accounting.final_mass = final_mass.at(binding.first);
-			// Backward Euler reports physical end-step compiled flux/source rates.
-			// The amount is dt times that rate; residual is diagnostic only because
-			// stabilized SUPG algebra is not claimed to be exactly conservative.
-			accounting.source_amount = step_.dt_s*source_rate.at(binding.first);
-			for (const auto& port : ports_) if (port.species.count(binding.first))
-				accounting.outward_port_amount.emplace(port.id,
-					step_.dt_s*GetTransportPortState(port.id).outward_species_flux.at(binding.first));
-			for (const auto& amount : accounting.outward_port_amount)
-				accounting.residual += amount.second;
-			accounting.residual += accounting.final_mass-accounting.initial_mass-accounting.source_amount;
-			result.emplace(binding.first, std::move(accounting));
+		std::map<std::string, PortState> states;
+		for (const auto& port : ports_) {
+			if (port.species.empty()) continue;
+			auto state = GetTransportPortState(port.id);
+			CollectiveLocalStage(flow_runtime_.Communicator(), "3d accounting port cache", [&] {
+				states.emplace(port.id, std::move(state));
+			});
 		}
+		std::map<std::string, SpeciesStepAccounting> result;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d accounting result", [&] {
+			for (const auto& binding : species_bindings_) {
+				SpeciesStepAccounting accounting;
+				accounting.initial_mass = initial_species_mass_.at(binding.first);
+				accounting.final_mass = final_mass.at(binding.first);
+				// Backward Euler reports physical end-step compiled flux/source rates.
+				// The amount is dt times that rate; residual is diagnostic only because
+				// stabilized SUPG algebra is not claimed to be exactly conservative.
+				accounting.source_amount = step_.dt_s*source_rate.at(binding.first);
+				for (const auto& port : ports_) if (port.species.count(binding.first))
+					accounting.outward_port_amount.emplace(port.id,
+						step_.dt_s*states.at(port.id).outward_species_flux.at(binding.first));
+				for (const auto& amount : accounting.outward_port_amount)
+					accounting.residual += amount.second;
+				accounting.residual += accounting.final_mass-accounting.initial_mass-accounting.source_amount;
+				result.emplace(binding.first, std::move(accounting));
+			}
+		});
 		return result;
 	}
 
 private:
+	static std::string InputSignature(const std::string& port_id, const PortBoundaryData& input)
+	{
+		std::ostringstream text;
+		text.exceptions(std::ios::badbit | std::ios::failbit);
+		text << std::quoted(port_id) << ' ' << std::hexfloat << input.time_s;
+		for (const auto& value : {input.outward_flow_m3_s, input.mean_pressure_pa,
+			input.mean_normal_traction_pa, input.total_pressure_pa}) {
+			text << ' ' << value.has_value();
+			if (value) text << ' ' << *value;
+		}
+		for (const auto* values : {&input.concentration, &input.outward_species_flux}) {
+			text << ' ' << values->size();
+			for (const auto& value : *values) text << ' ' << std::quoted(value.first) << ' ' << value.second;
+		}
+		return text.str();
+	}
+
+	std::string PlanSignature(const DomainStepContext& step) const
+	{
+		std::ostringstream text;
+		text.exceptions(std::ios::badbit | std::ios::failbit);
+		text << step.step_index << ' ' << std::hexfloat << step.start_time_s << ' ' << step.dt_s
+			<< ' ' << controls_.species_flow_epsilon_m3_s << ' ' << ports_.size();
+		for (const auto& port : ports_) {
+			text << ' ' << std::quoted(port.id) << ' ' << ParseThreeDFlowBoundaryLabel(port)
+				<< ' ' << port.orientation.native_to_outward_sign;
+			for (const auto* quantities : {&port.requires, &port.provides}) {
+				text << ' ' << quantities->size();
+				for (const auto value : *quantities) text << ' ' << static_cast<int>(value);
+			}
+			text << ' ' << port.species.size();
+			for (const auto& field : port.species) text << ' ' << std::quoted(field);
+		}
+		text << ' ' << species_bindings_.size();
+		for (const auto& binding : species_bindings_)
+			text << ' ' << std::quoted(binding.first) << ' ' << std::quoted(binding.second);
+		return text.str();
+	}
+
 	void ValidateTransportInputTime(double time_s) const
 	{
 		if (!std::isfinite(time_s))
@@ -376,39 +480,47 @@ private:
 		const auto found = concentration_inputs_.find(port.id);
 		const bool has_concentration = found != concentration_inputs_.end();
 		const auto flow = GetHydraulicPortState(port.id);
-		if (!flow.outward_flow_m3_s)
-			throw std::runtime_error("3D coupled species port omitted outward flow");
-		if (*flow.outward_flow_m3_s < -controls_.species_flow_epsilon_m3_s
-			&& !has_concentration)
-			throw std::runtime_error("3D inward species port '"+port.id
-				+"' requires every coupled concentration");
-		if (*flow.outward_flow_m3_s > controls_.species_flow_epsilon_m3_s
-			&& has_concentration)
-			throw std::runtime_error("3D outward species port '"+port.id
-				+"' must not impose a remote concentration");
-		for (const auto& species : port.species) {
-			std::optional<double> value;
-			if (has_concentration) value = found->second.at(species);
-			SetThreeDPortSpeciesBoundary(configuration, port,
-				species_bindings_.at(species), value);
-		}
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d staged species boundary", [&] {
+			if (!flow.outward_flow_m3_s)
+				throw std::runtime_error("3D coupled species port omitted outward flow");
+			if (*flow.outward_flow_m3_s < -controls_.species_flow_epsilon_m3_s
+				&& !has_concentration)
+				throw std::runtime_error("3D inward species port '"+port.id
+					+"' requires every coupled concentration");
+			if (*flow.outward_flow_m3_s > controls_.species_flow_epsilon_m3_s
+				&& has_concentration)
+				throw std::runtime_error("3D outward species port '"+port.id
+					+"' must not impose a remote concentration");
+			for (const auto& species : port.species) {
+				std::optional<double> value;
+				if (has_concentration) value = found->second.at(species);
+				SetThreeDPortSpeciesBoundary(configuration, port,
+					species_bindings_.at(species), value);
+			}
+		});
 	}
 
 	PortState LogicalTransportPortState(const CouplingPort& port) const
 	{
-		auto state = flow_runtime_.MeasurePorts({port}, step_.EndTime(),
-			transport_runtime_.System().fields, transport_runtime_.GatherRequiredState(),
-			&transport_runtime_.System()).at(port.id);
-		std::map<std::string, double> logical_concentration;
-		std::map<std::string, double> logical_flux;
-		for (const auto& species : port.species) {
-			const auto& native = species_bindings_.at(species);
-			logical_concentration.emplace(species, state.concentration.at(native));
-			logical_flux.emplace(species, state.outward_species_flux.at(native));
-		}
-		state.concentration = std::move(logical_concentration);
-		state.outward_species_flux = std::move(logical_flux);
-		ValidatePortState(state);
+		std::vector<CouplingPort> ports;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d logical port preparation", [&] { ports.push_back(port); });
+		const auto values = transport_runtime_.GatherRequiredState();
+		const auto measured = flow_runtime_.MeasurePorts(ports, step_.EndTime(),
+			transport_runtime_.System().fields, values, &transport_runtime_.System());
+		PortState state;
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d logical port result", [&] {
+			state = measured.at(port.id);
+			std::map<std::string, double> logical_concentration;
+			std::map<std::string, double> logical_flux;
+			for (const auto& species : port.species) {
+				const auto& native = species_bindings_.at(species);
+				logical_concentration.emplace(species, state.concentration.at(native));
+				logical_flux.emplace(species, state.outward_species_flux.at(native));
+			}
+			state.concentration = std::move(logical_concentration);
+			state.outward_species_flux = std::move(logical_flux);
+			ValidatePortState(state);
+		});
 		return state;
 	}
 
@@ -416,8 +528,10 @@ private:
 		const std::map<std::string, double>& native_mass) const
 	{
 		std::map<std::string, double> result;
-		for (const auto& binding : species_bindings_)
-			result.emplace(binding.first, native_mass.at(binding.second));
+		CollectiveLocalStage(flow_runtime_.Communicator(), "3d logical mass", [&] {
+			for (const auto& binding : species_bindings_)
+				result.emplace(binding.first, native_mass.at(binding.second));
+		});
 		return result;
 	}
 

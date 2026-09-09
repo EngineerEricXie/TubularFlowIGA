@@ -1,6 +1,7 @@
 #ifndef IGA_MULTIDOMAIN_CONFIG_HPP
 #define IGA_MULTIDOMAIN_CONFIG_HPP
 
+#include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "FlowDomainPortMetadata.hpp"
 #include "SimulationGraph.hpp"
@@ -507,13 +508,20 @@ inline ZeroDFlowModelConfiguration ParseZeroDFlowModelConfiguration(const std::s
 	return result;
 }
 
-inline ZeroDFlowModelConfiguration ReadZeroDFlowModelConfiguration(const std::filesystem::path& path)
+inline ZeroDFlowModelConfiguration ReadZeroDFlowModelConfiguration(const std::filesystem::path& path,
+	std::string& source_text)
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open 0D flow model configuration: "+path.string());
-	std::ostringstream text;
-	text << input.rdbuf();
-	return ParseZeroDFlowModelConfiguration(text.str());
+	const auto text = iga::ReadCheckedText(input);
+	source_text = text;
+	return ParseZeroDFlowModelConfiguration(source_text);
+}
+
+inline ZeroDFlowModelConfiguration ReadZeroDFlowModelConfiguration(const std::filesystem::path& path)
+{
+	std::string source_text;
+	return ReadZeroDFlowModelConfiguration(path, source_text);
 }
 
 inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string& text)
@@ -612,13 +620,18 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		std::move(initial_pressure), std::move(graph)};
 }
 
-inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& path)
+// Capture the exact bytes parsed, keyed by logical input identity rather than
+// machine-specific paths. The original one-argument overload remains available.
+inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& path,
+	std::map<std::string, std::string>& source_texts)
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open multidomain simulation configuration: "+path);
-	std::ostringstream text;
-	text << input.rdbuf();
-	auto result = ParseMultidomainConfiguration(text.str());
+	const auto text = iga::ReadCheckedText(input);
+	source_texts.clear();
+	auto& manifest = source_texts["graph manifest"];
+	manifest = text;
+	auto result = ParseMultidomainConfiguration(manifest);
 	const auto root = multidomain_detail::CanonicalGraphCaseRoot(
 		std::filesystem::path(path).parent_path());
 	for (auto& domain : result.domains) {
@@ -627,7 +640,8 @@ inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& 
 			domain.case_directory, true, "domain '"+domain.id+"' case directory");
 		const auto model_path = multidomain_detail::ResolveContainedCaseFile(case_directory,
 			domain.zero_d_model, "domain '"+domain.id+"' zero_d_model");
-		domain.zero_d_flow_model = ReadZeroDFlowModelConfiguration(model_path);
+		domain.zero_d_flow_model = ReadZeroDFlowModelConfiguration(model_path,
+			source_texts["0D model "+domain.id]);
 		ValidateZeroDFlowDomainMetadata(domain.id, domain.ports,
 			domain.zero_d_flow_model->model.role);
 	}
@@ -680,6 +694,12 @@ inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& 
 		}
 	}
 	return result;
+}
+
+inline MultidomainConfiguration ReadMultidomainConfiguration(const std::string& path)
+{
+	std::map<std::string, std::string> source_texts;
+	return ReadMultidomainConfiguration(path, source_texts);
 }
 
 } // namespace iga

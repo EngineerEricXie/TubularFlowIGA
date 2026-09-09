@@ -22,6 +22,27 @@ endif
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow multidomain_config_test: ../../include/CheckedText.hpp
+
+collective_asset_input_test: tests/test_collective_asset_input.cpp ../cpu/include/CollectiveAssetInput.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/Sha256.hpp ../../include/PhaseProfile.hpp
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG -DIGA_ASSET_INPUT_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+three_d_staged_failure_test: tests/test_three_d_staged_failure.cpp tests/test_multidomain_flow_smoke.cpp tests/test_bifurcation_coupling_smoke.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -DIGA_TRANSPORT_RUNTIME_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+three_d_trial_failure_test: tests/test_three_d_trial_failure.cpp tests/test_bifurcation_coupling_smoke.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+three_d_port_failure_test: tests/test_three_d_port_failure.cpp tests/test_bifurcation_coupling_smoke.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -DIGA_FLOW_RUNTIME_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+iga_1d_3d_bifurcation iga_multidomain_flow: ../../include/MultidomainRunner.hpp
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/OwnedRowAssembler.hpp ../cpu/include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp
+iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectivePetscOptions.hpp
+iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectiveAssetInput.hpp ../cpu/include/Sha256.hpp
+
 zero_d_flow_test: tests/test_zero_d_flow.cpp ../../include/ZeroDFlowDomain.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingPort.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
@@ -78,6 +99,12 @@ bifurcation-test: iga_1d_3d_bifurcation bifurcation_coupling_smoke_test
 
 multidomain-test: iga_multidomain_flow multidomain_flow_smoke_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./multidomain_flow_smoke_test
+
+multidomain_subcommunicator_test: tests/test_multidomain_subcommunicator.cpp tests/test_bifurcation_coupling_smoke.cpp tests/test_multidomain_flow_smoke.cpp src/iga_1d_3d_bifurcation.cpp ../../include/MultidomainRunner.hpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_subcommunicator.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
+
+multidomain_failure_test: tests/test_multidomain_failure.cpp tests/test_bifurcation_coupling_smoke.cpp tests/test_multidomain_flow_smoke.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_failure.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
 
 # Phase 6 closure combines direct production immersed solves (physical and
 # transactional gates) with real explicit and strong-fixed 1D--3D--1D runs.
@@ -153,4 +180,63 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
+	$(RM) sequential_strong_failure_test
+	$(RM) sequential_text_failure_test
+	$(RM) sequential_initialization_failure_test
+	$(RM) text_close_preload.so
+	$(RM) registry_failure_test graph_registry_failure_test
+	$(RM) species_collective_failure_test
+	$(RM) pressure_flow_collective_failure_test
+	$(RM) collective_asset_input_test
+	$(RM) runtime_construction_failure_test
+	$(RM) three_d_staged_failure_test
+	$(RM) three_d_trial_failure_test
+	$(RM) three_d_port_failure_test
+	$(RM) multidomain_failure_test
+	$(RM) multidomain_subcommunicator_test
 	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
+
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../one_d/include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp ../cpu/include/RuntimeConstruction.hpp
+
+runtime_construction_failure_test: tests/test_runtime_construction_failure.cpp tests/test_bifurcation_coupling_smoke.cpp tests/CouplingFixture.hpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectivePressureFlowExecution.hpp
+
+pressure_flow_collective_failure_test: tests/test_pressure_flow_collective_failure.cpp tests/test_pressure_flow_executor.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectiveSpeciesPressureFlowExecution.hpp
+iga_1d_3d_explicit: ../../include/SpeciesPressureFlowComponentExecutor.hpp
+
+species_collective_failure_test: tests/test_species_collective_failure.cpp tests/test_species_pressure_flow_executor.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+.PHONY: multidomain-species-test
+multidomain-species-test: iga_multidomain_flow iga_1d_3d_bifurcation multidomain_flow_smoke_test
+	./multidomain_flow_smoke_test --species-only
+
+iga_multidomain_flow iga_1d_3d_bifurcation iga_1d_3d_explicit: ../cpu/include/CollectiveDomainRuntimeRegistry.hpp
+
+text_close_preload.so: tests/text_close_preload.cpp
+	$(CXX) $(CXXFLAGS) -fPIC -shared $< -o $@ -ldl
+
+iga_1d_3d_explicit: ../../include/MultidomainRunner.hpp ../cpu/include/CollectiveAssetInput.hpp ../cpu/include/CollectivePetscOptions.hpp
+iga_1d_3d_explicit: ../cpu/include/SequentialExecution.hpp
+
+sequential_strong_failure_test: tests/test_sequential_strong_failure.cpp tests/test_explicit_coupling_smoke.cpp src/iga_1d_3d_explicit.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING -DIGA_SEQUENTIAL_EXECUTION_TESTING -DIGA_SEQUENTIAL_NO_MAIN $(PETSC_CFLAGS) tests/test_sequential_strong_failure.cpp src/iga_1d_3d_explicit.cpp -o $@ $(PETSC_LIBS)
+
+sequential_text_failure_test: tests/test_sequential_text_failure.cpp src/iga_1d_3d_explicit.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+sequential_initialization_failure_test: tests/test_sequential_initialization_failure.cpp tests/test_explicit_coupling_smoke.cpp src/iga_1d_3d_explicit.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING -DIGA_SEQUENTIAL_NO_MAIN $(PETSC_CFLAGS) tests/test_sequential_initialization_failure.cpp src/iga_1d_3d_explicit.cpp -o $@ $(PETSC_LIBS)
+
+registry_failure_test: tests/test_registry_failure.cpp tests/test_pressure_flow_executor.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+graph_registry_failure_test: tests/test_graph_registry_failure.cpp tests/test_multidomain_flow_smoke.cpp tests/test_bifurcation_coupling_smoke.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING -DIGA_MULTIDOMAIN_NO_MAIN $(PETSC_CFLAGS) tests/test_graph_registry_failure.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
+three_d_staged_failure_test three_d_trial_failure_test three_d_port_failure_test: ../cpu/tests/StringStreamFailure.hpp
+pressure_flow_collective_failure_test species_collective_failure_test: tests/AbortReportAllocation.hpp

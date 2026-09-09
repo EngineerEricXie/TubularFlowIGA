@@ -8,6 +8,7 @@
 #include "CutCellGhostPenalty.hpp"
 #include "ImmersedSurfaceQuadrature.hpp"
 #include "Sha256.hpp"
+#include "PhaseProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -64,6 +65,7 @@ public:
 		MaterialSurfaceKinematics kinematics,
 		MovingCutGeometryOptions options = {}, const MovingCutGeometry* previous = nullptr)
 	{
+		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		kinematics.Validate();
 		if (previous) ValidatePreviousInput(grid, kinematics, *previous);
 		return std::unique_ptr<MovingCutGeometry>(new MovingCutGeometry(std::move(grid), std::move(kinematics),

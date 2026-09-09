@@ -29,6 +29,258 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 `iga_solve` can also read a configured time-resolved velocity manifest and
 linearly interpolate flow snapshots onto the transport time grid.
 
+Before constructing its runtime, `iga_navier_stokes` coordinates CLI controls
+and local input errors across MPI ranks. Database, control mesh, initial
+velocity, selected configuration/legacy parameters, and referenced transient
+boundary tables must have identical contents across rank-local copies. Inputs
+must remain immutable during execution; missing or non-regular required files
+are rejected before parsing. This adds a full startup scan of each asset per
+rank. See the [flow input validation report](../../docs/progress/HPC_01C_FLOW_INPUT_PROGRESS.md)
+for coverage, legacy numerical limitations, and remaining runtime boundaries.
+
+Flow output now coordinates path preparation, PETSc gather errors, field writes
+and output indexes across ranks. Existing non-regular output targets are rejected
+before opening, and the final solve summary is printed after those writers return
+successfully. Failed writes may leave partial files; atomic publication remains
+separate work. See the
+[flow output validation report](../../docs/progress/HPC_01C_FLOW_OUTPUT_PROGRESS.md).
+
+CPU flow and configured transport now explicitly finalize VTKHDF before their
+success summaries and coordinate close errors across ranks. The shared writer
+also serves CUDA flow and transport. Geometry reports and coupling histories
+check the stream after closing. See the
+[I/O finalization report](../../docs/progress/HPC_01C_IO_FINALIZATION_PROGRESS.md)
+for native close-failure injection, HDF5 roundtrips, and remaining limitations.
+
+The native flow CLI also coordinates timestep configuration, waveform and VCA
+inlet preparation, port-result processing, transport budgets, and circuit/history
+updates. A failed VCA step ends the job; this does not provide whole-step rollback
+for an in-process retry. See the
+[flow step validation report](../../docs/progress/HPC_01C_FLOW_STEP_PROGRESS.md).
+
+`iga_solve` also coordinates input and timestep errors. It validates the
+configuration, labels, selected velocity source and referenced boundary tables
+across ranks; snapshot files are checked when selected for interpolation.
+Unused snapshots and temporal definitions remain unopened. Keep all case inputs
+immutable during execution. Checkpoint reads accept verified identical local
+replicas, while checkpoint writes still require shared storage. State and
+metadata are published separately, so a complete crash-safe restart bundle
+remains pending. See the [transport CLI validation report](../../docs/progress/HPC_01C_TRANSPORT_CLI_PROGRESS.md)
+for failure, numerical, memory-report, VTKHDF and restart evidence.
+
+The legacy `iga_transport` CLI also checks packed-database, parameter, mesh,
+selected velocity and optional case-configuration contents across rank-local
+replicas. It compares effective PETSc options, coordinates local assembly and
+returned PETSc errors, and releases its matrix/vector/solver owners before the
+success summary. Its positional arguments and numerical defaults are preserved.
+See the [legacy transport report](../../docs/progress/HPC_01C_LEGACY_TRANSPORT_PROGRESS.md)
+for native faults, cleanup checks, replica compatibility and remaining limits.
+
+`iga_mesh_check` and `iga_assembly_smoke` require identical database contents
+across rank-local paths. The mesh checker also rejects out-of-range owners and
+disagreement between the ownership index and loaded element records; an empty
+rank remains valid. Assembly smoke coordinates returned PETSc errors and checks
+matrix destruction before printing its result. See the
+[tool asset report](../../docs/progress/HPC_01C_TOOL_ASSET_PROGRESS.md).
+
+Schema-v5 pressure-flow graph and sequential explicit executors coordinate
+operation outcomes and require a common convergence decision before commit.
+Schema-v6 species execution also checks donor ownership and transport order
+before starting transport, and captures port observations before its local
+precommit callback. Registry construction now coordinates storage and index
+validation before adopting runtime owners; see the
+[registry report](../../docs/progress/HPC_01C_REGISTRY_PROGRESS.md),
+[pressure-flow report](../../docs/progress/HPC_01C_PRESSURE_EXECUTOR_PROGRESS.md)
+and [species report](../../docs/progress/HPC_01C_SPECIES_EXECUTOR_PROGRESS.md).
+Sequential CSV and manifest writers check explicit close outcomes before
+publishing the graph completion marker; see the
+[sequential output report](../../docs/progress/HPC_01C_SEQUENTIAL_OUTPUT_PROGRESS.md).
+Sequential initialization now coordinates local preparation, checks effective
+controls/options and selected input contents, and supports identical rank-local
+replicas on a borrowed communicator; see the
+[sequential initialization report](../../docs/progress/HPC_01C_SEQUENTIAL_INITIALIZATION_PROGRESS.md).
+The sequential fixed/Aitken loop now coordinates operation outcomes, global
+convergence and all three abort attempts. Native fault/retry tests cover
+1/2/3-rank communicators and verify committed snapshots and PETSc ownership
+release; see the [strong loop report](../../docs/progress/HPC_01C_SEQUENTIAL_STRONG_PROGRESS.md).
+Configured transport Bezier VTKHDF initialization also coordinates standard and
+nonstandard exceptions; see the [initialization report](../../docs/progress/HPC_01C_TRANSPORT_VISUALIZATION_INIT_PROGRESS.md).
+Configuration and metadata readers now reject incomplete stream reads, and the
+selected control, JSON, CSV and checkpoint serializers propagate stream errors;
+see the [checked text report](../../docs/progress/HPC_01C_CHECKED_TEXT_PROGRESS.md).
+The 1D checkpoint metadata/fingerprint, VTU filenames, VTKHDF array schema and
+resource report also propagate intermediate stream failures. The allocation
+sweep and native compatibility results are documented in the
+[text helper report](../../docs/progress/HPC_01C_TEXT_HELPER_PROGRESS.md).
+Run the focused MPI regression with `make text-helper-failure-test PETSC_DIR=...`.
+Flow initialization, step controls, port measurements, transport integrals and
+staged adapter signatures also reject stringstream formatting errors before
+agreement. The [MPI boundary index](../../docs/architecture/MPI_FAILURE_BOUNDARIES.md)
+maps supported entries to tests and identifies remaining gaps.
+The remaining helper and supported-entry audit is still open.
+
+## Optional OpenMP volume assembly
+
+`ImmersedTransientFlowRuntime` can compute volume element systems with OpenMP.
+Its moving-flow and FSI wrappers use the same implementation. PETSc reads,
+matrix/vector insertion, wall/port terms and ghost penalties execute on the
+MPI initialization thread; volume results are inserted in the original order.
+`TransientFlowRuntime` also supports body-fitted volume assembly with MPI and
+OpenMP. Each rank gathers its required nodal values on the initialization
+thread, computes private element systems, and inserts them in the original
+order. Pressure traction integration remains on the initialization thread.
+Static immersed flow and body-fitted transport assembly remain serial within
+each rank.
+
+```bash
+make compliant_channel_fsi_openmp_test PETSC_DIR=/path/to/petsc
+OMP_NUM_THREADS=4 OMP_THREAD_LIMIT=4 OMP_DYNAMIC=FALSE \
+OMP_PROC_BIND=close OMP_PLACES=threads \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
+taskset -c 0,2,4,6 ./compliant_channel_fsi_openmp_test
+```
+
+Adapt CPU IDs to the allocated machine. The ordinary
+`compliant_channel_fsi_test` target remains a build without OpenMP unless the
+caller adds OpenMP flags. An OpenMP build defaults to `omp_get_max_threads()`;
+`IGA_ASSEMBLY_THREADS=1` explicitly selects serial assembly. An explicit
+request above one thread is rejected by a build without OpenMP. Multiple
+threads require MPI to provide at least `MPI_THREAD_FUNNELED`.
+
+The default batch capacity is `min(requested_threads, 8)` elements.
+`IGA_ASSEMBLY_BATCH_SIZE` overrides it with a positive count; this is an element
+count, not a byte budget. Both settings are captured at runtime construction.
+`IGA_PROFILE=1` reports actual team size and maximum resident batch items.
+Failures join workers before propagation; retry completes pending PETSc
+insertions and clears them before reassembly. Runtime calls remain confined
+to the initialization thread. Numerical evidence and remaining acceptance
+work are recorded in [HPC-02 progress](../../docs/progress/HPC_02_VOLUME_PROGRESS.md).
+
+For body-fitted flow, build `iga_navier_stokes_openmp` with the same PETSc
+installation as the ordinary CLI. For example, on a single allocated node:
+
+```bash
+make iga_navier_stokes_openmp PETSC_DIR=/path/to/petsc
+OMP_NUM_THREADS=2 OMP_THREAD_LIMIT=2 OMP_DYNAMIC=FALSE \
+OMP_PROC_BIND=close OMP_PLACES=cores IGA_ASSEMBLY_THREADS=2 \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
+mpiexec --map-by slot:PE=2 --bind-to core -np 2 \
+  ./iga_navier_stokes_openmp DATABASE_FOR_2_RANKS.ntiga CASE_DIR --output flow.txt
+```
+
+This Open MPI example allocates two physical cores per rank; scheduler jobs
+must request matching resources. A failed worker batch is joined before the
+cross-rank error agreement. Retry flushes pending matrix insertions before
+clearing them, retaining preallocation even if the first assembly failed.
+See [body-fitted hybrid progress](../../docs/progress/HPC_02_HYBRID_PROGRESS.md)
+for tested configurations and outstanding performance comparisons.
+
+## Embedding MPI runtimes
+
+Call `RequireExecutionResources(comm, &stream)` from the MPI initialization
+thread before numerical work to validate numeric thread settings and the
+real/double PETSc ABI. It reports communicator size, PetscInt width, MPI thread
+support, compiled OpenMP, effective OpenMP thread limits, and BLAS thread requests.
+Multiple OpenMP threads require at least `MPI_THREAD_FUNNELED`. Legal differences
+between ranks are retained and reported as ranges; the report does not measure
+active workers or certify CPU binding. The native flow, configured transport,
+1D, and graph entrypoints call this preflight automatically. See the
+[resource validation report](../../docs/progress/HPC_01D_PROGRESS.md).
+`iga_mesh_check`, `iga_assembly_smoke`, and legacy `iga_transport` also perform
+this preflight and coordinate input failures. Assembly `FIELDS` must be a full
+positive integer within the PETSc row capacity; legacy `STEPS` must be a full
+nonnegative integer, and ranks must agree on step count and whether to output.
+See the [auxiliary tool report](../../docs/progress/HPC_01CD_TOOLS_PROGRESS.md)
+for before/after field comparisons, bad-Jacobian exit codes, and failure coverage.
+
+`OwnedRowAssembler`, `TransientFlowRuntime`, and `TransientTransportRuntime`
+borrow the communicator supplied to their constructors. The owner must keep it
+valid until these objects and their PETSc resources are destroyed, before
+`PetscFinalize`. Their local ghost vectors use `COMM_SELF`; distributed solves,
+reductions, and transport checkpoint operations use the supplied group.
+
+Call flow `InitializeState` collectively while the runtime is committed. It
+compares the resolved initial boundaries across the group, prepares candidate
+fields in existing scratch vectors, and preserves the public state Vec handle.
+Transport `GatherState` is also collective and validates the ordered field
+layout before gathering. It retains raw values, including NaN and infinity for
+diagnostics, and allocates the complete field on every rank; use the required-node
+query for element work. See the
+[initialization and gather report](../../docs/progress/HPC_01C_INITIALIZATION_PROGRESS.md)
+for failure coverage, compatibility tests, and remaining constructor/I/O work.
+
+Transport `ReadState` is collective and requires the committed phase. Native
+flow restart and this transport reader validate the path, exact binary length,
+Vec header, and finite coefficients before publishing a candidate vector. Each
+rank reads its owned rows from the same immutable regular file on shared storage;
+the reader accepts an ordinary uncompressed PETSc binary Vec matching the current
+PetscInt/PetscScalar build and ignores adjacent `.info` options. A successful
+transport load retains the existing warm-start convention (`Steps() == 1`).
+The [checkpoint read report](../../docs/progress/HPC_01C_CHECKPOINT_READ_PROGRESS.md)
+records failure and restart coverage. Coordinated checkpoint publication and
+whole-coupled-state recovery remain HPC-05 work.
+
+Transport `WriteState` is collective and accepts only committed state. The native
+flow and transport writers copy owned coefficients, reject nonfinite input, and
+write disjoint sections of a sibling temporary file on shared storage. After all
+ranks finish and sync their writes, rank 0 renames the file onto the destination.
+Caught errors before that rename preserve the previous Vec file and trigger
+temporary-file cleanup. Use one writer group per destination; separate groups
+must use distinct paths. New files have owner-only permissions; replacement
+preserves an existing regular file's permission bits. Nonregular destinations,
+including symlinks, are rejected. See the
+[checkpoint write report](../../docs/progress/HPC_01C_CHECKPOINT_WRITE_PROGRESS.md)
+for format compatibility and real I/O failure tests. Metadata and coupled state
+are still separate publications, so this is not a complete restart transaction.
+
+The synchronous [RunMultidomainFlow API](../../include/MultidomainRunner.hpp)
+runs a complete graph on a borrowed communicator. Initialize PETSc and configure
+its options before calling it; the function parses graph arguments and does not
+initialize/finalize PETSc or insert a new PETSc options database. Compile the
+coupling runner with `IGA_MULTIDOMAIN_NO_MAIN` when embedding it. Independent
+graphs require distinct output paths. Existing CLIs continue to select world.
+This is whole-graph isolation; assigning separate groups to individual domains
+remains HPC-08. See the [communicator report](../../docs/progress/HPC_01A_PROGRESS.md)
+for tests, numerical limits, and the currently serial immersed/FSI paths.
+
+`OwnedRowAssembler::RequiredRows` validates the global IDs and PETSc row
+arithmetic used by the runtime scatters. Its optional collective
+`ValidateOwnership()` audit checks partition integration, minimum-node
+integration and owned-row element contributions independently. Use
+`make -C solvers/cpu parallel-ownership-test PETSC_DIR=...` from the repository
+root for the three-rank fault-injection and empty-rank tests. Surface publication
+ownership has a separate MPI adapter; see the
+[ownership contract](../../docs/architecture/PARALLEL_OWNERSHIP.md).
+
+The `OwnedRowAssembler` constructor and both `CreateMatrix` overloads now
+require participation by every member of the supplied communicator. They
+coordinate local database/preallocation exceptions before PETSc creation.
+`CollectiveLocalStage` is for local callbacks only: all group members must call
+the same stages in the same order, and callbacks must not enter MPI/PETSc
+collectives. It propagates the lowest failing group rank's bounded diagnostic.
+Body-fitted element assembly and graph preflight/output use this protocol;
+coverage of other failure boundaries remains in progress. See the
+[failure protocol report](../../docs/progress/HPC_01C_PROGRESS.md) for the exact
+tested scope and the controlled-failure regression command.
+
+Graph execution now compares captured manifest, 0D model and native 1D/3D
+configuration bytes within each communicator before creating collective
+runtimes. Identical copies may live at different paths; different formatting
+also counts as different input bytes. Stop/Newton/injection controls must agree.
+The assembler additionally checks global node, element and field counts.
+These checks do not establish identity of all geometry, waveform or packed
+database contents. See the
+[configuration progress report](../../docs/progress/HPC_01C_CONFIGURATION_PROGRESS.md).
+
+Graph startup also compares the visible PETSc option entries within its supplied
+communicator, preserving unused-option tracking. Application arguments are checked
+separately; different `-options_file` locations are allowed when the loaded entries
+agree. Separate communicators may use different options. This checks the startup
+database, not later changes or preconfigured PETSc objects. The native 1D CLI now
+uses the same startup check; standalone CPU CLI coverage remains pending. See the
+[PETSc options report](../../docs/progress/HPC_01C_PETSC_OPTIONS_PROGRESS.md) and
+[1D CLI report](../../docs/progress/HPC_01C_ONE_D_CLI_PROGRESS.md).
+
 ## Why this version is faster and smaller
 
 The legacy MPI programs made every rank scan large ASCII extraction files,

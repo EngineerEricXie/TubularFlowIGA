@@ -43,6 +43,7 @@ inline TransportCouplingPatterns BuildTransportCouplingPatterns(
 }
 
 struct GenericTransportMatrices {
+	GenericTransportMatrices() = default;
 	explicit GenericTransportMatrices(const TransportCouplingPatterns& patterns)
 		: left(patterns.left), previous(patterns.previous) {}
 

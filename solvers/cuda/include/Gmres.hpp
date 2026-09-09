@@ -2,6 +2,7 @@
 #define IGA_CUDA_GMRES_HPP
 
 #include "IgaCudaKernels.cuh"
+#include "PhaseProfile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -70,6 +71,9 @@ inline GmresResult SolveGmres(const BlockMatrix<Fields>& matrix, GmresWorkspace<
 	const double* rhs, double* solution, int maximum_iterations, double relative_tolerance,
 	bool verbose = false, int preconditioner_sweeps = 0, bool rebuild_preconditioner = true)
 {
+	if (CurrentPhaseProfile().Enabled())
+		Check(cudaDeviceSynchronize(), "profile GMRES entry synchronize");
+	PhaseScope linear_phase(ProfilePhase::LinearSolve);
 	const auto pattern = matrix.pattern();
 	const int size = pattern.nodes*Fields;
 	if (workspace.size != size) throw std::invalid_argument("GMRES workspace size does not match matrix");
@@ -90,10 +94,13 @@ inline GmresResult SolveGmres(const BlockMatrix<Fields>& matrix, GmresWorkspace<
 	auto& g = workspace.g;
 	auto& y = workspace.y;
 	if (rebuild_preconditioner) {
+		PhaseScope setup_phase(ProfilePhase::SolverSetup);
 		singular.Clear();
 		BuildBlockInverseKernel<Fields><<<node_blocks,256>>>(
 			pattern, matrix.values(), inverse.data(), singular.data());
 		CheckKernel("BuildBlockInverseKernel");
+		if (CurrentPhaseProfile().Enabled())
+			Check(cudaDeviceSynchronize(), "profile block inverse synchronize");
 	}
 	BlockSpmvKernel<Fields><<<node_blocks,256>>>(pattern, matrix.values(), solution, raw.data());
 	CheckKernel("BlockSpmvKernel initial");

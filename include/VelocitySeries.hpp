@@ -1,6 +1,7 @@
 #ifndef IGA_VELOCITY_SERIES_HPP
 #define IGA_VELOCITY_SERIES_HPP
 
+#include "CheckedText.hpp"
 #include "SimulationConfig.hpp"
 
 #include <algorithm>
@@ -77,11 +78,10 @@ inline std::vector<VelocitySnapshot> ReadVelocityManifest(const std::filesystem:
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open velocity manifest: " + path.string());
-	std::ostringstream contents;
-	contents << input.rdbuf();
+	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof())
 		throw std::runtime_error("cannot read velocity manifest: " + path.string());
-	return ParseVelocityManifest(contents.str(), path.string());
+	return ParseVelocityManifest(contents, path.string());
 }
 
 inline std::filesystem::path VelocityManifestPath(const std::filesystem::path& base)
@@ -98,6 +98,7 @@ inline void WriteVelocityManifest(const std::filesystem::path& path,
 	for (const auto& snapshot : snapshots)
 		output << std::setprecision(17) << snapshot.time << ','
 			<< snapshot.file.filename().string() << '\n';
+	output.close();
 	if (!output) throw std::runtime_error("cannot write velocity manifest: "+path.string());
 }
 

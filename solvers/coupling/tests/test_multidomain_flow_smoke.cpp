@@ -736,10 +736,16 @@ void ValidateZeroDClockRun(const fs::path& output)
 
 } // namespace
 
+#ifdef IGA_MULTIDOMAIN_FIXTURE_ONLY
+int MultidomainSmokeFixtureMain(int argc, char** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
 	try {
-		if (argc < 1) throw std::runtime_error("missing test executable path");
+		if (argc < 1 || argc > 2 || (argc == 2 && std::string(argv[1]) != "--species-only"))
+			throw std::runtime_error("usage: multidomain_flow_smoke_test [--species-only]");
+		const bool species_only = argc == 2;
 		executable_directory = fs::absolute(argv[0]).parent_path();
 		const auto root = fs::temp_directory_path()
 			/("tubularflowiga_multidomain_"+std::to_string(static_cast<long long>(getpid())));
@@ -748,111 +754,113 @@ int main(int argc, char** argv)
 			"species_leaf_a", "species_leaf_b", "immersed", "immersed_source",
 			"immersed_sink", "zero_source", "zero_terminal", "zero_junction"})
 			fs::create_directories(root/directory);
-		// The eight 0.1 s steps cross the n*dt rounding divergence point.  The
-		// body-fitted single-element case also exercises source-0D initialization
-		// without turning this into a benchmark solve.
-		WriteZeroDModel(root/"zero_source", true);
-		WriteZeroDModel(root/"zero_terminal", false);
-		WriteZeroDThreeDCase(root/"zero_junction");
-		WriteDatabase(root/"zero_junction.ntiga", 1);
-		WriteZeroDClockGraph(root);
-		// The runner must reject a loaded model-role/port mismatch before it can
-		// create a native 3D runtime or output directory.
-		WriteZeroDModel(root/"zero_source", false);
-		if (RunMultidomain(root, root/"zero_d_invalid_role") == 0
-			|| fs::exists(root/"zero_d_invalid_role/graph_binding_manifest.json"))
-			throw std::runtime_error("invalid schema-v5 0D model-role topology was accepted");
-		RequireLogContains(root/"zero_d_invalid_role.log",
-			"0D flow domain port does not match its model role");
-		WriteZeroDModel(root/"zero_source", true);
-		if (RunMultidomain(root, root/"zero_d_clock_one") != 0)
-			throw std::runtime_error("schema-v5 0D exact-clock production run failed");
-		ValidateZeroDClockRun(root/"zero_d_clock_one");
-		if (RunMultidomain(root, root/"zero_d_clock_two") != 0)
-			throw std::runtime_error("repeated schema-v5 0D production run failed");
-		ValidateZeroDClockRun(root/"zero_d_clock_two");
-		if (ReadFile(root/"zero_d_clock_one/zero_d_flow_history.csv")
-			!= ReadFile(root/"zero_d_clock_two/zero_d_flow_history.csv"))
-			throw std::runtime_error("schema-v5 0D history is not deterministic");
-		if (std::getenv("TUBULARFLOWIGA_ZERO_D_CLOCK_FIXTURE_ONLY")) {
-			fs::remove_all(root);
-			std::cout << "schema-v5 0D exact-clock production fixture passed\n";
-			return 0;
-		}
-		WriteOneDCase(root/"immersed_source", 1.0e-3);
-		WriteOneDCase(root/"immersed_sink", 1.0e-3);
-		WriteImmersedCase(root/"immersed");
-		WriteImmersedGraph(root);
-		if (RunMultidomain(root, root/"immersed_one") != 0)
-			throw std::runtime_error("one-rank generic immersed multidomain run failed");
-		ValidateImmersedManifest(root/"immersed_one");
-		WriteThreeDCase(root/"three_a");
-		WriteThreeDCase(root/"three_b");
-		WriteOneDCase(root/"source", 1.0e-3);
-		WriteOneDCase(root/"bridge", 5.5e-4);
-		WriteOneDCase(root/"leaf_a", 4.5e-4);
-		WriteOneDCase(root/"leaf_b", 3.0e-4);
-		WriteOneDCase(root/"leaf_c", 2.5e-4);
-		WriteDatabase(root/"a.ntiga", 1);
-		WriteDatabase(root/"b.ntiga", 1);
-		WriteMultiIslandGraph(root, "explicit");
-		if (RunBifurcation(root, root/"bifurcation_rejected") == 0
-			|| fs::exists(root/"bifurcation_rejected/graph_binding_manifest.json"))
-			throw std::runtime_error("legacy bifurcation entry accepted a multi-island graph");
-		if (RunMultidomain(root, root/"explicit_one") != 0)
-			throw std::runtime_error("one-rank explicit multi-island run failed");
-		ValidateMultidomain(root/"explicit_one", "explicit");
-		WriteMultiIslandGraph(root, "explicit", true);
-		if (RunMultidomain(root, root/"explicit_permuted") != 0)
-			throw std::runtime_error("permuted explicit multi-island run failed");
-		ValidateMultidomain(root/"explicit_permuted", "explicit");
-		const auto canonical_edges = ReadCsv(root/"explicit_one/pressure_flow_edges.csv");
-		const auto permuted_edges = ReadCsv(root/"explicit_permuted/pressure_flow_edges.csv");
-		if (canonical_edges.size() != permuted_edges.size())
-			throw std::runtime_error("permuted multi-island row count changed");
-		for (std::size_t row = 0; row < canonical_edges.size(); ++row)
-			if (canonical_edges[row].at("edge_id") != permuted_edges[row].at("edge_id")
-				|| std::abs(Value(canonical_edges[row], "measured_pressure_pa")
-					-Value(permuted_edges[row], "measured_pressure_pa")) > 1.0e-12)
-				throw std::runtime_error("permuted multi-island execution changed");
-		WriteMultiIslandGraph(root, "explicit");
-		if (RunMultidomain(root, root/"failed", {},
-			"TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP=1 ") == 0
-			|| fs::exists(root/"failed/graph_binding_manifest.json"))
-			throw std::runtime_error("failed multi-island run published a completion marker");
-		WriteMultiIslandGraph(root, "aitken");
-		if (RunMultidomain(root, root/"aitken_one") != 0)
-			throw std::runtime_error("one-rank Aitken multi-island run failed");
-		ValidateMultidomain(root/"aitken_one", "aitken");
-		WriteDatabase(root/"a_two.ntiga", 2);
-		WriteDatabase(root/"b_two.ntiga", 2);
-		WriteMultiIslandGraph(root, "explicit");
-		{
-			std::string config = ReadFile(root/"simulation_config.json");
-			const auto first = config.find("a.ntiga");
-			const auto second = config.find("b.ntiga");
-			if (first == std::string::npos || second == std::string::npos)
-				throw std::runtime_error("multi-island database paths are missing");
-			config.replace(first, 7, "a_two.ntiga");
-			config.replace(config.find("b.ntiga"), 7, "b_two.ntiga");
-			std::ofstream rewritten(root/"simulation_config.json", std::ios::trunc);
-			rewritten << config;
-		}
-		if (RunMultidomain(root, root/"explicit_two", "mpiexec -np 2 ") != 0)
-			throw std::runtime_error("two-rank explicit multi-island run failed");
-		ValidateMultidomain(root/"explicit_two", "explicit");
-		const auto one = ReadCsv(root/"explicit_one/pressure_flow_edges.csv");
-		const auto two = ReadCsv(root/"explicit_two/pressure_flow_edges.csv");
-		if (one.size() != two.size()) throw std::runtime_error("multi-island MPI row mismatch");
-		for (std::size_t row = 0; row < one.size(); ++row) {
-			if (one[row].at("edge_id") != two[row].at("edge_id"))
-				throw std::runtime_error("multi-island MPI ordering mismatch");
-			for (const auto& name : {"measured_pressure_pa", "first_outward_flow_m3_s",
-				"second_outward_flow_m3_s"})
-				if (std::abs(Value(one[row], name)-Value(two[row], name))
-					> 1.0e-11*std::max({1.0, std::abs(Value(one[row], name)),
-						std::abs(Value(two[row], name))}))
-					throw std::runtime_error("multi-island MPI numerical mismatch");
+		if (!species_only) {
+			// The eight 0.1 s steps cross the n*dt rounding divergence point.  The
+			// body-fitted single-element case also exercises source-0D initialization
+			// without turning this into a benchmark solve.
+			WriteZeroDModel(root/"zero_source", true);
+			WriteZeroDModel(root/"zero_terminal", false);
+			WriteZeroDThreeDCase(root/"zero_junction");
+			WriteDatabase(root/"zero_junction.ntiga", 1);
+			WriteZeroDClockGraph(root);
+			// The runner must reject a loaded model-role/port mismatch before it can
+			// create a native 3D runtime or output directory.
+			WriteZeroDModel(root/"zero_source", false);
+			if (RunMultidomain(root, root/"zero_d_invalid_role") == 0
+				|| fs::exists(root/"zero_d_invalid_role/graph_binding_manifest.json"))
+				throw std::runtime_error("invalid schema-v5 0D model-role topology was accepted");
+			RequireLogContains(root/"zero_d_invalid_role.log",
+				"0D flow domain port does not match its model role");
+			WriteZeroDModel(root/"zero_source", true);
+			if (RunMultidomain(root, root/"zero_d_clock_one") != 0)
+				throw std::runtime_error("schema-v5 0D exact-clock production run failed");
+			ValidateZeroDClockRun(root/"zero_d_clock_one");
+			if (RunMultidomain(root, root/"zero_d_clock_two") != 0)
+				throw std::runtime_error("repeated schema-v5 0D production run failed");
+			ValidateZeroDClockRun(root/"zero_d_clock_two");
+			if (ReadFile(root/"zero_d_clock_one/zero_d_flow_history.csv")
+				!= ReadFile(root/"zero_d_clock_two/zero_d_flow_history.csv"))
+				throw std::runtime_error("schema-v5 0D history is not deterministic");
+			if (std::getenv("TUBULARFLOWIGA_ZERO_D_CLOCK_FIXTURE_ONLY")) {
+				if (!std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT")) fs::remove_all(root);
+				std::cout << "schema-v5 0D exact-clock production fixture passed\n";
+				return 0;
+			}
+			WriteOneDCase(root/"immersed_source", 1.0e-3);
+			WriteOneDCase(root/"immersed_sink", 1.0e-3);
+			WriteImmersedCase(root/"immersed");
+			WriteImmersedGraph(root);
+			if (RunMultidomain(root, root/"immersed_one") != 0)
+				throw std::runtime_error("one-rank generic immersed multidomain run failed");
+			ValidateImmersedManifest(root/"immersed_one");
+			WriteThreeDCase(root/"three_a");
+			WriteThreeDCase(root/"three_b");
+			WriteOneDCase(root/"source", 1.0e-3);
+			WriteOneDCase(root/"bridge", 5.5e-4);
+			WriteOneDCase(root/"leaf_a", 4.5e-4);
+			WriteOneDCase(root/"leaf_b", 3.0e-4);
+			WriteOneDCase(root/"leaf_c", 2.5e-4);
+			WriteDatabase(root/"a.ntiga", 1);
+			WriteDatabase(root/"b.ntiga", 1);
+			WriteMultiIslandGraph(root, "explicit");
+			if (RunBifurcation(root, root/"bifurcation_rejected") == 0
+				|| fs::exists(root/"bifurcation_rejected/graph_binding_manifest.json"))
+				throw std::runtime_error("legacy bifurcation entry accepted a multi-island graph");
+			if (RunMultidomain(root, root/"explicit_one") != 0)
+				throw std::runtime_error("one-rank explicit multi-island run failed");
+			ValidateMultidomain(root/"explicit_one", "explicit");
+			WriteMultiIslandGraph(root, "explicit", true);
+			if (RunMultidomain(root, root/"explicit_permuted") != 0)
+				throw std::runtime_error("permuted explicit multi-island run failed");
+			ValidateMultidomain(root/"explicit_permuted", "explicit");
+			const auto canonical_edges = ReadCsv(root/"explicit_one/pressure_flow_edges.csv");
+			const auto permuted_edges = ReadCsv(root/"explicit_permuted/pressure_flow_edges.csv");
+			if (canonical_edges.size() != permuted_edges.size())
+				throw std::runtime_error("permuted multi-island row count changed");
+			for (std::size_t row = 0; row < canonical_edges.size(); ++row)
+				if (canonical_edges[row].at("edge_id") != permuted_edges[row].at("edge_id")
+					|| std::abs(Value(canonical_edges[row], "measured_pressure_pa")
+						-Value(permuted_edges[row], "measured_pressure_pa")) > 1.0e-12)
+					throw std::runtime_error("permuted multi-island execution changed");
+			WriteMultiIslandGraph(root, "explicit");
+			if (RunMultidomain(root, root/"failed", {},
+				"TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP=1 ") == 0
+				|| fs::exists(root/"failed/graph_binding_manifest.json"))
+				throw std::runtime_error("failed multi-island run published a completion marker");
+			WriteMultiIslandGraph(root, "aitken");
+			if (RunMultidomain(root, root/"aitken_one") != 0)
+				throw std::runtime_error("one-rank Aitken multi-island run failed");
+			ValidateMultidomain(root/"aitken_one", "aitken");
+			WriteDatabase(root/"a_two.ntiga", 2);
+			WriteDatabase(root/"b_two.ntiga", 2);
+			WriteMultiIslandGraph(root, "explicit");
+			{
+				std::string config = ReadFile(root/"simulation_config.json");
+				const auto first = config.find("a.ntiga");
+				const auto second = config.find("b.ntiga");
+				if (first == std::string::npos || second == std::string::npos)
+					throw std::runtime_error("multi-island database paths are missing");
+				config.replace(first, 7, "a_two.ntiga");
+				config.replace(config.find("b.ntiga"), 7, "b_two.ntiga");
+				std::ofstream rewritten(root/"simulation_config.json", std::ios::trunc);
+				rewritten << config;
+			}
+			if (RunMultidomain(root, root/"explicit_two", "mpiexec -np 2 ") != 0)
+				throw std::runtime_error("two-rank explicit multi-island run failed");
+			ValidateMultidomain(root/"explicit_two", "explicit");
+			const auto one = ReadCsv(root/"explicit_one/pressure_flow_edges.csv");
+			const auto two = ReadCsv(root/"explicit_two/pressure_flow_edges.csv");
+			if (one.size() != two.size()) throw std::runtime_error("multi-island MPI row mismatch");
+			for (std::size_t row = 0; row < one.size(); ++row) {
+				if (one[row].at("edge_id") != two[row].at("edge_id"))
+					throw std::runtime_error("multi-island MPI ordering mismatch");
+				for (const auto& name : {"measured_pressure_pa", "first_outward_flow_m3_s",
+					"second_outward_flow_m3_s"})
+					if (std::abs(Value(one[row], name)-Value(two[row], name))
+						> 1.0e-11*std::max({1.0, std::abs(Value(one[row], name)),
+							std::abs(Value(two[row], name))}))
+						throw std::runtime_error("multi-island MPI numerical mismatch");
+			}
 		}
 		WriteOneDTransportCase(root/"species_source", 1.0e-3,
 			"source_red", "source_blue");
@@ -971,7 +979,7 @@ int main(int argc, char** argv)
 					> 1.0e-9)
 					throw std::runtime_error("schema-v6 MPI amounts changed");
 		}
-		fs::remove_all(root);
+		if (!std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT")) fs::remove_all(root);
 		std::cout << std::setprecision(17)
 			<< "multidomain flow smoke test passed species_max_edge_residual="
 			<< species_residual_maxima.edge << " species_max_domain_residual="

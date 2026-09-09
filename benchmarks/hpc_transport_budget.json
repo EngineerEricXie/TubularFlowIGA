@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "case": "body_fitted_transport",
+  "purpose": "Predeclared independent backward-Euler species budget gates for the existing two-step neuron_transport baseline",
+  "relative_tolerance": 0.000001,
+  "zero_reference_absolute_tolerance": 0.000000000001,
+  "gates": [
+    "Each species volume budget closes, including capacity change, advective volume term, linear reactions, volume sources, natural boundary terms and essential-boundary reaction",
+    "Each species surface budget closes after replacing advective volume transport by outward surface flux minus the concentration-weighted velocity-divergence integral",
+    "The free-row residual L2 passes independently, preventing cancellation of local errors",
+    "Previous and current essential boundary coefficients match the static configuration",
+    "The two-species baseline has zero net linear-transfer contribution within the zero-reference absolute tolerance"
+  ],
+  "scales": {
+    "budget": "Sum of absolute current and previous capacity inventories divided by dt, reaction and source integrals, gross natural-boundary flux and absolute essential-row reactions. Add the advective volume magnitude for the volume gate, or gross outward/inward advective flux plus the velocity-divergence magnitude for the surface gate",
+    "free_rows": "Sum of component L2 norms over free rows, with current and previous capacity contributions kept separate before adding advection/reaction/diffusion/source/natural-boundary components",
+    "essential_values": "L2 norm of prescribed constrained values; zero reference uses the absolute gate"
+  },
+  "scope": "Static body-fitted geometry, prescribed nodal velocity, constant coefficients, backward Euler, scalar fields; SUPG supported for nondiffusive equations. SUPG diffusion is explicitly rejected by this validator. Full native solver and CPU/CUDA field gates remain required.",
+  "notes": [
+    "Essential-boundary exchange is the reaction of the unconstrained weak equations, not a claim that the raw boundary gradient gives the same discrete flux",
+    "Advection is nonconservative v dot grad(c); concentration times div(v) must be included when expressing the budget through outward surface flux",
+    "Current and previous capacity scales remain separate so a nonzero steady inventory does not become a zero-reference residual test through cancellation",
+    "Field integrals are in concentration times physical volume units; they are not automatically kilograms",
+    "All database elements are integrated exactly once, independently of their MPI ownership; the validator does not use the production element matrices or PETSc residual"
+  ]
+}

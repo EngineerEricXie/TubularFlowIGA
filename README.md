@@ -6,11 +6,14 @@
 
 # TubularFlowIGA
 
-TubularFlowIGA is a native C++ simulation toolkit for tubular and branching
-networks. It provides a direct SWC-to-1D vascular flow/transport path and a
-three-dimensional isogeometric-analysis (IGA) pipeline that generates a
-hexahedral control mesh, constructs the spline and Bezier representation,
-packs a partition-aware database, and solves on MPI/PETSc CPUs or one CUDA GPU.
+TubularFlowIGA is a native C++ toolkit for multiscale vascular flow and
+transport in tubular and branching networks. It combines direct centerline-to-1D
+models with three-dimensional isogeometric analysis (IGA) on MPI/PETSc CPUs
+or one CUDA GPU. The body-fitted 3D pipeline generates hexahedral control
+meshes, constructs splines and Bezier extraction, and packs a partition-aware
+database. CPU extensions provide 0D/1D/3D domain coupling, immersed flow on a
+Cartesian spline background, prescribed moving anatomy, and foundational
+two-way fluid--structure interaction (FSI).
 
 This is research software specialized for tube-like networks. It is not a
 general-purpose CFD package.
@@ -19,12 +22,28 @@ general-purpose CFD package.
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled runs support one in-memory transport system. CUDA VCA, 3D replay/open-loop, and 3D FSI are not included |
+| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
+| Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer | Executable graphs require supported acyclic topology. 0D supports one-port compliant sources and terminal RCR models; 0D species and a full closed-loop 0D heart are deferred |
+| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, and ghost stabilization; prescribed moving-anatomy runtime | The graph-integrated immersed path is quasi-static and flow-only. Prescribed motion uses a fixed Eulerian background; distributed immersed execution and ALE/remeshing are deferred |
+| Foundational FSI | Two-way immersed flow coupled to a pre-tensioned membrane with strong Dirichlet--Neumann iteration and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark using one partition and `PETSC_COMM_SELF`; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
-| Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D vasodilation is disabled because rigid-wall flow has no FSI |
+| Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
 
-CPU and CUDA use the same `simulation_config.json` schema and packed `.ntiga`
-database. CUDA configured transport supports one through eight scalar fields.
+Immersed transient, moving-flow and FSI runtimes now have optional OpenMP
+volume assembly within one MPI rank. Body-fitted flow also has an optional
+MPI/OpenMP volume assembly CLI. Thread configuration, actual worker evidence
+and remaining performance validation are documented in the
+[CPU guide](solvers/cpu/README.md#optional-openmp-volume-assembly),
+[immersed progress](docs/progress/HPC_02_VOLUME_PROGRESS.md) and
+[body-fitted progress](docs/progress/HPC_02_HYBRID_PROGRESS.md).
+
+Standalone body-fitted CPU and CUDA solvers share the configuration format
+and packed `.ntiga` database within their supported feature sets. CUDA
+configured transport supports one through eight scalar fields. Multidomain,
+immersed, moving-domain, and FSI execution use CPU runtimes.
+
+The [foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md)
+collects the completed Phases 0--9 and their numerical evidence and limitations.
 
 ## Example results
 
@@ -47,6 +66,8 @@ numerical checks are recorded in the
 
 ## Pipeline
 
+The body-fitted 3D workflow preserves the original file interfaces:
+
 ```text
 SWC or radius-annotated line-OBJ centerline
   -> C++ smoothing and hexahedral control mesh
@@ -59,9 +80,26 @@ SWC or radius-annotated line-OBJ centerline
   -> velocity, pressure, and transported fields
 ```
 
+Native 1D runs read a centerline and configuration directly. Immersed 3D runs
+build a Cartesian cubic B-spline background and cut-cell quadrature from a
+closed triangulated surface. They do not require the SWC-to-control-mesh
+pipeline. Multidomain runs connect supported native domains through named
+pressure/flow and species ports, using SI units and outward-positive flow.
+
+| Configuration | Purpose | Entry point |
+|---|---|---|
+| Schema v3 | Standalone native 1D flow and transport | `iga_1d` |
+| Schema v4 | Standalone body-fitted 3D geometry, mesh, flow, and transport | `prepare_example.sh`, then CPU or CUDA solver |
+| Schema v5 graph | Heterogeneous flow-only coupling, including supported 0D and quasi-static immersed domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
+| Schema v6 graph | Conservative species transport across native 1D and body-fitted 3D domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
+
+Graph manifests reference each domain's native inputs. Schema v6 rejects 0D
+and immersed domains. Moving-anatomy and FSI benchmarks have dedicated runtime
+and validation targets described in their architecture guides below.
+
 ## Choose a first example
 
-Every 3D runnable example contains `skeleton_initial.swc` or
+Each standalone body-fitted 3D example contains `skeleton_initial.swc` or
 `skeleton_initial.obj` plus a schema-v4 `simulation_config.json`; its
 `geometry` and `mesh` blocks configure preprocessing in the same validated
 document as the physics. A native 1D example needs only the skeleton and
@@ -84,7 +122,8 @@ to a separate work directory.
 | 3D VCA closed loop | Two-outlet vascular coupling smoke case | `RANKS=2 ./scripts/prepare_example.sh vascular_flow/vca_bifurcation` |
 
 See the [examples catalog](examples/README.md) for the input contract and case
-descriptions.
+descriptions. The [immersed aneurysm chain](examples/vascular_flow/immersed_aneurysm_chain/README.md)
+has separate surface/native-domain inputs and dedicated validation targets.
 
 ## Install dependencies
 
@@ -156,8 +195,8 @@ RANKS=2 ./scripts/prepare_example.sh \
   vascular_flow/straight_tube "$VASCULAR_WORK"
 ```
 
-The preparation script builds the dependency-free tools and runs mesh
-generation, spline extraction, two-way METIS partitioning, database packing,
+The preparation script builds the preprocessing and PETSc-free CPU tools and
+runs mesh generation, spline extraction, two-way METIS partitioning, database packing,
 inspection, configuration validation, and boundary-label validation. A
 successful run prints the work directory, database path, and matching CPU/CUDA
 solver commands.
@@ -252,6 +291,52 @@ access but does not install `nvcc`; see the [dependency guide](docs/DEPENDENCIES
 for native and Conda CUDA Toolkit options. The CUDA flow path also writes a VTK
 file next to the requested text output.
 
+## Multidomain coupling, immersed flow, and FSI
+
+Build the CPU coupling executables with the same PETSc/MPI installation used
+for the native solvers:
+
+```bash
+make coupling PETSC_DIR="$PETSC_DIR" PETSC_ARCH="${PETSC_ARCH:-}"
+make coupling-test
+```
+
+This builds `iga_1d_3d_explicit`, `iga_1d_3d_bifurcation`, and
+`iga_multidomain_flow`. The generic runner accepts a schema-v5 or schema-v6
+graph root containing `simulation_config.json` and its referenced native case
+assets. Its output directory must not already exist. For body-fitted domains,
+each packed database must match the MPI rank count.
+
+`SimulationGraph` validates topology and port capabilities;
+`DomainRuntimeRegistry` owns the native runtimes. Component executors exchange
+boundary data, converge trial states, and prepare every domain before
+finalizing the accepted step. Failed trials can be rolled back without
+advancing committed physical state. See the
+[coupling architecture](docs/architecture/COUPLING_ARCHITECTURE.md) for graph
+configuration and runtime contracts.
+
+The numerical milestones include 1D--3D pulsatile coupling, conservative
+species transfer, a quasi-static immersed aneurysm chain, a prescribed
+idealized left-ventricle cycle, a compliant-channel FSI benchmark, and a
+five-domain `0D source -> 3D -> 1D -> two 0D RCR outlets` circulation case.
+Focused reproduction targets include:
+
+```bash
+make -C solvers/cpu phase6-aneurysm-depth2-regression PETSC_DIR="$PETSC_DIR"
+make phase7-lv-closure-test PETSC_DIR="$PETSC_DIR"
+make compliant-channel-fsi-test PETSC_DIR="$PETSC_DIR"
+make -C solvers/coupling phase9-multiscale-closure-test PETSC_DIR="$PETSC_DIR"
+```
+
+Add `PETSC_ARCH` when required by your installation. These are numerical
+validation workloads; use an appropriate compute allocation. The depth-2
+aneurysm target checks the local immersed Jacobian and conservation; the full
+chain has a separate closure target. See the
+[moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md),
+[FSI architecture](docs/architecture/FSI_ARCHITECTURE.md), and
+[phase reports](docs/progress/FINAL_ROADMAP_REPORT.md) for exact scope,
+prerequisites, and recorded results.
+
 ## Build and test targets
 
 ```bash
@@ -262,6 +347,7 @@ make cpu
 make cpu-test
 make one-d-petsc
 make one-d-test
+make coupling-test
 
 make cpu-petsc \
   PETSC_DIR=/path/to/petsc \
@@ -271,14 +357,17 @@ make cuda CUDA_ARCHS="70 80 89 90"
 ```
 
 `make cpu` builds the PETSc-free packer, inspectors, validators, and reference
-utilities. `make cpu-petsc` builds the MPI simulation executables. MATLAB and
-the external TREES Toolbox are optional and are needed only to reproduce the
-legacy reference workflow.
+utilities. `make cpu-petsc` builds the CPU 3D and native 1D simulation
+executables; `make coupling` builds the separate PETSc coupling runners.
+`make coupling-test` exercises the PETSc-free graph, runtime, 0D, species,
+surface, and FSI contracts. MATLAB and the external TREES Toolbox are optional
+and are needed only to reproduce the legacy reference workflow.
 
 ## Create or modify a case
 
-For 3D, copy one complete directory from `examples/neuron_transport/` or
-`examples/vascular_flow/` to a work directory, then:
+For standalone body-fitted 3D, copy one complete case directory from
+`examples/neuron_transport/` or `examples/vascular_flow/` to a work directory,
+then:
 
 1. Edit the SWC or OBJ named by `geometry.file` for the centerline and radii.
 2. Edit the schema-v4 `geometry` and `mesh` blocks in `simulation_config.json`
@@ -291,6 +380,12 @@ For 3D, copy one complete directory from `examples/neuron_transport/` or
 For 1D, copy a directory from `examples/one_d/`, edit its SWC and schema-v3
 configuration, then run `iga_1d CASE_DIR --check` before simulation. There is no
 control-mesh generation or `.ntiga` packing step.
+
+For a multidomain case, define a schema-v5 flow graph or schema-v6 species
+graph and supply the native assets for each domain. Use the coupling
+architecture guide for supported topology, port capabilities, and unit
+conversion. Immersed cases supply a closed surface and background-grid
+configuration through their dedicated case loader.
 
 The mesh generator assigns wall label 0, inlet label 1, and terminal outlet
 labels starting at 2. Do not assume a branch label without checking
@@ -309,13 +404,16 @@ physically.
 ## Repository layout
 
 - `examples/`: source-only neuron, vascular, and validation cases.
+- `include/`: shared configuration, I/O, physiology, domain adapters, and coupling contracts.
 - `preprocessing/mesh/`: dependency-free C++ SWC smoothing and control meshes.
 - `meshgeneration/`: legacy MATLAB reference and template assets.
 - `preprocessing/spline/`: C++11 spline construction and Bezier extraction.
-- `solvers/cpu/`: C++17 packer, checks, MPI/PETSc flow, and transport.
+- `solvers/cpu/`: C++17 packer, checks, MPI/PETSc flow and transport, immersed/moving flow, and FSI runtimes.
 - `solvers/one_d/`: native C++17 SWC-network flow, transport, physiology, and PETSc solvers.
+- `solvers/coupling/`: PETSc multidomain runners and coupling validation harnesses.
 - `solvers/cuda/`: FP64 single-GPU backend using the CPU database format.
-- `docs/`: installation, pipeline, configuration, and validation.
+- `scripts/`: dependency checks, example preparation, validation, and rendering helpers.
+- `docs/`: installation, pipeline, configuration, architecture, and phase validation reports.
 
 Large generated meshes, databases, caches, partitions, and results are
 intentionally not versioned. The source-only NMO_06840 regression is committed
@@ -330,6 +428,13 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
+| 0D/1D/3D graphs, ports, species routing, and runtime lifecycle | [Coupling architecture](docs/architecture/COUPLING_ARCHITECTURE.md) |
+| Prescribed moving immersed anatomy | [Moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md) |
+| Membrane coupling, traction transfer, and foundational FSI limits | [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
+| Immersed aneurysm inputs and focused validation | [Immersed aneurysm chain](examples/vascular_flow/immersed_aneurysm_chain/README.md) |
+| Completed multiscale milestones and phase-specific evidence | [Foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md) |
+| Workstation multicore and HPC development tasks, dependencies, and goal templates | [Workstation and HPC checklist](docs/WORKSTATION_HPC_TODO.md) |
+| Repeat CPU MPI, serial fixture, and single-GPU timing, memory, and field comparisons | [HPC benchmark guide](docs/HPC_BENCHMARKS.md) |
 | Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
 | Run the large morphology-derived neuron regression | [NMO_06840 transport](examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
@@ -348,12 +453,26 @@ are recorded in the [vascular example validation](examples/vascular_flow/VALIDAT
 [CPU validation](solvers/cpu/VALIDATION.md), and
 [CUDA validation](solvers/cuda/VALIDATION.md).
 
+The [foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md)
+records completion of Phases 0--9, including coupled conservation and
+rollback/retry checks, immersed-flow verification, prescribed motion, bounded
+two-way FSI, and 0D/1D/3D integration. Its linked reports identify which
+targets passed and any partial or environment-blocked checks; phase closure
+does not imply that every test target passed in one full-suite run.
+
 Current scope limits are important when interpreting results:
 
-- 3D vessel and neurite walls are geometrically rigid; 1D compliant wall laws
-  do not constitute 3D FSI;
-- native 1D and CPU 3D `vca_closed_loop` coupling are available, but CUDA VCA,
-  3D replay/open-loop, arbitrary multi-system coupling, and 3D FSI are not;
+- standalone body-fitted 3D vessel and neurite walls remain rigid; two-way FSI
+  is currently limited to the small-displacement immersed membrane benchmark;
+- immersed flow and FSI do not yet provide distributed ownership within one
+  solve; the validated FSI runtime uses one partition and `PETSC_COMM_SELF`;
+- moving anatomy uses a fixed Eulerian background. ALE/remeshing, nonmatching
+  FSI transfer, monolithic FSI, and advanced valves/leaflet contact are deferred;
+- multidomain execution supports validated acyclic pressure/flow graphs and
+  staged 1D/body-fitted-3D species transfer. 0D species, a full closed-loop 0D
+  heart, multirate coupled clocks, and graph-wide restart remain deferred;
+- native 1D and CPU 3D `vca_closed_loop` coupling remain separate from generic
+  domain coupling; CUDA VCA and 3D VCA replay/open-loop are unavailable;
 - 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
   models, not tissue-resolved circulation;
 - the 1D physiology layer is configurable and reduced, not automatically a

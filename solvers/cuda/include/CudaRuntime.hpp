@@ -1,10 +1,13 @@
 #ifndef IGA_CUDA_RUNTIME_HPP
 #define IGA_CUDA_RUNTIME_HPP
 
+#include "DeviceAllocation.hpp"
+
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -33,7 +36,7 @@ class DeviceBuffer {
 public:
 	DeviceBuffer() = default;
 	explicit DeviceBuffer(std::size_t count) { Allocate(count); }
-	~DeviceBuffer() { if (data_) cudaFree(data_); }
+	~DeviceBuffer() { Release(); }
 
 	DeviceBuffer(const DeviceBuffer&) = delete;
 	DeviceBuffer& operator=(const DeviceBuffer&) = delete;
@@ -44,7 +47,7 @@ public:
 	DeviceBuffer& operator=(DeviceBuffer&& other) noexcept
 	{
 		if (this != &other) {
-			if (data_) cudaFree(data_);
+			Release();
 			data_ = std::exchange(other.data_, nullptr);
 			size_ = std::exchange(other.size_, 0);
 		}
@@ -54,8 +57,13 @@ public:
 	void Allocate(std::size_t count)
 	{
 		if (data_) throw std::logic_error("DeviceBuffer is already allocated");
+		if (count > std::numeric_limits<std::size_t>::max()/sizeof(T))
+			throw std::overflow_error("DeviceBuffer byte count overflows");
+		if (count) {
+			Check(cudaMalloc(reinterpret_cast<void**>(&data_), count * sizeof(T)), "cudaMalloc");
+			DeviceAllocationCounter::Add(count * sizeof(T));
+		}
 		size_ = count;
-		if (count) Check(cudaMalloc(reinterpret_cast<void**>(&data_), count * sizeof(T)), "cudaMalloc");
 	}
 
 	void Clear()
@@ -81,6 +89,14 @@ public:
 	std::size_t bytes() const { return size_ * sizeof(T); }
 
 private:
+	void Release() noexcept
+	{
+		if (data_ && cudaFree(data_) == cudaSuccess)
+			DeviceAllocationCounter::Remove(bytes());
+		data_ = nullptr;
+		size_ = 0;
+	}
+
 	T* data_ = nullptr;
 	std::size_t size_ = 0;
 };

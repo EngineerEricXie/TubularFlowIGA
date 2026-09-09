@@ -2,6 +2,7 @@
 #define TRANSPORT_ELEMENT_HPP
 
 #include "CaseInput.hpp"
+#include "CollectiveFailure.hpp"
 #include "ElementGeometry.hpp"
 #include "IgaDatabase.hpp"
 #include "Quadrature.hpp"
@@ -69,16 +70,18 @@ inline GeometryQuality InspectGeometry(const std::vector<Element>& elements,
 {
 	constexpr std::array<double, 4> points{{0.06943184420297371, 0.33000947820757187, 0.6699905217924281, 0.9305681557970262}};
 	GeometryQuality local, global;
-	for (const auto& element : elements) {
-		if (!owns_element(element)) continue;
-		bool bad = false;
-		for (double w : points) for (double v : points) for (double u : points) {
-			const auto determinant = ElementJacobianDeterminant(element, u, v, w);
-			local.minimum_determinant = std::min(local.minimum_determinant, determinant);
-			if (!std::isfinite(determinant) || determinant <= 0.0) { ++local.bad_samples; bad = true; }
+	CollectiveLocalStage(communicator, "geometry inspection", [&] {
+		for (const auto& element : elements) {
+			if (!owns_element(element)) continue;
+			bool bad = false;
+			for (double w : points) for (double v : points) for (double u : points) {
+				const auto determinant = ElementJacobianDeterminant(element, u, v, w);
+				local.minimum_determinant = std::min(local.minimum_determinant, determinant);
+				if (!std::isfinite(determinant) || determinant <= 0.0) { ++local.bad_samples; bad = true; }
+			}
+			if (bad) { ++local.bad_elements; local.first_bad_element = std::min(local.first_bad_element, element.id); }
 		}
-		if (bad) { ++local.bad_elements; local.first_bad_element = std::min(local.first_bad_element, element.id); }
-	}
+	});
 	MPI_Allreduce(&local.bad_elements, &global.bad_elements, 1, MPI_UINT64_T, MPI_SUM, communicator);
 	MPI_Allreduce(&local.bad_samples, &global.bad_samples, 1, MPI_UINT64_T, MPI_SUM, communicator);
 	MPI_Allreduce(&local.first_bad_element, &global.first_bad_element, 1, MPI_UINT64_T, MPI_MIN, communicator);

@@ -5,6 +5,7 @@
 // It deliberately owns no runtime or MPI communication.  The scalar unknown
 // is normal displacement on the immutable reference material surface.
 #include "DistributedSurfaceInterface.hpp"
+#include "PhaseProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -176,6 +177,7 @@ public:
 	PretensionedMembraneTrial SolveTrial(const PretensionedMembraneTrialContext& context,
 		const SurfaceTraction& traction) const
 	{
+		PhaseScope assembly_phase(ProfilePhase::Assembly);
 		if (has_active_trial_)
 			throw std::runtime_error("pretensioned membrane requires RejectTrial or AbortTrial before a new solve");
 		ValidateContext(context);
@@ -202,7 +204,10 @@ public:
 			}
 			rhs[row] += load[row];
 		}
+		assembly_phase.Stop();
+		PhaseScope linear_phase(ProfilePhase::LinearSolve);
 		std::vector<double> velocity = SolveWithClamps(system, rhs);
+		linear_phase.Stop();
 		std::vector<double> displacement(count, 0.0);
 		for (std::size_t node = 0; node < count; ++node)
 			displacement[node] = clamped_[node] ? 0.0
