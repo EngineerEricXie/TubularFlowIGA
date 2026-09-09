@@ -815,6 +815,8 @@ int main(int argc, char** argv)
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow visualization close", [&] {
 			if (rank == 0 && vtkhdf) vtkhdf->Close();
 		});
+		if (vca_transport) vca_transport->Close();
+		flow.Close();
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow completion logging", [&] {
 			if (rank == 0) std::cout << "navier_stokes_v2 seconds=" << solve_seconds
 				<< " total_linear_iterations=" << summary.linear_iterations

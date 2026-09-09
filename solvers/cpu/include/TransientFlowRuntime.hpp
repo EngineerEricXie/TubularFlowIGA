@@ -1,6 +1,7 @@
 #ifndef IGA_TRANSIENT_FLOW_RUNTIME_HPP
 #define IGA_TRANSIENT_FLOW_RUNTIME_HPP
 
+#include "RuntimeCleanup.hpp"
 #include "CheckedText.hpp"
 #include "BoundaryFlow.hpp"
 #include "CouplingPort.hpp"
@@ -193,6 +194,14 @@ public:
 	}
 
 	~TransientFlowRuntime() { DestroyPetsc(); }
+
+	// Terminal collective operation. Call before reporting success and before
+	// releasing the borrowed communicator. Only Close/destruction may follow.
+	void Close()
+	{
+		DestroyPetsc().Check(communicator_, "flow runtime cleanup");
+	}
+
 	TransientFlowRuntime(const TransientFlowRuntime&) = delete;
 	TransientFlowRuntime& operator=(const TransientFlowRuntime&) = delete;
 
@@ -207,20 +216,26 @@ public:
 	}
 
 private:
-	void DestroyPetsc() noexcept
+	bool cleanup_started_ = false;
+	RuntimeCleanupResult cleanup_result_;
+
+	RuntimeCleanupResult DestroyPetsc() noexcept
 	{
-		KSPDestroy(&solver_);
-		VecScatterDestroy(&scatter_);
-		ISDestroy(&destination_rows_);
-		VecDestroy(&ghost_previous_);
-		VecDestroy(&ghost_state_);
-		ISDestroy(&source_rows_);
-		VecDestroy(&rhs_);
-		VecDestroy(&update_);
-		VecDestroy(&previous_);
-		VecDestroy(&committed_state_);
-		VecDestroy(&state_);
-		MatDestroy(&jacobian_);
+		if (cleanup_started_) return cleanup_result_;
+		cleanup_started_ = true;
+		cleanup_result_.Observe("flow solver", KSPDestroy(&solver_));
+		cleanup_result_.Observe("flow scatter", VecScatterDestroy(&scatter_));
+		cleanup_result_.Observe("flow destination_rows", ISDestroy(&destination_rows_));
+		cleanup_result_.Observe("flow ghost_previous", VecDestroy(&ghost_previous_));
+		cleanup_result_.Observe("flow ghost_state", VecDestroy(&ghost_state_));
+		cleanup_result_.Observe("flow source_rows", ISDestroy(&source_rows_));
+		cleanup_result_.Observe("flow rhs", VecDestroy(&rhs_));
+		cleanup_result_.Observe("flow update", VecDestroy(&update_));
+		cleanup_result_.Observe("flow previous", VecDestroy(&previous_));
+		cleanup_result_.Observe("flow committed_state", VecDestroy(&committed_state_));
+		cleanup_result_.Observe("flow state", VecDestroy(&state_));
+		cleanup_result_.Observe("flow jacobian", MatDestroy(&jacobian_));
+		return cleanup_result_;
 	}
 
 	void InitializeStateImpl(const SimulationConfiguration* initial_configuration)

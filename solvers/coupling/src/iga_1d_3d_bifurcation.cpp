@@ -1248,6 +1248,11 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			accepted_time_s = step_context.EndTime();
 		}
 
+		for (auto& entry : three_d) {
+			auto& native = *entry.second;
+			if (native.transport_runtime) native.transport_runtime->Close();
+			native.runtime->Close();
+		}
 		iga::CollectiveLocalStage(communicator, "graph output", [&] {
 			if (rank != 0) return;
 			if (species_executor)

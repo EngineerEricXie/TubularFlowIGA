@@ -30,7 +30,7 @@ PETSC_TARGETS += flow_step_failure_test legacy_transport_failure_test
 PETSC_TARGETS += text_helper_failure_test text-helper-failure-test
 PETSC_TARGETS += snapshot_publication_failure_test
 PETSC_TARGETS += mesh_stdout_failure_test assembly_stdout_failure_test
-PETSC_TARGETS += flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test
+PETSC_TARGETS += flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test runtime_cleanup_cli_test
 
 flow_stdout_failure_test: CPPFLAGS += -DIGA_TEST_FLOW_STDOUT
 transport_stdout_failure_test: CPPFLAGS += -DIGA_TEST_TRANSPORT_STDOUT
@@ -86,7 +86,7 @@ endif
 # PETSc-backed runtimes share opt-in phase accounting and explicit KSP setup.
 $(PETSC_TARGETS): include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
 $(PETSC_TARGETS): include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
-$(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp
+$(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp include/RuntimeCleanup.hpp
 $(PETSC_TARGETS): include/PetscGather.hpp
 $(PETSC_TARGETS): include/PetscCheckpointRead.hpp
 $(PETSC_TARGETS): include/PetscCheckpointWrite.hpp
@@ -141,6 +141,9 @@ strong_fluid_structure_coupling_test pretensioned_membrane_test pretensioned_mem
 # wall paths; make header changes rebuild every affected executable.
 immersed_face_targets := navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_flow_snapshot_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test phase5_closure_test moving_cut_geometry_test
 $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
+
+runtime_cleanup_cli_test: tests/test_runtime_cleanup_cli.cpp src/iga_navier_stokes.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
 
@@ -588,6 +591,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) runtime_cleanup_cli_test
 	$(RM) snapshot_publication_failure_test mesh_stdout_failure_test assembly_stdout_failure_test
 	$(RM) flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test
 	$(RM) womersley_stream_failure_test transport_budget_stream_failure_test fsi_export_stream_failure_test text_read_preload.so

@@ -1578,6 +1578,7 @@ int iga::RunSequentialFlow(int argc, char** argv, MPI_Comm communicator)
 				});
 			}
 		}
+		three_d.Close();
 		iga::CollectiveLocalStage(communicator, "sequential output", [&] {
 			if (rank != 0) return;
 			if (graph_configuration) {

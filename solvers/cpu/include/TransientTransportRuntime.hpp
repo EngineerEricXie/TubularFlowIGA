@@ -1,6 +1,7 @@
 #ifndef IGA_TRANSIENT_TRANSPORT_RUNTIME_HPP
 #define IGA_TRANSIENT_TRANSPORT_RUNTIME_HPP
 
+#include "RuntimeCleanup.hpp"
 #include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
 #include "OwnedRowAssembler.hpp"
@@ -141,6 +142,14 @@ public:
 	}
 
 	~TransientTransportRuntime() { DestroyPetsc(); }
+
+	// Terminal collective operation. Call before reporting success and before
+	// releasing the borrowed communicator. Only Close/destruction may follow.
+	void Close()
+	{
+		DestroyPetsc().Check(communicator_, "transport runtime cleanup");
+	}
+
 	TransientTransportRuntime(const TransientTransportRuntime&) = delete;
 	TransientTransportRuntime& operator=(const TransientTransportRuntime&) = delete;
 
@@ -427,16 +436,26 @@ public:
 	}
 
 private:
-	void DestroyPetsc() noexcept
+	bool cleanup_started_ = false;
+	RuntimeCleanupResult cleanup_result_;
+
+	RuntimeCleanupResult DestroyPetsc() noexcept
 	{
-		KSPDestroy(&solver_);
-		VecScatterDestroy(&scatter_);
-		ISDestroy(&destination_rows_);
-		VecDestroy(&ghost_state_);
-		ISDestroy(&source_rows_);
-		VecDestroy(&rhs_); VecDestroy(&next_); VecDestroy(&committed_);
-		VecDestroy(&current_); VecDestroy(&forcing_);
-		MatDestroy(&previous_); MatDestroy(&left_);
+		if (cleanup_started_) return cleanup_result_;
+		cleanup_started_ = true;
+		cleanup_result_.Observe("transport solver", KSPDestroy(&solver_));
+		cleanup_result_.Observe("transport scatter", VecScatterDestroy(&scatter_));
+		cleanup_result_.Observe("transport destination_rows", ISDestroy(&destination_rows_));
+		cleanup_result_.Observe("transport ghost_state", VecDestroy(&ghost_state_));
+		cleanup_result_.Observe("transport source_rows", ISDestroy(&source_rows_));
+		cleanup_result_.Observe("transport rhs", VecDestroy(&rhs_));
+		cleanup_result_.Observe("transport next", VecDestroy(&next_));
+		cleanup_result_.Observe("transport committed", VecDestroy(&committed_));
+		cleanup_result_.Observe("transport current", VecDestroy(&current_));
+		cleanup_result_.Observe("transport forcing", VecDestroy(&forcing_));
+		cleanup_result_.Observe("transport previous", MatDestroy(&previous_));
+		cleanup_result_.Observe("transport left", MatDestroy(&left_));
+		return cleanup_result_;
 	}
 
 	// Callbacks are local work only. Both the reduction buffers and their

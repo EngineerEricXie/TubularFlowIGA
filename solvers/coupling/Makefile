@@ -24,6 +24,12 @@ all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test sp
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow multidomain_config_test: ../../include/CheckedText.hpp
 
+graph_cleanup_cli_test bifurcation_cleanup_cli_test: CPPFLAGS += -DIGA_CLEANUP_GRAPH
+bifurcation_cleanup_cli_test: CPPFLAGS += -DIGA_BIFURCATION_ENTRY=1
+sequential_cleanup_cli_test: CPPFLAGS += -DIGA_CLEANUP_SEQUENTIAL
+graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test: ../cpu/tests/test_runtime_cleanup_cli.cpp src/iga_1d_3d_bifurcation.cpp src/iga_1d_3d_explicit.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
 graph_stdout_failure_test bifurcation_stdout_failure_test: CPPFLAGS += -DIGA_TEST_GRAPH_STDOUT
 bifurcation_stdout_failure_test: CPPFLAGS += -DIGA_BIFURCATION_ENTRY=1
 sequential_stdout_failure_test: CPPFLAGS += -DIGA_TEST_SEQUENTIAL_STDOUT
@@ -186,6 +192,7 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
+	$(RM) graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test
 	$(RM) sequential_strong_failure_test
 	$(RM) sequential_text_failure_test
 	$(RM) sequential_initialization_failure_test
@@ -203,10 +210,10 @@ clean:
 	$(RM) multidomain_subcommunicator_test
 	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
 
-iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../one_d/include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp ../cpu/include/RuntimeConstruction.hpp
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../one_d/include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp ../cpu/include/RuntimeConstruction.hpp ../cpu/include/RuntimeCleanup.hpp
 
 runtime_construction_failure_test: tests/test_runtime_construction_failure.cpp tests/test_bifurcation_coupling_smoke.cpp tests/CouplingFixture.hpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING -DIGA_RUNTIME_CLEANUP_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectivePressureFlowExecution.hpp
 

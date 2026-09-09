@@ -1,6 +1,6 @@
 # MPI 錯誤邊界與剩餘工作
 
-本文件是 HPC-01C 的入口稽核索引，依 2026-09-08 工作樹建立。
+本文件是 HPC-01C 的入口稽核索引，最近更新於 2026-09-09。
 「已接入」表示可定位協調程式與相應測試，不表示該入口的所有錯誤均已驗收。
 完成仍須核對本文件的剩餘項目與 [主清單](../WORKSTATION_HPC_TODO.md)。
 
@@ -56,7 +56,7 @@ grep 結果重新開始；新增入口也必須補進上表。
 | F03（已驗證） | Publisher 的檔名、JSON、VTU arrays、Number、Nonce 使用受檢查串流，ReadAll 使用完整讀取 | Publish／retry／collection rebuild 共 219 次故障、222 次重試通過，accepted epoch 不變且重試輸出逐位元一致；見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | F04（已驗證） | Packer／FSI reader、FSI Values、Womersley filename／close 與 budget JSON 已補強 | 21 個原生 CLI 案例、30 個輸出比較、cache/text packing 與 FSI helper 故障通過；完整 FSI 兩版均 4 次迭代收斂、5 份輸出逐位元相同及 29 個數值 arrays 相對 L2=0，見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | F05（已驗證） | `BezierVisualization` 的錯誤訊息 formatter 啟用 exceptions；packer formatter 已加 exceptions | 舊實作重現例外被吞掉；修正後三種 formatter 例外及三次健康診斷恢復通過，原有幾何／array tests 通過；見 [Bezier 診斷驗收](../progress/HPC_01C_BEZIER_DIAGNOSTIC_PROGRESS.md)。這原本就是拒絕路徑，不是靜默數值成功 |
-| F06 | 入口／constructor／destructor／早退分支的完整呼叫圖與最後一輪整合矩陣仍未逐項簽核 | 以來源位置、前後 collective、owner 清理與必要原生測試建立 coverage 記錄；只有所有必要路徑具證據時才勾選 HPC-01C |
+| F06 | 入口／constructor／destructor／早退分支的完整呼叫圖與最後一輪整合矩陣仍未逐項簽核 | 已完成終止呼叫鏈核對與 runtime Close 補強：144 個 runtime 故障／重試及最終 112 個原生作業通過，見 [入口稽核](../progress/HPC_01C_ENTRY_AUDIT.md) 與 [cleanup 驗收](../progress/HPC_01C_RUNTIME_CLEANUP_PROGRESS.md)。其餘呼叫鏈與最後整合覆蓋仍需簽核 |
 
 HPC-01D 的型別／配置／後端能力矩陣、HPC-05 的持久化契約與 HPC-09 的
 跨節點驗收仍維持原要求。此索引不移除或縮小任何主清單任務。

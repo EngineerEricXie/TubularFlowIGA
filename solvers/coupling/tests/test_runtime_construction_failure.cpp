@@ -143,7 +143,10 @@ std::vector<double> HealthyConstructionFlow(iga::Database& database, MPI_Comm co
 	auto flow = MakeConstructionFlow(database, comm, input);
 	flow->InitializeState(input.flow);
 	flow->Advance(input.flow, 0, kDt, 12, 1e-8, 1e-12, 1e-6);
-	return GatherConstructionState(flow->State());
+	auto values = GatherConstructionState(flow->State());
+	flow->Close();
+	flow->Close();
+	return values;
 }
 
 std::vector<double> HealthyConstructionTransport(iga::Database& database, MPI_Comm comm, const ConstructionInput& input)
@@ -156,7 +159,55 @@ std::vector<double> HealthyConstructionTransport(iga::Database& database, MPI_Co
 		for (double value : values)
 			RequireConstruction(std::abs(value - (2.0 + kDt)) <= 1e-10, "constant scalar source solution differs");
 	});
+	transport->Close();
 	return values;
+}
+
+int cleanup_rank = -1, cleanup_target_rank = -1, cleanup_calls = 0;
+const char* cleanup_target = nullptr;
+bool cleanup_injected = false;
+
+PetscErrorCode InjectCleanupResult(const char* operation, PetscErrorCode code) noexcept
+{
+	++cleanup_calls;
+	if (cleanup_rank == cleanup_target_rank && std::strcmp(operation, cleanup_target) == 0) {
+		cleanup_injected = true;
+		return PETSC_ERR_USER;
+	}
+	return code;
+}
+
+template<class Build, class Retry>
+void CleanupFailures(MPI_Comm comm, const std::vector<const char*>& operations,
+	const char* stage, Build&& build, Retry&& retry)
+{
+	int ranks = 1;
+	MPI_Comm_rank(comm, &cleanup_rank); MPI_Comm_size(comm, &ranks);
+	cleanup_target_rank = ranks-1;
+	for (const auto operation : operations) {
+		RetainedObjects retained;
+		auto& hooks = iga::RuntimeConstructionHooksForTesting();
+		hooks.object_created = [&](PetscObject object) { retained.Retain(object); };
+		auto runtime = build();
+		hooks = {};
+		cleanup_target = operation; cleanup_calls = 0; cleanup_injected = false;
+		iga::RuntimeCleanupProbeForTesting() = InjectCleanupResult;
+		RejectConstruction(comm, stage, [&] { runtime->Close(); });
+		// A second Close repeats the same common failure without retrying an
+		// uncertain PETSc destroy on only the ranks that retained a handle.
+		RejectConstruction(comm, operation, [&] { runtime->Close(); });
+		runtime.reset();
+		iga::RuntimeCleanupProbeForTesting() = nullptr;
+		iga::CollectiveLocalStage(comm, "cleanup release coverage", [&] {
+			RequireConstruction(cleanup_calls == static_cast<int>(operations.size()), "cleanup skipped or repeated a release");
+			RequireConstruction(cleanup_injected == (cleanup_rank == cleanup_target_rank), "cleanup injection missed target");
+		});
+		retained.VerifyAndRelease(comm);
+		retry();
+	}
+	if (cleanup_rank == 0) std::cout << "runtime_cleanup stage=" << stage << " ranks=" << ranks
+		<< " faults=" << operations.size() << " retries=" << operations.size()
+		<< " references_released=1 repeated_close=passed\n";
 }
 
 struct ConstructionFailureCase {
@@ -455,6 +506,20 @@ void RunConstructionGroup(MPI_Comm comm, const fs::path& root)
 		[&] { auto flow = MakeConstructionFlow(empty_database, comm, empty_input); }, retry_empty_flow);
 	const int empty_scalar_cases = ConstructionFailures(comm, scalar_failures,
 		[&] { auto transport = MakeConstructionTransport(empty_database, comm, empty_input); }, retry_empty_scalar);
+	const std::vector<const char*> flow_cleanup = {"flow solver", "flow scatter", "flow destination_rows",
+		"flow ghost_previous", "flow ghost_state", "flow source_rows", "flow rhs", "flow update",
+		"flow previous", "flow committed_state", "flow state", "flow jacobian"};
+	const std::vector<const char*> transport_cleanup = {"transport solver", "transport scatter", "transport destination_rows",
+		"transport ghost_state", "transport source_rows", "transport rhs", "transport next", "transport committed",
+		"transport current", "transport forcing", "transport previous", "transport left"};
+	CleanupFailures(comm, flow_cleanup, "flow runtime cleanup",
+		[&] { return MakeConstructionFlow(database, comm, input); }, retry_flow);
+	CleanupFailures(comm, transport_cleanup, "transport runtime cleanup",
+		[&] { return MakeConstructionTransport(database, comm, input); }, retry_scalar);
+	CleanupFailures(comm, flow_cleanup, "flow runtime cleanup",
+		[&] { return MakeConstructionFlow(empty_database, comm, empty_input); }, retry_empty_flow);
+	CleanupFailures(comm, transport_cleanup, "transport runtime cleanup",
+		[&] { return MakeConstructionTransport(empty_database, comm, empty_input); }, retry_empty_scalar);
 	if (rank == 0) std::cout << "runtime_construction ranks=" << ranks << " flow_cases=" << flow_cases
 		<< " scalar_cases=" << scalar_cases << " empty_flow_cases=" << empty_flow_cases
 		<< " empty_scalar_cases=" << empty_scalar_cases

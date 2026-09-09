@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-08。接續清理診斷、snapshot 發布及串行工具讀寫驗收；
+最近更新：2026-09-09。接續完成 runtime 終止清理與耦合 completion 發布順序驗收；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -398,7 +398,12 @@ F05 的原始診斷例外保存與恢復亦通過，見
   F02 的 CPU flow／runtime、configured／legacy transport 亦已通過 412 個
   原生作業、618 份 rank reports 與 310 個場比較（relative L2=0），見
   [CPU stdout 驗收](progress/HPC_01C_SOLVER_STDOUT_PROGRESS.md)。
-  F02 其他入口、F05／F06 及 HPC-01D 剩餘能力矩陣繼續追蹤。
+  F02 其他入口與 F05 已完成相應驗收，見上方報告。F06 的終止呼叫鏈已核對，
+  runtime Close、144 次故障／重試與最終 112 個原生 CLI 作業通過；
+  graph／sequential 清理失敗不發布 completion manifest，見
+  [runtime cleanup 驗收](progress/HPC_01C_RUNTIME_CLEANUP_PROGRESS.md)與
+  [入口稽核](progress/HPC_01C_ENTRY_AUDIT.md)。F06 其餘呼叫鏈與
+  HPC-01D 剩餘能力矩陣繼續追蹤。
 
 - [ ] **HPC-01D：執行資源與能力檢查。** 檢查分區數／rank 數、執行緒配置、
   PETSc index/scalar 型別及必要後端能力；提供清楚錯誤資訊與執行摘要。
