@@ -484,6 +484,7 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 					mesh.points[static_cast<std::size_t>(global)], element.bezier_points[point]);
 				if (distance_squared > point_match_tolerance_squared) {
 					std::ostringstream message;
+					message.exceptions(std::ios::badbit | std::ios::failbit);
 					message << std::setprecision(17)
 						<< "matching Bezier extraction signatures have inconsistent coordinates: first_element="
 						<< point_elements[static_cast<std::size_t>(global)]

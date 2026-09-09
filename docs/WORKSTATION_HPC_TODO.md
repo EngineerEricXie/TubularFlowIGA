@@ -98,7 +98,7 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
-| HPC-01C | F01／F03／F04 與 F02 的 CPU／1D／耦合／四個序列工具已驗證；CUDA stdout 亦已驗證；接續 F05 診斷與 F06 完整入口覆蓋 | [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)、[本輪串行工具與 FSI 驗收](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
+| HPC-01C | F01／F03／F04 與 F02 的 CPU／1D／耦合／四個序列工具已驗證；CUDA stdout 亦已驗證；F05 診斷亦已驗證；接續 F06 完整入口覆蓋 | [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)、[本輪串行工具與 FSI 驗收](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | HPC-01D | 尚未覆蓋的工具／CUDA 啟動檢查，以及 PETSc 型別、配置與後端能力矩陣 | [資源檢查進度](progress/HPC_01D_PROGRESS.md)、[工具進度](progress/HPC_01CD_TOOLS_PROGRESS.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
@@ -107,6 +107,8 @@ Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
 詳見 [耦合與工具 stdout 驗收](progress/HPC_01C_COUPLING_STDOUT_PROGRESS.md)。
 CUDA 的 38 個作業與 27 個場比較亦通過，見
 [CUDA stdout 驗收](progress/HPC_01C_CUDA_STDOUT_PROGRESS.md)。
+F05 的原始診斷例外保存與恢復亦通過，見
+[Bezier 診斷驗收](progress/HPC_01C_BEZIER_DIAGNOSTIC_PROGRESS.md)。
 
 ## 可複製的 goal 範本
 

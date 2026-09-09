@@ -55,7 +55,7 @@ grep 結果重新開始；新增入口也必須補進上表。
 | F02（已驗證） | mesh check／assembly smoke 的 result logging 與 resource summary 已 flush 並通過 84 個原生作業；CPU flow／runtime、configured／legacy transport 亦已補強，412 個作業及 310 個場比較通過；1D／graph／sequential 另通過 216 個作業與 660 個輸出比較，四個序列工具通過 48 個作業；CUDA 另通過 38 個原生作業與 27 個場比較 | [CUDA stdout 報告](../progress/HPC_01C_CUDA_STDOUT_PROGRESS.md)、[耦合與工具 stdout 報告](../progress/HPC_01C_COUPLING_STDOUT_PROGRESS.md) 與 [CPU stdout 報告](../progress/HPC_01C_SOLVER_STDOUT_PROGRESS.md) 含 prefix／stage 對應與限制。區分可控制 stream failure 與 SIGPIPE／程序死亡 |
 | F03（已驗證） | Publisher 的檔名、JSON、VTU arrays、Number、Nonce 使用受檢查串流，ReadAll 使用完整讀取 | Publish／retry／collection rebuild 共 219 次故障、222 次重試通過，accepted epoch 不變且重試輸出逐位元一致；見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | F04（已驗證） | Packer／FSI reader、FSI Values、Womersley filename／close 與 budget JSON 已補強 | 21 個原生 CLI 案例、30 個輸出比較、cache/text packing 與 FSI helper 故障通過；完整 FSI 兩版均 4 次迭代收斂、5 份輸出逐位元相同及 29 個數值 arrays 相對 L2=0，見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
-| F05 | `BezierVisualization` 的錯誤訊息串流即使截斷仍會拋錯，但可能漏掉原始診斷資訊；packer formatter 已加 exceptions | 納入診斷格式化核對；不將它誤列為目前可靜默成功的數值路徑 |
+| F05（已驗證） | `BezierVisualization` 的錯誤訊息 formatter 啟用 exceptions；packer formatter 已加 exceptions | 舊實作重現例外被吞掉；修正後三種 formatter 例外及三次健康診斷恢復通過，原有幾何／array tests 通過；見 [Bezier 診斷驗收](../progress/HPC_01C_BEZIER_DIAGNOSTIC_PROGRESS.md)。這原本就是拒絕路徑，不是靜默數值成功 |
 | F06 | 入口／constructor／destructor／早退分支的完整呼叫圖與最後一輪整合矩陣仍未逐項簽核 | 以來源位置、前後 collective、owner 清理與必要原生測試建立 coverage 記錄；只有所有必要路徑具證據時才勾選 HPC-01C |
 
 HPC-01D 的型別／配置／後端能力矩陣、HPC-05 的持久化契約與 HPC-09 的

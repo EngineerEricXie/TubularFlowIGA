@@ -5,12 +5,36 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <locale>
+#include <new>
 #include <string>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
+
+class DiagnosticFailure : public std::num_put<char>
+{
+public:
+	explicit DiagnosticFailure(int mode) : mode_(mode) {}
+	mutable bool injected = false;
+protected:
+	iter_type do_put(iter_type iterator, std::ios_base& output, char fill,
+		unsigned long value) const override
+	{
+		const auto* stream = dynamic_cast<std::ostringstream*>(&output);
+		if (stream && stream->str().find("matching Bezier extraction signatures") == 0) {
+			injected = true;
+			if (mode_ == 0) throw std::runtime_error("injected Bezier diagnostic failure");
+			if (mode_ == 1) throw std::bad_alloc();
+			throw 7;
+		}
+		return std::num_put<char>::do_put(iterator, output, fill, value);
+	}
+private:
+	int mode_;
+};
 
 iga::Element MakeElement(std::uint64_t id, double x_offset,
 	std::int32_t node_offset, bool share_structured_nodes)
@@ -162,6 +186,34 @@ int main()
 		rejected = true;
 	}
 	assert(rejected);
+
+	const auto inconsistent_path = directory/"inconsistent.ntiga";
+	WriteDatabase(inconsistent_path,
+		{MakeElement(0, 0.0, 0, true), MakeElement(1, 1.01, 0, true)}, 112);
+	iga::Database inconsistent_database(inconsistent_path.string());
+	const auto diagnostic = [&] {
+		try { (void)iga::BuildBezierVisualizationMesh(inconsistent_database); }
+		catch (const std::runtime_error& error) { return std::string(error.what()); }
+		return std::string();
+	};
+	const auto expected = diagnostic();
+	assert(expected.find("first_element=0 current_element=1 current_local_point=0") != std::string::npos);
+	assert(expected.find(" distance=") != std::string::npos);
+	for (int mode = 0; mode < 3; ++mode) {
+		auto* facet = new DiagnosticFailure(mode);
+		const std::locale installed(std::locale(), facet);
+		const auto previous = std::locale::global(installed);
+		bool preserved = false;
+		try { (void)iga::BuildBezierVisualizationMesh(inconsistent_database); }
+		catch (const std::bad_alloc&) { preserved = mode == 1; }
+		catch (const std::runtime_error& error) {
+			preserved = mode == 0 && std::string(error.what()) == "injected Bezier diagnostic failure";
+		}
+		catch (int value) { preserved = mode == 2 && value == 7; }
+		std::locale::global(previous);
+		assert(facet->injected && preserved);
+		assert(diagnostic() == expected);
+	}
 
 	fs::remove_all(directory);
 }
