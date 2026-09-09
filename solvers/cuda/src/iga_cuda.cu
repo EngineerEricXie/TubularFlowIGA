@@ -5,6 +5,7 @@
 #include "CheckedText.hpp"
 #include "GenericCaseInput.hpp"
 #include "CudaRuntime.hpp"
+#include "CudaExecution.hpp"
 #include "DeviceMesh.hpp"
 #include "Gmres.hpp"
 #include "GenericTransportKernels.cuh"
@@ -282,11 +283,22 @@ void PrintDevice()
 	Check(cudaGetDeviceProperties(&properties, device), "cudaGetDeviceProperties");
 	std::size_t free = 0, total = 0;
 	Check(cudaMemGetInfo(&free, &total), "cudaMemGetInfo");
+	int runtime_version = 0, driver_version = 0;
+	Check(cudaRuntimeGetVersion(&runtime_version), "cudaRuntimeGetVersion");
+	Check(cudaDriverGetVersion(&driver_version), "cudaDriverGetVersion");
+	unsigned hdf_major = 0, hdf_minor = 0, hdf_release = 0;
+	if (H5get_libversion(&hdf_major, &hdf_minor, &hdf_release) < 0)
+		throw std::runtime_error("cannot query linked HDF5 library version");
 	std::cout << "device=" << device << " name=\"" << properties.name << "\""
 		<< " compute_capability=" << properties.major << '.' << properties.minor
 		<< " fp64_ratio=1/" << properties.singleToDoublePrecisionPerfRatio
 		<< " memory_free_gib=" << Gibibytes(free)
 		<< " memory_total_gib=" << Gibibytes(total) << '\n';
+	std::cout << "cuda_capabilities runtime_build=" << CUDART_VERSION
+		<< " runtime_linked=" << runtime_version << " driver=" << driver_version
+		<< " hdf5_build=" << H5_VERS_MAJOR << '.' << H5_VERS_MINOR << '.' << H5_VERS_RELEASE
+		<< " hdf5_linked=" << hdf_major << '.' << hdf_minor << '.' << hdf_release
+		<< " vtkhdf_io=serial database_partition_mode=all_elements\n";
 	iga::FlushCheckedText(std::cout);
 }
 
@@ -611,6 +623,8 @@ int Transport(int argc, char** argv)
 		throw std::runtime_error("usage: iga_cuda transport DATABASE.ntiga CASE_DIR [STEPS] [OUTPUT] [VELOCITY]");
 	const auto total_start = Clock::now();
 	iga::Database database(argv[2]);
+	RequireMeshIndexCapacity(database.header().nodes, database.header().elements);
+	RequireFieldIndexCapacity(database.header().nodes, 2);
 	const fs::path case_dir(argv[3]);
 	auto parameters = iga::ReadTransportParameters((case_dir/"simulation_parameter.txt").string());
 	if (argc >= 5) parameters.steps = std::stoi(argv[4]);
@@ -721,6 +735,8 @@ int NavierStokes(int argc, char** argv)
 	const auto options = ParseCudaFlowOptions(argc, argv);
 	const auto total_start = Clock::now();
 	iga::Database database(options.database.string());
+	RequireMeshIndexCapacity(database.header().nodes, database.header().elements);
+	RequireFieldIndexCapacity(database.header().nodes, 4);
 	BezierVtkHdfOutput vtkhdf;
 	const auto& case_dir = options.case_dir;
 	const int maximum_newton = options.maximum_newton;
@@ -1140,6 +1156,7 @@ int main(int argc, char** argv)
 	try {
 		if (argc < 2)
 			throw std::runtime_error("usage: iga_cuda device-info|mesh-check|solve|transport|navier-stokes ...");
+		iga::cuda::RequireExecutionEnvironment(std::cout);
 		const std::string command(argv[1]);
 		if (command == "device-info") {
 			iga::cuda::PrintDevice();

@@ -99,7 +99,7 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
 | HPC-01C | F01／F03／F04 與 F02 的 CPU／1D／耦合／四個序列工具已驗證；CUDA stdout 亦已驗證；F05 診斷亦已驗證；接續 F06 完整入口覆蓋 | [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)、[本輪串行工具與 FSI 驗收](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
-| HPC-01D | 尚未覆蓋的工具／CUDA 啟動檢查，以及 PETSc 型別、配置與後端能力矩陣 | [資源檢查進度](progress/HPC_01D_PROGRESS.md)、[工具進度](progress/HPC_01CD_TOOLS_PROGRESS.md) |
+| HPC-01D | 剩餘 embedding／工具入口、PETSc 型別、配置與後端能力矩陣；CUDA 啟動檢查已補入 | [資源檢查進度](progress/HPC_01D_PROGRESS.md)、[工具進度](progress/HPC_01CD_TOOLS_PROGRESS.md)、[CUDA 進度](progress/HPC_01D_CUDA_PROGRESS.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
 Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
@@ -409,7 +409,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   PETSc index/scalar 型別及必要後端能力；提供清楚錯誤資訊與執行摘要。
   已接入 CPU flow／transport、1D 與 graph 啟動檢查及摘要，並查詢明確指定的
   factor backend。150 個 resource unit 案例、實際 MPI thread level、16 項
-  原生 CLI 資源案例及既有數值回歸通過；其餘工具／CUDA／配置與後端矩陣仍待
+  原生 CLI 資源案例及既有數值回歸通過；其餘入口／配置與後端矩陣仍待
   完成，故保持未勾選，見 [HPC-01D 進度](progress/HPC_01D_PROGRESS.md)。後續亦已
   接入 mesh check、assembly smoke 與 legacy transport，39 項工具回歸、
   幾何錯誤同步及既有 runtime／VCA 回歸通過，見
@@ -417,6 +417,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   Standalone FSI exporter 已在建立輸出前拒絕多 rank；2／3-rank 拒絕與既有
   輸出保留檢查通過，單 rank 完整案例亦已以 4 次耦合迭代收斂，見
   [exporter 入口](progress/HPC_01C_EXPORTER_ENTRY_PROGRESS.md)。
+  CUDA 五個入口已加入單程序、thread requests、索引容量與版本摘要檢查；
+  84 項 host checks、23 個原生啟動案例及 CPU 共用 parser 的 150 項檢查通過。
+  數值與限制詳見 [CUDA 資源驗收](progress/HPC_01D_CUDA_PROGRESS.md)。
 
 驗收：既有單程序與小型 MPI 數值門檻通過；subcommunicator 測試無串擾；
 錯誤注入不掛住、不寫出成功標記。不以替換 communicator 常數宣稱分散式完成。

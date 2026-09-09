@@ -126,7 +126,10 @@ native attempts／authoritative records、build logs、evidence summary、invent
 
 ## 剩餘範圍
 
-HPC-01D 尚需其餘 legacy／工具／CUDA 路徑的完整能力矩陣、scheduler allocation
+後續 CUDA 啟動、版本摘要及索引容量檢查見
+[CUDA 資源驗收](HPC_01D_CUDA_PROGRESS.md)；本報告的原始量測維持不變。
+
+HPC-01D 尚需其餘 embedding／工具路徑的完整能力矩陣、scheduler allocation
 與綁定配置核對，以及 HDF5 等輸出後端的細部能力檢查。預條件器內部 sub-KSP、
 PETSc 自動挑選的 backend 與完整 options 支援矩陣仍依 HPC-04 補齊。
 純 C++ 1D、浸入式／FSI 的 embedding callers 尚未自動套用此 MPI 啟動摘要。

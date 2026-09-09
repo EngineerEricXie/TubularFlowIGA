@@ -79,7 +79,7 @@ template <int Fields>
 class BlockMatrix {
 public:
 	explicit BlockMatrix(const DevicePattern& pattern)
-		: pattern_(pattern.view()), values_(static_cast<std::size_t>(pattern_.blocks) * Fields * Fields) {}
+		: pattern_(pattern.view()), values_(CheckedBlockValueCount(static_cast<std::size_t>(pattern_.blocks), Fields)) {}
 
 	void Clear() { values_.Clear(); }
 	const DevicePatternView& pattern() const { return pattern_; }

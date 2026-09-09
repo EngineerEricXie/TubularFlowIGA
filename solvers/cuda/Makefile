@@ -36,11 +36,17 @@ HEADERS += ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hp
 HEADERS += include/DeviceAllocation.hpp
 HEADERS += ../cpu/include/BoundarySupport.hpp
 HEADERS += ../../include/PhaseProfile.hpp
-HEADERS += ../../include/CheckedText.hpp
+HEADERS += ../../include/CheckedText.hpp ../../include/ExecutionEnvironment.hpp include/CudaExecution.hpp
 
-.PHONY: all clean allocation-test
+.PHONY: all clean allocation-test execution-test
 
 all: $(TARGET)
+
+cuda_execution_test: tests/test_execution.cpp include/CudaExecution.hpp ../../include/ExecutionEnvironment.hpp ../../include/CheckedText.hpp
+	$(CXX) -Iinclude -I../../include -std=c++17 -Wall -Wextra -Wpedantic $< -o $@
+
+execution-test: cuda_execution_test
+	./cuda_execution_test
 
 $(TARGET): $(SOURCES) Makefile $(HEADERS)
 	$(NVCC) $(CUDA_CPPFLAGS) $(HDF5_CFLAGS) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ $(LDLIBS) $(HDF5_LIBS)
@@ -55,4 +61,4 @@ allocation-test: device_allocation_test
 	./device_allocation_test
 
 clean:
-	$(RM) $(TARGET) device_allocation_test cuda_stdout_failure_test
+	$(RM) $(TARGET) device_allocation_test cuda_stdout_failure_test cuda_execution_test

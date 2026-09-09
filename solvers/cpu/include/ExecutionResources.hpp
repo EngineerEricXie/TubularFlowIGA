@@ -3,6 +3,7 @@
 
 #include "CollectiveFailure.hpp"
 #include "CheckedText.hpp"
+#include "ExecutionEnvironment.hpp"
 #include <petscksp.h>
 #include <cerrno>
 #include <climits>
@@ -16,28 +17,6 @@
 #endif
 
 namespace iga {
-
-// Parse documented numeric resource settings without changing environment or
-// runtime policy. -1 means unset; a BLAS zero is retained as a library default.
-inline int ResourceThreadSetting(const char* name, bool list = false, bool allow_zero = false)
-{
-	const auto* value = std::getenv(name);
-	if (!value) return -1;
-	int first = -1;
-	for (;;) {
-		while (std::isspace(static_cast<unsigned char>(*value))) ++value;
-		char* end = nullptr;
-		errno = 0;
-		const auto number = std::strtol(value, &end, 10);
-		if (end == value || errno == ERANGE || number < (allow_zero ? 0 : 1) || number > INT_MAX)
-			throw std::runtime_error(std::string(name)+" requires "+(allow_zero ? "nonnegative" : "positive")+" integer thread counts");
-		if (first < 0) first = static_cast<int>(number);
-		while (std::isspace(static_cast<unsigned char>(*end))) ++end;
-		if (!*end) return first;
-		if (!list || *end != ',') throw std::runtime_error(std::string(name)+" has an invalid thread count list");
-		value = end+1;
-	}
-}
 
 inline void RequirePetscRealDouble()
 {

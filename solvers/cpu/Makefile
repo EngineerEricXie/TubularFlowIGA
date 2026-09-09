@@ -100,7 +100,7 @@ checked-text-test: checked_text_test
 	./checked_text_test
 
 test: checked-text-test
-$(PETSC_TARGETS): include/ExecutionResources.hpp include/ElementAssemblyExecution.hpp include/ParallelElementBatch.hpp
+$(PETSC_TARGETS): ../../include/ExecutionEnvironment.hpp include/ExecutionResources.hpp include/ElementAssemblyExecution.hpp include/ParallelElementBatch.hpp
 
 parallel_body_fitted_flow_test: tests/test_parallel_body_fitted_flow.cpp include/TransientFlowRuntime.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -fopenmp -UNDEBUG -DIGA_FLOW_RUNTIME_TESTING $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)

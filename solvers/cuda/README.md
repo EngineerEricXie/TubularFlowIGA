@@ -25,6 +25,26 @@ One executable exposes five modes:
 The database can be packed for any CPU MPI rank count. The single-GPU reader
 loads each element exactly once and ignores CPU ownership records.
 
+All commands check supported launcher metadata before accessing CUDA or case
+files. Open MPI and PMI launches must contain one process; a Slurm job step
+must contain one task. A batch shell or an allocation's `SLURM_NTASKS` alone
+does not imply multiple running processes. This check covers these metadata
+conventions, not every launcher or concurrent independent invocation.
+
+Startup validates OMP and OpenBLAS/MKL/BLIS thread requests and reports them
+in `execution_resources`; unset values are `-1`, and BLAS `0` retains the
+library default. These are requests, not measured worker counts. The following
+`cuda_capabilities` line reports build/linked CUDA runtime and HDF5 versions,
+the CUDA driver API version, serial VTKHDF I/O, and all-element database loading.
+
+Mesh node and element counts must be positive and fit in `int`. Solver nodes
+must additionally fit `INT_MAX / max(field_count, 3)` because field vectors and
+three-component velocity arrays use integer indices. Configured transport
+supports 1–8 fields. Block IDs remain integer indices while block-value offsets
+use `size_t`; allocation byte overflow is checked without restricting those
+offsets to `INT_MAX`. These checks precede large solver allocations.
+See the [CUDA resource validation](../../docs/progress/HPC_01D_CUDA_PROGRESS.md).
+
 ## GPU-specific optimizations
 
 - Flatten sparse Bezier extraction, connectivity, quadrature tables, and
@@ -144,6 +164,9 @@ make cuda CUDA_ARCHS="70 80 89 90"
 
 Set `CUDA_ARCHS` to the compute capabilities needed at the deployment site.
 Run `device-info` and all solver modes only on a CUDA-capable host.
+
+The launcher, thread-setting, and index-capacity checks can also be tested
+without CUDA or PETSc using `make -C solvers/cuda execution-test`.
 
 On WSL systems where `nvidia-smi` works but `nvcc` is absent, the Windows
 driver is already exposed to WSL but a Linux CUDA toolkit is still required.

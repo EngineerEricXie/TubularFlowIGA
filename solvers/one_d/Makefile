@@ -91,7 +91,7 @@ one_d_implicit_failure_test: tests/test_one_d_implicit_failure.cpp include/OneDI
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 iga_1d one_d_petsc_test one_d_subcommunicator_test one_d_trial_failure_test one_d_implicit_failure_test: include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp
-iga_1d one_d_petsc_test one_d_subcommunicator_test one_d_trial_failure_test one_d_implicit_failure_test one_d_adapter_failure_test: ../cpu/include/ExecutionResources.hpp
+iga_1d one_d_petsc_test one_d_subcommunicator_test one_d_trial_failure_test one_d_implicit_failure_test one_d_adapter_failure_test: ../../include/ExecutionEnvironment.hpp ../cpu/include/ExecutionResources.hpp
 
 .PHONY: implicit-failure-test
 implicit-failure-test: one_d_implicit_failure_test

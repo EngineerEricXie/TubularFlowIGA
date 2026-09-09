@@ -2,6 +2,7 @@
 #define IGA_CUDA_DEVICE_MESH_HPP
 
 #include "CudaRuntime.hpp"
+#include "CudaExecution.hpp"
 #include "IgaDatabase.hpp"
 
 #include <algorithm>
@@ -26,11 +27,8 @@ struct FlatMesh {
 	explicit FlatMesh(iga::Database& database)
 	{
 		nodes = database.header().nodes;
-		if (nodes > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
-			throw std::runtime_error("CUDA solver currently requires fewer than INT_MAX nodes");
 		const auto count = database.header().elements;
-		if (count > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
-			throw std::runtime_error("CUDA solver currently requires fewer than INT_MAX elements");
+		RequireMeshIndexCapacity(nodes, count);
 		element_offsets.reserve(static_cast<std::size_t>(count) + 1);
 		element_offsets.push_back(0);
 		extraction_offsets.push_back(0);

@@ -23,6 +23,7 @@ endif
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow multidomain_config_test: ../../include/CheckedText.hpp
+iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/ExecutionResources.hpp ../../include/ExecutionEnvironment.hpp
 
 graph_cleanup_cli_test bifurcation_cleanup_cli_test: CPPFLAGS += -DIGA_CLEANUP_GRAPH
 bifurcation_cleanup_cli_test: CPPFLAGS += -DIGA_BIFURCATION_ENTRY=1

@@ -464,11 +464,13 @@ int SolveConfigured(int argc, char** argv)
 		"[--stop-after-step N] [--visualization-format auto|vtu|vtkhdf]");
 	const auto options = ParseCudaConfiguredTransportOptions(argc, argv);
 	iga::Database database(argv[2]);
+	RequireMeshIndexCapacity(database.header().nodes, database.header().elements);
 	const fs::path case_dir(argv[3]);
 	const auto configuration = iga::ReadSimulationConfiguration((case_dir/"simulation_config.json").string());
 	const auto system_name = !options.system.empty() ? options.system
 		: iga::FirstLinearTransportSystem(configuration);
 	const auto system = iga::CompileLinearSystem(configuration, system_name);
+	RequireFieldIndexCapacity(database.header().nodes, system.fields.size());
 	if (system.velocity_source != "prescribed" && !options.velocity.empty())
 		throw std::runtime_error("a positional VELOCITY file cannot override a configured snapshot_series");
 	switch (system.fields.size()) {
