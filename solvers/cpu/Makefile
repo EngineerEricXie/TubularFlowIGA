@@ -144,6 +144,8 @@ $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
 
 all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
 
+iga_inspect iga_flow_validate: ../../include/CheckedText.hpp
+
 compliant_channel_fsi_test compliant_channel_fsi_openmp_test immersed_aneurysm_jacobian_test: tests/ReferenceStateOutput.hpp include/Sha256.hpp
 
 reference_state_output_test: tests/test_reference_state_output.cpp tests/ReferenceStateOutput.hpp include/Sha256.hpp

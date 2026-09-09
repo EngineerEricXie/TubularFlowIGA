@@ -1663,9 +1663,12 @@ int iga::RunSequentialFlow(int argc, char** argv, MPI_Comm communicator)
 				WriteGraphBindingManifest(options.output_directory/"graph_binding_manifest.json",
 					*graph_configuration, graph_assets, graph_case_root);
 		});
-		if (rank == 0) std::cout << "completed " << (options.strong_aitken ? "strong Aitken" : (options.strong_fixed ? "strong fixed" : "explicit"))
-			<< " 1D--3D coupling steps=" << history.size()
-			<< " output=" << options.output_directory << '\n';
+		iga::CollectiveLocalStage(communicator, "sequential completion logging", [&] {
+			if (rank == 0) std::cout << "completed " << (options.strong_aitken ? "strong Aitken" : (options.strong_fixed ? "strong fixed" : "explicit"))
+				<< " 1D--3D coupling steps=" << history.size()
+				<< " output=" << options.output_directory << '\n';
+			iga::FlushCheckedText(std::cout);
+		});
 	} catch (const std::exception& error) {
 		if (rank == 0) std::cerr << error.what() << '\n';
 		status = 1;

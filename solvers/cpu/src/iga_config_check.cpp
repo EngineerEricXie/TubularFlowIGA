@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "SimulationConfig.hpp"
 #include "OneDConfig.hpp"
 #include "MultidomainConfig.hpp"
@@ -60,6 +61,7 @@ int main(int argc, char** argv)
 			}
 			if (version == 6)
 				std::cout << "native_species_runner_compatible=no reason=Phase_3_metadata_only\n";
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 		if (version == 3) {
@@ -79,6 +81,7 @@ int main(int argc, char** argv)
 				for (const auto& system : configuration.transport_systems)
 					std::cout << "system=" << system.name << " kind=network_transport_1d unknowns="
 						<< system.unknowns.size() << " flow_system=" << system.flow_system << '\n';
+				iga::FlushCheckedText(std::cout);
 				return 0;
 			}
 			if (dimension != "3d") throw std::runtime_error("dimension must be '1d' or '3d'");
@@ -105,6 +108,7 @@ int main(int argc, char** argv)
 				<< " time_integration=" << system.time_integration;
 			std::cout << '\n';
 		}
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

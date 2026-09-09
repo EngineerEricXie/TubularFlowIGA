@@ -23,6 +23,9 @@ endif
 
 all: one_d_core_test
 
+one_d_stdout_failure_test: ../cpu/tests/test_tool_stdout_failure.cpp src/iga_1d.cpp $(wildcard include/*.hpp ../../include/*.hpp ../cpu/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_TEST_ONE_D_STDOUT $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
 one_d_filename_failure_test: tests/test_one_d_filename_failure.cpp src/iga_1d.cpp ../cpu/tests/StringStreamFailure.hpp $(wildcard include/*.hpp ../cpu/include/*.hpp ../../include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
@@ -80,6 +83,7 @@ clean:
 	$(RM) one_d_trial_failure_test
 	$(RM) one_d_checkpoint_format_test
 	$(RM) one_d_filename_failure_test
+	$(RM) one_d_stdout_failure_test
 	$(RM) one_d_subcommunicator_test
 	$(RM) one_d_core_test one_d_coupling_test one_d_runtime_test one_d_petsc_test iga_1d
 

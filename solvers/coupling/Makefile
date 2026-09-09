@@ -24,6 +24,12 @@ all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test sp
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow multidomain_config_test: ../../include/CheckedText.hpp
 
+graph_stdout_failure_test bifurcation_stdout_failure_test: CPPFLAGS += -DIGA_TEST_GRAPH_STDOUT
+bifurcation_stdout_failure_test: CPPFLAGS += -DIGA_BIFURCATION_ENTRY=1
+sequential_stdout_failure_test: CPPFLAGS += -DIGA_TEST_SEQUENTIAL_STDOUT
+graph_stdout_failure_test bifurcation_stdout_failure_test sequential_stdout_failure_test: ../cpu/tests/test_tool_stdout_failure.cpp src/iga_1d_3d_bifurcation.cpp src/iga_1d_3d_explicit.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
 collective_asset_input_test: tests/test_collective_asset_input.cpp ../cpu/include/CollectiveAssetInput.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/Sha256.hpp ../../include/PhaseProfile.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG -DIGA_ASSET_INPUT_TESTING $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
@@ -187,6 +193,7 @@ clean:
 	$(RM) registry_failure_test graph_registry_failure_test
 	$(RM) species_collective_failure_test
 	$(RM) pressure_flow_collective_failure_test
+	$(RM) graph_stdout_failure_test bifurcation_stdout_failure_test sequential_stdout_failure_test
 	$(RM) collective_asset_input_test
 	$(RM) runtime_construction_failure_test
 	$(RM) three_d_staged_failure_test

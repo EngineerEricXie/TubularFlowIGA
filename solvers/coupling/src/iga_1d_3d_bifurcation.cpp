@@ -1256,7 +1256,8 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			else WriteOutputs(options.output_directory, configuration, graph_root, assets,
 				bifurcation_holder, one_d, immersed_audit, accepted);
 		});
-		if (rank == 0) {
+		iga::CollectiveLocalStage(communicator, "graph completion logging", [&] {
+			if (rank != 0) return;
 #ifdef IGA_BIFURCATION_ENTRY
 			std::cout << "completed schema-v5 1D--3D bifurcation steps="
 				<< accepted.size() << " branches=" << bifurcation_holder->branches.size()
@@ -1268,7 +1269,8 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				<< " domains=" << configuration.graph.Domains().size()
 				<< " output=" << options.output_directory << '\n';
 #endif
-		}
+			iga::FlushCheckedText(std::cout);
+		});
 	} catch (const std::exception& error) {
 		if (rank == 0) std::cerr << error.what() << '\n';
 		status = 1;

@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "IgaDatabase.hpp"
 
 #include <algorithm>
@@ -54,6 +55,7 @@ int main(int argc, char** argv)
 			<< "row-touching duplication: " << static_cast<double>(total_required) / db.header().elements << "x\n";
 		for (const auto& entry : boundary_faces)
 			std::cout << "boundary_faces[" << entry.first << "]: " << entry.second << '\n';
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& e) {
 		std::cerr << "iga_inspect: " << e.what() << '\n';

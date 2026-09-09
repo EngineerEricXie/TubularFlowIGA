@@ -240,14 +240,17 @@ int main(int argc, char** argv)
 		const auto& flow = runtime.FlowSystem();
 		const auto config_fingerprint = iga::OneDFingerprint(config_text);
 		if (options.check) {
-			if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
-				<< " nodes=" << runtime.Network().nodes.size()
-				<< " segments=" << runtime.Network().segments.size()
-				<< " root_id=" << runtime.Network().nodes[
-					static_cast<std::size_t>(runtime.Network().root)].id
-				<< " cells=" << runtime.Network().cells
-				<< " outlets=" << runtime.Network().outlet_nodes.size()
-				<< " transport_systems=" << runtime.Transports().size() << '\n';
+			iga::CollectiveLocalStage(communicator, "1d check output", [&] {
+				if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
+					<< " nodes=" << runtime.Network().nodes.size()
+					<< " segments=" << runtime.Network().segments.size()
+					<< " root_id=" << runtime.Network().nodes[
+						static_cast<std::size_t>(runtime.Network().root)].id
+					<< " cells=" << runtime.Network().cells
+					<< " outlets=" << runtime.Network().outlet_nodes.size()
+					<< " transport_systems=" << runtime.Transports().size() << '\n';
+				iga::FlushCheckedText(std::cout);
+			});
 			PetscFinalize();
 			return 0;
 		}
@@ -401,6 +404,7 @@ int main(int argc, char** argv)
 					output_seconds);
 				std::cout << "completed 1d system=" << flow.name << " steps="
 					<< runtime.FlowState().completed_step << " output=" << options.output_directory << '\n';
+				iga::FlushCheckedText(std::cout);
 			}
 		});
 	} catch (const std::exception& error) {

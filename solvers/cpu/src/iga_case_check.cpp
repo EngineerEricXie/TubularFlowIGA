@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "CaseInput.hpp"
 #include "GenericCaseInput.hpp"
 #include "IgaDatabase.hpp"
@@ -58,6 +59,7 @@ int main(int argc, char** argv)
 			for (const auto& boundary : configuration.boundaries)
 				std::cout << "boundary label=" << boundary.label << " name=" << boundary.name
 					<< " conditions=" << boundary.conditions.size() << '\n';
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 
@@ -75,6 +77,7 @@ int main(int argc, char** argv)
 		for (const auto& rule : configuration.boundaries)
 			std::cout << "rule label=" << rule.label << " type=" << iga::BoundaryTypeName(rule.type)
 				<< (rule.name.empty() ? "" : " name="+rule.name) << '\n';
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << "iga_case_check: " << error.what() << '\n';

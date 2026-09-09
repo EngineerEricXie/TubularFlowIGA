@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "BoundaryFlow.hpp"
 #include "CaseInput.hpp"
 #include "IgaDatabase.hpp"
@@ -195,6 +196,7 @@ int main(int argc, char** argv)
 			const auto metrics = MeasureFlow(elements, velocity);
 			PrintFlowMetrics(metrics, "");
 			std::cout << "boundary_faces=" << boundary_faces << '\n';
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 		if (std::string(argv[2]) == "--compare") {
@@ -207,6 +209,7 @@ int main(int argc, char** argv)
 			std::cout << "relative_velocity_l2="
 				<< RelativeVelocityL2(reference, current)
 				<< " boundary_faces=" << boundary_faces << '\n';
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 		if (std::string(argv[2]) == "--compare-manifests") {
@@ -248,6 +251,7 @@ int main(int argc, char** argv)
 			std::cout << "reference_snapshots=" << reference_snapshots.size()
 				<< " current_snapshots=" << current_snapshots.size()
 				<< " maximum_relative_velocity_l2=" << maximum_error << '\n';
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 		if (std::string(argv[2]) == "--womersley") {
@@ -284,6 +288,7 @@ int main(int argc, char** argv)
 			std::cout << "womersley_snapshots=" << configuration.sample_times.size()
 				<< " current_snapshots=" << current_snapshots.size()
 				<< " maximum_womersley_volume_relative_l2=" << maximum_error << '\n';
+			iga::FlushCheckedText(std::cout);
 			return 0;
 		}
 		if (std::string(argv[2]) != "--manifest")
@@ -328,6 +333,7 @@ int main(int argc, char** argv)
 		if (period > 0.0 && cycle_pairs == 0)
 			throw std::runtime_error(
 				"manifest contains no snapshot pairs separated by PERIOD");
+		iga::FlushCheckedText(std::cout);
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << "iga_flow_validate: " << error.what() << '\n';

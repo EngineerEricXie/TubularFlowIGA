@@ -1,4 +1,8 @@
-#ifdef IGA_TEST_MESH_STDOUT
+#ifdef IGA_TEST_CUDA_STDOUT
+#define main NativeToolMain
+#include "../../cuda/src/iga_cuda.cu"
+#undef main
+#elif defined(IGA_TEST_MESH_STDOUT)
 #define main NativeToolMain
 #include "../src/iga_mesh_check.cpp"
 #undef main
@@ -13,6 +17,18 @@
 #elif defined(IGA_TEST_LEGACY_STDOUT)
 #define main NativeToolMain
 #include "../src/iga_transport.cpp"
+#undef main
+#elif defined(IGA_TEST_ONE_D_STDOUT)
+#define main NativeToolMain
+#include "../../one_d/src/iga_1d.cpp"
+#undef main
+#elif defined(IGA_TEST_GRAPH_STDOUT)
+#define main NativeToolMain
+#include "../../coupling/src/iga_1d_3d_bifurcation.cpp"
+#undef main
+#elif defined(IGA_TEST_SEQUENTIAL_STDOUT)
+#define main NativeToolMain
+#include "../../coupling/src/iga_1d_3d_explicit.cpp"
 #undef main
 #else
 #define main NativeToolMain
