@@ -162,6 +162,14 @@ graph clock／完整診斷契約，05C 需提供帶正確 counter 的 validated 
 可以是新 shard 的承載方式，但舊 metadata＋state 兩檔不具備跨 domain 原子發布。
 相同 rank 數也須核對 `.ntiga` 分區、node IDs、field 順序與 ownership，不能只比 vector 長度。
 
+05C 已加入 flow／transport 的 typed accepted capture／fresh candidate restore：
+flow 的 graph macro dt 與 steady kernel dt=0 分開保存／驗證；transport 使用真實
+accepted step count，舊 ReadState 的 steps=1 行為只留在 legacy API。場按 owned rows
+保存，replicated boundaries／outlets 經 SHA agreement；clock、iteration count 與
+snapshot／BE history 一起恢復。詳見 [貼體 3D 狀態進度](../progress/HPC_05C_BODY_FITTED_STATE_PROGRESS.md)。
+目前仍缺 3D 磁碟 codec 與全作業 provider publication，不能把 typed restore 當作
+live graph 的跨 domain 原子替換。
+
 ### 4.4 VCA／外部 circuit
 
 [VcaExternalCircuit](../../include/VascularCoupling.hpp) 保存 reservoir volume、所有

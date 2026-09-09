@@ -14,6 +14,8 @@
 #include "CollectivePetscOptions.hpp"
 #include <optional>
 #include "PetscReadArray.hpp"
+#include "OwnedCheckpointVector.hpp"
+#include "Sha256.hpp"
 #include "PressureTraction.hpp"
 
 #include <petscksp.h>
@@ -77,6 +79,18 @@ enum class FlowStepPhase {
 	CommitPrepared
 };
 
+struct FlowAcceptedCheckpointState {
+	std::string configuration_identity_sha256;
+	int accepted_steps = 0;
+	double accepted_time_s = 0.0;
+	double macro_dt_s = 0.0;
+	PetscInt total_linear_iterations = 0;
+	OwnedCheckpointVector field;
+	ResolvedBoundaryConditions boundaries;
+	std::map<int, double> pressure_tractions;
+	std::vector<OutletModelState> outlets;
+};
+
 class TransientFlowRuntime {
 public:
 	// Borrows communicator for the runtime lifetime. The owner must destroy
@@ -88,7 +102,8 @@ public:
 		const std::vector<std::array<double, 3>>& boundary_velocity,
 		const std::set<std::int32_t>& wall_trace_basis,
 		const std::vector<OutletModelState>& outlet_models,
-		const std::set<std::string>& application_options = {})
+		const std::set<std::string>& application_options = {},
+		const std::string& checkpoint_identity_sha256 = {}, double checkpoint_macro_dt_s = 0.0)
 		: database_(database), communicator_(communicator), configured_(configured),
 			transient_(transient), parameters_(parameters), assembler_(database, communicator, 4),
 			trial_configuration_(PrepareRuntimeConstructionInput<SimulationConfiguration>(communicator,
@@ -100,6 +115,16 @@ public:
 		try {
 			CollectiveLocalStage(communicator_, "flow assembly resources", [&] { assembly_execution_.emplace(); });
 			RuntimeConstructionStage(communicator_, "flow runtime input", [&] {
+				checkpoint_identity_sha256_ = checkpoint_identity_sha256;
+				if (!checkpoint_identity_sha256_.empty()) {
+					ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+					if (!std::isfinite(checkpoint_macro_dt_s) || checkpoint_macro_dt_s < 0.0)
+						throw std::runtime_error("invalid flow checkpoint macro dt");
+					checkpoint_macro_dt_s_ = checkpoint_macro_dt_s > 0.0 ? checkpoint_macro_dt_s : parameters_.dt;
+					if (!std::isfinite(checkpoint_macro_dt_s_) || checkpoint_macro_dt_s_ <= 0.0
+						|| (transient_ && checkpoint_macro_dt_s_ != parameters_.dt))
+						throw std::runtime_error("flow checkpoint requires a positive macro dt matching transient solver dt");
+				}
 				boundaries_ = initial_boundaries;
 				labels_ = labels;
 				ProbeRuntimeConstruction("flow boundary input copied");
@@ -316,6 +341,10 @@ public:
 		std::string controls;
 		CollectiveLocalStage(communicator_, "flow begin step preparation", [&] {
 			RequirePhase(FlowStepPhase::Committed, "BeginStep");
+			if (step == std::numeric_limits<int>::max()) throw std::runtime_error("flow accepted step counter overflows");
+			if (!checkpoint_identity_sha256_.empty() && (step != accepted_steps_
+				|| std::abs(physical_time-(accepted_time_s_+checkpoint_macro_dt_s_)) > 1e-12*std::max({1.0, std::abs(physical_time), std::abs(accepted_time_s_)})))
+				throw std::runtime_error("flow step does not continue checkpoint-bound accepted clock");
 			ValidateSolveControls(step, physical_time, maximum_newton,
 				nonlinear_relative_tolerance, nonlinear_absolute_tolerance, mass_relative_tolerance);
 			boundaries = boundaries_; tractions = pressure_tractions_; outlets = outlet_models_;
@@ -459,6 +488,8 @@ public:
 			RequirePhase(FlowStepPhase::TrialSolved, "PrepareCommitStep");
 			if (!trial_solve_succeeded_)
 				throw std::runtime_error("PrepareCommitStep requires a successful 3D flow trial solve");
+			if (trial_linear_iterations_ < 0 || total_linear_iterations_ > std::numeric_limits<PetscInt>::max()-trial_linear_iterations_)
+				throw std::runtime_error("flow linear iteration counter overflows");
 		});
 		phase_ = FlowStepPhase::CommitPrepared;
 	}
@@ -466,6 +497,7 @@ public:
 	void FinalizeCommitStep() noexcept
 	{
 		if (phase_ != FlowStepPhase::CommitPrepared) std::terminate();
+		accepted_steps_ = trial_step_+1; accepted_time_s_ = trial_time_;
 		total_linear_iterations_ += trial_linear_iterations_;
 		trial_linear_iterations_ = 0;
 		trial_solve_succeeded_ = false;
@@ -863,6 +895,49 @@ public:
 		return result;
 	}
 
+	FlowAcceptedCheckpointState CaptureCheckpointState() const
+	{
+		FlowAcceptedCheckpointState value; std::string signature;
+		CollectiveLocalStage(communicator_, "flow accepted checkpoint capture", [&] {
+			RequirePhase(FlowStepPhase::Committed, "CaptureCheckpointState");
+			if (cleanup_started_) throw std::runtime_error("checkpoint runtime is closed");
+			value.configuration_identity_sha256 = checkpoint_identity_sha256_;
+			value.accepted_steps = accepted_steps_; value.accepted_time_s = accepted_time_s_; value.macro_dt_s = checkpoint_macro_dt_s_;
+			value.total_linear_iterations = total_linear_iterations_;
+			value.field = CaptureOwnedCheckpointVector(state_); value.boundaries = boundaries_;
+			value.pressure_tractions = pressure_tractions_; value.outlets = outlet_models_;
+			signature = ValidateCheckpointState(value);
+		});
+		RequireCollectiveSameText(communicator_, "flow checkpoint replicated state agreement", signature);
+		return value;
+	}
+
+	// Restore an unpublished fresh runtime. The embedding provider publishes
+	// owners only after all candidates and bundle checks have succeeded.
+	void RestoreCheckpointState(const FlowAcceptedCheckpointState& value)
+	{
+		ResolvedBoundaryConditions boundaries; std::map<int, double> tractions;
+		std::vector<OutletModelState> outlets; std::string signature;
+		CollectiveLocalStage(communicator_, "flow accepted checkpoint validation", [&] {
+			RequirePhase(FlowStepPhase::Committed, "RestoreCheckpointState");
+			if (cleanup_started_) throw std::runtime_error("checkpoint runtime is closed");
+			if (accepted_steps_ != 0) throw std::runtime_error("flow checkpoint restore requires a fresh runtime");
+			signature = ValidateCheckpointState(value);
+			boundaries = value.boundaries; tractions = value.pressure_tractions; outlets = value.outlets;
+		});
+		RequireCollectiveSameText(communicator_, "flow checkpoint replicated state agreement", signature);
+		CollectiveLocalStage(communicator_, "flow accepted checkpoint staging", [&] { StageOwnedCheckpointVector(update_, value.field); });
+		RequireCollectivePetscSuccess(communicator_, "flow accepted checkpoint history", VecCopy(update_, rhs_));
+		RequireCollectivePetscSuccess(communicator_, "flow accepted checkpoint snapshot", VecCopy(update_, committed_state_));
+		RequireCollectivePetscSuccess(communicator_, "flow accepted checkpoint field publication", VecSwap(state_, update_));
+		RequireCollectivePetscSuccess(communicator_, "flow accepted checkpoint history publication", VecSwap(previous_, rhs_));
+		std::swap(boundaries_, boundaries); pressure_tractions_.swap(tractions); outlet_models_.swap(outlets);
+		accepted_steps_ = value.accepted_steps; accepted_time_s_ = value.accepted_time_s;
+		total_linear_iterations_ = value.total_linear_iterations;
+	}
+
+	int AcceptedSteps() const noexcept { return accepted_steps_; }
+	double AcceptedTime() const noexcept { return accepted_time_s_; }
 	Vec State() const { return state_; }
 	const ElementBatchStatistics& LastVolumeBatchStatistics() const noexcept { return last_volume_batch_; }
 #ifdef IGA_FLOW_RUNTIME_TESTING
@@ -881,6 +956,57 @@ public:
 	const std::vector<OutletModelState>& OutletModels() const { return outlet_models_; }
 
 private:
+	std::string ValidateCheckpointState(const FlowAcceptedCheckpointState& value) const
+	{
+		ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+		if (value.configuration_identity_sha256 != checkpoint_identity_sha256_ || value.accepted_steps <= 0
+			|| !std::isfinite(value.accepted_time_s) || value.accepted_time_s < 0.0 || value.total_linear_iterations < 0
+			|| value.macro_dt_s != checkpoint_macro_dt_s_)
+			throw std::runtime_error("invalid flow checkpoint identity, clock or counters");
+		const double expected_time = value.accepted_steps*checkpoint_macro_dt_s_;
+		if (!std::isfinite(expected_time) || std::abs(value.accepted_time_s-expected_time)
+			> 1e-12*std::max({1.0, expected_time, value.accepted_time_s}))
+			throw std::runtime_error("flow checkpoint time and count differ");
+		ValidateOwnedCheckpointVector(state_, value.field); ValidateConstraintTopology(value.boundaries);
+		const auto& a = value.boundaries; const auto& b = boundaries_;
+		if (a.velocity.size() != b.velocity.size() || a.pressure.size() != b.pressure.size()
+			|| a.transport_constrained != b.transport_constrained || a.n0 != b.n0 || a.nplus != b.nplus
+			|| a.velocity_nodes != b.velocity_nodes || a.pressure_nodes != b.pressure_nodes || a.transport_nodes != b.transport_nodes
+			|| value.outlets.size() != outlet_models_.size())
+			throw std::runtime_error("flow checkpoint boundary or outlet topology differs");
+		Sha256 hash;
+		auto integer = [&](std::uint64_t scalar) { hash.AppendLittleEndian64(scalar); };
+		auto real = [&](double scalar) {
+			if (!std::isfinite(scalar)) throw std::runtime_error("nonfinite flow checkpoint boundary state");
+			std::uint64_t bits; std::memcpy(&bits, &scalar, 8); integer(bits);
+		};
+		integer(value.configuration_identity_sha256.size()); hash.Append(value.configuration_identity_sha256.data(), value.configuration_identity_sha256.size());
+		integer(value.accepted_steps); real(value.accepted_time_s); real(value.macro_dt_s); integer(value.total_linear_iterations);
+		for (const auto* mask : {&a.velocity_constrained, &a.pressure_constrained, &a.transport_constrained}) {
+			integer(mask->size()); for (int scalar : *mask) integer(static_cast<std::uint64_t>(scalar));
+		}
+		integer(a.velocity.size()); for (const auto& vector : a.velocity) for (double scalar : vector) real(scalar);
+		for (const auto* field : {&a.pressure, &a.n0, &a.nplus}) { integer(field->size()); for (double scalar : *field) real(scalar); }
+		integer(a.velocity_nodes); integer(a.pressure_nodes); integer(a.transport_nodes);
+		integer(value.pressure_tractions.size());
+		for (const auto& traction : value.pressure_tractions) {
+			if (!boundary_label_index_.count(traction.first)) throw std::runtime_error("unknown flow checkpoint traction label");
+			integer(static_cast<std::uint64_t>(traction.first)); real(traction.second);
+		}
+		integer(value.outlets.size());
+		for (std::size_t i = 0; i < value.outlets.size(); ++i) {
+			const auto& outlet = value.outlets[i]; const auto& model = outlet_models_[i];
+			if (outlet.label != model.label || outlet.kind != model.kind || outlet.resistance != model.resistance
+				|| outlet.proximal_resistance != model.proximal_resistance || outlet.distal_resistance != model.distal_resistance
+				|| outlet.capacitance != model.capacitance || outlet.reference_pressure != model.reference_pressure)
+				throw std::runtime_error("flow checkpoint outlet model differs");
+			integer(static_cast<std::uint64_t>(outlet.label)); integer(static_cast<std::uint64_t>(outlet.kind));
+			for (double scalar : {outlet.resistance, outlet.proximal_resistance, outlet.distal_resistance, outlet.capacitance,
+				outlet.reference_pressure, outlet.capacitor_pressure, outlet.flow, outlet.pressure}) real(scalar);
+		}
+		return hash.Hex();
+	}
+
 	static constexpr std::uint64_t kScalablePreconditionerNodeThreshold = 1000;
 
 	void RestoreCommittedSnapshot()
@@ -1441,6 +1567,10 @@ private:
 	Vec ghost_state_ = nullptr, ghost_previous_ = nullptr;
 	VecScatter scatter_ = nullptr;
 	KSP solver_ = nullptr;
+	std::string checkpoint_identity_sha256_;
+	double checkpoint_macro_dt_s_ = 0.0;
+	int accepted_steps_ = 0;
+	double accepted_time_s_ = 0.0;
 	PetscInt total_linear_iterations_ = 0;
 	PetscInt trial_linear_iterations_ = 0;
 	FlowStepPhase phase_ = FlowStepPhase::Committed;

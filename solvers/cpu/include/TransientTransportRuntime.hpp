@@ -7,6 +7,7 @@
 #include "OwnedRowAssembler.hpp"
 #include "CollectivePetscOptions.hpp"
 #include "PetscReadArray.hpp"
+#include "OwnedCheckpointVector.hpp"
 
 #include <petscksp.h>
 
@@ -64,6 +65,12 @@ inline double IntegrateTransportPhysicalVolume(const Element& element,
 	return result;
 }
 
+struct TransportAcceptedCheckpointState {
+	std::string configuration_identity_sha256;
+	int accepted_steps = 0;
+	OwnedCheckpointVector field;
+};
+
 class TransientTransportRuntime {
 public:
 	// Borrows communicator for all solves, reductions and checkpoint viewers.
@@ -72,7 +79,8 @@ public:
 		const SimulationConfiguration& configuration,
 		const CompiledLinearSystem& system, const std::vector<int>& labels,
 		const std::map<std::uint64_t, VolumeQuadratureRule>& volume_rules = {},
-		const std::set<std::string>& application_options = {})
+		const std::set<std::string>& application_options = {},
+		const std::string& checkpoint_identity_sha256 = {})
 		: communicator_(communicator),
 			configuration_(PrepareRuntimeConstructionInput<SimulationConfiguration>(communicator,
 				"transport configuration preparation", configuration)),
@@ -84,6 +92,8 @@ public:
 			ResolvedScalarBoundaries boundaries;
 			std::vector<double> initial;
 			RuntimeConstructionStage(communicator_, "transport runtime input", [&] {
+				checkpoint_identity_sha256_ = checkpoint_identity_sha256;
+				if (!checkpoint_identity_sha256_.empty()) ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
 				labels_ = labels;
 				if (system_.velocity_source != "prescribed")
 					throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
@@ -172,6 +182,7 @@ public:
 	{
 		CollectiveLocalStage(communicator_, "transport begin step preparation", [&] {
 			RequirePhase(TransportStepPhase::Committed, "BeginStep");
+			if (steps_ == std::numeric_limits<int>::max()) throw std::runtime_error("transport step counter overflows");
 		});
 		RequireCollectiveSameInt(communicator_, "transport step agreement", steps_);
 		RequireCollectivePetscSuccess(communicator_, "transport save state", VecCopy(current_, committed_));
@@ -380,6 +391,43 @@ public:
 		committed_steps_ = steps_;
 	}
 
+	TransportAcceptedCheckpointState CaptureCheckpointState() const
+	{
+		TransportAcceptedCheckpointState value;
+		CollectiveLocalStage(communicator_, "transport accepted checkpoint capture", [&] {
+			RequirePhase(TransportStepPhase::Committed, "CaptureCheckpointState");
+			if (cleanup_started_) throw std::runtime_error("checkpoint runtime is closed");
+			ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+			if (steps_ <= 0) throw std::runtime_error("transport checkpoint requires an accepted step");
+			value.configuration_identity_sha256 = checkpoint_identity_sha256_;
+			value.accepted_steps = steps_; value.field = CaptureOwnedCheckpointVector(current_);
+		});
+		RequireCollectiveSameText(communicator_, "transport checkpoint identity agreement", value.configuration_identity_sha256);
+		RequireCollectiveSameInt(communicator_, "transport checkpoint clock agreement", value.accepted_steps);
+		return value;
+	}
+
+	// Restore only an unpublished fresh runtime. All local validation and
+	// staging precede publication. A PETSc failure discards this whole candidate.
+	void RestoreCheckpointState(const TransportAcceptedCheckpointState& value)
+	{
+		CollectiveLocalStage(communicator_, "transport accepted checkpoint validation", [&] {
+			RequirePhase(TransportStepPhase::Committed, "RestoreCheckpointState");
+			if (cleanup_started_) throw std::runtime_error("checkpoint runtime is closed");
+			ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+			if (steps_ != 0 || value.accepted_steps <= 0
+				|| value.configuration_identity_sha256 != checkpoint_identity_sha256_)
+				throw std::runtime_error("transport checkpoint requires a compatible fresh target and accepted count");
+			ValidateOwnedCheckpointVector(current_, value.field);
+		});
+		RequireCollectiveSameText(communicator_, "transport checkpoint identity agreement", value.configuration_identity_sha256);
+		RequireCollectiveSameInt(communicator_, "transport checkpoint clock agreement", value.accepted_steps);
+		CollectiveLocalStage(communicator_, "transport accepted checkpoint staging", [&] { StageOwnedCheckpointVector(next_, value.field); });
+		RequireCollectivePetscSuccess(communicator_, "transport accepted checkpoint snapshot", VecCopy(next_, committed_));
+		RequireCollectivePetscSuccess(communicator_, "transport accepted checkpoint publication", VecSwap(current_, next_));
+		steps_ = value.accepted_steps; committed_steps_ = steps_;
+	}
+
 	TransportStepPhase Phase() const noexcept { return phase_; }
 	int Steps() const noexcept { return steps_; }
 
@@ -582,6 +630,7 @@ private:
 	Vec ghost_state_ = nullptr;
 	VecScatter scatter_ = nullptr;
 	KSP solver_ = nullptr;
+	std::string checkpoint_identity_sha256_;
 	int steps_ = 0;
 	int committed_steps_ = 0;
 	bool trial_solve_succeeded_ = false;

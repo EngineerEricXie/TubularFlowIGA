@@ -568,8 +568,10 @@ F05 的原始診斷例外保存與恢復亦通過，見
   另完成 [1D 狀態與串流元件](progress/HPC_05C_ONE_D_STATE_PROGRESS.md)：五種模式
   由新程序恢復第 3 個 macro-step，後續 7 步完整狀態、port 與帳目逐位元一致；
   保存可變 Hct／Hb、species inlet／waveform、動態半徑及 64-bit internal substeps。
-  1D graph provider wiring、3D providers、完整歷史 prefix 與 native CLI／MPI graph
-  整合尚待完成。
+  貼體 3D 另完成 [accepted-state 記憶體恢復](progress/HPC_05C_BODY_FITTED_STATE_PROGRESS.md)：
+  owned fields、boundaries／outlets、graph clock 與真實 transport steps 在 3／1／2-rank
+  groups 精確接續，局部錯誤在發布前全群拒絕。3D streaming codec、1D／3D graph
+  provider wiring、完整歷史 prefix 與 native CLI／MPI graph 整合尚待完成。
 - [ ] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。

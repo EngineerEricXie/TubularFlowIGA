@@ -19,6 +19,7 @@ PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += collective_failure_test
 PETSC_TARGETS += collective_petsc_options_test
 PETSC_TARGETS += petsc_gather_test
+PETSC_TARGETS += body_fitted_accepted_checkpoint_test
 PETSC_TARGETS += petsc_checkpoint_read_test
 PETSC_TARGETS += petsc_checkpoint_write_test
 PETSC_TARGETS += execution_resources_test execution_resources_serial_test
@@ -634,6 +635,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) body_fitted_accepted_checkpoint_test
 	$(RM) runtime_cleanup_cli_test
 	$(RM) snapshot_publication_failure_test mesh_stdout_failure_test assembly_stdout_failure_test
 	$(RM) flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test
@@ -687,3 +689,6 @@ immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: include/Im
 immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedDistributedDomain.hpp
 
 immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp include/ImmersedTransientDistributedRuntime.hpp include/ImmersedTransientDistributedOperator.hpp include/ImmersedDistributedTransientVolume.hpp include/ImmersedDistributedVelocityHistory.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedTransientState.hpp
+
+body_fitted_accepted_checkpoint_test: tests/test_body_fitted_accepted_checkpoint.cpp ../coupling/tests/test_bifurcation_coupling_smoke.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)

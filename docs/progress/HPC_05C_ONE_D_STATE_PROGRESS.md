@@ -7,6 +7,7 @@
 搭配的 metadata、field 兩分片格式。五種模式從第 3 個 macro-step 的磁碟 bundle
 恢復，新的 executable 接續後面 7 步，與父程序預先寫下的不中斷參考逐位元一致。
 正式 native graph CLI、1D provider wiring、3D providers 與完整歷史 prefix 尚待實作。
+後續貼體 3D 的記憶體恢復介面另見 [3D 狀態進度](HPC_05C_BODY_FITTED_STATE_PROGRESS.md)。
 
 ## 狀態介面與格式
 
