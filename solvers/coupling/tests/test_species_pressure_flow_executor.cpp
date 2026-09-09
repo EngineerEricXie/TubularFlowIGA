@@ -1,4 +1,5 @@
 #include "SpeciesPressureFlowComponentExecutor.hpp"
+#include "PressureFlowCheckpointControls.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -256,6 +257,61 @@ iga::SpeciesPressureFlowExecutionControls Controls()
 int main()
 {
 	const iga::DomainStepContext step{0, 0.0, 0.1};
+	{
+		Fixture original;
+		iga::SpeciesPressureFlowComponentExecutor executor(*original.registry, "a", Controls());
+		RequireRejected([&] { executor.CaptureCheckpointDonors(); });
+		const std::map<std::pair<std::string, std::string>, iga::SpeciesDonor> first{
+			{{"edge", "dye"}, iga::SpeciesDonor::First}, {{"edge", "tracer"}, iga::SpeciesDonor::First}};
+		const auto accepted = executor.Advance(step, {{"edge", 0.0}}, [&](const auto&) {
+			RequireRejected([&] { executor.CaptureCheckpointDonors(); });
+			RequireRejected([&] { executor.RestoreCheckpointDonors(first); });
+		});
+		const auto donors = executor.CaptureCheckpointDonors(); assert(donors == first);
+		const auto digest = std::string(64, 'a');
+		const iga::CoupledCheckpointEpoch epoch{digest, {}, {digest, digest, digest, 1}, 1, 0.1, 0.1};
+		const auto controls = iga::MakePressureFlowCheckpointControls(step, accepted.hydraulic_iterations.back(), donors);
+		assert(controls.next_pressure_pa.at("edge") == 1.0);
+		const auto encoded = iga::SerializePressureFlowCheckpointControls(controls);
+		const auto decoded = iga::ParsePressureFlowCheckpointControls(encoded, *original.graph, epoch);
+		assert(iga::SerializePressureFlowCheckpointControls(decoded) == encoded);
+		assert(decoded.NextStep().step_index == 1 && decoded.NextStep().start_time_s == 0.1);
+		for (std::size_t n = 0; n < encoded.size(); ++n)
+			RequireRejected([&] { iga::ParsePressureFlowCheckpointControls(std::string_view(encoded).substr(0, n), *original.graph, epoch); });
+		for (int mutation = 0; mutation < 5; ++mutation) {
+			auto invalid = controls;
+			if (mutation == 0) invalid.next_pressure_pa.clear();
+			if (mutation == 1) invalid.next_pressure_pa.emplace("unknown", 0);
+			if (mutation == 2) invalid.donors.clear();
+			if (mutation == 3) invalid.accepted_step.step_index = 1;
+			if (mutation == 4) invalid.accepted_step.dt_s = 0.2;
+			const auto bad = iga::SerializePressureFlowCheckpointControls(invalid);
+			RequireRejected([&] { iga::ParsePressureFlowCheckpointControls(bad, *original.graph, epoch); });
+		}
+		Fixture restarted;
+		iga::SpeciesPressureFlowComponentExecutor resumed(*restarted.registry, "a", Controls());
+		for (int mutation = 0; mutation < 3; ++mutation) {
+			auto invalid = donors;
+			if (mutation == 0) invalid.erase({"edge", "tracer"});
+			if (mutation == 1) invalid[{"unknown", "tracer"}] = iga::SpeciesDonor::First;
+			if (mutation == 2) invalid[{"edge", "tracer"}] = static_cast<iga::SpeciesDonor>(99);
+			RequireRejected([&] { resumed.RestoreCheckpointDonors(invalid); });
+			assert(resumed.CommittedDonorOwnership().empty());
+			RequireRejected([&] { resumed.CaptureCheckpointDonors(); });
+		}
+		resumed.RestoreCheckpointDonors(decoded.donors);
+		assert(resumed.CaptureCheckpointDonors() == donors);
+		RequireRejected([&] { resumed.RestoreCheckpointDonors(donors); });
+		restarted.a->signed_flow = 0.0; restarted.b->signed_flow = 0.0;
+		const auto zero = resumed.Advance(decoded.NextStep(), decoded.next_pressure_pa);
+		assert(zero.donor_ownership == donors && resumed.CaptureCheckpointDonors() == donors);
+		restarted.a->signed_flow = -1.0; restarted.b->signed_flow = -1.0;
+		const auto reverse = resumed.Advance({2, 0.2, 0.1}, {{"edge", 1.0}});
+		assert(reverse.donor_ownership.at({"edge", "tracer"}) == iga::SpeciesDonor::Second);
+		restarted.b->fail_prepare = true;
+		RequireRejected([&] { resumed.Advance({3, 0.3, 0.1}, {{"edge", 1.0}}); });
+		assert(resumed.CaptureCheckpointDonors() == reverse.donor_ownership);
+	}
 	{
 		Fixture fixture;
 		iga::SpeciesPressureFlowComponentExecutor executor(*fixture.registry, "a", Controls());

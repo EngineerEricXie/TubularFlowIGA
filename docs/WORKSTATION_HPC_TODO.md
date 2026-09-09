@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-05B checkpoint bundle 格式與發布／恢復協議已通過驗收；
+最近更新：2026-09-09。HPC-05C 已補齊 0D 與 pressure／donor 的 checkpoint 狀態介面；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -48,10 +48,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（14 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
-| 其餘待辦（22 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-05C |
+| 其餘待辦（21 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-05C；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 24 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 24 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -562,6 +562,10 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-05C：既有 0D／1D／貼體 3D graph 續跑。** 先支援相同 rank 數，
   比較不中斷與中斷後續跑的完整歷史；測試 commit 前、寫分片中與 manifest
   發布前的中斷。整個作業終止後可由新的作業載入最後完整 checkpoint。
+  已交付 [0D 與耦合控制狀態介面](progress/HPC_05C_ACCEPTED_STATE_PROGRESS.md)：
+  兩個真實 0D 模型可由新的 executable 恢復第 4 步並精確延續後續 6 步；
+  pressure guess／donor codec、lifecycle guards 與現有 MPI regression 通過。
+  1D／3D providers、完整歷史 prefix 與 native CLI／MPI graph 整合尚待完成。
 - [ ] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。

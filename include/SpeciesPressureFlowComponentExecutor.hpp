@@ -128,6 +128,31 @@ public:
 	const std::map<std::pair<std::string, std::string>, SpeciesDonor>&
 	CommittedDonorOwnership() const noexcept { return committed_donors_; }
 
+	std::map<std::pair<std::string, std::string>, SpeciesDonor> CaptureCheckpointDonors() const
+	{
+		if (active_step_ || !has_committed_step_)
+			throw std::runtime_error("species checkpoint capture requires an idle accepted step");
+		return committed_donors_;
+	}
+
+	// Local initialization of an unpublished executor. The caller coordinates
+	// this restored map with domain states, pressure guesses and the graph clock.
+	void RestoreCheckpointDonors(std::map<std::pair<std::string, std::string>, SpeciesDonor> donors)
+	{
+		if (active_step_ || has_committed_step_)
+			throw std::runtime_error("species checkpoint restore requires a fresh idle executor");
+		std::size_t expected = 0;
+		for (const auto& edge : registry_.Graph().Edges()) for (const auto& species : edge.species) {
+			++expected;
+			const auto found = donors.find({edge.id, species});
+			if (found == donors.end() || (found->second != SpeciesDonor::First && found->second != SpeciesDonor::Second))
+				throw std::runtime_error("species checkpoint donor catalog is incomplete or invalid");
+		}
+		if (donors.size() != expected)
+			throw std::runtime_error("species checkpoint has unknown donor keys");
+		committed_donors_.swap(donors); has_committed_step_ = true;
+	}
+
 	SpeciesPressureFlowStepResult Advance(const DomainStepContext& step,
 		const std::map<std::string, double>& initial_pressure_pa,
 		const std::function<void(const SpeciesPressureFlowStepResult&)>& before_commit = {})
@@ -135,10 +160,16 @@ public:
 		std::vector<double> pressure;
 		std::vector<std::exception_ptr> abort_errors;
 		Stage("species step input", [&] {
+			if (active_step_) throw std::runtime_error("species executor already has an active step");
 			step.Validate();
 			pressure = InitialPressure(initial_pressure_pa);
 			abort_errors.resize(plan_.domain_order.size());
 		});
+		struct ActiveStep {
+			bool& active;
+			explicit ActiveStep(bool& value) noexcept : active(value) { active = true; }
+			~ActiveStep() { active = false; }
+		} active(active_step_);
 		SpeciesPressureFlowStepResult result;
 		try {
 			for (const auto& domain_id : plan_.domain_order)
@@ -178,6 +209,7 @@ public:
 			for (const auto& domain_id : plan_.domain_order)
 				registry_.Runtime(domain_id).FinalizeCommitStep();
 			committed_donors_.swap(candidate_donors);
+			has_committed_step_ = true;
 			return result;
 		} catch (...) {
 			const auto primary = std::current_exception();
@@ -651,6 +683,8 @@ private:
 	std::vector<PressureFlowInterfacePlan> interfaces_;
 	std::map<std::string, StagedFlowTransportDomainRuntime*> staged_;
 	std::map<std::pair<std::string, std::string>, SpeciesDonor> committed_donors_;
+	bool active_step_ = false;
+	bool has_committed_step_ = false;
 };
 
 } // namespace iga

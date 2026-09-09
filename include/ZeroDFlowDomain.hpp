@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -84,6 +85,17 @@ struct ZeroDFlowTrial {
 	ZeroDFlowState state;
 	PortState port;
 	ZeroDFlowStorageBalance storage;
+};
+
+// Complete accepted publication. Initial (pre-step) state and active trials
+// deliberately have no checkpoint representation in the v1 graph contract.
+struct ZeroDFlowCheckpointState {
+	std::string domain_id;
+	std::string model_identity_sha256;
+	DomainStepContext accepted_step;
+	ZeroDFlowState state;
+	PortState port;
+	ZeroDFlowStepAccounting accounting;
 };
 
 namespace zero_d_flow_detail {
@@ -332,13 +344,45 @@ public:
 	std::string CommittedStateIdentitySha256() const
 	{ return BuildZeroDFlowStateIdentitySha256(model_, committed_state_); }
 
+	ZeroDFlowCheckpointState CaptureCheckpointState() const
+	{
+		RequirePhase(Phase::Committed, "capture checkpoint");
+		if (!committed_step_count_ || !committed_port_ || !committed_accounting_)
+			throw std::runtime_error("0D checkpoint requires an accepted step");
+		ZeroDFlowCheckpointState result{domain_id_, ModelIdentitySha256(), committed_step_,
+			committed_state_, *committed_port_, *committed_accounting_};
+		ValidateCheckpointState(result);
+		return result;
+	}
+
+	// Local candidate initialization. The graph coordinator must restore all
+	// domains into unpublished owners, agree on success, then publish together.
+	// Validation/copies finish before the first accepted datum is changed.
+	void RestoreCheckpointState(ZeroDFlowCheckpointState value)
+	{
+		RequirePhase(Phase::Committed, "restore checkpoint");
+		if (committed_step_count_)
+			throw std::runtime_error("0D checkpoint restore requires a fresh runtime");
+		ValidateCheckpointState(value);
+		Staged restored{value.state, std::move(value.port), value.accounting};
+		static_assert(noexcept(committed_port_.swap(restored.port)) && noexcept(committed_accounting_.swap(restored.accounting)),
+			"validated 0D checkpoint publication must not throw");
+		committed_port_.swap(restored.port); committed_accounting_.swap(restored.accounting);
+		committed_state_ = restored.state;
+		committed_step_ = value.accepted_step;
+		committed_time_s_ = committed_step_.EndTime();
+		committed_step_index_ = committed_step_.step_index;
+		committed_step_count_ = static_cast<std::size_t>(committed_step_index_)+1;
+	}
+
 	void BeginStep(const DomainStepContext& step) override
 	{
 		RequirePhase(Phase::Committed, "begin step");
 		step.Validate();
 		if (step.start_time_s != committed_time_s_)
 			throw std::runtime_error("0D flow runtime step start time is not the committed time");
-		if (step.step_index != committed_step_index_+1)
+		if (committed_step_index_ == std::numeric_limits<int>::max()
+			|| step.step_index != committed_step_index_+1)
 			throw std::runtime_error("0D flow runtime step index is not the next committed index");
 		step_ = step;
 		base_state_ = committed_state_;
@@ -441,6 +485,7 @@ public:
 		committed_port_.swap(staged_->port);
 		committed_accounting_.swap(staged_->accounting);
 		committed_time_s_ = step_.EndTime();
+		committed_step_ = step_;
 		committed_step_index_ = step_.step_index;
 		++committed_step_count_;
 		input_.reset(); trial_.reset(); trial_accounting_.reset(); staged_.reset();
@@ -456,6 +501,51 @@ private:
 		std::optional<ZeroDFlowStepAccounting> accounting;
 	};
 
+	void ValidateCheckpointState(const ZeroDFlowCheckpointState& value) const
+	{
+		if (value.domain_id != domain_id_ || value.model_identity_sha256 != ModelIdentitySha256())
+			throw std::runtime_error("0D checkpoint domain or model differs");
+		value.accepted_step.Validate(); ValidateZeroDFlowState(value.state);
+		ValidatePortState(value.port); ValidateZeroDFlowStepAccounting(value.accounting);
+		const auto& port = value.port; const auto& accounting = value.accounting;
+		if (port.time_s != value.accepted_step.EndTime() || !port.outward_flow_m3_s || !port.mean_pressure_pa
+			|| port.area_m2 || port.mean_normal_traction_pa || port.total_pressure_pa
+			|| !port.concentration.empty() || !port.outward_species_flux.empty())
+			throw std::runtime_error("0D checkpoint accepted port is inconsistent");
+		const double dt = value.accepted_step.dt_s, pressure = value.state.stored_pressure_pa;
+		const double flow = *port.outward_flow_m3_s;
+		const bool source = model_.role == ZeroDFlowRole::SourceReservoir;
+		const double capacitance = source ? model_.source.capacitance_m3_pa : model_.terminal.capacitance_m3_pa;
+		if (accounting.final_stored_volume_m3 != capacitance*pressure
+			|| accounting.outward_graph_port_amount_m3 != flow*dt)
+			throw std::runtime_error("0D checkpoint state and accounting differ");
+		if (source) {
+			if (flow != (pressure-*port.mean_pressure_pa)/model_.source.resistance_pa_s_m3
+				|| accounting.prescribed_source_amount_m3 != model_.source.prescribed_flow_m3_s*dt
+				|| accounting.distal_sink_amount_m3 != 0.0)
+				throw std::runtime_error("0D source checkpoint is inconsistent with its model");
+		} else {
+			if (*port.mean_pressure_pa != pressure+model_.terminal.proximal_resistance_pa_s_m3*(-flow)
+				|| accounting.distal_sink_amount_m3 != ((pressure-model_.terminal.distal_pressure_pa)
+					/model_.terminal.distal_resistance_pa_s_m3)*dt
+				|| accounting.prescribed_source_amount_m3 != 0.0)
+				throw std::runtime_error("0D terminal checkpoint is inconsistent with its model");
+		}
+		// The kernel computes C*(p_new-p_old), whereas the stored accounting
+		// exposes C*p_new and C*p_old. Bound their different rounding orders.
+		const long double balance = static_cast<long double>(accounting.final_stored_volume_m3)
+			-accounting.initial_stored_volume_m3-accounting.prescribed_source_amount_m3
+			+accounting.distal_sink_amount_m3+accounting.outward_graph_port_amount_m3;
+		long double scale = 0;
+		for (double amount : {accounting.initial_stored_volume_m3, accounting.final_stored_volume_m3,
+			accounting.prescribed_source_amount_m3, accounting.distal_sink_amount_m3,
+			accounting.outward_graph_port_amount_m3}) scale += std::abs(static_cast<long double>(amount));
+		const long double roundoff = 128*std::numeric_limits<double>::epsilon()*scale
+			+16*static_cast<long double>(std::numeric_limits<double>::denorm_min());
+		if (std::abs(balance-accounting.residual_m3) > roundoff || std::abs(balance) > roundoff)
+			throw std::runtime_error("0D checkpoint storage balance is inconsistent");
+	}
+
 	void RequirePhase(Phase expected, const char* operation) const
 	{
 		if (phase_ != expected)
@@ -468,6 +558,7 @@ private:
 	const std::vector<CouplingPort> ports_;
 	Phase phase_ = Phase::Committed;
 	DomainStepContext step_;
+	DomainStepContext committed_step_;
 	ZeroDFlowState committed_state_;
 	ZeroDFlowState base_state_;
 	double committed_time_s_ = 0.0;

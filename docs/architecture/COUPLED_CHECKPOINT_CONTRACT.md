@@ -6,6 +6,8 @@ graph 已可 checkpoint／restart**。程式基準為
 實作與驗收分別由 [HPC-05B／C／D](../WORKSTATION_HPC_TODO.md) 承接。
 更新：05B 已交付 [bundle v1 發布／載入元件](COUPLED_CHECKPOINT_BUNDLE.md)；
 以下 domain payload／restore 與完整 graph 續跑仍由 05C／D 實作。
+05C 已補上 [0D 與 pressure／donor state 的首批介面](../progress/HPC_05C_ACCEPTED_STATE_PROGRESS.md)；
+下文的程式缺口盤點以開頭的原始基準 revision 為準，最新交付見該進度報告。
 
 ## 1. 唯一可保存的邊界
 

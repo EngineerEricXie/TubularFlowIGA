@@ -25,6 +25,9 @@ all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test sp
 coupled_checkpoint_bundle_test: tests/test_coupled_checkpoint_bundle.cpp ../../include/CoupledCheckpointBundle.hpp ../../include/CoupledCheckpointManifest.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DIGA_COUPLED_CHECKPOINT_TESTING $< -o $@
 
+zero_d_checkpoint_test: tests/test_zero_d_checkpoint.cpp ../../include/ZeroDFlowCheckpoint.hpp ../../include/CheckpointMetadataCodec.hpp ../../include/ZeroDFlowDomain.hpp ../../include/CoupledCheckpointBundle.hpp ../../include/CoupledCheckpointManifest.hpp ../cpu/include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
 .PHONY: checkpoint-bundle-test
 checkpoint-bundle-test: coupled_checkpoint_bundle_test
 	./coupled_checkpoint_bundle_test "$$(mktemp -d)/checkpoint"
@@ -95,6 +98,8 @@ pressure_flow_executor_test: tests/test_pressure_flow_executor.cpp ../../include
 
 species_pressure_flow_executor_test: tests/test_species_pressure_flow_executor.cpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+species_pressure_flow_executor_test: ../../include/PressureFlowCheckpointControls.hpp ../../include/CheckpointMetadataCodec.hpp ../../include/CoupledCheckpointManifest.hpp ../cpu/include/Sha256.hpp
 
 multidomain_config_test: tests/test_multidomain_config.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/ZeroDFlowDomain.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/CaseConfig.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
@@ -200,6 +205,7 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
+	$(RM) zero_d_checkpoint_test
 	$(RM) coupled_checkpoint_bundle_test
 	$(RM) graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test
 	$(RM) sequential_strong_failure_test
@@ -230,6 +236,7 @@ pressure_flow_collective_failure_test: tests/test_pressure_flow_collective_failu
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/CollectiveSpeciesPressureFlowExecution.hpp
+iga_1d_3d_bifurcation iga_multidomain_flow: ../../include/ZeroDFlowDomain.hpp
 iga_1d_3d_explicit: ../../include/SpeciesPressureFlowComponentExecutor.hpp
 
 species_collective_failure_test: tests/test_species_collective_failure.cpp tests/test_species_pressure_flow_executor.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp)
