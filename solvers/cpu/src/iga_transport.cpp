@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "ExecutionResources.hpp"
 #include "CollectiveAssetInput.hpp"
 #include "CollectivePetscOptions.hpp"
@@ -152,6 +153,7 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 		iga::CollectiveLocalStage(communicator, "legacy transport input logging", [&] {
 			if (rank == 0) std::cout << "boundary_config=" << (case_configuration.present ? "case_config.json" : "legacy-defaults")
 			<< " transport_nodes=" << boundaries.transport_nodes << '\n';
+			iga::FlushCheckedText(std::cout);
 		});
 		iga::OwnedRowAssembler assembler(database, communicator, 2);
 		iga::RequireValidGeometry(assembler.elements(),
@@ -285,6 +287,7 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 			std::cout << "transport_v2 nodes=" << database.header().nodes << " elements=" << database.header().elements
 				<< " steps=" << parameters.steps << " assembly_s=" << assembly_seconds << " solve_s=" << solve_seconds
 				<< " total_iterations=" << total_iterations << " final_l2=" << norm << '\n';
+			iga::FlushCheckedText(std::cout);
 		});
 	}
 }

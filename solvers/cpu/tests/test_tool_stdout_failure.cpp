@@ -2,6 +2,18 @@
 #define main NativeToolMain
 #include "../src/iga_mesh_check.cpp"
 #undef main
+#elif defined(IGA_TEST_FLOW_STDOUT)
+#define main NativeToolMain
+#include "../src/iga_navier_stokes.cpp"
+#undef main
+#elif defined(IGA_TEST_TRANSPORT_STDOUT)
+#define main NativeToolMain
+#include "../src/iga_solve.cpp"
+#undef main
+#elif defined(IGA_TEST_LEGACY_STDOUT)
+#define main NativeToolMain
+#include "../src/iga_transport.cpp"
+#undef main
 #else
 #define main NativeToolMain
 #include "../src/iga_assembly_smoke.cpp"

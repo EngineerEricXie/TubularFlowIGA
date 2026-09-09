@@ -30,6 +30,13 @@ PETSC_TARGETS += flow_step_failure_test legacy_transport_failure_test
 PETSC_TARGETS += text_helper_failure_test text-helper-failure-test
 PETSC_TARGETS += snapshot_publication_failure_test
 PETSC_TARGETS += mesh_stdout_failure_test assembly_stdout_failure_test
+PETSC_TARGETS += flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test
+
+flow_stdout_failure_test: CPPFLAGS += -DIGA_TEST_FLOW_STDOUT
+transport_stdout_failure_test: CPPFLAGS += -DIGA_TEST_TRANSPORT_STDOUT
+legacy_stdout_failure_test: CPPFLAGS += -DIGA_TEST_LEGACY_STDOUT
+flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test: tests/test_tool_stdout_failure.cpp src/iga_navier_stokes.cpp src/iga_solve.cpp src/iga_transport.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 PETSC_TARGETS += womersley_stream_failure_test transport_budget_stream_failure_test
 PETSC_TARGETS += fsi_export_stream_failure_test
 
@@ -580,6 +587,7 @@ iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp i
 
 clean:
 	$(RM) snapshot_publication_failure_test mesh_stdout_failure_test assembly_stdout_failure_test
+	$(RM) flow_stdout_failure_test transport_stdout_failure_test legacy_stdout_failure_test
 	$(RM) womersley_stream_failure_test transport_budget_stream_failure_test fsi_export_stream_failure_test text_read_preload.so
 	$(RM) checked_text_test
 	$(RM) parallel_body_fitted_flow_test iga_navier_stokes_openmp parallel_immersed_volume_serial_test element_assembly_execution_test element_assembly_execution_openmp_test parallel_immersed_volume_test compliant_channel_fsi_openmp_test immersed_transient_flow_openmp_test

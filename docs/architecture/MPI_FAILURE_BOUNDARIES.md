@@ -52,7 +52,7 @@ grep 結果重新開始；新增入口也必須補進上表。
 | ID | 已觀察的缺口 | 下一步與完成證據 |
 |---|---|---|
 | F01（已驗證） | 兩個 AbortAll formatter 已啟用 fail/bad exceptions，所有 abort outcome 返回後才格式化診斷 | 3-rank world 與 split 1／2 ranks 的 24 次 allocation 故障、30 次健康／重試通過，primary error 與全 domain abort 保留；見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
-| F02 | mesh check／assembly smoke 的 result logging 與 resource summary 已 flush 並通過 84 個原生作業；其他 CLI 的若干 `std::cout` logging 仍只依賴丟例外，未檢查預設串流的 fail/bad 狀態 | 逐一列出 CLI 成功回報與必需診斷，測試 root 的可控制 stream failure；區分無法寫成功摘要與 SIGPIPE／程序死亡 |
+| F02 | mesh check／assembly smoke 的 result logging 與 resource summary 已 flush 並通過 84 個原生作業；CPU flow／runtime、configured／legacy transport 亦已補強，412 個作業及 310 個場比較通過；其餘 1D／graph／sequential／CUDA 與串行工具尚待補齊 | 接續其餘入口的 required logging；本輪 [CPU stdout 報告](../progress/HPC_01C_SOLVER_STDOUT_PROGRESS.md) 含 prefix／stage 對應與限制。區分可控制 stream failure 與 SIGPIPE／程序死亡 |
 | F03（已驗證） | Publisher 的檔名、JSON、VTU arrays、Number、Nonce 使用受檢查串流，ReadAll 使用完整讀取 | Publish／retry／collection rebuild 共 219 次故障、222 次重試通過，accepted epoch 不變且重試輸出逐位元一致；見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | F04（已驗證） | Packer／FSI reader、FSI Values、Womersley filename／close 與 budget JSON 已補強 | 21 個原生 CLI 案例、30 個輸出比較、cache/text packing 與 FSI helper 故障通過；完整 FSI 兩版均 4 次迭代收斂、5 份輸出逐位元相同及 29 個數值 arrays 相對 L2=0，見 [本輪報告](../progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
 | F05 | `BezierVisualization` 的錯誤訊息串流即使截斷仍會拋錯，但可能漏掉原始診斷資訊；packer formatter 已加 exceptions | 納入診斷格式化核對；不將它誤列為目前可靜默成功的數值路徑 |

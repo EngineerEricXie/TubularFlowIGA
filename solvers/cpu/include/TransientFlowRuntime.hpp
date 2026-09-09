@@ -1,6 +1,7 @@
 #ifndef IGA_TRANSIENT_FLOW_RUNTIME_HPP
 #define IGA_TRANSIENT_FLOW_RUNTIME_HPP
 
+#include "CheckedText.hpp"
 #include "BoundaryFlow.hpp"
 #include "CouplingPort.hpp"
 #include "GenericCaseInput.hpp"
@@ -550,6 +551,7 @@ private:
 					<< " outlet_iteration=" << coupling
 					<< " pressure_change=" << evaluated.maximum_pressure_change
 					<< " tolerance=" << tolerance << '\n';
+				iga::FlushCheckedText(std::cout);
 				outlet_converged = evaluated.maximum_pressure_change <= tolerance;
 				if (outlet_converged) {
 					CommitOutletCoupling(candidate, evaluated);
@@ -558,6 +560,7 @@ private:
 							<< " flow=" << model.flow << " pressure=" << model.pressure
 							<< " capacitor_pressure=" << model.capacitor_pressure << '\n';
 				} else RelaxOutletCoupling(candidate, evaluated);
+				iga::FlushCheckedText(std::cout);
 			});
 			RequireCollectiveSameInt(communicator_, "flow outlet convergence agreement", outlet_converged ? 1 : 0);
 			outlet_models_.swap(candidate);
@@ -1219,11 +1222,13 @@ private:
 					assembler_.AddElementVector(rhs_, element, local.negative_residual);
 					});
 				last_volume_batch_=batch;
-				if(CurrentPhaseProfile().Enabled())
+				if(CurrentPhaseProfile().Enabled()) {
 					std::cout << "body_fitted_element_assembly rank=" << rank_
 						<< " threads_requested=" << assembly_execution_->Options().threads
 						<< " team_size=" << batch.maximum_team_size << " elements=" << batch.items
 						<< " batches=" << batch.batches << " maximum_resident_items=" << batch.maximum_resident_items << '\n';
+					iga::FlushCheckedText(std::cout);
+				}
 				previous_view.Restore();
 			});
 			{
@@ -1286,6 +1291,7 @@ private:
 						<< " relative_mass_imbalance=" << convergence.relative_mass_imbalance
 						<< " mass_tolerance=" << mass_relative_tolerance << " assembly_s="
 						<< std::chrono::duration<double>(std::chrono::steady_clock::now()-iteration_start).count() << '\n';
+					iga::FlushCheckedText(std::cout);
 				});
 				return true;
 			}
@@ -1342,6 +1348,7 @@ private:
 					<< " linear_residual=" << linear_residual << " assembly_s="
 					<< std::chrono::duration<double>(linear_start-iteration_start).count()
 					<< " linear_s=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_start).count() << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 		}
 		return false;

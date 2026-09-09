@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "ExecutionResources.hpp"
 #include "CaseInput.hpp"
 #include "CollectiveAssetInput.hpp"
@@ -437,8 +438,10 @@ int main(int argc, char** argv)
 				std::cout << "configuration=simulation_config.json system=" << system.name
 					<< " fields=" << fields << " velocity_source=" << system.velocity_source
 					<< " dirichlet_dofs=" << boundaries.constrained_dofs << '\n';
+				iga::FlushCheckedText(std::cout);
 				for (std::size_t i = 0; i < system.fields.size(); ++i)
 					std::cout << "field[" << i << "]=" << system.fields[i] << '\n';
+				iga::FlushCheckedText(std::cout);
 			}
 		});
 
@@ -579,6 +582,7 @@ int main(int argc, char** argv)
 				if (rank == 0) std::cout << "restart=" << options.restart.string()
 					<< " completed_step=" << start_step
 					<< " physical_time=" << metadata.physical_time << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 		}
 		if (!options.output.empty()
@@ -599,6 +603,7 @@ int main(int argc, char** argv)
 					<< " local_point_references=" << bezier_mesh->validation.local_points
 					<< " geometry_report=" << report.string()
 					<< " vtkhdf=" << vtkhdf->path().string() << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 		}
 
@@ -714,6 +719,7 @@ int main(int argc, char** argv)
 				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport checkpoint logging", [&] {
 					if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
 						<< " completed_step=" << completed_step << '\n';
+					iga::FlushCheckedText(std::cout);
 				});
 			}
 		}
@@ -758,6 +764,7 @@ int main(int argc, char** argv)
 				<< " solve_s=" << linear_seconds
 				<< " time_loop_s=" << std::chrono::duration<double>(solve_end-solve_start).count()
 				<< " total_iterations=" << total_iterations << " final_l2=" << norm << '\n';
+			iga::FlushCheckedText(std::cout);
 		});
 	} catch (const std::exception& error) {
 		std::cerr << "rank " << rank << ": " << error.what() << '\n';
@@ -765,7 +772,15 @@ int main(int argc, char** argv)
 	}
 	int global_status = 0;
 	MPI_Allreduce(&status, &global_status, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);
-	iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, global_status);
+	try {
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport profile logging", [&] {
+			iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, global_status);
+			iga::FlushCheckedText(std::cout);
+		});
+	} catch (const std::exception& error) {
+		std::cerr << "rank " << rank << ": " << error.what() << '\n';
+		global_status = 1;
+	}
 	PetscFinalize();
 	return global_status;
 }

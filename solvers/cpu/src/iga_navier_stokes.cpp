@@ -1,3 +1,4 @@
+#include "CheckedText.hpp"
 #include "ExecutionResources.hpp"
 #include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
@@ -488,6 +489,7 @@ int main(int argc, char** argv)
 				<< " run_end_step=" << run_end_step << " velocity_nodes=" << boundaries.velocity_nodes
 				<< " pressure_nodes=" << boundaries.pressure_nodes
 				<< " wall_trace_velocity_nodes=" << wall_trace_basis.size() << '\n';
+			iga::FlushCheckedText(std::cout);
 		});
 
 		input_phase.Stop();
@@ -619,6 +621,7 @@ int main(int argc, char** argv)
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "checkpoint restart logging", [&] {
 				if (rank == 0) std::cout << "restart=" << options.restart.string()
 					<< " completed_step=" << start_step << " physical_time=" << metadata.physical_time << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 		} else {
 			if (vca_circuit) {
@@ -649,6 +652,7 @@ int main(int argc, char** argv)
 					<< " local_point_references=" << bezier_mesh->validation.local_points
 					<< " geometry_report=" << report.string()
 					<< " vtkhdf=" << vtkhdf->path().string() << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 		}
 
@@ -775,6 +779,7 @@ int main(int argc, char** argv)
 				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "checkpoint write logging", [&] {
 					if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
 						<< " completed_step=" << completed_step << '\n';
+					iga::FlushCheckedText(std::cout);
 				});
 			}
 		}
@@ -815,6 +820,7 @@ int main(int argc, char** argv)
 				<< " total_linear_iterations=" << summary.linear_iterations
 				<< " state_l2=" << summary.state_l2 << " velocity_l2=" << summary.velocity_l2
 				<< " pressure_l2=" << summary.pressure_l2 << '\n';
+			iga::FlushCheckedText(std::cout);
 		});
 	} catch (const std::exception& error) {
 		std::cerr << "rank " << rank << ": " << error.what() << '\n';
@@ -822,7 +828,15 @@ int main(int argc, char** argv)
 	}
 	int global_status = 0;
 	MPI_Allreduce(&status, &global_status, 1, MPI_INT, MPI_MAX, PETSC_COMM_WORLD);
-	iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, global_status);
+	try {
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow profile logging", [&] {
+			iga::CurrentPhaseProfile().Write(std::cout, rank, ranks, global_status);
+			iga::FlushCheckedText(std::cout);
+		});
+	} catch (const std::exception& error) {
+		std::cerr << "rank " << rank << ": " << error.what() << '\n';
+		global_status = 1;
+	}
 	PetscFinalize();
 	return global_status;
 }

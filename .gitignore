@@ -203,3 +203,11 @@ solvers/one_d/one_d_filename_failure_test
 /solvers/cpu/womersley_stream_failure_test
 /solvers/cpu/transport_budget_stream_failure_test
 /solvers/cpu/fsi_export_stream_failure_test
+/solvers/cpu/flow_stdout_failure_test
+/solvers/cpu/transport_stdout_failure_test
+/solvers/cpu/legacy_stdout_failure_test
+# Native test executables; test sources remain under each tests/ directory.
+/solvers/cpu/*_test
+/solvers/coupling/*_test
+/solvers/one_d/*_test
+/solvers/cpu/phase8_compliant_channel_fsi_paraview
