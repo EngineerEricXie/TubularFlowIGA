@@ -4,6 +4,7 @@
 #include "CollectivePetscOptions.hpp"
 #include "Sha256.hpp"
 #include <petscksp.h>
+#include <petscsnes.h>
 
 namespace iga {
 
@@ -102,6 +103,15 @@ public:
 		RequireCollectivePetscSuccess(communicator_, "solver options PC lookup", KSPGetPC(solver, &pc));
 		RequireCollectivePetscSuccess(communicator_, "solver options PC database", PetscObjectSetOptions(reinterpret_cast<PetscObject>(pc), options_));
 		RequireCollectivePetscSuccess(communicator_, "solver options prefix", KSPSetOptionsPrefix(solver, prefix_.c_str()));
+	}
+
+	void Attach(SNES solver) const
+	{
+		KSP linear = nullptr;
+		RequireCollectivePetscSuccess(communicator_, "solver options SNES database", PetscObjectSetOptions(reinterpret_cast<PetscObject>(solver), options_));
+		RequireCollectivePetscSuccess(communicator_, "solver options SNES prefix", SNESSetOptionsPrefix(solver, prefix_.c_str()));
+		RequireCollectivePetscSuccess(communicator_, "solver options SNES KSP", SNESGetKSP(solver, &linear));
+		Attach(linear);
 	}
 
 	// PETSc 3.15 propagates the prefix but not the database to some child KSPs.

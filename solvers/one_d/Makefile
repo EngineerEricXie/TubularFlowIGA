@@ -78,6 +78,7 @@ test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_petsc_test
 	$(MPIEXEC) -np $(MPI_TEST_RANKS) ./one_d_petsc_test
 
 clean:
+	$(RM) one_d_solver_options_test
 	$(RM) one_d_accepted_checkpoint_test
 	$(RM) one_d_adapter_failure_test
 	$(RM) one_d_implicit_failure_test
@@ -103,3 +104,8 @@ one_d_adapter_failure_test: tests/test_one_d_adapter_failure.cpp ../../include/O
 
 one_d_accepted_checkpoint_test: tests/test_one_d_accepted_checkpoint.cpp $(wildcard include/*.hpp ../../include/*.hpp ../cpu/include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
+
+one_d_solver_options_test: tests/test_one_d_solver_options.cpp tests/test_one_d_implicit_failure.cpp $(wildcard include/*.hpp ../cpu/include/*.hpp ../../include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+iga_1d one_d_petsc_test one_d_implicit_failure_test one_d_subcommunicator_test: include/OneDPetscSupport.hpp ../cpu/include/PetscSolverOptions.hpp ../cpu/include/CollectivePetscOptions.hpp

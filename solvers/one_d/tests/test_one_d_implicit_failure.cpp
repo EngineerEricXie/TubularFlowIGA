@@ -148,7 +148,7 @@ void CheckGroup(MPI_Comm group, const char* path, int repetitions)
 						? iga::OneDImplicitFormulation::LinearizedAQ : iga::OneDImplicitFormulation::PressureNetwork;
 					expected = "1d implicit formulation";
 				} else if (mode == "petsc-options") {
-					Option("-ksp_type", "no_such_iga_ksp"); expected = "KSPSetFromOptions";
+					Option("-ksp_type", "no_such_iga_ksp"); expected = "1d solver options";
 				} else {
 					Option("-ksp_type", "gmres"); Option("-pc_type", "none"); Option("-ksp_max_it", "0");
 					expected = "1d implicit convergence";

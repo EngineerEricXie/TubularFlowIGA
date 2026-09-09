@@ -1,7 +1,8 @@
-# 貼體 graph 的 PETSc 求解器選項
+# 1D 與貼體 graph 的 PETSc 求解器選項
 
 `iga_multidomain_flow`／`iga_1d_3d_bifurcation` 中，每個貼體 3D domain 的 flow 與
-transport 現在有獨立 options prefix。全域 PETSc 選項仍作共同基線，domain 選項優先：
+transport，以及每個 implicit 1D domain，現在都有獨立 options prefix。
+全域 PETSc 選項仍作共同基線，domain 選項優先：
 
 ```bash
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
@@ -62,8 +63,37 @@ Embedding caller 可在 `TransientFlowRuntime`／`TransientTransportRuntime` 建
 constructor 的全域 fieldsplit defaults 行為；新的 scoped graph 使用 private defaults。
 `SolverConfiguration()` 是 runtime 開啟時的本地查詢；外層須自行提供群組錯誤協調。
 
-尚未接入這套 domain prefix 的 1D implicit／SNES、其他 standalone CLI，以及
-immersed／moving／FSI 各路徑仍依原設定。HPC-04A 的其餘 prefix、完整巢狀求解器
-診斷與後端矩陣仍待完成，見 [本批報告](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。
+## 1D implicit 與 SNES
+
+Graph 的 1D domain 使用相同 `domain_<id>_flow_` 規則，例如
+`-domain_source_flow_ksp_type fgmres`。獨立 `iga_1d` CLI 則以選定的 equation-system
+名稱產生 prefix；系統 `blood_flow_1d` 使用 `domain_blood_flow_1d_flow_`：
+
+```bash
+mpiexec -np 3 solvers/one_d/iga_1d IMPLICIT_CASE --output-dir NEW_OUTPUT \
+  -domain_blood_flow_1d_flow_ksp_type fgmres \
+  -domain_blood_flow_1d_flow_snes_type newtontr
+```
+
+這個範例需要 compliant／implicit_petsc case；只有 `nonlinear_aq`、`implicit_1d_pde`
+會使用 SNES。`pressure_network`、`linearized_aq` 使用線性 KSP。非線性初始猜測的
+linearized solve 與 SNES 的 KSP 共用該 runtime 的 prefix；例如 `..._ksp_type` 同時
+影響二者，`..._snes_type` 只影響 SNES。原非線性預設仍是 preonly／LU，multi-rank
+預設 MUMPS；explicit override 仍須通過實際 factor backend 能力檢查。
+
+`one_d_solver_configuration` JSON 記錄 prefix、step、有效 KSP／PC／backend、tolerances、
+最後一次線性 iterations／reason；非線性另記 SNES type、iterations／reason。數值 gate
+通過後才由 CLI／graph 的 accepted-step 輸出邊界寫出；不是所有 substeps 或 trials 的
+累計。rigid／explicit 1D 沒有 PETSc solve，因此不產生這筆診斷。
+
+Embedding caller 可建立 `OneDPetscSolverContext`，在 `AdvanceImplicitOneD` 或個別
+Solve API 最後傳入指標。context 須使用相同 communicator，並活到整次呼叫完成；
+context 建構包含 collective agreement，不得置於僅允許本地工作的準備階段。正式 CLI／
+graph 各 runtime 持有一份 immutable snapshot。省略 context 時保留無前綴介面，
+在當次 advance 建立暫時 snapshot。使用者提供的自訂 callback 簽名不變。
+
+驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。其他 body-fitted standalone
+CLI、immersed／moving／FSI 路徑，以及完整 nested solver 診斷與後端矩陣仍待完成。
+貼體基礎驗收見 [原報告](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。
 既有 `.ntiga`、場輸出與 checkpoint payload 格式不變；新的 source identity 會讓舊建置的
 checkpoint 明確不相容，續跑須保留相同建置與數值選項。

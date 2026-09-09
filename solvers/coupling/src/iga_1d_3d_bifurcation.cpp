@@ -294,7 +294,8 @@ void RequireOneDStagedTransport(const iga::OneDConfiguration& configuration,
 NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
 	const std::string& domain_id, bool species_mode, MPI_Comm communicator,
-	const std::string& configuration_text, const std::string& checkpoint_identity = {})
+	const std::string& configuration_text, const std::string& checkpoint_identity = {},
+	iga::OneDPetscSolverContext* solver_context = nullptr)
 {
 	const auto& definition = iga::GraphDomainDefinitionFor(graph, domain_id);
 	const auto case_directory = assets.at(domain_id).case_directory;
@@ -313,10 +314,10 @@ NativeOneD BuildOneD(const iga::MultidomainConfiguration& graph,
 	auto inlet = iga::ResolveOneDInlet(configuration);
 	auto runtime = std::make_unique<iga::OneDFlowRuntime>(configuration, flow,
 		std::move(network), inlet, case_directory,
-		[communicator](const iga::OneDNetwork& network_definition,
+		[communicator, solver_context](const iga::OneDNetwork& network_definition,
 			const iga::OneDFlowSystemDefinition& flow_definition,
 			iga::OneDFlowState& state, double inlet_flow, double dt) {
-			iga::AdvanceImplicitOneD(network_definition, flow_definition, state, inlet_flow, dt, communicator);
+			iga::AdvanceImplicitOneD(network_definition, flow_definition, state, inlet_flow, dt, communicator, solver_context);
 		}, [communicator](const char* stage, std::exception_ptr error) {
 			iga::CollectiveLocalStage(communicator, stage, [&] {
 				if (error) std::rethrow_exception(error);
@@ -838,6 +839,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 		std::optional<iga::PressureFlowComponentPlan> plan_holder;
 		std::optional<iga::OneDThreeDBifurcationDefinition> bifurcation_holder;
 		std::map<std::string, iga::ResolvedGraphDomainAssets> assets;
+		std::map<std::string, std::unique_ptr<iga::OneDPetscSolverContext>> one_d_solvers;
 		std::map<std::string, NativeOneD> one_d;
 		std::map<std::string, std::unique_ptr<NativeThreeD>> three_d;
 		std::map<std::string, std::unique_ptr<NativeImmersed>> immersed;
@@ -929,6 +931,16 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			checkpoint_identity = iga::BuildNativeGraphCheckpointIdentity(communicator, input_texts, input_assets, application_options, options.maximum_newton,
 				{kNonlinearRelativeTolerance, kNonlinearAbsoluteTolerance, kMassRelativeTolerance});
 		}
+		for (const auto& domain_id : plan_holder->domain_order) {
+			if (configuration_holder->graph.Domain(domain_id).kind != iga::DomainKind::OneDFlow) continue;
+			std::string prefix;
+			iga::CollectiveLocalStage(communicator, "graph 1D solver preparation", [&] {
+				prefix = iga::PetscDomainOptionsPrefix(domain_id, "flow");
+				one_d_solvers.emplace(domain_id, nullptr);
+			});
+			one_d_solvers.at(domain_id) = iga::AllocateCollectiveRuntime<iga::OneDPetscSolverContext>(communicator,
+				communicator, prefix, application_options);
+		}
 		iga::CollectiveLocalStage(communicator, "graph 1D initialization", [&] {
 			const bool species_mode = configuration_holder->schema_version == 6;
 			for (const auto& domain_id : plan_holder->domain_order) {
@@ -949,7 +961,8 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				one_d.emplace(domain_id,
 					BuildOneD(*configuration_holder, assets, domain_id, species_mode, communicator,
 						input_texts.at("domain configuration "+domain_id),
-						checkpoint_enabled ? iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "one-d") : ""));
+						checkpoint_enabled ? iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "one-d") : "",
+						one_d_solvers.at(domain_id).get()));
 			}
 		});
 
@@ -1347,6 +1360,8 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			accepted_time_s = step_context.EndTime();
 			iga::CollectiveLocalStage(communicator, "graph solver configuration output", [&] {
 				if (rank != 0) return;
+				for (const auto& domain : one_d_solvers)
+					iga::WriteOneDPetscSolverConfiguration(std::cout, *domain.second, step);
 				for (const auto& domain : three_d) {
 					const auto write = [&](const char* role, const iga::PetscKspConfiguration& solver) {
 						const auto precision = std::cout.precision();

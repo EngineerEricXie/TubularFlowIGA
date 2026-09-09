@@ -532,8 +532,10 @@ F05 的原始診斷例外保存與恢復亦通過，見
   貼體 graph 的 flow／transport 已接入獨立 prefix、精確 options snapshot、有效
   KSP／PC 記錄與返回式錯誤處理；未指定 override 的場及 history 保留原結果。
   操作見 [solver options](SOLVER_OPTIONS.md)，驗收見
-  [貼體進度](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。其餘 1D implicit／SNES、
-  standalone、immersed／moving／FSI 與完整巢狀診斷及後端矩陣仍待完成。
+  [貼體進度](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。四種 1D implicit 方法、
+  SNES 及正式 1D CLI／native graph 也已接入，見
+  [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。其餘 body-fitted standalone、
+  immersed／moving／FSI 與完整巢狀診斷及後端矩陣仍待完成。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point

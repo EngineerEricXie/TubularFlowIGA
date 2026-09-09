@@ -189,8 +189,11 @@ inline void OneDUpdateStateFromImplicitSolution(const OneDNetwork& network,
 // The default preserves existing CLI and injected callback behavior.
 inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 	const OneDFlowSystemDefinition& flow, OneDFlowState& state,
-	double inlet_flow, double dt, MPI_Comm communicator = PETSC_COMM_WORLD)
+	double inlet_flow, double dt, MPI_Comm communicator = PETSC_COMM_WORLD,
+	OneDPetscSolverContext* solver_context = nullptr)
 {
+	std::optional<OneDPetscSolverContext> fallback;
+	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDImplicitGraph graph;
 	CollectiveLocalStage(communicator, "1d implicit graph preparation", [&] {
 		graph = BuildOneDImplicitGraph(network, false);
@@ -247,8 +250,11 @@ inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 	OneDCollectivePetscCheck(communicator, VecAssemblyEnd(rhs), "VecAssemblyEnd");
 	OneDCollectivePetscCheck(communicator, KSPCreate(communicator, &solver), "KSPCreate");
 	OneDCollectivePetscCheck(communicator, KSPSetOperators(solver, matrix, matrix), "KSPSetOperators");
-	OneDCollectivePetscCheck(communicator, KSPSetFromOptions(solver), "KSPSetFromOptions");
-	OneDCollectivePetscCheck(communicator, KSPSolve(solver, rhs, solution), "KSPSolve");
+	solver_context->options.Attach(solver);
+	solver_context->options.Call("1d solver options", [&] { return KSPSetFromOptions(solver); });
+	RequireKspFactorBackend(solver, matrix, communicator);
+	solver_context->options.Call("1d linear solve", [&] { return KSPSolve(solver, rhs, solution); });
+	solver_context->Record(communicator, solver);
 	CollectiveLocalStage(communicator, "1d implicit convergence", [&] {
 		KSPConvergedReason reason;
 		OneDPetscCheck(KSPGetConvergedReason(solver, &reason), "KSPGetConvergedReason");
@@ -274,8 +280,11 @@ inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 
 inline void SolveOneDLinearizedAQPetsc(const OneDNetwork& network,
 	const OneDFlowSystemDefinition& flow, OneDFlowState& state,
-	double inlet_flow, double dt, bool expand_cells, MPI_Comm communicator = PETSC_COMM_WORLD)
+	double inlet_flow, double dt, bool expand_cells, MPI_Comm communicator = PETSC_COMM_WORLD,
+	OneDPetscSolverContext* solver_context = nullptr)
 {
+	std::optional<OneDPetscSolverContext> fallback;
+	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDImplicitGraph graph;
 	CollectiveLocalStage(communicator, "1d implicit graph preparation", [&] {
 		graph = BuildOneDImplicitGraph(network, expand_cells);
@@ -349,8 +358,11 @@ inline void SolveOneDLinearizedAQPetsc(const OneDNetwork& network,
 	OneDCollectivePetscCheck(communicator, VecAssemblyEnd(rhs), "VecAssemblyEnd");
 	OneDCollectivePetscCheck(communicator, KSPCreate(communicator, &solver), "KSPCreate");
 	OneDCollectivePetscCheck(communicator, KSPSetOperators(solver, matrix, matrix), "KSPSetOperators");
-	OneDCollectivePetscCheck(communicator, KSPSetFromOptions(solver), "KSPSetFromOptions");
-	OneDCollectivePetscCheck(communicator, KSPSolve(solver, rhs, solution), "KSPSolve");
+	solver_context->options.Attach(solver);
+	solver_context->options.Call("1d solver options", [&] { return KSPSetFromOptions(solver); });
+	RequireKspFactorBackend(solver, matrix, communicator);
+	solver_context->options.Call("1d linear solve", [&] { return KSPSolve(solver, rhs, solution); });
+	solver_context->Record(communicator, solver);
 	CollectiveLocalStage(communicator, "1d implicit convergence", [&] {
 		KSPConvergedReason reason; OneDPetscCheck(KSPGetConvergedReason(solver, &reason), "KSPGetConvergedReason");
 		if (reason <= 0) throw std::runtime_error("PETSc linearized_aq did not converge");
@@ -509,13 +521,16 @@ inline PetscErrorCode OneDNonlinearJacobian(SNES, Vec input, Mat jacobian, Mat, 
 
 inline void SolveOneDNonlinearAQPetsc(const OneDNetwork& network,
 	const OneDFlowSystemDefinition& flow, OneDFlowState& state,
-	double inlet_flow, double dt, bool expand_cells, MPI_Comm communicator = PETSC_COMM_WORLD)
+	double inlet_flow, double dt, bool expand_cells, MPI_Comm communicator = PETSC_COMM_WORLD,
+	OneDPetscSolverContext* solver_context = nullptr)
 {
+	std::optional<OneDPetscSolverContext> fallback;
+	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDFlowState linear_guess;
 	CollectiveLocalStage(communicator, "1d nonlinear initial state", [&] {
 		linear_guess = state;
 	});
-	SolveOneDLinearizedAQPetsc(network, flow, linear_guess, inlet_flow, dt, expand_cells, communicator);
+	SolveOneDLinearizedAQPetsc(network, flow, linear_guess, inlet_flow, dt, expand_cells, communicator, solver_context);
 	OneDImplicitGraph graph;
 	CollectiveLocalStage(communicator, "1d nonlinear graph preparation", [&] {
 		graph = BuildOneDImplicitGraph(network, expand_cells);
@@ -582,13 +597,15 @@ inline void SolveOneDNonlinearAQPetsc(const OneDNetwork& network,
 		OneDCollectivePetscCheck(communicator, PCSetType(nonlinear_pc, PCLU), "PCSetType");
 		OneDCollectivePetscCheck(communicator, PCFactorSetMatSolverType(nonlinear_pc, MATSOLVERMUMPS), "PCFactorSetMatSolverType");
 	}
-	OneDCollectivePetscCheck(communicator, SNESSetFromOptions(solver), "SNESSetFromOptions");
+	solver_context->options.Attach(solver);
+	solver_context->options.Call("1d nonlinear options", [&] { return SNESSetFromOptions(solver); });
 	RequireKspFactorBackend(nonlinear_ksp, jacobian, communicator);
-	const auto solve_error = SNESSolve(solver, nullptr, solution);
-	CollectiveLocalStage(communicator, "1d nonlinear solve", [&] {
+	solver_context->options.Call("1d nonlinear solve", [&] {
+		const auto code = SNESSolve(solver, nullptr, solution);
 		if (context.callback_error) std::rethrow_exception(context.callback_error);
-		OneDPetscCheck(solve_error, "SNESSolve");
+		return code;
 	});
+	solver_context->Record(communicator, nonlinear_ksp, solver);
 
 	CollectiveLocalStage(communicator, "1d nonlinear convergence", [&] {
 		SNESConvergedReason reason; OneDPetscCheck(SNESGetConvergedReason(solver, &reason), "SNESGetConvergedReason");
@@ -608,8 +625,11 @@ inline void SolveOneDNonlinearAQPetsc(const OneDNetwork& network,
 
 inline void AdvanceImplicitOneD(const OneDNetwork& network,
 	const OneDFlowSystemDefinition& flow, OneDFlowState& state,
-	double inlet_flow, double dt, MPI_Comm communicator = PETSC_COMM_WORLD)
+	double inlet_flow, double dt, MPI_Comm communicator = PETSC_COMM_WORLD,
+	OneDPetscSolverContext* solver_context = nullptr)
 {
+	std::optional<OneDPetscSolverContext> fallback;
+	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDRequireSameInteger(communicator, static_cast<int>(flow.formulation), "1d implicit formulation");
 	OneDFlowState candidate;
 	CollectiveLocalStage(communicator, "1d implicit advance preparation", [&] {
@@ -617,12 +637,12 @@ inline void AdvanceImplicitOneD(const OneDNetwork& network,
 		candidate.inlet_flow = inlet_flow;
 	});
 	if (flow.formulation == OneDImplicitFormulation::PressureNetwork)
-		SolveOneDPressureNetworkPetsc(network, flow, candidate, inlet_flow, dt, communicator);
+		SolveOneDPressureNetworkPetsc(network, flow, candidate, inlet_flow, dt, communicator, solver_context);
 	else if (flow.formulation == OneDImplicitFormulation::LinearizedAQ)
-		SolveOneDLinearizedAQPetsc(network, flow, candidate, inlet_flow, dt, false, communicator);
+		SolveOneDLinearizedAQPetsc(network, flow, candidate, inlet_flow, dt, false, communicator, solver_context);
 	else if (flow.formulation == OneDImplicitFormulation::NonlinearAQ)
-		SolveOneDNonlinearAQPetsc(network, flow, candidate, inlet_flow, dt, false, communicator);
-	else SolveOneDNonlinearAQPetsc(network, flow, candidate, inlet_flow, dt, true, communicator);
+		SolveOneDNonlinearAQPetsc(network, flow, candidate, inlet_flow, dt, false, communicator, solver_context);
+	else SolveOneDNonlinearAQPetsc(network, flow, candidate, inlet_flow, dt, true, communicator, solver_context);
 	state = std::move(candidate);
 }
 

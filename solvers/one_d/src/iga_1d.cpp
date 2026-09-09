@@ -7,6 +7,7 @@
 #include "CouplingReplay.hpp"
 #include "CollectivePetscOptions.hpp"
 #include "CollectiveAssetInput.hpp"
+#include "RuntimeConstruction.hpp"
 
 #include <petscsys.h>
 
@@ -70,7 +71,12 @@ Options ParseOptions(int argc, char** argv)
 			else options.stop_after_step = PositiveInteger(value, argument);
 			continue;
 		}
-		if (!argument.empty() && argument[0] == '-') continue;
+		if (!argument.empty() && argument[0] == '-') {
+			// PETSc already parsed its options during initialization. Skip the
+			// optional value here so named solver types are not positional input.
+			if (i+1 < argc && argv[i+1][0] != '-') ++i;
+			continue;
+		}
 		throw std::runtime_error("unexpected argument: "+argument);
 	}
 		if (options.checkpoint_every > 0 && options.checkpoint.empty())
@@ -186,6 +192,12 @@ int main(int argc, char** argv)
 		});
 		// Inspect regular files before the parser can block opening a FIFO.
 		iga::RequireCollectiveAssetFiles(communicator, network_assets);
+		std::string solver_prefix;
+		iga::CollectiveLocalStage(communicator, "1d solver prefix", [&] {
+			solver_prefix = iga::PetscDomainOptionsPrefix(SelectFlow(*input_configuration, options.system).name, "flow");
+		});
+		auto solver_context = iga::AllocateCollectiveRuntime<iga::OneDPetscSolverContext>(communicator,
+			communicator, solver_prefix, application_options);
 		std::unique_ptr<iga::OneDFlowRuntime> runtime_owner;
 		std::unique_ptr<iga::ReplayInletProvider> replay;
 		std::unique_ptr<iga::VcaExternalCircuit> circuit;
@@ -201,10 +213,10 @@ int main(int argc, char** argv)
 			// Construction only stores the advance callback; it does not execute MPI.
 			runtime_owner = std::make_unique<iga::OneDFlowRuntime>(configuration, selected_flow,
 				std::move(network), inlet, options.case_directory,
-				[communicator](const iga::OneDNetwork& runtime_network,
+				[communicator, context = solver_context.get()](const iga::OneDNetwork& runtime_network,
 					const iga::OneDFlowSystemDefinition& runtime_flow, iga::OneDFlowState& state,
 					double inlet_flow, double dt) {
-					iga::AdvanceImplicitOneD(runtime_network, runtime_flow, state, inlet_flow, dt, communicator);
+					iga::AdvanceImplicitOneD(runtime_network, runtime_flow, state, inlet_flow, dt, communicator, context);
 				}, [communicator](const char* stage, std::exception_ptr error) {
 					iga::CollectiveLocalStage(communicator, stage, [&] {
 						if (error) std::rethrow_exception(error);
@@ -369,6 +381,10 @@ int main(int argc, char** argv)
 				}
 			});
 			iga::CollectiveLocalStage(communicator, "1d step output", [&] {
+				if (rank == 0) {
+					iga::WriteOneDPetscSolverConfiguration(std::cout, *solver_context, step);
+					iga::FlushCheckedText(std::cout);
+				}
 				if (rank == 0 && (step%runtime.Configuration().time.output_every == 0
 					|| step == final_step)) {
 					const auto before = std::chrono::steady_clock::now();
