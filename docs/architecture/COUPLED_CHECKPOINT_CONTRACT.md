@@ -4,6 +4,8 @@
 graph 已可 checkpoint／restart**。程式基準為
 `70b1715992912871eebb4a6458634bedb1b9a542`，2026-09-09。
 實作與驗收分別由 [HPC-05B／C／D](../WORKSTATION_HPC_TODO.md) 承接。
+更新：05B 已交付 [bundle v1 發布／載入元件](COUPLED_CHECKPOINT_BUNDLE.md)；
+以下 domain payload／restore 與完整 graph 續跑仍由 05C／D 實作。
 
 ## 1. 唯一可保存的邊界
 

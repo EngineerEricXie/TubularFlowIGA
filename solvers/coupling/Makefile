@@ -22,6 +22,13 @@ endif
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
+coupled_checkpoint_bundle_test: tests/test_coupled_checkpoint_bundle.cpp ../../include/CoupledCheckpointBundle.hpp ../../include/CoupledCheckpointManifest.hpp ../cpu/include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DIGA_COUPLED_CHECKPOINT_TESTING $< -o $@
+
+.PHONY: checkpoint-bundle-test
+checkpoint-bundle-test: coupled_checkpoint_bundle_test
+	./coupled_checkpoint_bundle_test "$$(mktemp -d)/checkpoint"
+
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow multidomain_config_test: ../../include/CheckedText.hpp
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/ExecutionResources.hpp ../../include/ExecutionEnvironment.hpp
 
@@ -193,6 +200,7 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
+	$(RM) coupled_checkpoint_bundle_test
 	$(RM) graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test
 	$(RM) sequential_strong_failure_test
 	$(RM) sequential_text_failure_test

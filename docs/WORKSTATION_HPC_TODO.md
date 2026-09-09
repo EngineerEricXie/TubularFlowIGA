@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-05A checkpoint 狀態契約已完成稽核；
+最近更新：2026-09-09。HPC-05B checkpoint bundle 格式與發布／恢復協議已通過驗收；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -47,11 +47,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（13 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A |
+| 已勾選完成（14 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A、HPC-05B |
 | 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
-| 其餘待辦（23 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A；既有程式能力不等於已通過各項驗收 |
+| 其餘待辦（22 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 25 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 24 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -552,9 +552,13 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [介面稽核報告](progress/HPC_05A_CHECKPOINT_CONTRACT_REPORT.md)：pressure guesses、
   donor、1D／3D／0D／VCA、moving publication provenance、FSI committed state 均有
   保存／重建決策；現有 serializer 與 restore 缺口由下列 05B／C／D 實作驗收。
-- [ ] **HPC-05B：版本化與發布協議。** 分片先寫暫存，完成校驗及同步後，
+- [x] **HPC-05B：版本化與發布協議。** 分片先寫暫存，完成校驗及同步後，
   最後發布含版本、案例／配置身分、時間與各分片校驗資訊的完成 manifest。
   載入時拒絕截斷、損毀、缺片、不同 epoch 混用與不相容配置。
+  已完成 [bundle v1 協議](architecture/COUPLED_CHECKPOINT_BUNDLE.md) 與
+  [發布／恢復驗收](progress/HPC_05B_CHECKPOINT_BUNDLE_REPORT.md)：734 個預期拒絕、
+  並行 producer、新程序恢復、兩個程序中斷點、32 MiB 串流及 sanitizer 通過。
+  此項為儲存元件；完整 MPI graph 的 runtime capture／restore 由 05C 接續。
 - [ ] **HPC-05C：既有 0D／1D／貼體 3D graph 續跑。** 先支援相同 rank 數，
   比較不中斷與中斷後續跑的完整歷史；測試 commit 前、寫分片中與 manifest
   發布前的中斷。整個作業終止後可由新的作業載入最後完整 checkpoint。
