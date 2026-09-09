@@ -63,6 +63,28 @@ Embedding caller 可在 `TransientFlowRuntime`／`TransientTransportRuntime` 建
 constructor 的全域 fieldsplit defaults 行為；新的 scoped graph 使用 private defaults。
 `SolverConfiguration()` 是 runtime 開啟時的本地查詢；外層須自行提供群組錯誤協調。
 
+## Body-fitted standalone 與 VCA
+
+`iga_navier_stokes` 依選定的 Navier–Stokes system 名稱配置 `..._flow_`；舊 boundary
+configuration 沒有 system 名稱時用 `domain_flow_flow_`。VCA 的 transport system 另用
+`..._transport_`。`iga_solve` 也使用選定 transport system 的名稱，例如：
+
+```bash
+PETSC_OPTIONS='-ksp_type gmres -pc_type lu -pc_factor_mat_solver_type mumps' \
+mpiexec -np 2 solvers/cpu/iga_solve DATABASE.ntiga CASE_DIR \
+  --system transport --output result.txt \
+  -domain_transport_transport_ksp_type fgmres
+```
+
+兩個 CLI 均接受單個 `-` 開頭的 PETSc key 與 optional value；既有 `--` application
+options 與 positional 介面保留。請先列出資料庫／case 位置參數，再列 PETSc options。
+PETSc 自行解讀數值的語義；CLI 不另外保證所有負 tolerance 都會被本機 PETSc 拒絕。
+
+`solver_configuration prefix=... ksp=... pc=... factor_backend=... step=... iterations=... reason=...`
+記錄每步實際設定與最後一次 KSP 結果。一般 transport CLI 在後續步使用非零 initial
+guess；保留其既有 GMRES 策略，PREONLY 不接受這個 warm start。VCA transport 的既有
+呼叫方式不變。小案例驗收與限制見 [standalone 進度](progress/HPC_04A_STANDALONE_OPTIONS_PROGRESS.md)。
+
 ## 1D implicit 與 SNES
 
 Graph 的 1D domain 使用相同 `domain_<id>_flow_` 規則，例如
@@ -92,8 +114,7 @@ context 建構包含 collective agreement，不得置於僅允許本地工作的
 graph 各 runtime 持有一份 immutable snapshot。省略 context 時保留無前綴介面，
 在當次 advance 建立暫時 snapshot。使用者提供的自訂 callback 簽名不變。
 
-驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。其他 body-fitted standalone
-CLI、immersed／moving／FSI 路徑，以及完整 nested solver 診斷與後端矩陣仍待完成。
+驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。immersed／moving／FSI 路徑，以及完整 nested solver 診斷與後端矩陣仍待完成。
 貼體基礎驗收見 [原報告](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。
 既有 `.ntiga`、場輸出與 checkpoint payload 格式不變；新的 source identity 會讓舊建置的
 checkpoint 明確不相容，續跑須保留相同建置與數值選項。

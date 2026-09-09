@@ -1,3 +1,4 @@
+#include <cctype>
 #include "CheckedText.hpp"
 #include "ExecutionResources.hpp"
 #include "BoundarySupport.hpp"
@@ -184,6 +185,17 @@ FlowOptions ParseOptions(int argc, char** argv)
 	int positional = 0;
 	for (int i = 3; i < argc; ++i) {
 		const std::string argument(argv[i]);
+		if (argument.size() > 1 && argument[0] == '-' && std::isalpha(static_cast<unsigned char>(argument[1]))) {
+			// PETSc parsed these keys during initialization; keep their values
+			// out of the legacy positional application interface.
+			if (i+1 < argc) {
+				const std::string next(argv[i+1]);
+				const bool next_key = next.size() > 1 && next[0] == '-'
+					&& (next[1] == '-' || std::isalpha(static_cast<unsigned char>(next[1])));
+				if (!next_key) ++i;
+			}
+			continue;
+		}
 		if (argument.rfind("--", 0) != 0) {
 			if (positional == 0) options.max_newton = ParsePositiveInteger(argument, "MAX_NEWTON");
 			else if (positional == 1) options.output = argument;
@@ -492,11 +504,16 @@ int main(int argc, char** argv)
 			iga::FlushCheckedText(std::cout);
 		});
 
+		std::string flow_solver_prefix, transport_solver_prefix;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow solver prefixes", [&] {
+			flow_solver_prefix = iga::PetscDomainOptionsPrefix(configured ? iga::FirstNavierStokesSystem(configuration).name : "flow", "flow");
+			if (vca_has_transport) transport_solver_prefix = iga::PetscDomainOptionsPrefix(vca_transport_system.name, "transport");
+		});
 		input_phase.Stop();
 		iga::PhaseScope geometry_phase(iga::ProfilePhase::Geometry);
 		iga::TransientFlowRuntime flow(database, PETSC_COMM_WORLD, configured, transient,
 			parameters, boundaries, labels, boundary_velocity, wall_trace_basis,
-			std::move(outlet_models));
+			std::move(outlet_models), {}, {}, 0.0, flow_solver_prefix);
 		iga::RequireValidGeometry(flow.Elements(), rank, PETSC_COMM_WORLD);
 		geometry_phase.Stop();
 		if (vca_circuit) {
@@ -558,7 +575,8 @@ int main(int argc, char** argv)
 		}
 		if (vca_has_transport)
 			vca_transport = iga::AllocateCollectiveRuntime<iga::TransientTransportRuntime>(PETSC_COMM_WORLD, database,
-				PETSC_COMM_WORLD, configuration, vca_transport_system, labels);
+				PETSC_COMM_WORLD, configuration, vca_transport_system, labels,
+				std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, std::set<std::string>{}, std::string{}, transport_solver_prefix);
 		std::unique_ptr<iga::CouplingHistoryWriter> vca_history;
 		fs::path vca_history_path;
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow VCA identity and history", [&] {
@@ -698,6 +716,18 @@ int main(int argc, char** argv)
 				vca_transport->Advance(step_configuration, flow.RequiredNodes(), velocity);
 				vca_species_state = vca_transport->GatherRequiredState();
 			}
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow solver diagnostics", [&] {
+				if (rank != 0) return;
+				const auto write = [&](const iga::PetscKspConfiguration& solver) {
+					std::cout << "solver_configuration prefix=" << solver.prefix << " ksp=" << solver.ksp
+						<< " pc=" << solver.pc << " factor_backend=" << solver.factor_backend
+						<< " step=" << step << " iterations=" << solver.last_iterations
+						<< " reason=" << static_cast<int>(solver.last_reason) << '\n';
+				};
+				write(flow.SolverConfiguration());
+				if (vca_transport) write(vca_transport->SolverConfiguration());
+				iga::FlushCheckedText(std::cout);
+			});
 			if (vca_circuit) {
 				const std::vector<std::string> empty_fields;
 				const auto& species_fields = vca_transport ? vca_transport->System().fields : empty_fields;

@@ -534,7 +534,8 @@ F05 的原始診斷例外保存與恢復亦通過，見
   操作見 [solver options](SOLVER_OPTIONS.md)，驗收見
   [貼體進度](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。四種 1D implicit 方法、
   SNES 及正式 1D CLI／native graph 也已接入，見
-  [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。其餘 body-fitted standalone、
+  [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。body-fitted standalone／VCA
+  也已接入，見 [standalone 進度](progress/HPC_04A_STANDALONE_OPTIONS_PROGRESS.md)。
   immersed／moving／FSI 與完整巢狀診斷及後端矩陣仍待完成。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、

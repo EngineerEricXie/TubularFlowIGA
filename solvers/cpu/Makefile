@@ -702,3 +702,5 @@ petsc_solver_options_test: tests/test_petsc_solver_options.cpp include/PetscSolv
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 iga_navier_stokes: include/PetscSolverOptions.hpp include/CollectivePetscOptions.hpp
+
+iga_solve: include/PetscSolverOptions.hpp include/RuntimeConstruction.hpp

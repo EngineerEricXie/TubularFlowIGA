@@ -1,3 +1,6 @@
+#include <cctype>
+#include "PetscSolverOptions.hpp"
+#include "RuntimeConstruction.hpp"
 #include "CheckedText.hpp"
 #include "ExecutionResources.hpp"
 #include "CaseInput.hpp"
@@ -61,6 +64,7 @@ private:
 };
 
 struct TransportPetscObjects {
+	std::unique_ptr<iga::PetscSolverOptions> options;
 	Mat left = nullptr, previous = nullptr;
 	Vec forcing = nullptr, current = nullptr, next = nullptr, rhs = nullptr;
 	KSP solver = nullptr;
@@ -101,12 +105,12 @@ void RequireRegularOutput(const fs::path& path)
 		throw std::runtime_error("output must be a regular file: "+path.string());
 }
 
-void SetupTransportKsp(KSP solver, Mat matrix)
+void SetupTransportKsp(KSP solver, Mat matrix, iga::PetscSolverOptions& options)
 {
 	iga::RequireKspFactorBackend(solver, matrix, PETSC_COMM_WORLD);
 	iga::PhaseScope phase(iga::ProfilePhase::SolverSetup);
-	CheckPetsc("transport solver setup", KSPSetUp(solver));
-	CheckPetsc("transport block solver setup", KSPSetUpOnBlocks(solver));
+	options.Call("transport solver setup", [&] { return KSPSetUp(solver); });
+	options.Call("transport block solver setup", [&] { return KSPSetUpOnBlocks(solver); });
 }
 
 void EnableMemoryTracking(int argc, char** argv)
@@ -182,6 +186,17 @@ TransportOptions ParseOptions(int argc, char** argv)
 	int positional = 0;
 	for (int i = 3; i < argc; ++i) {
 		const std::string argument(argv[i]);
+		if (argument.size() > 1 && argument[0] == '-' && std::isalpha(static_cast<unsigned char>(argument[1]))) {
+			// PETSc parsed these keys during initialization; keep their values
+			// out of the legacy positional application interface.
+			if (i+1 < argc) {
+				const std::string next(argv[i+1]);
+				const bool next_key = next.size() > 1 && next[0] == '-'
+					&& (next[1] == '-' || std::isalpha(static_cast<unsigned char>(next[1])));
+				if (!next_key) ++i;
+			}
+			continue;
+		}
 		if (argument.rfind("--", 0) != 0) {
 			if (positional == 0) options.system = argument;
 			else if (positional == 1) options.output = argument;
@@ -607,7 +622,14 @@ int main(int argc, char** argv)
 			});
 		}
 
+		std::string solver_prefix;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport solver prefix", [&] {
+			solver_prefix = iga::PetscDomainOptionsPrefix(system.name, "transport");
+		});
+		objects.options = iga::AllocateCollectiveRuntime<iga::PetscSolverOptions>(PETSC_COMM_WORLD,
+			PETSC_COMM_WORLD, solver_prefix);
 		CheckPetsc("transport KSPCreate", KSPCreate(PETSC_COMM_WORLD, &solver));
+		objects.options->Attach(solver);
 		if (!velocity_source) CheckPetsc("transport KSPSetOperators", KSPSetOperators(solver, left, left));
 		CheckPetsc("transport KSPSetType", KSPSetType(solver, KSPGMRES));
 		CheckPetsc("transport KSPGMRESSetRestart", KSPGMRESSetRestart(solver, 50));
@@ -615,9 +637,10 @@ int main(int argc, char** argv)
 		PC preconditioner = nullptr;
 		CheckPetsc("transport KSPGetPC", KSPGetPC(solver, &preconditioner));
 		CheckPetsc("transport PCSetType", PCSetType(preconditioner, PCBJACOBI));
-		CheckPetsc("transport KSPSetFromOptions", KSPSetFromOptions(solver));
+		objects.options->Call("transport KSPSetFromOptions", [&] { return KSPSetFromOptions(solver); });
+		objects.options->RecordUsed();
 		if (!velocity_source) {
-			SetupTransportKsp(solver, left);
+			SetupTransportKsp(solver, left, *objects.options);
 			memory.Record("ksp_setup");
 		}
 
@@ -649,7 +672,7 @@ int main(int argc, char** argv)
 				const auto velocity = velocity_at((step+1)*system.dt);
 				assemble_operators(velocity);
 				CheckPetsc("transport KSPSetOperators", KSPSetOperators(solver, left, left));
-				SetupTransportKsp(solver, left);
+				SetupTransportKsp(solver, left, *objects.options);
 				if (!setup_memory_recorded) {
 					memory.Record("ksp_setup");
 					setup_memory_recorded = true;
@@ -677,10 +700,11 @@ int main(int argc, char** argv)
 			if (step > 0) CheckPetsc("transport VecCopy", VecCopy(current, next));
 			CheckPetsc("transport KSPSetInitialGuessNonzero", KSPSetInitialGuessNonzero(solver, step > 0 ? PETSC_TRUE : PETSC_FALSE));
 			const auto linear_start = std::chrono::steady_clock::now();
-			SetupTransportKsp(solver, left);
+			SetupTransportKsp(solver, left, *objects.options);
 			{
 				iga::PhaseScope linear_phase(iga::ProfilePhase::LinearSolve);
-				CheckPetsc("transport linear solve", KSPSolve(solver, rhs, next));
+				objects.options->Call("transport linear solve", [&] { return KSPSolve(solver, rhs, next); });
+				objects.options->RecordUsed();
 			}
 			linear_seconds += std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-linear_start).count();
@@ -690,6 +714,15 @@ int main(int argc, char** argv)
 				if (KSPGetConvergedReason(solver, &reason) || KSPGetIterationNumber(solver, &iterations))
 					throw std::runtime_error("cannot query transport KSP status");
 				if (reason <= 0) throw std::runtime_error("KSP did not converge at step " + std::to_string(step));
+			});
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport solver diagnostics", [&] {
+				if (rank != 0) return;
+				const auto configured_solver = iga::CaptureKspConfiguration(solver);
+				std::cout << "solver_configuration prefix=" << configured_solver.prefix
+					<< " ksp=" << configured_solver.ksp << " pc=" << configured_solver.pc
+					<< " factor_backend=" << configured_solver.factor_backend
+					<< " step=" << step+1 << " iterations=" << iterations << " reason=" << static_cast<int>(reason) << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 			total_iterations += iterations;
 			CheckPetsc("transport VecSwap", VecSwap(current, next));
