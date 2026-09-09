@@ -180,6 +180,16 @@ public:
 		PreflightCatalogs();
 		BuildActiveMap();
 	}
+	// Topology is fixed. A runtime owns the trial-state guard; compatibility of
+	// all flow targets is checked after a caller has supplied the complete set.
+	void SetPortControlValue(const std::string& id,double value)
+	{
+		if (!std::isfinite(value)) throw std::invalid_argument("immersed flow port value must be finite");
+		for (std::size_t i = 0; i < options_.ports.size(); ++i) if (options_.ports[i].id == id) {
+			options_.ports[i].value = value; diagnostics_.ports[i].target = value; return;
+		}
+		throw std::out_of_range("immersed flow port id is not configured");
+	}
 	const ImmersedStaticFlowOptions& Options() const noexcept { return options_; }
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
 	const std::vector<std::int32_t>& ActiveNodes() const noexcept { return active_nodes_; }

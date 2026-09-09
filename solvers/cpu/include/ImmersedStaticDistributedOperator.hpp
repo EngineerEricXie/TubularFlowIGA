@@ -14,7 +14,7 @@ namespace iga {
 
 enum class ImmersedWorkPartition { CellCount, WeightedContiguous };
 
-// Immutable geometry and controls for a steady four-field operator. Local
+// Immutable geometry and port topology for a steady four-field operator. Local
 // evaluators must represent the same physical functions on every MPI member.
 // Geometry/controls are validated before distributed resources are created.
 // The communicator and catalogs must outlive this object. Construction,
@@ -96,10 +96,30 @@ public:
 	ImmersedDistributedAssembly& Assembly() noexcept { return *assembly_; }
 	const ImmersedDistributedAssembly& Assembly() const noexcept { return *assembly_; }
 
+	void SetPortControlValue(const std::string& id,double value)
+	{
+		std::size_t index = 0;
+		std::string signature;
+		CollectiveLocalStage(communicator_,"immersed port update preflight",[&] {
+			(void)assembly_->State();
+			if (!std::isfinite(value)) throw std::invalid_argument("immersed flow port value must be finite");
+			const auto& ports = Options().ports;
+			while (index < ports.size() && ports[index].id != id) ++index;
+			if (index == ports.size()) throw std::out_of_range("immersed flow port id is not configured");
+			std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
+			text << id.size() << ':' << id << ':' << std::setprecision(std::numeric_limits<double>::max_digits10) << value;
+			signature = text.str();
+		});
+		RequireCollectiveSameText(communicator_,"immersed port update agreement",signature);
+		// The validated lookup only stores doubles; publication allocates nothing.
+		setup_->SetPortControlValue(id,value); diagnostics_.ports[index].target = value;
+	}
+
 	void Assemble()
 	{
 		PhaseScope phase(ProfilePhase::Assembly);
 		const auto start = std::chrono::steady_clock::now();
+		CollectiveLocalStage(communicator_,"immersed port compatibility",[&] { setup_->ValidateAllFlowCompatibility(); });
 		std::fill(local_ports_.begin(),local_ports_.end(),std::array<double,7>{}); local_counts_.fill(0);
 		std::fill(local_walls_.begin(),local_walls_.end(),0);
 		assembly_->Assemble([&](const auto& stencil,auto& matrix,auto& residual) { Integrate(stencil,matrix,residual); });

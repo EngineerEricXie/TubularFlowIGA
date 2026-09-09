@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。完成 HPC-03A 靜態 MPI 與 HPC-03B 可選工作量分區／單機比較；
+最近更新：2026-09-09。接入 HPC-03C 準靜態 graph MPI；固定幾何暫態仍待接續；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -48,10 +48,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（11 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B |
-| 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
-| 其餘待辦（25 項） | HPC-03C 至 HPC-09；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-03C |
+| 其餘待辦（24 項） | HPC-03D 至 HPC-09；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 27 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 27 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -148,7 +148,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
 | CPU 貼體 3D 流場／傳輸 | MPI/PETSc、owned-row 組裝 | 擴展性證據、可配置 communicator、求解與 I/O 改善 |
 | 原生 1D | 部分隱式求解使用 MPI；部分顯式／物種更新使用 OpenMP | 釐清各方法的執行模式、減少大型案例的重複資料 |
 | 0D／1D／貼體 3D graph | 有 MPI 耦合案例及 trial/commit/rollback | 全域 checkpoint、程序群配置與可靠失敗處理 |
-| 浸入式／移動流場 | 單程序求解；浸入式 graph loader 要求 MPI size 1 | 單機 OpenMP、分散式資料所有權、移動後狀態移轉 |
+| 浸入式／移動流場 | 靜態 runtime／準靜態 graph 已接 MPI；暫態／移動維持序列 | 固定幾何 velocity history、移動 ownership／halo 與狀態移轉 |
 | FSI | 單分區膜結構與流體強耦合 | 分散式介面、全域收斂與回復 |
 | Spline | 部分 OpenMP、分塊與串流輸出 | 大型案例的時間／記憶體證據 |
 | Mesh／packer | 單程序工具 | 先量測，只有成為瓶頸時才擴充 |
@@ -494,6 +494,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、
   全域守恆及 trial rollback。只有這些門檻通過後，才移除對應已支援路徑的
   MPI size 1 限制；未完成的模式維持明確拒絕。
+  準靜態 graph 的 collective port 更新、owned runtime／adapter 與 case 建立
+  已接入；正式 explicit／fixed／Aitken 入口通過 1／2／4 ranks、介面門檻與
+  precommit failure，序列 schema 回歸通過。固定幾何 backward-Euler history
+  與暫態求解尚未接入，故保持未勾選，見
+  [準靜態 graph MPI 進度](progress/HPC_03C_STATIC_GRAPH_PROGRESS.md)。
 - [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。

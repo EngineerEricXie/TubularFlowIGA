@@ -78,6 +78,22 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 	iga::ImmersedStaticDistributedRuntime runtime(comm,f.domain,f.volume,f.surface,f.ghost,options,partition);
 	std::vector<PetscScalar> zero(static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),0.0);
 	runtime.SetCommittedOwnedState(zero);
+	if (!closed) {
+		for (int scenario = 0; scenario < (size > 1 ? 3 : 2); ++scenario) {
+			std::string id = "inlet"; double value = -1e-6;
+			if (rank == size-1) {
+				if (scenario == 0) id = "absent";
+				if (scenario == 1) value = std::numeric_limits<double>::quiet_NaN();
+				if (scenario == 2) value *= 0.5;
+			}
+			Reject(comm,[&] { runtime.SetPortControlValue(id,value); });
+			iga::CollectiveLocalStage(comm,"static rejected control preserves targets",[&] {
+				for (std::size_t i = 0; i < options.ports.size(); ++i)
+					if (runtime.PortDefinitions()[i].value != options.ports[i].value || runtime.Diagnostics().ports[i].target != options.ports[i].value)
+						throw std::runtime_error("rejected static control changed target");
+			});
+		}
+	}
 	calls = 0; runtime.Assemble(); const auto calls_per_assembly = calls;
 	const int candidate_rank = calls_per_assembly ? rank : -1;
 	MPI_Allreduce(&candidate_rank,&failure_rank,1,MPI_INT,MPI_MAX,comm);
@@ -98,6 +114,7 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 	});
 	if (!runtime.SolveTrial()) throw std::runtime_error("distributed static trial did not converge");
 	const auto accepted = runtime.Diagnostics();
+	if (!closed) Reject(comm,[&] { runtime.SetPortControlValue("inlet",-2e-6); });
 	if (rank == size-1) runtime.FailNextPrepareForTesting();
 	Reject(comm,[&] { runtime.PrepareCommit(); });
 	iga::CollectiveLocalStage(comm,"static MPI unpublished preparation",[&] {
@@ -106,6 +123,11 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 		for (PetscInt row = runtime.RowBegin(); row < runtime.RowEnd(); ++row)
 			if (committed.Data()[row-runtime.RowBegin()] != 0.0) throw std::runtime_error("failed prepare changed committed values");
 		committed.Restore();
+	});
+	runtime.PrepareCommit(); runtime.AbortPrepared(); runtime.FinalizeCommit();
+	iga::CollectiveLocalStage(comm,"static abort prepared does not publish",[&] {
+		if (runtime.Diagnostics().prepared || !runtime.Diagnostics().trial_active || runtime.Diagnostics().commit_count)
+			throw std::runtime_error("aborted static preparation published state");
 	});
 	runtime.PrepareCommit(); runtime.FinalizeCommit();
 	double local[6]{},global[6]{};

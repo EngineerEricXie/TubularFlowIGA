@@ -16,8 +16,9 @@ exchange. `ImmersedStaticDistributedOperator` now uses the shared serial/MPI
 geometry setup and existing physics kernels, with global port/wall/pressure
 diagnostics. `ImmersedStaticDistributedRuntime` adds owned Newton/KSP updates,
 global convergence and conservation checks, and transactional commit/rollback.
-Its C++ interface supports steady solves; existing case/graph/transient entry
-points retain their single-rank restrictions pending HPC-03C integration. See
+Its C++ interface and the quasi-static graph entry support distributed steady
+solves. Fixed-geometry backward-Euler and moving immersed entry points remain
+serial pending further HPC-03C/D work. See
 the [assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md),
 [static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md),
 and [static runtime report](../../docs/progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md).
@@ -28,6 +29,10 @@ quadrature and stabilization cost estimates. The default remains `CellCount`;
 the measured small case showed no clear speedup. See the
 [partition comparison](../../docs/progress/HPC_03B_WORK_PARTITION_PROGRESS.md)
 for per-rank work, halo, assembly timings, and reproducible benchmark commands.
+
+The [steady graph MPI report](../../docs/progress/HPC_03C_STATIC_GRAPH_PROGRESS.md)
+covers collective port updates, case preflight/initialization, transactional
+rollback, and native explicit/fixed/Aitken graph validation.
 
 | Executable | Purpose |
 | --- | --- |

@@ -50,6 +50,19 @@ public:
 	ImmersedStaticDistributedRuntime(const ImmersedStaticDistributedRuntime&) = delete;
 	ImmersedStaticDistributedRuntime& operator=(const ImmersedStaticDistributedRuntime&) = delete;
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
+	MPI_Comm Communicator() const noexcept { return communicator_; }
+	const std::vector<ImmersedFlowPortDefinition>& PortDefinitions() const noexcept { return op_->Options().ports; }
+	void SetPortControlValue(const std::string& id,double value)
+	{
+		RequireStateAgreement();
+		CollectiveLocalStage(communicator_,"distributed static port trial guard",[&] {
+			RequireOpen();
+			if (diagnostics_.trial_active) throw std::logic_error("cannot change immersed port control during an active trial");
+		});
+		op_->SetPortControlValue(id,value);
+		for (auto& port : diagnostics_.ports) if (port.id == id) port.target = value;
+		diagnostics_.converged = false;
+	}
 	const ImmersedStaticFlowSetup& Topology() const noexcept { return op_->Topology(); }
 	std::size_t OwnedStencilCount() const noexcept { return op_->Assembly().OwnedStencils().size(); }
 	std::size_t RequiredStateRows() const noexcept { return op_->Assembly().RequiredRows().size(); }
@@ -175,6 +188,7 @@ public:
 		diagnostics_.committed = true; ++diagnostics_.commit_count; ++diagnostics_.finalize_count;
 	}
 	void Commit() { PrepareCommit(); FinalizeCommit(); }
+	void AbortPrepared() noexcept { diagnostics_.prepared = false; }
 	void Rollback()
 	{
 		RequireStateAgreement();

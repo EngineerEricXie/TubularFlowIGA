@@ -1,7 +1,7 @@
 #ifndef IGA_IMMERSED_FLOW_CASE_HPP
 #define IGA_IMMERSED_FLOW_CASE_HPP
 
-// Production owner for the serial, quasi-static immersed flow backend.  Keep
+// Production owner for serial or distributed quasi-static immersed flow. Keep
 // the catalog dependencies in declaration order: the runtime borrows ghost,
 // surface and volume, ghost borrows classification and volume, and all of
 // them ultimately retain the classified surface.
@@ -10,6 +10,7 @@
 #include "FlowDomainPortMetadata.hpp"
 #include "SimulationConfig.hpp"
 #include "ThreeDImmersedFlowDomain.hpp"
+#include "ThreeDImmersedDistributedFlowDomain.hpp"
 #include "../solvers/cpu/include/CartesianDomainClassification.hpp"
 #include "../solvers/cpu/include/CutCellGhostPenalty.hpp"
 #include "../solvers/cpu/include/ImmersedStaticFlowRuntime.hpp"
@@ -35,11 +36,21 @@ namespace iga {
 class ImmersedFlowCase final : public CoupledDomainRuntime {
 public:
 	static std::unique_ptr<ImmersedFlowCase> Load(const std::filesystem::path& case_directory,
-		const std::string& domain_id, const std::vector<CouplingPort>& ports, int mpi_size)
+		const std::string& domain_id,const std::vector<CouplingPort>& ports,int mpi_size)
+	{
+		if (mpi_size != 1) throw std::runtime_error("immersed flow cases require MPI size 1 through the serial Load interface");
+		auto result = Preflight(case_directory,domain_id,ports);
+		result->runtime_ = std::make_unique<ImmersedStaticFlowRuntime>(*result->classification_,
+			*result->volume_,*result->surface_,*result->ghost_,result->runtime_options_);
+		result->adapter_ = std::make_unique<ThreeDImmersedFlowDomain>(domain_id,*result->runtime_,ports);
+		return result;
+	}
+	// Local geometry/configuration preparation: safe inside a caller's local
+	// failure stage. No distributed resource is created until initialization.
+	static std::unique_ptr<ImmersedFlowCase> Preflight(const std::filesystem::path& case_directory,
+		const std::string& domain_id,const std::vector<CouplingPort>& ports)
 	{
 		PhaseScope input_phase(ProfilePhase::Input);
-		if (mpi_size != 1)
-			throw std::runtime_error("immersed flow cases require MPI size 1");
 		ValidateThreeDImmersedFlowDomainMetadata(domain_id, ports);
 		auto result = std::unique_ptr<ImmersedFlowCase>(new ImmersedFlowCase);
 		result->case_directory_ = std::filesystem::canonical(case_directory);
@@ -71,20 +82,36 @@ public:
 		result->ghost_ = std::make_unique<CutCellGhostPenaltyCatalog>(*result->classification_,
 			*result->volume_, ParseGhost(Required(object, "ghost_penalty")));
 		const auto wall_labels = ParseLabels(Required(object, "wall_labels"));
-		const auto runtime_options = ParseRuntime(Required(object, "runtime"), result->configuration_,
+		result->runtime_options_ = ParseRuntime(Required(object, "runtime"), result->configuration_,
 			wall_labels);
 		ValidateLabelPartition(result->classification_->SurfaceIndex().Surface(), wall_labels,
-			ports, runtime_options.ports);
-		result->runtime_ = std::make_unique<ImmersedStaticFlowRuntime>(*result->classification_,
-			*result->volume_, *result->surface_, *result->ghost_, runtime_options);
-		result->runtime_parameters_ = runtime_options.parameters;
-		result->adapter_ = std::make_unique<ThreeDImmersedFlowDomain>(domain_id,
-			*result->runtime_, ports);
+			ports, result->runtime_options_.ports);
+		result->domain_id_ = domain_id; result->graph_ports_ = ports;
+		result->runtime_parameters_ = result->runtime_options_.parameters;
 		return result;
 	}
+	void InitializeDistributed(MPI_Comm communicator)
+	{
+		CollectiveLocalStage(communicator,"immersed case distributed initialization",[&] {
+			if (runtime_ || distributed_runtime_ || adapter_ || !classification_ || !volume_ || !surface_ || !ghost_)
+				throw std::logic_error("immersed case is not an uninitialized preflight result");
+		});
+		auto runtime = AllocateCollectiveRuntime<ImmersedStaticDistributedRuntime>(communicator,communicator,
+			*classification_,*volume_,*surface_,*ghost_,runtime_options_);
+		auto adapter = AllocateCollectiveRuntime<ThreeDImmersedDistributedFlowDomain>(communicator,domain_id_,*runtime,graph_ports_);
+		distributed_runtime_ = std::move(runtime); adapter_ = std::move(adapter);
+	}
+	bool IsDistributed() const noexcept { return static_cast<bool>(distributed_runtime_); }
+	// Collective for a distributed case; geometry and audit metadata stay valid.
+	void CloseDistributed() const { if (distributed_runtime_) distributed_runtime_->Close(); }
+	ImmersedStaticDistributedRuntime& DistributedRuntime()
+	{
+		if (!distributed_runtime_) throw std::logic_error("immersed case has no distributed runtime");
+		return *distributed_runtime_;
+	}
 
-	ImmersedStaticFlowRuntime& Runtime() noexcept { return *runtime_; }
-	const ImmersedStaticFlowRuntime& Runtime() const noexcept { return *runtime_; }
+	ImmersedStaticFlowRuntime& Runtime() { if (!runtime_) throw std::logic_error("immersed case has no serial runtime"); return *runtime_; }
+	const ImmersedStaticFlowRuntime& Runtime() const { if (!runtime_) throw std::logic_error("immersed case has no serial runtime"); return *runtime_; }
 	const SimulationConfiguration& Configuration() const noexcept { return configuration_; }
 	const std::string& SurfaceHash() const noexcept { return classification_->SurfaceCanonicalHash(); }
 	const CubicCartesianGridSpec& Grid() const noexcept { return classification_->Background().Spec(); }
@@ -99,20 +126,25 @@ public:
 	const NavierStokesParameters& RuntimeParameters() const noexcept
 	{ return runtime_parameters_; }
 
-	const std::string& DomainId() const noexcept override { return adapter_->DomainId(); }
-	DomainKind Kind() const noexcept override { return adapter_->Kind(); }
-	const std::vector<CouplingPort>& Ports() const noexcept override { return adapter_->Ports(); }
-	void BeginStep(const DomainStepContext& step) override { adapter_->BeginStep(step); }
+	const std::string& DomainId() const noexcept override { return domain_id_; }
+	DomainKind Kind() const noexcept override { return DomainKind::ThreeDImmersedFlow; }
+	const std::vector<CouplingPort>& Ports() const noexcept override { return graph_ports_; }
+	void BeginStep(const DomainStepContext& step) override { Adapter().BeginStep(step); }
 	void SetPortInput(const std::string& id, const PortBoundaryData& input) override
-	{ adapter_->SetPortInput(id, input); }
-	void SolveTrial() override { adapter_->SolveTrial(); }
-	PortState GetPortState(const std::string& id) const override { return adapter_->GetPortState(id); }
-	void RollbackTrial() override { adapter_->RollbackTrial(); }
-	void AbortStep() override { adapter_->AbortStep(); }
-	void PrepareCommitStep() override { adapter_->PrepareCommitStep(); }
-	void FinalizeCommitStep() noexcept override { adapter_->FinalizeCommitStep(); }
+	{ Adapter().SetPortInput(id, input); }
+	void SolveTrial() override { Adapter().SolveTrial(); }
+	PortState GetPortState(const std::string& id) const override { return Adapter().GetPortState(id); }
+	void RollbackTrial() override { Adapter().RollbackTrial(); }
+	void AbortStep() override { Adapter().AbortStep(); }
+	void PrepareCommitStep() override { Adapter().PrepareCommitStep(); }
+	void FinalizeCommitStep() noexcept override { if (adapter_) adapter_->FinalizeCommitStep(); }
 
 private:
+	CoupledDomainRuntime& Adapter() const
+	{
+		if (!adapter_) throw std::logic_error("immersed case runtime has not been initialized");
+		return *adapter_;
+	}
 	static const config_detail::JsonValue& Required(const std::map<std::string, config_detail::JsonValue>& object,
 		const std::string& key)
 	{
@@ -231,9 +263,13 @@ private:
 	std::unique_ptr<CutCellVolumeQuadratureCatalog> volume_;
 	std::unique_ptr<ImmersedSurfaceQuadratureCatalog> surface_;
 	std::unique_ptr<CutCellGhostPenaltyCatalog> ghost_;
+	ImmersedStaticFlowOptions runtime_options_;
+	std::string domain_id_;
+	std::vector<CouplingPort> graph_ports_;
 	std::unique_ptr<ImmersedStaticFlowRuntime> runtime_;
+	std::unique_ptr<ImmersedStaticDistributedRuntime> distributed_runtime_;
 	NavierStokesParameters runtime_parameters_;
-	std::unique_ptr<ThreeDImmersedFlowDomain> adapter_;
+	std::unique_ptr<CoupledDomainRuntime> adapter_;
 };
 
 } // namespace iga

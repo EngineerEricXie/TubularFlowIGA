@@ -24,7 +24,7 @@ PETSC_TARGETS += petsc_checkpoint_write_test
 PETSC_TARGETS += execution_resources_test execution_resources_serial_test
 PETSC_TARGETS += memory_report_test
 PETSC_TARGETS += immersed_distributed_assembly_test
-PETSC_TARGETS += immersed_distributed_physics_test immersed_distributed_static_flow_test
+PETSC_TARGETS += immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 
 immersed_distributed_static_flow_test: tests/test_immersed_distributed_static_flow.cpp include/ImmersedStaticDistributedRuntime.hpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp include/CollectivePetscOptions.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -103,7 +103,7 @@ $(PETSC_TARGETS): include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
 $(PETSC_TARGETS): include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
 $(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp include/RuntimeCleanup.hpp
 $(PETSC_TARGETS): include/ImmersedStaticFlowSetup.hpp
-immersed_distributed_physics_test immersed_distributed_static_flow_test: ../../include/WeightedWorkPartition.hpp
+immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test: ../../include/WeightedWorkPartition.hpp
 $(PETSC_TARGETS): include/PetscGather.hpp
 $(PETSC_TARGETS): include/PetscCheckpointRead.hpp
 $(PETSC_TARGETS): include/PetscCheckpointWrite.hpp
@@ -620,7 +620,7 @@ clean:
 	$(RM) execution_resources_test execution_resources_serial_test
 	$(RM) memory_report_test
 	$(RM) immersed_distributed_assembly_test weighted_work_partition_test
-	$(RM) immersed_distributed_physics_test immersed_distributed_static_flow_test
+	$(RM) immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test
 	$(RM) petsc_gather_test
@@ -646,3 +646,8 @@ weighted-work-partition-test: weighted_work_partition_test
 	./weighted_work_partition_test
 
 test: weighted-work-partition-test
+
+immersed_distributed_domain_test: tests/test_immersed_distributed_domain.cpp ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../../include/ThreeDImmersedFlowDomain.hpp include/ImmersedStaticDistributedRuntime.hpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp

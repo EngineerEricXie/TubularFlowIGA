@@ -956,9 +956,11 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 					if (configuration.schema_version == 6)
 						throw std::runtime_error(
 							"schema-v6 transport is unsupported by the immersed flow backend");
-					immersed.emplace(domain_id, iga::ImmersedFlowCase::Load(
-						assets.at(domain_id).case_directory, domain_id,
-						configuration.graph.Domain(domain_id).ports, mpi_size));
+					immersed.emplace(domain_id, mpi_size == 1
+						? iga::ImmersedFlowCase::Load(assets.at(domain_id).case_directory,domain_id,
+							configuration.graph.Domain(domain_id).ports,mpi_size)
+						: iga::ImmersedFlowCase::Preflight(assets.at(domain_id).case_directory,domain_id,
+							configuration.graph.Domain(domain_id).ports));
 				}
 			for (const auto& volume : three_d)
 				for (const auto& line : one_d)
@@ -977,6 +979,21 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
 		});
+		if (mpi_size > 1) for (const auto& domain_id : plan.domain_order) if (immersed.count(domain_id)) {
+			auto& native = *immersed.at(domain_id); native.InitializeDistributed(communicator);
+			iga::CollectiveLocalStage(communicator,"immersed distribution diagnostics",[&] {
+				const char* profile = std::getenv("IGA_PROFILE");
+				if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0] != '1' || profile[1] != '\0')) return;
+				const auto& runtime = native.DistributedRuntime();
+				std::cout << "hpc_immersed_distribution {\"domain\":\"" << JsonEscape(domain_id)
+					<< "\",\"rank\":" << rank << ",\"ranks\":" << mpi_size
+					<< ",\"global_rows\":" << runtime.Diagnostics().total_dofs
+					<< ",\"owned_rows\":" << runtime.RowEnd()-runtime.RowBegin()
+					<< ",\"owned_stencils\":" << runtime.OwnedStencilCount()
+					<< ",\"required_rows\":" << runtime.RequiredStateRows() << "}\n";
+				iga::FlushCheckedText(std::cout);
+			});
+		}
 		for (const auto& domain_id : plan.domain_order) {
 			if (!three_d.count(domain_id)) continue;
 			auto& native = *three_d.at(domain_id);
@@ -1110,8 +1127,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						native.configuration, native.case_directory,
 						native.reference_outward_flow_m3_s, controls));
 				} else if (immersed.count(domain_id)) {
-					// Immersed owners are currently restricted to one rank by Load.
-					// Allocate the audit entry before transferring that owner.
+					// Allocate the audit entry before transferring the complete owner.
 					immersed_audit.emplace(domain_id, immersed.at(domain_id).get());
 					runtimes.push_back(std::move(immersed.at(domain_id)));
 				} else {
@@ -1253,6 +1269,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			if (native.transport_runtime) native.transport_runtime->Close();
 			native.runtime->Close();
 		}
+		for (const auto& entry : immersed_audit) entry.second->CloseDistributed();
 		iga::CollectiveLocalStage(communicator, "graph output", [&] {
 			if (rank != 0) return;
 			if (species_executor)

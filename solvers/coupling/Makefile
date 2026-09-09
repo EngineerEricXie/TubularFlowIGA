@@ -255,3 +255,5 @@ graph_registry_failure_test: tests/test_graph_registry_failure.cpp tests/test_mu
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) -UNDEBUG -DIGA_RUNTIME_CONSTRUCTION_TESTING -DIGA_MULTIDOMAIN_NO_MAIN $(PETSC_CFLAGS) tests/test_graph_registry_failure.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
 three_d_staged_failure_test three_d_trial_failure_test three_d_port_failure_test: ../cpu/tests/StringStreamFailure.hpp
 pressure_flow_collective_failure_test species_collective_failure_test: tests/AbortReportAllocation.hpp
+
+iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp

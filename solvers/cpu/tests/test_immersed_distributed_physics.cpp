@@ -35,7 +35,7 @@ void Run(MPI_Comm comm, const std::string& mode,iga::ImmersedWorkPartition parti
 {
 	int rank = 0, size = 1;
 	MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
-	if (mode != "flow" && mode != "pressure" && mode != "traction" && mode != "closed" && mode != "wall-only" && mode != "faults" && mode != "padded" && mode != "expanded") throw std::invalid_argument("unknown physics mode");
+	if (mode != "flow" && mode != "pressure" && mode != "traction" && mode != "closed" && mode != "wall-only" && mode != "faults" && mode != "padded" && mode != "expanded" && mode != "controls") throw std::invalid_argument("unknown physics mode");
 	bool inject = false;
 	std::size_t force_calls = 0;
 	std::unique_ptr<Fixture> fixture;
@@ -93,6 +93,36 @@ void Run(MPI_Comm comm, const std::string& mode,iga::ImmersedWorkPartition parti
 	});
 	iga::RequireCollectivePetscSuccess(comm,"physics state begin",VecAssemblyBegin(distributed.State()));
 	iga::RequireCollectivePetscSuccess(comm,"physics state end",VecAssemblyEnd(distributed.State()));
+	if (mode == "controls") {
+		for (int scenario = 0; scenario < (size > 1 ? 4 : 2); ++scenario) {
+			std::string id = "inlet"; double value = -0.001;
+			if (rank == size-1) {
+				if (scenario == 0) id = "absent";
+				if (scenario == 1) value = std::numeric_limits<double>::quiet_NaN();
+				if (scenario == 2) value *= 0.5;
+				if (scenario == 3) id = "outlet";
+			}
+			bool rejected = false;
+			try { op.SetPortControlValue(id,value); } catch (const std::exception&) { rejected = true; }
+			iga::CollectiveLocalStage(comm,"physics control rejection",[&] {
+				if (!rejected) throw std::runtime_error("invalid or inconsistent control accepted");
+				for (std::size_t i = 0; i < options.ports.size(); ++i)
+					if (op.Options().ports[i].value != options.ports[i].value || op.Diagnostics().ports[i].target != options.ports[i].value)
+						throw std::runtime_error("rejected control changed a port");
+			});
+		}
+		op.SetPortControlValue("inlet",-0.0005);
+		bool rejected = false;
+		try { op.Assemble(); } catch (const std::exception&) { rejected = true; }
+		iga::CollectiveLocalStage(comm,"physics incomplete target set",[&] {
+			if (!rejected || op.Diagnostics().aggregate_assembly_seconds != 0.0) throw std::runtime_error("incompatible flow targets assembled");
+		});
+		op.SetPortControlValue("outlet",0.0005);
+		iga::CollectiveLocalStage(comm,"physics updated serial control reference",[&] {
+			serial->SetPortControlValue("inlet",-0.0005); serial->SetPortControlValue("outlet",0.0005);
+			serial->Assemble(); expected_residual = serial->AssembledNegativeResidual(); expected_action = serial->AssembledJacobianAction(state);
+		});
+	}
 	if (mode == "faults") {
 		inject = true;
 		bool rejected = false;

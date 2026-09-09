@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--ranks', nargs='+', type=int, choices=[1, 2, 4], default=[1, 2, 4])
     parser.add_argument('--kind', choices=['unit', 'physics', 'all'], default='all')
-    parser.add_argument('--physics-mode', choices=['flow', 'pressure', 'traction', 'closed', 'wall-only', 'faults', 'padded', 'expanded'], default='flow')
+    parser.add_argument('--physics-mode', choices=['flow', 'pressure', 'traction', 'closed', 'wall-only', 'faults', 'padded', 'expanded', 'controls'], default='flow')
     parser.add_argument('--split', action='store_true', help='Also run the unit checks in 1+2 groups on three ranks')
     parser.add_argument('--bind-to-core', action='store_true', help='Bind MPI processes to separate cores for timing comparisons')
     parser.add_argument('--partition', choices=['cell-count', 'weighted'], default='cell-count')
