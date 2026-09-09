@@ -1,5 +1,8 @@
 # HPC-05C：貼體 3D accepted-state 恢復介面
 
+後續進度：本報告的磁碟 codec／新作業恢復缺口已由
+[3D 分片驗收](HPC_05C_BODY_FITTED_BUNDLE_PROGRESS.md) 接續；下文保留本批原始範圍。
+
 日期：2026-09-09。基準 revision：`49ae5c5eead287601bc0b3d0ff45766bfd2b8975`
 加本批修改。狀態：**部分完成，HPC-05C 保持未勾選**。
 

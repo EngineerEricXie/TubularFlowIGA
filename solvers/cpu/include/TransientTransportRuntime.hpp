@@ -391,6 +391,19 @@ public:
 		committed_steps_ = steps_;
 	}
 
+	TransportAcceptedCheckpointState CreateCheckpointRestoreCandidate() const
+	{
+		TransportAcceptedCheckpointState value;
+		CollectiveLocalStage(communicator_, "transport checkpoint candidate layout", [&] {
+			RequirePhase(TransportStepPhase::Committed, "CreateCheckpointRestoreCandidate");
+			if (cleanup_started_ || steps_ != 0) throw std::runtime_error("transport decoder requires a fresh open target");
+			ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+			value.configuration_identity_sha256 = checkpoint_identity_sha256_;
+			value.field = CaptureOwnedCheckpointVector(current_);
+		});
+		return value;
+	}
+
 	TransportAcceptedCheckpointState CaptureCheckpointState() const
 	{
 		TransportAcceptedCheckpointState value;

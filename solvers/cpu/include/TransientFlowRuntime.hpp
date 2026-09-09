@@ -895,6 +895,23 @@ public:
 		return result;
 	}
 
+	// Allocate decoder storage only from this verified fresh target. The
+	// returned image is not accepted until all payloads have been filled,
+	// checked against the bundle, and passed to RestoreCheckpointState.
+	FlowAcceptedCheckpointState CreateCheckpointRestoreCandidate() const
+	{
+		FlowAcceptedCheckpointState value;
+		CollectiveLocalStage(communicator_, "flow checkpoint candidate layout", [&] {
+			RequirePhase(FlowStepPhase::Committed, "CreateCheckpointRestoreCandidate");
+			if (cleanup_started_ || accepted_steps_ != 0) throw std::runtime_error("flow decoder requires a fresh open target");
+			ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
+			value.configuration_identity_sha256 = checkpoint_identity_sha256_; value.macro_dt_s = checkpoint_macro_dt_s_;
+			value.field = CaptureOwnedCheckpointVector(state_); value.boundaries = boundaries_;
+			value.pressure_tractions = pressure_tractions_; value.outlets = outlet_models_;
+		});
+		return value;
+	}
+
 	FlowAcceptedCheckpointState CaptureCheckpointState() const
 	{
 		FlowAcceptedCheckpointState value; std::string signature;

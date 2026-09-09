@@ -178,7 +178,11 @@ void Run(const fs::path& root, MPI_Comm comm, bool transient, bool outlet_model)
 }
 } // namespace
 
+#ifdef IGA_BODY_FITTED_CHECKPOINT_FIXTURE_ONLY
+int BodyFittedAcceptedCheckpointFixtureMain(int argc, char** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
 	PetscInitialize(&argc, &argv, nullptr, nullptr); iga::CurrentPhaseProfile().EnableFromEnvironment(); int rank = 0, ranks = 1;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank); MPI_Comm_size(PETSC_COMM_WORLD, &ranks);

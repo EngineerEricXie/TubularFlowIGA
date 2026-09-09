@@ -167,8 +167,12 @@ flow 的 graph macro dt 與 steady kernel dt=0 分開保存／驗證；transport
 accepted step count，舊 ReadState 的 steps=1 行為只留在 legacy API。場按 owned rows
 保存，replicated boundaries／outlets 經 SHA agreement；clock、iteration count 與
 snapshot／BE history 一起恢復。詳見 [貼體 3D 狀態進度](../progress/HPC_05C_BODY_FITTED_STATE_PROGRESS.md)。
-目前仍缺 3D 磁碟 codec 與全作業 provider publication，不能把 typed restore 當作
-live graph 的跨 domain 原子替換。
+3D 磁碟 codec 與 local bundle producer／loader 已加入：metadata、replicated boundary
+arrays 每 domain 保存一次，owned fields 按 bundle world rank 分片，stream buffer 上限
+64 KiB。decoder 的形狀取自 verified fresh runtime；全部 payload／SHA 與群組 agreement
+通過後才 typed restore。三種模式已由新 MPI 作業恢復，詳見
+[3D 分片進度](../progress/HPC_05C_BODY_FITTED_BUNDLE_PROGRESS.md)。全作業 provider
+publication 尚未接入 native graph，不能把 typed restore 當作 live graph 的跨 domain 原子替換。
 
 ### 4.4 VCA／外部 circuit
 

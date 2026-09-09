@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-05C 已補齊 0D 與 pressure／donor 的 checkpoint 狀態介面；
+最近更新：2026-09-09。HPC-05C 已加入貼體 3D 分片及新 MPI 作業的恢復驗收；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -570,8 +570,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
   保存可變 Hct／Hb、species inlet／waveform、動態半徑及 64-bit internal substeps。
   貼體 3D 另完成 [accepted-state 記憶體恢復](progress/HPC_05C_BODY_FITTED_STATE_PROGRESS.md)：
   owned fields、boundaries／outlets、graph clock 與真實 transport steps 在 3／1／2-rank
-  groups 精確接續，局部錯誤在發布前全群拒絕。3D streaming codec、1D／3D graph
-  provider wiring、完整歷史 prefix 與 native CLI／MPI graph 整合尚待完成。
+  groups 精確接續，局部錯誤在發布前全群拒絕。另完成
+  [3D 分片與新作業恢復](progress/HPC_05C_BODY_FITTED_BUNDLE_PROGRESS.md)：三種模式
+  在新的三 rank 作業精確接續，寫分片中與 manifest 發布前終止後都回退到完整世代；
+  24 MiB 串流、910 個 codec 拒絕及 sanitizer 通過。1D／3D graph provider wiring、
+  完整歷史 prefix 與 native CLI／MPI graph 整合尚待完成。
 - [ ] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。
