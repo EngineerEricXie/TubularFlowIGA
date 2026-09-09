@@ -26,7 +26,7 @@ PETSC_TARGETS += memory_report_test
 PETSC_TARGETS += immersed_distributed_assembly_test
 PETSC_TARGETS += immersed_distributed_physics_test
 
-immersed_distributed_physics_test: tests/test_immersed_distributed_physics.cpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp
+immersed_distributed_physics_test: tests/test_immersed_distributed_physics.cpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed_distributed_assembly_test: tests/test_immersed_distributed_assembly.cpp include/ImmersedDistributedAssembly.hpp
@@ -99,6 +99,7 @@ endif
 $(PETSC_TARGETS): include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
 $(PETSC_TARGETS): include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
 $(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp include/RuntimeCleanup.hpp
+$(PETSC_TARGETS): include/ImmersedStaticFlowSetup.hpp
 $(PETSC_TARGETS): include/PetscGather.hpp
 $(PETSC_TARGETS): include/PetscCheckpointRead.hpp
 $(PETSC_TARGETS): include/PetscCheckpointWrite.hpp

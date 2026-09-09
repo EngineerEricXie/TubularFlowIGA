@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。接續完成 runtime 終止清理與耦合 completion 發布順序驗收；
+最近更新：2026-09-09。接續開發浸入式 MPI 正式物理 operator 與全域診斷；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -479,8 +479,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
   分散式 stencil 組裝層已完成 owned Mat／Vec、required-state scatter、唯一積分
   與失敗後重試。27 cells／54 ghost faces 的完整體積、壁面、兩個 flow controller
   與 gauge 在 1／2／4 ranks 對照既有序列殘差及 Jacobian action 通過；空 rank
-  及 split1+2 亦通過。靜態 nonlinear runtime／診斷尚未接入，故保持未勾選，見
-  [分散式組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md)。
+  及 split1+2 亦通過。正式 static operator 已接上共用幾何 preflight／active
+  編號、既有物理 kernels、全域 port／wall／pressure 診斷；nonlinear runtime
+  與守恆驗收仍待接入，故保持未勾選，見
+  [分散式組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md) 與
+  [正式 operator 進度](progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md)。
 - [ ] **HPC-03B：按計算量分區。** 以積分點、切割與穩定化工作量建立初始權重，
   比較加權／未加權分區的最大 rank 耗時與通訊成本；避免只按 cell 數量分配。
 - [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、

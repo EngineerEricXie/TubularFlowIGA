@@ -15,6 +15,7 @@ def main():
     parser.add_argument('--output-dir', required=True, type=Path)
     parser.add_argument('--ranks', nargs='+', type=int, choices=[1, 2, 4], default=[1, 2, 4])
     parser.add_argument('--kind', choices=['unit', 'physics', 'all'], default='all')
+    parser.add_argument('--physics-mode', choices=['flow', 'pressure', 'traction', 'closed', 'wall-only', 'faults', 'padded', 'expanded'], default='flow')
     parser.add_argument('--split', action='store_true', help='Also run the unit checks in 1+2 groups on three ranks')
     args = parser.parse_args()
     if any(r < 1 for r in args.ranks) or len(set(args.ranks)) != len(args.ranks):
@@ -38,9 +39,11 @@ def main():
             command = ['timeout', '--kill-after=5s', '240s', 'mpiexec', '--oversubscribe', '-np', str(ranks),
                        sys.executable, str(repo/'scripts/hpc_rank_run.py'), '--expected-ranks', str(ranks),
                        '--timeout', '210', '--output-dir', str(directory), '--', str(binaries[kind])]
+            if kind == 'physics':
+                command.append(args.physics_mode)
             if split:
                 command.append('split')
-            record = dict(kind=kind, ranks=ranks, split=split, argv=command, rank_reports=[], observations=[])
+            record = dict(kind=kind, ranks=ranks, split=split, physics_mode=args.physics_mode if kind == 'physics' else None, argv=command, rank_reports=[], observations=[])
             summary['cases'].append(record)
             with (directory/'launcher.log').open('w') as log:
                 result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -66,7 +69,7 @@ def main():
             if kind == 'physics':
                 values = record['observations']
                 if (sum(v['owned_rows'] for v in values) != values[0]['global_rows']
-                        or any(v['cells'] != 27 or v['ghost_faces'] != 54 for v in values)
+                        or any(v['cells'] != (125 if args.physics_mode == 'padded' else 27) or v['ghost_faces'] != 54 for v in values)
                         or any(not (v['residual_relative_l2'] <= 1e-6 and v['action_relative_l2'] <= 1e-6) for v in values)):
                     raise RuntimeError(directory.name+': physical parity/ownership failed')
                 if ranks > 1 and any(v['halo_rows'] >= v['global_rows'] for v in values):

@@ -3,6 +3,9 @@
 日期：2026-09-09。基準 HEAD `0b9df67` 加本批工作樹。
 狀態：owned rows／halo／物理 operator 組裝已驗證，HPC-03A 部分完成。
 
+本頁保留 `ed129fd` 的首批組裝層證據。後續正式物理 orchestration、共用 setup
+與全域診斷的實作／驗收見 [static operator 進度](HPC_03A_STATIC_OPERATOR_PROGRESS.md)。
+
 ## 實作與資料契約
 
 [ImmersedDistributedAssembly.hpp](../../solvers/cpu/include/ImmersedDistributedAssembly.hpp)

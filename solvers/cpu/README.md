@@ -12,10 +12,12 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 
 The immersed MPI assembly layer now supports uniquely owned cell/ghost
 integration, distributed sparse rows, scalar constraints, and required-state
-exchange. Its 1/2/4-rank physical operator checks match the serial immersed
-runtime. Integration into the nonlinear/runtime and graph paths is still in
+exchange. `ImmersedStaticDistributedOperator` now uses the shared serial/MPI
+geometry setup and existing physics kernels, with global port/wall/pressure
+diagnostics. Integration into nonlinear solves and graph paths remains in
 progress; their existing single-rank restrictions remain. See the
-[HPC-03A assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md).
+[HPC-03A assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md) and
+[static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md).
 
 | Executable | Purpose |
 | --- | --- |
