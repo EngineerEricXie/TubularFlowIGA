@@ -39,8 +39,13 @@ exchanges only required nodes. `ImmersedDistributedTransientVolume` couples that
 snapshot to uniquely owned, frozen body-force quadrature and backward-Euler
 volume integration. Both compact and expanded catalogs are covered by the
 [transient volume regression](../../docs/progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md).
-These building blocks do not yet enable the complete transient immersed runtime;
-wall/port assembly, Newton transactions, and entry integration remain pending.
+`ImmersedTransientDistributedOperator` combines these inputs with stationary
+material-aware walls (including optional inertial impedance), mixed traces,
+ghost stabilization, ports, and the gauge. Its
+[operator regression](../../docs/progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)
+compares five boundary modes against the serial transient runtime on 1/2/4 ranks.
+Transient Newton transactions, accepted-clock handling, and entry integration
+remain pending; transient/moving entry restrictions still apply.
 
 | Executable | Purpose |
 | --- | --- |

@@ -14,6 +14,11 @@ namespace iga {
 
 enum class ImmersedWorkPartition { CellCount, WeightedContiguous };
 
+struct ImmersedOwnedVolumeContribution {
+	NavierStokesSystem system;
+	std::map<int,std::uint64_t> wall_selected_points;
+};
+
 // Immutable geometry and port topology for a steady four-field operator. Local
 // evaluators must represent the same physical functions on every MPI member.
 // Geometry/controls are validated before distributed resources are created.
@@ -25,8 +30,9 @@ public:
 	ImmersedStaticDistributedOperator(MPI_Comm communicator,
 		const CartesianDomainClassification& domain, const CutCellVolumeQuadratureCatalog& volume,
 		const ImmersedSurfaceQuadratureCatalog& surface, const CutCellGhostPenaltyCatalog& ghost,
-		const ImmersedStaticFlowOptions& options,ImmersedWorkPartition partition = ImmersedWorkPartition::CellCount)
-		: partition_(partition), communicator_(communicator), domain_(domain), volume_(volume), surface_(surface), ghost_(ghost)
+		const ImmersedStaticFlowOptions& options,ImmersedWorkPartition partition = ImmersedWorkPartition::CellCount,
+		ImmersedFlowTopologyMode topology_mode = ImmersedFlowTopologyMode::Steady)
+		: partition_(partition), topology_mode_(topology_mode), communicator_(communicator), domain_(domain), volume_(volume), surface_(surface), ghost_(ghost)
 	{
 		MPI_Comm_rank(communicator_, &rank_); MPI_Comm_size(communicator_, &size_);
 		std::vector<PetscInt> offsets;
@@ -35,7 +41,7 @@ public:
 		CollectiveLocalStage(communicator_, "immersed static setup", [&] {
 			if (partition_ != ImmersedWorkPartition::CellCount && partition_ != ImmersedWorkPartition::WeightedContiguous)
 				throw std::invalid_argument("unknown immersed work partition");
-			setup_ = std::make_unique<ImmersedStaticFlowSetup>(domain,volume,surface,ghost,options);
+			setup_ = std::make_unique<ImmersedStaticFlowSetup>(domain,volume,surface,ghost,options,topology_mode);
 			diagnostics_ = setup_->Diagnostics();
 			local_ports_.resize(options.ports.size()); global_ports_.resize(options.ports.size());
 			if (options.ports.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())/7)
@@ -117,12 +123,42 @@ public:
 
 	void Assemble()
 	{
+		AssembleBlocks([&](const auto& stencil,auto& matrix,auto& residual) { Integrate(stencil,matrix,residual); });
+	}
+	// Compose the shared ghost/port/gauge and diagnostic machinery with a
+	// local cell integrator providing volume, mixed trace and wall terms.
+	// The callback must not enter MPI. It uses the freshly exchanged state.
+	template<class Function> void AssembleWithVolume(Function&& function)
+	{
+		AssembleBlocks([&](const auto& stencil,auto& matrix,auto& residual) {
+			const auto& task = work_[stencil.id];
+			if (task.kind != Kind::Volume) { Integrate(stencil,matrix,residual); return; }
+			auto contribution = function(task.cell,Gather(domain_.Background().MaterializeElement(task.cell)));
+			matrix = std::move(contribution.system.jacobian); residual = std::move(contribution.system.negative_residual);
+			++local_counts_[0];
+			bool has_wall = false;
+			for (const auto& entry : contribution.wall_selected_points) if (entry.second) {
+				const auto offset = 2*wall_labels_.at(entry.first);
+				local_walls_[offset] += entry.second; ++local_walls_[offset+1]; has_wall = true;
+			}
+			if (has_wall) ++local_counts_[1];
+		});
+	}
+	std::vector<std::uint64_t> OwnedVolumeCells() const
+	{
+		std::vector<std::uint64_t> cells; cells.reserve(gauge_weights_.size());
+		for (const auto& cell : gauge_weights_) cells.push_back(cell.first);
+		return cells;
+	}
+private:
+	template<class Function> void AssembleBlocks(Function&& function)
+	{
 		PhaseScope phase(ProfilePhase::Assembly);
 		const auto start = std::chrono::steady_clock::now();
 		CollectiveLocalStage(communicator_,"immersed port compatibility",[&] { setup_->ValidateAllFlowCompatibility(); });
 		std::fill(local_ports_.begin(),local_ports_.end(),std::array<double,7>{}); local_counts_.fill(0);
 		std::fill(local_walls_.begin(),local_walls_.end(),0);
-		assembly_->Assemble([&](const auto& stencil,auto& matrix,auto& residual) { Integrate(stencil,matrix,residual); });
+		assembly_->Assemble(std::forward<Function>(function));
 		MPI_Allreduce(local_counts_.data(),global_counts_.data(),3,MPI_UINT64_T,MPI_SUM,communicator_);
 		if (!local_ports_.empty()) MPI_Allreduce(local_ports_.data(),global_ports_.data(),static_cast<int>(local_ports_.size()*7),MPI_DOUBLE,MPI_SUM,communicator_);
 		if (!local_walls_.empty()) MPI_Allreduce(local_walls_.data(),global_walls_.data(),static_cast<int>(local_walls_.size()),MPI_UINT64_T,MPI_SUM,communicator_);
@@ -183,6 +219,7 @@ public:
 		});
 		diagnostics_ = std::move(*candidate);
 	}
+public:
 	ImmersedStaticFlowConservationDiagnostics ConservationDiagnostics() const
 	{
 		PhaseScope phase(ProfilePhase::Diagnostics);
@@ -251,7 +288,7 @@ private:
 	std::string Signature() const
 	{
 		std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
-		text << std::setprecision(std::numeric_limits<double>::max_digits10) << domain_.SurfaceCanonicalHash() << ' ' << static_cast<int>(partition_);
+		text << std::setprecision(std::numeric_limits<double>::max_digits10) << domain_.SurfaceCanonicalHash() << ' ' << static_cast<int>(partition_) << ' ' << static_cast<int>(topology_mode_);
 		const auto& grid = domain_.Background().Spec();
 		for (int d = 0; d < 3; ++d) text << ' ' << grid.lower_m[d] << ' ' << grid.upper_m[d] << ' ' << grid.cells[d];
 		const auto& q = volume_.Options(); const auto& s = surface_.Options(); const auto& g = ghost_.Options(); const auto& o = Options();
@@ -455,6 +492,7 @@ private:
 		if (constant_pressure_) { cleanup_.Observe("pressure constant destroy",VecDestroy(&constant_pressure_)); constant_pressure_ = nullptr; }
 	}
 	ImmersedWorkPartition partition_;
+	ImmersedFlowTopologyMode topology_mode_;
 	std::vector<std::uint64_t> rank_work_;
 	MPI_Comm communicator_;
 	int rank_ = 0,size_ = 1;

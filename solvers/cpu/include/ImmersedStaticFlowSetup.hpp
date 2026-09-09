@@ -18,6 +18,8 @@
 
 namespace iga {
 
+enum class ImmersedFlowTopologyMode { Steady, FixedTransient };
+
 struct ImmersedStaticFlowOptions {
 	NavierStokesParameters parameters{1.0, 1.0, 0.0};
 	std::vector<int> wall_labels;
@@ -152,10 +154,13 @@ public:
 	ImmersedStaticFlowSetup(const CartesianDomainClassification& domain,
 		const CutCellVolumeQuadratureCatalog& volume,
 		const ImmersedSurfaceQuadratureCatalog& surface,
-		const CutCellGhostPenaltyCatalog& ghost, ImmersedStaticFlowOptions options)
-		: domain_(domain), volume_(volume), surface_(surface), ghost_(ghost), options_(std::move(options))
+		const CutCellGhostPenaltyCatalog& ghost, ImmersedStaticFlowOptions options,
+		ImmersedFlowTopologyMode topology_mode = ImmersedFlowTopologyMode::Steady)
+		: domain_(domain), volume_(volume), surface_(surface), ghost_(ghost), options_(std::move(options)), topology_mode_(topology_mode)
 	{
 		PhaseScope geometry_phase(ProfilePhase::Geometry);
+		if (topology_mode_ != ImmersedFlowTopologyMode::Steady && topology_mode_ != ImmersedFlowTopologyMode::FixedTransient)
+			throw std::invalid_argument("invalid immersed flow topology mode");
 		if (!options_.wall_velocity || !options_.body_force || !std::isfinite(options_.parameters.density) || !(options_.parameters.density > 0.0)
 			|| !std::isfinite(options_.parameters.dynamic_viscosity) || !(options_.parameters.dynamic_viscosity > 0.0)
 			|| !std::isfinite(options_.parameters.dt) || options_.parameters.dt != 0.0 || !std::isfinite(options_.wall_gamma0)
@@ -237,9 +242,9 @@ public:
 protected:
 	void ConfigurePorts()
 	{
-		// Preserve the Phase-5 closed-surface contract exactly: there is no
-		// new label-completeness or source-area policy when no ports are present.
-		if (options_.ports.empty()) { diagnostics_.ports.clear(); diagnostics_.gauge_present = true; return; }
+		// Preserve the steady Phase-5 closed-surface contract. Transient topology
+		// instead validates a complete boundary-label partition, also when closed.
+		if (options_.ports.empty() && topology_mode_ == ImmersedFlowTopologyMode::Steady) { diagnostics_.ports.clear(); diagnostics_.gauge_present = true; return; }
 		std::vector<std::string> ids; std::vector<int> labels;
 		for (const auto& port : options_.ports) { ValidateImmersedFlowPortDefinition(port); ids.push_back(port.id); labels.push_back(port.boundary_label); }
 		std::sort(ids.begin(), ids.end()); if (std::adjacent_find(ids.begin(), ids.end()) != ids.end()) throw std::invalid_argument("immersed flow port ids must be unique");
@@ -290,10 +295,10 @@ protected:
 			if (!ghost_.Covered(id)) throw std::runtime_error("covered immersed Nitsche policy requires every positive cut cell to be ghost-covered");
 			surface_.ValidateUsableRule(domain_, id);
 			const auto& rule = surface_.UsableRule(domain_, id);
-			// Preserve the Phase-5 no-port preflight at construction time.  Open
-			// ports deliberately relax this only for cap-only cells; ghost coverage
-			// and ConfigurePorts() label completeness remain mandatory in both modes.
-			if (options_.ports.empty() && !HasSelectedWallPoint(rule))
+			// Preserve the steady Phase-5 no-port preflight. Transient assembly
+			// visits walls only where selected points exist; its complete label
+			// partition and ghost coverage are already validated independently.
+			if (topology_mode_ == ImmersedFlowTopologyMode::Steady && options_.ports.empty() && !HasSelectedWallPoint(rule))
 				throw std::runtime_error("positive cut cell has no selected immersed wall surface contribution");
 		}
 	}
@@ -316,7 +321,14 @@ protected:
 			node_to_active_[static_cast<std::size_t>(active_nodes_[i])] = index;
 		}
 		std::size_t next_scalar_row = diagnostics_.physical_dofs;
-		for (std::size_t i = 0; i < diagnostics_.ports.size(); ++i) if (options_.ports[i].control_mode == ImmersedFlowPortControlMode::FlowRate) {
+		std::vector<std::size_t> scalar_ports;
+		for (std::size_t i = 0; i < diagnostics_.ports.size(); ++i)
+			if (options_.ports[i].control_mode == ImmersedFlowPortControlMode::FlowRate) scalar_ports.push_back(i);
+		// The established transient layout orders controllers by numeric label;
+		// steady APIs retain their original declaration-order scalar rows.
+		if (topology_mode_ == ImmersedFlowTopologyMode::FixedTransient)
+			std::sort(scalar_ports.begin(),scalar_ports.end(),[&](auto a,auto b) { return options_.ports[a].boundary_label < options_.ports[b].boundary_label; });
+		for (auto i : scalar_ports) {
 			if (next_scalar_row >= total_dofs) throw std::logic_error("immersed controller row topology is inconsistent");
 			diagnostics_.ports[i].multiplier_row = CheckedPetscCount(next_scalar_row);
 			++next_scalar_row;
@@ -340,6 +352,7 @@ protected:
 	const ImmersedSurfaceQuadratureCatalog& surface_;
 	const CutCellGhostPenaltyCatalog& ghost_;
 	ImmersedStaticFlowOptions options_;
+	ImmersedFlowTopologyMode topology_mode_;
 	std::vector<std::int32_t> active_nodes_;
 	std::vector<PetscInt> node_to_active_;
 	ImmersedStaticFlowDiagnostics diagnostics_{};
