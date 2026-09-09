@@ -48,8 +48,11 @@ $(TARGET): $(SOURCES) Makefile $(HEADERS)
 device_allocation_test: tests/test_device_allocation.cu include/CudaRuntime.hpp include/DeviceAllocation.hpp
 	$(NVCC) -Iinclude $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcublas
 
+cuda_stdout_failure_test: tests/test_stdout_failure.cu ../cpu/tests/test_tool_stdout_failure.cpp $(SOURCES) Makefile $(HEADERS)
+	$(NVCC) $(CUDA_CPPFLAGS) $(HDF5_CFLAGS) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ $(LDLIBS) $(HDF5_LIBS)
+
 allocation-test: device_allocation_test
 	./device_allocation_test
 
 clean:
-	$(RM) $(TARGET) device_allocation_test
+	$(RM) $(TARGET) device_allocation_test cuda_stdout_failure_test

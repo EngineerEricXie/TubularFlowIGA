@@ -2,6 +2,7 @@
 #include "BoundaryFlow.hpp"
 #include "BoundarySupport.hpp"
 #include "CaseInput.hpp"
+#include "CheckedText.hpp"
 #include "GenericCaseInput.hpp"
 #include "CudaRuntime.hpp"
 #include "DeviceMesh.hpp"
@@ -286,6 +287,7 @@ void PrintDevice()
 		<< " fp64_ratio=1/" << properties.singleToDoublePrecisionPerfRatio
 		<< " memory_free_gib=" << Gibibytes(free)
 		<< " memory_total_gib=" << Gibibytes(total) << '\n';
+	iga::FlushCheckedText(std::cout);
 }
 
 void PrintMesh(const FlatMesh& mesh, const BlockPattern* pattern = nullptr)
@@ -1146,7 +1148,9 @@ int main(int argc, char** argv)
 		iga::cuda::PrintDevice();
 		if (command == "mesh-check") {
 			if (argc != 3) throw std::runtime_error("usage: iga_cuda mesh-check DATABASE.ntiga");
-			return iga::cuda::MeshCheck(argv[2]);
+			const int status = iga::cuda::MeshCheck(argv[2]);
+			iga::FlushCheckedText(std::cout);
+			return status;
 		}
 		int status = 0;
 		if (command == "transport") status = iga::cuda::Transport(argc, argv);
@@ -1157,6 +1161,7 @@ int main(int argc, char** argv)
 			<< iga::cuda::DeviceAllocationCounter::Peak() << " requested_live_bytes="
 			<< iga::cuda::DeviceAllocationCounter::Current() << '\n';
 		iga::CurrentPhaseProfile().Write(std::cout, 0, 1, status);
+		iga::FlushCheckedText(std::cout);
 		return status;
 	} catch (const std::exception& error) {
 		std::cerr << "iga_cuda: " << error.what() << '\n';
