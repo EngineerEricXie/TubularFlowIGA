@@ -12,6 +12,7 @@
 #include "OwnedRowAssembler.hpp"
 #include "ElementAssemblyExecution.hpp"
 #include "CollectivePetscOptions.hpp"
+#include "PetscSolverOptions.hpp"
 #include <optional>
 #include "PetscReadArray.hpp"
 #include "OwnedCheckpointVector.hpp"
@@ -103,7 +104,8 @@ public:
 		const std::set<std::int32_t>& wall_trace_basis,
 		const std::vector<OutletModelState>& outlet_models,
 		const std::set<std::string>& application_options = {},
-		const std::string& checkpoint_identity_sha256 = {}, double checkpoint_macro_dt_s = 0.0)
+		const std::string& checkpoint_identity_sha256 = {}, double checkpoint_macro_dt_s = 0.0,
+		const std::string& solver_options_prefix = {})
 		: database_(database), communicator_(communicator), configured_(configured),
 			transient_(transient), parameters_(parameters), assembler_(database, communicator, 4),
 			trial_configuration_(PrepareRuntimeConstructionInput<SimulationConfiguration>(communicator,
@@ -171,6 +173,15 @@ public:
 			RequireCollectivePetscOptions(communicator_, nullptr, application_options);
 			RequireCollectivePetscSuccess(communicator_, "flow solver creation", KSPCreate(communicator_, &solver_));
 			ObserveConstructedObject(communicator_, "flow solver created", reinterpret_cast<PetscObject>(solver_));
+			PetscOptionEntries solver_defaults;
+			RuntimeConstructionStage(communicator_, "flow scoped solver defaults", [&] {
+				if (database_.header().nodes >= kScalablePreconditionerNodeThreshold)
+					solver_defaults = {{"-fieldsplit_0_ksp_type", std::string("preonly")}, {"-fieldsplit_0_pc_type", std::string("gamg")},
+						{"-fieldsplit_1_ksp_type", std::string("preonly")}, {"-fieldsplit_1_pc_type", std::string("gamg")}};
+			});
+			solver_options_ = AllocateCollectiveRuntime<PetscSolverOptions>(communicator_, communicator_, solver_options_prefix,
+				nullptr, solver_defaults, application_options);
+			solver_options_->Attach(solver_);
 			RequireCollectivePetscSuccess(communicator_, "flow solver type", KSPSetType(solver_, KSPFGMRES));
 			RequireCollectivePetscSuccess(communicator_, "flow solver tolerances", KSPSetTolerances(solver_, 1e-8, PETSC_DEFAULT, PETSC_DEFAULT, 5000));
 			PC preconditioner = nullptr;
@@ -192,8 +203,8 @@ public:
 				RequireCollectivePetscSuccess(communicator_, "flow preconditioner override",
 					PetscOptionsGetString(nullptr, nullptr, "-pc_type", requested_preconditioner,
 						sizeof(requested_preconditioner), &has_preconditioner_override));
-				if (!has_preconditioner_override
-					|| std::strcmp(requested_preconditioner, PCFIELDSPLIT) == 0) {
+				if (solver_options_prefix.empty() && (!has_preconditioner_override
+					|| std::strcmp(requested_preconditioner, PCFIELDSPLIT) == 0)) {
 					RuntimeConstructionStage(communicator_, "flow default solver options", [&] {
 						SetDefaultPetscOption("-fieldsplit_0_ksp_type", "preonly", added_defaults, added_default_count);
 						SetDefaultPetscOption("-fieldsplit_0_pc_type", "gamg", added_defaults, added_default_count);
@@ -202,7 +213,8 @@ public:
 					});
 				}
 			} else RequireCollectivePetscSuccess(communicator_, "flow block Jacobi type", PCSetType(preconditioner, PCBJACOBI));
-			RequireCollectivePetscSuccess(communicator_, "flow solver options", KSPSetFromOptions(solver_));
+			solver_options_->Call("flow solver options", [&] { return KSPSetFromOptions(solver_); });
+			solver_options_->RecordUsed();
 			RuntimeConstructionStage(communicator_, "flow runtime ready", [] {});
 		} catch (...) {
 			// Only remove defaults absent on entry. Each rank may have reached
@@ -225,6 +237,12 @@ public:
 	void Close()
 	{
 		DestroyPetsc().Check(communicator_, "flow runtime cleanup");
+	}
+
+	PetscKspConfiguration SolverConfiguration() const
+	{
+		if (cleanup_started_) throw std::logic_error("solver configuration requested after runtime close");
+		return CaptureKspConfiguration(solver_);
 	}
 
 	TransientFlowRuntime(const TransientFlowRuntime&) = delete;
@@ -1459,12 +1477,13 @@ private:
 			RequireCollectivePetscSuccess(communicator_, "flow solver operators", KSPSetOperators(solver_, jacobian_, jacobian_));
 			{
 				PhaseScope setup_phase(ProfilePhase::SolverSetup);
-				RequireCollectivePetscSuccess(communicator_, "flow solver setup", KSPSetUp(solver_));
-				RequireCollectivePetscSuccess(communicator_, "flow block solver setup", KSPSetUpOnBlocks(solver_));
+				solver_options_->Call("flow solver setup", [&] { return KSPSetUp(solver_); });
+				solver_options_->Call("flow block solver setup", [&] { return KSPSetUpOnBlocks(solver_); });
 			}
 			{
 				PhaseScope solve_phase(ProfilePhase::LinearSolve);
-				RequireCollectivePetscSuccess(communicator_, "flow linear solve", KSPSolve(solver_, rhs_, update_));
+				solver_options_->Call("flow linear solve", [&] { return KSPSolve(solver_, rhs_, update_); });
+				solver_options_->RecordUsed();
 			}
 			PetscInt iterations = 0;
 			PetscReal linear_residual = 0.0, update_norm = 0.0;
@@ -1583,6 +1602,7 @@ private:
 	IS source_rows_ = nullptr, destination_rows_ = nullptr;
 	Vec ghost_state_ = nullptr, ghost_previous_ = nullptr;
 	VecScatter scatter_ = nullptr;
+	std::unique_ptr<PetscSolverOptions> solver_options_;
 	KSP solver_ = nullptr;
 	std::string checkpoint_identity_sha256_;
 	double checkpoint_macro_dt_s_ = 0.0;

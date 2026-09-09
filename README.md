@@ -445,6 +445,7 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Run the large morphology-derived neuron regression | [NMO_06840 transport](examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
 | Boundary labels and supported conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
+| Per-domain PETSc options for body-fitted graphs | [Solver options](docs/SOLVER_OPTIONS.md) |
 | CPU solver details | [CPU solver README](solvers/cpu/README.md) |
 | CUDA solver details | [CUDA solver README](solvers/cuda/README.md) |
 | PSC Bridges-2 scheduler workflow | [Bridges-2](docs/BRIDGES2.md) |

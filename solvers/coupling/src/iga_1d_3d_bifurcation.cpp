@@ -1023,8 +1023,10 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			if (!three_d.count(domain_id)) continue;
 			auto& native = *three_d.at(domain_id);
 			const auto& flow = iga::FirstNavierStokesSystem(native.configuration);
-			std::string flow_identity, transport_identity;
+			std::string flow_identity, transport_identity, flow_prefix, transport_prefix;
 			iga::CollectiveLocalStage(communicator, "graph checkpoint domain identities", [&] {
+				flow_prefix = iga::PetscDomainOptionsPrefix(domain_id, "flow");
+				transport_prefix = iga::PetscDomainOptionsPrefix(domain_id, "transport");
 				if (checkpoint_enabled) {
 					flow_identity = iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "flow");
 					transport_identity = iga::GraphCheckpointDomainIdentity(checkpoint_identity, domain_id, "transport");
@@ -1035,7 +1037,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				iga::NavierStokesParameters{flow.density, flow.viscosity,
 					native.configuration.time.dt}, native.initial_boundaries,
 				native.mesh.labels, native.boundary_velocity, native.wall_trace_basis,
-				std::move(native.outlet_models), application_options, flow_identity, configuration.time.dt_s);
+				std::move(native.outlet_models), application_options, flow_identity, configuration.time.dt_s, flow_prefix);
 			iga::RequireValidGeometry(native.runtime->Elements(), rank, communicator);
 			for (const auto& port : configuration.graph.Domain(domain_id).ports) {
 				int label = 0;
@@ -1105,7 +1107,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				native.transport_runtime = iga::AllocateCollectiveRuntime<iga::TransientTransportRuntime>(communicator,
 					*native.database, communicator, native.configuration,
 					*native.transport_system, native.mesh.labels,
-					std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, application_options, transport_identity);
+					std::map<std::uint64_t, iga::VolumeQuadratureRule>{}, application_options, transport_identity, transport_prefix);
 				iga::RuntimeConstructionStage(communicator, "graph transport node agreement", [&] {
 					if (native.runtime->RequiredNodes() != native.transport_runtime->RequiredNodes())
 						throw std::runtime_error(
@@ -1343,6 +1345,26 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			// accepted-result bookkeeping have completed.  A failed trial or
 			// precommit callback therefore leaves this accepted clock unchanged.
 			accepted_time_s = step_context.EndTime();
+			iga::CollectiveLocalStage(communicator, "graph solver configuration output", [&] {
+				if (rank != 0) return;
+				for (const auto& domain : three_d) {
+					const auto write = [&](const char* role, const iga::PetscKspConfiguration& solver) {
+						const auto precision = std::cout.precision();
+						std::cout << std::setprecision(17) << "solver_configuration {\"domain\":\"" << JsonEscape(domain.first)
+							<< "\",\"role\":\"" << role << "\",\"step\":" << step
+							<< ",\"prefix\":\"" << JsonEscape(solver.prefix) << "\",\"ksp\":\"" << JsonEscape(solver.ksp)
+							<< "\",\"pc\":\"" << JsonEscape(solver.pc) << "\",\"factor_backend\":\"" << JsonEscape(solver.factor_backend)
+							<< "\",\"rtol\":" << solver.relative_tolerance << ",\"atol\":" << solver.absolute_tolerance
+							<< ",\"max_iterations\":" << solver.maximum_iterations << ",\"last_iterations\":" << solver.last_iterations
+							<< ",\"last_reason\":" << static_cast<int>(solver.last_reason) << "}\n";
+						std::cout.precision(precision);
+					};
+					write("flow", domain.second->runtime->SolverConfiguration());
+					if (domain.second->transport_runtime) write("transport", domain.second->transport_runtime->SolverConfiguration());
+				}
+				iga::FlushCheckedText(std::cout);
+			});
+
 			int stop_requested = 0;
 			if (checkpoint_signal) {
 				const int local_request = checkpoint_signal->Requested();

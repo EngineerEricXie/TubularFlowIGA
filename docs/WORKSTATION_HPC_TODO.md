@@ -49,10 +49,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（14 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-05C |
-| 其餘待辦（21 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-05C；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（4 項） | HPC-01C、HPC-01D、HPC-04A、HPC-05C |
+| 其餘待辦（20 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-04A／HPC-05C；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 24 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 24 項未勾選，其中 4 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -529,6 +529,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-04A：可配置求解器。** 為各 runtime 建立獨立 PETSc options prefix，
   保留已驗證預設；記錄有效 KSP/PC 與迭代數。明確檢查多 rank LU 所需後端，
   包含現有 1D 非線性路徑的 MUMPS 需求。
+  貼體 graph 的 flow／transport 已接入獨立 prefix、精確 options snapshot、有效
+  KSP／PC 記錄與返回式錯誤處理；未指定 override 的場及 history 保留原結果。
+  操作見 [solver options](SOLVER_OPTIONS.md)，驗收見
+  [貼體進度](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。其餘 1D implicit／SNES、
+  standalone、immersed／moving／FSI 與完整巢狀診斷及後端矩陣仍待完成。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point

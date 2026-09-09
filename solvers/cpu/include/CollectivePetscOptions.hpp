@@ -40,7 +40,9 @@ struct Buffers {
 // LeftGet supplies unused entries; FindPair is called only for already-used
 // entries. Do not clone via GetAll/InsertString: GetAll's display string is
 // ambiguous when a value contains spaces or text resembling another option.
-inline std::string CapturePetscOptions(PetscOptions options,
+using PetscOptionEntries = std::map<std::string, std::optional<std::string>>;
+
+inline PetscOptionEntries CapturePetscOptionEntries(PetscOptions options,
 	const std::set<std::string>& excluded = {})
 {
 	using petsc_options_detail::Check;
@@ -53,7 +55,7 @@ inline std::string CapturePetscOptions(PetscOptions options,
 	for (PetscInt i = 0; i < buffers.count; ++i)
 		unused.emplace("-"+std::string(buffers.names[i]), buffers.values[i]);
 	const std::string_view display(buffers.all ? buffers.all : "");
-	std::map<std::string, std::optional<std::string>> entries;
+	PetscOptionEntries entries;
 	std::size_t offset = 0;
 	while (offset < display.size()) {
 		const auto end = display.find(' ', offset);
@@ -81,6 +83,11 @@ inline std::string CapturePetscOptions(PetscOptions options,
 			&& !entries.emplace(name, value ? std::optional<std::string>(value) : std::nullopt).second)
 			throw std::runtime_error("duplicate PETSc option during capture");
 	}
+	return entries;
+}
+
+inline std::string SerializePetscOptionEntries(const PetscOptionEntries& entries)
+{
 	// Length framing distinguishes an option-like substring inside one value
 	// from a separate option, including embedded spaces, newlines and quotes.
 	std::string result;
@@ -89,6 +96,12 @@ inline std::string CapturePetscOptions(PetscOptions options,
 		result += entry.second ? "V"+std::to_string(entry.second->size())+":"+*entry.second : "F";
 	}
 	return result;
+}
+
+inline std::string CapturePetscOptions(PetscOptions options,
+	const std::set<std::string>& excluded = {})
+{
+	return SerializePetscOptionEntries(CapturePetscOptionEntries(options, excluded));
 }
 
 inline void RequireCollectivePetscOptions(MPI_Comm communicator, PetscOptions options = nullptr,

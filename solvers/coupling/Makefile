@@ -298,3 +298,5 @@ native_graph_checkpoint_fixture_test: tests/test_native_graph_checkpoint_fixture
 
 native_graph_checkpoint_groups_test: tests/test_native_graph_checkpoint_groups.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_native_graph_checkpoint_groups.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
+
+iga_1d_3d_explicit: ../cpu/include/PetscSolverOptions.hpp ../cpu/include/CollectivePetscOptions.hpp

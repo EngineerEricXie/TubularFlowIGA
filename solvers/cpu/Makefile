@@ -17,7 +17,7 @@ PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closur
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += collective_failure_test
-PETSC_TARGETS += collective_petsc_options_test
+PETSC_TARGETS += collective_petsc_options_test petsc_solver_options_test
 PETSC_TARGETS += petsc_gather_test
 PETSC_TARGETS += body_fitted_checkpoint_bundle_test body_fitted_accepted_checkpoint_test
 PETSC_TARGETS += petsc_checkpoint_read_test
@@ -635,6 +635,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) petsc_solver_options_test
 	$(RM) body_fitted_checkpoint_bundle_test
 	$(RM) body_fitted_accepted_checkpoint_test
 	$(RM) runtime_cleanup_cli_test
@@ -696,3 +697,8 @@ body_fitted_accepted_checkpoint_test: tests/test_body_fitted_accepted_checkpoint
 
 body_fitted_checkpoint_bundle_test: tests/test_body_fitted_checkpoint_bundle.cpp tests/test_body_fitted_accepted_checkpoint.cpp ../coupling/tests/test_bifurcation_coupling_smoke.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+petsc_solver_options_test: tests/test_petsc_solver_options.cpp include/PetscSolverOptions.hpp include/CollectivePetscOptions.hpp include/ExecutionResources.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+iga_navier_stokes: include/PetscSolverOptions.hpp include/CollectivePetscOptions.hpp

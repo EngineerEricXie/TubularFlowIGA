@@ -6,6 +6,7 @@
 #include "GenericTransportElement.hpp"
 #include "OwnedRowAssembler.hpp"
 #include "CollectivePetscOptions.hpp"
+#include "PetscSolverOptions.hpp"
 #include "PetscReadArray.hpp"
 #include "OwnedCheckpointVector.hpp"
 
@@ -80,7 +81,8 @@ public:
 		const CompiledLinearSystem& system, const std::vector<int>& labels,
 		const std::map<std::uint64_t, VolumeQuadratureRule>& volume_rules = {},
 		const std::set<std::string>& application_options = {},
-		const std::string& checkpoint_identity_sha256 = {})
+		const std::string& checkpoint_identity_sha256 = {},
+		const std::string& solver_options_prefix = {})
 		: communicator_(communicator),
 			configuration_(PrepareRuntimeConstructionInput<SimulationConfiguration>(communicator,
 				"transport configuration preparation", configuration)),
@@ -139,6 +141,10 @@ public:
 			RequireCollectivePetscOptions(communicator_, nullptr, application_options);
 			RequireCollectivePetscSuccess(communicator_, "transport solver creation", KSPCreate(communicator_, &solver_));
 			ObserveConstructedObject(communicator_, "transport solver created", reinterpret_cast<PetscObject>(solver_));
+			const PetscOptionEntries solver_defaults;
+			solver_options_ = AllocateCollectiveRuntime<PetscSolverOptions>(communicator_, communicator_, solver_options_prefix,
+				nullptr, solver_defaults, application_options);
+			solver_options_->Attach(solver_);
 			RequireCollectivePetscSuccess(communicator_, "transport solver type", KSPSetType(solver_, KSPGMRES));
 			RequireCollectivePetscSuccess(communicator_, "transport solver restart", KSPGMRESSetRestart(solver_, 50));
 			RequireCollectivePetscSuccess(communicator_, "transport solver tolerances",
@@ -146,7 +152,8 @@ public:
 			PC preconditioner = nullptr;
 			RequireCollectivePetscSuccess(communicator_, "transport preconditioner lookup", KSPGetPC(solver_, &preconditioner));
 			RequireCollectivePetscSuccess(communicator_, "transport preconditioner type", PCSetType(preconditioner, PCBJACOBI));
-			RequireCollectivePetscSuccess(communicator_, "transport solver options", KSPSetFromOptions(solver_));
+			solver_options_->Call("transport solver options", [&] { return KSPSetFromOptions(solver_); });
+			solver_options_->RecordUsed();
 			RuntimeConstructionStage(communicator_, "transport runtime ready", [] {});
 		} catch (...) { DestroyPetsc(); throw; }
 	}
@@ -158,6 +165,12 @@ public:
 	void Close()
 	{
 		DestroyPetsc().Check(communicator_, "transport runtime cleanup");
+	}
+
+	PetscKspConfiguration SolverConfiguration() const
+	{
+		if (cleanup_started_) throw std::logic_error("solver configuration requested after runtime close");
+		return CaptureKspConfiguration(solver_);
 	}
 
 	TransientTransportRuntime(const TransientTransportRuntime&) = delete;
@@ -263,8 +276,9 @@ public:
 		RequireKspFactorBackend(solver_, left_, communicator_);
 		RequireCollectivePetscSuccess(communicator_, "transport solver operators", KSPSetOperators(solver_, left_, left_));
 		RequireCollectivePetscSuccess(communicator_, "transport solver initial guess", KSPSetInitialGuessNonzero(solver_, warm_start ? PETSC_TRUE : PETSC_FALSE));
-		RequireCollectivePetscSuccess(communicator_, "transport solver setup", KSPSetUp(solver_));
-		RequireCollectivePetscSuccess(communicator_, "transport solve", KSPSolve(solver_, rhs_, next_));
+		solver_options_->Call("transport solver setup", [&] { return KSPSetUp(solver_); });
+		solver_options_->Call("transport solve", [&] { return KSPSolve(solver_, rhs_, next_); });
+		solver_options_->RecordUsed();
 		CollectiveLocalStage(communicator_, "transport convergence", [&] {
 			KSPConvergedReason reason;
 			if (KSPGetConvergedReason(solver_, &reason))
@@ -642,6 +656,7 @@ private:
 	IS source_rows_ = nullptr, destination_rows_ = nullptr;
 	Vec ghost_state_ = nullptr;
 	VecScatter scatter_ = nullptr;
+	std::unique_ptr<PetscSolverOptions> solver_options_;
 	KSP solver_ = nullptr;
 	std::string checkpoint_identity_sha256_;
 	int steps_ = 0;
