@@ -25,9 +25,13 @@ PETSC_TARGETS += execution_resources_test execution_resources_serial_test
 PETSC_TARGETS += memory_report_test
 PETSC_TARGETS += immersed_distributed_assembly_test
 PETSC_TARGETS += immersed_distributed_history_test
+PETSC_TARGETS += immersed_distributed_transient_volume_test
 PETSC_TARGETS += immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 
 immersed_distributed_history_test: tests/test_immersed_distributed_history.cpp include/ImmersedDistributedVelocityHistory.hpp include/ImmersedTransientState.hpp include/NavierStokesElement.hpp include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeCleanup.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_distributed_transient_volume_test: tests/test_immersed_distributed_transient_volume.cpp include/ImmersedDistributedTransientVolume.hpp include/ImmersedDistributedVelocityHistory.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedTransientState.hpp include/NavierStokesElement.hpp include/RuntimeConstruction.hpp include/CollectiveFailure.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed_distributed_static_flow_test: tests/test_immersed_distributed_static_flow.cpp include/ImmersedStaticDistributedRuntime.hpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp include/CollectivePetscOptions.hpp
@@ -625,6 +629,7 @@ clean:
 	$(RM) memory_report_test
 	$(RM) immersed_distributed_assembly_test weighted_work_partition_test
 	$(RM) immersed_distributed_history_test
+	$(RM) immersed_distributed_transient_volume_test
 	$(RM) immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test

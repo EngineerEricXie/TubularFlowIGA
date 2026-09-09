@@ -34,6 +34,14 @@ The [steady graph MPI report](../../docs/progress/HPC_03C_STATIC_GRAPH_PROGRESS.
 covers collective port updates, case preflight/initialization, transactional
 rollback, and native explicit/fixed/Aitken graph validation.
 
+`ImmersedDistributedVelocityHistory` freezes owned committed velocities and
+exchanges only required nodes. `ImmersedDistributedTransientVolume` couples that
+snapshot to uniquely owned, frozen body-force quadrature and backward-Euler
+volume integration. Both compact and expanded catalogs are covered by the
+[transient volume regression](../../docs/progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md).
+These building blocks do not yet enable the complete transient immersed runtime;
+wall/port assembly, Newton transactions, and entry integration remain pending.
+
 | Executable | Purpose |
 | --- | --- |
 | `iga_pack` | Validate sparse cache or legacy text and create indexed `.ntiga` |

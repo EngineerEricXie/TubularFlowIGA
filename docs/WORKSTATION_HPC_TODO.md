@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-03C 已補分散式凍結 velocity history 與元素驗證；暫態 runtime 仍待接續；
+最近更新：2026-09-09。HPC-03C 已補 owned 暫態體積組裝與凍結外力；完整暫態 runtime 仍待接續；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -497,10 +497,12 @@ F05 的原始診斷例外保存與恢復亦通過，見
   準靜態 graph 的 collective port 更新、owned runtime／adapter 與 case 建立
   已接入；正式 explicit／fixed／Aitken 入口通過 1／2／4 ranks、介面門檻與
   precommit failure，序列 schema 回歸通過。固定幾何已新增 owned velocity
-  snapshot／必要 halo、精確 clock 與失敗重試，並與序列 backward-Euler
-  元素比較；完整暫態 operator／Newton／graph 尚未接入，故保持未勾選。見
+  snapshot／必要 halo、精確 clock 與失敗重試；owned backward-Euler 體積
+  組裝已凍結外力，驗證 compact／expanded 與分散式殘差／Jacobian action。
+  完整暫態 operator／Newton／graph 尚未接入，故保持未勾選。見
   [準靜態 graph MPI 進度](progress/HPC_03C_STATIC_GRAPH_PROGRESS.md) 與
-  [分散式 history 進度](progress/HPC_03C_DISTRIBUTED_HISTORY_PROGRESS.md)。
+  [分散式 history 進度](progress/HPC_03C_DISTRIBUTED_HISTORY_PROGRESS.md)、
+  [暫態體積組裝進度](progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md)。
 - [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。
