@@ -404,6 +404,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [runtime cleanup 驗收](progress/HPC_01C_RUNTIME_CLEANUP_PROGRESS.md)與
   [入口稽核](progress/HPC_01C_ENTRY_AUDIT.md)。F06 其餘呼叫鏈與
   HPC-01D 剩餘能力矩陣繼續追蹤。
+  後續已核對五個 main 的控制流程，並修正 memory report 關檔失敗仍回報成功：
+  12 個原生作業、10 個場比較及 world3／split1+2 關檔與重試通過，見
+  [記憶體報告驗收](progress/HPC_01C_MEMORY_CLOSE_PROGRESS.md)。
 
 - [ ] **HPC-01D：執行資源與能力檢查。** 檢查分區數／rank 數、執行緒配置、
   PETSc index/scalar 型別及必要後端能力；提供清楚錯誤資訊與執行摘要。

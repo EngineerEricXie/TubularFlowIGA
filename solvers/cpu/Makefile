@@ -22,6 +22,10 @@ PETSC_TARGETS += petsc_gather_test
 PETSC_TARGETS += petsc_checkpoint_read_test
 PETSC_TARGETS += petsc_checkpoint_write_test
 PETSC_TARGETS += execution_resources_test execution_resources_serial_test
+PETSC_TARGETS += memory_report_test
+
+memory_report_test: tests/test_memory_report.cpp include/MemoryReport.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 PETSC_TARGETS += parallel_immersed_volume_test parallel_immersed_volume_serial_test element_assembly_execution_test element_assembly_execution_openmp_test
 PETSC_TARGETS += geometry_inspection_failure_test compliant_channel_fsi_openmp_test immersed_transient_flow_openmp_test
 PETSC_TARGETS += parallel_body_fitted_flow_test iga_navier_stokes_openmp
@@ -601,6 +605,7 @@ clean:
 	$(RM) petsc_checkpoint_read_test
 	$(RM) petsc_checkpoint_write_test
 	$(RM) execution_resources_test execution_resources_serial_test
+	$(RM) memory_report_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test
 	$(RM) petsc_gather_test

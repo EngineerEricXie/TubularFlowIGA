@@ -3,6 +3,27 @@
 日期：2026-09-09。基準 `d9eaea9` 加本批 runtime cleanup 修改。
 狀態：F06 進行中；此表記錄已核對的呼叫鏈，未把歷史測試自動視為本版實測。
 
+2026-09-09 接續以 `f9c7223` 核對下列五個 main 的控制流程，並補強 memory
+report 的 terminal close；此項驗收見 [memory close 報告](HPC_01C_MEMORY_CLOSE_PROGRESS.md)。
+
+## 已核對的 main 控制流程
+
+下表核對到 main 呼叫與既有 stage/helper 的交界。Runtime、adapter、executor
+內部仍依各自報告及下方待簽核項追蹤，不以此表替代其完整內部呼叫圖。
+
+| 入口 | main 控制流程與分支一致性 | 既有驗收依據 |
+|---|---|---|
+| CPU flow | `flow arguments` 建立含 Newton／步數／輸出／restart／容許值的 controls → exact agreement → PETSc options → database fingerprint／partition → asset catalog／waveforms → boundary input → collective runtime constructor。建構後 VCA／outlet／traction face loops 使用已同意的配置與全域 face counts；沒有本地 face 數決定是否進入下一次 reduction。Initial/restart → BeginStep／SolveTrial／CommitStep → optional VCA transport／ports／budget／circuit → output／checkpoint → final output／Close／summary／profile | [輸入](HPC_01C_FLOW_INPUT_PROGRESS.md)、[步進](HPC_01C_FLOW_STEP_PROGRESS.md)、[輸出](HPC_01C_FLOW_OUTPUT_PROGRESS.md)、[stdout](HPC_01C_SOLVER_STDOUT_PROGRESS.md)、[cleanup](HPC_01C_RUNTIME_CLEANUP_PROGRESS.md) |
+| Configured transport | tracking 的初始化前例外保存在 exception_ptr，初始化後共同 rethrow。Controls 包含 memory／velocity／output／checkpoint 分支；database 與實際 fields 分別驗證容量。Assets／waveforms／snapshot manifest 先同意；每步 selection → 選中 snapshot 比對 → interpolation → local assembly → Mat/Vec assembly／KSP → convergence stage → swap → output／checkpoint。記憶體 Record 自帶 measurement／gather／output 協調。Final norm／PETSc destroys → memory Close → summary／profile | [CLI](HPC_01C_TRANSPORT_CLI_PROGRESS.md)、[VTKHDF 初始化](HPC_01C_TRANSPORT_VISUALIZATION_INIT_PROGRESS.md)、[stdout](HPC_01C_SOLVER_STDOUT_PROGRESS.md)、[memory close](HPC_01C_MEMORY_CLOSE_PROGRESS.md) |
+| Native 1D | arguments／controls → effective options → configuration text agreement → network／forcing assets → 本地 runtime 建構；callback 只儲存，不在 local constructor stage 執行 implicit solve。`--check` 在共同 output 後早退，尚未建立 PETSc implicit owners。普通分支 initial／restart candidate／validation → writer setup → BeginStep 本地準備 → SolveTrial 內部協調 → PrepareCommit 本地準備 → noexcept FinalizeCommit → diagnostics／output／checkpoint。`OneDFingerprint(config_text)` 只有 uint64 hash 運算，不配置字串 | [CLI](HPC_01C_ONE_D_CLI_PROGRESS.md)、[checkpoint](HPC_01C_ONE_D_CHECKPOINT_PROGRESS.md)、[stdout](HPC_01C_COUPLING_STDOUT_PROGRESS.md) |
+| Mesh check | resource preflight → database regular-file／fingerprint／partition／owner checks → fingerprint agreement → owned elements input → geometry reduction → checked result logging → global exit status。空 owned list 可進入 geometry reduction；quality failure 返回 2，輸入或 logging failure 返回 1 | [工具 assets](HPC_01C_TOOL_ASSET_PROGRESS.md)、[工具 stdout](HPC_01C_SERIAL_TOOL_PROGRESS.md) |
+| Assembly smoke | resource／returning handler → input／field count／database → field／database／PETSc options agreement → OwnedRowAssembler → CreateMatrix → local insertion → collective assembly → returned MatMissingDiagonal／MatGetInfo → checked destroy → checked summary／global status。沒有把 Mat assembly 包在 local callback | [工具](HPC_01CD_TOOLS_PROGRESS.md)、[工具 assets](HPC_01C_TOOL_ASSET_PROGRESS.md)、[工具 stdout](HPC_01C_SERIAL_TOOL_PROGRESS.md) |
+
+上述歷史報告中的失敗觀察仍保留，尤其 legacy flow 的近零壓力跨 rank relative
+gate 未通過，不能由本次入口稽核改寫為通過。配置與資產的 exact agreement
+依既有「執行期間內容不變」契約，不提供檔案鎖。MPI 初始化／內部失聯不在
+程序存活的錯誤協調保證內。
+
 ## 此批已逐項核對的終止呼叫鏈
 
 | 入口／owner | 建構與正常返回 | 例外退棧／清理 | 本批結論 |
@@ -10,7 +31,7 @@
 | CPU flow main | `OwnedRowAssembler` → stack `TransientFlowRuntime` → 可選 VCA transport → step／final gather／VTKHDF close → transport Close → flow Close → completion／profile → PetscFinalize | runtime constructor 的 catch 與 destructor 使用同一固定順序；明確 Close 後不重複 destroy | 新增 terminal cleanup 協調；CLI、VCA 與 runtime unit 驗收見 cleanup 報告 |
 | Graph runner | 本地準備 native owners → `AllocateCollectiveRuntime` → borrowed adapters／registry → executor accepted histories → 各 3D transport／flow Close → CSV／completion manifest → return → main PetscFinalize | registry owns adapters；貼體 adapters 不在 destructor 呼叫被借用 runtime；native owners 析構在 communicator 釋放前 | 新增 Close，且置於 completion manifest 前 |
 | Sequential runner | 1D callbacks／3D runtime → explicit 或 fixed／Aitken loop → accepted histories → 3D Close → CSV／manifest → return → main PetscFinalize | callback outcomes 與內部 runtime stages 分開；strong loop 的 abort 順序沿用既有協議 | 新增 Close，且置於 completion manifest 前 |
-| Configured transport main | runtime 物件組直接持有 Mat／Vec／KSP；最後 gather／writer close／VecNorm 後逐一 CheckPetsc destroy，再列印 summary | `TransportPetscObjects` 於共同失敗後作 noexcept 後備清理 | 已有明確成功路徑清理；本批未修改該 CLI |
+| Configured transport main | runtime 物件組直接持有 Mat／Vec／KSP；最後 gather／writer close／VecNorm 後逐一 CheckPetsc destroy，memory report 明確 Close 後才列印 summary | `TransportPetscObjects` 於共同失敗後作 noexcept 後備清理；memory report destructor 只作本地後備 | memory close 的 12 個原生作業及 world3／split1+2 通過 |
 | Legacy transport main | `RunLegacyTransport` → output gather objects Close → transport objects Close → summary → return → PetscFinalize | 已有 owner 後備清理，main 協調最終 status | 本批未修改；保留既有 legacy 故障證據 |
 | Mesh check | 本地 database／owner／element checks → `InspectGeometry` reductions → result／global status → PetscFinalize | 無 PETSc Mat／Vec owner；database／elements 為本地 C++ 資源 | 空 rank 合法；quality 不佳返回 2，輸入例外返回 1 |
 | Assembly smoke | assembler → Mat owner → assembly／info → checked MatDestroy → summary／global status → PetscFinalize | Mat owner 在共同失敗後作後備 destroy | 已有 success 前明確 MatDestroy |
@@ -38,7 +59,8 @@
 
 1. 把各入口的參數早退、configuration／external asset、時間步控制、
    runtime／adapter／executor 與 writer 呼叫，逐項對到現有 stage 及故障證據；
-   本表只完成終止路徑，不以「已看過 main」替代完整呼叫鏈。
+   上表已核對五個 main 的交界及分支，仍需其餘 runner 和 runtime/helper 內部的
+   完整呼叫鏈；不以「已看過 main」替代完整覆蓋。
 2. 核對共用 helper 的 error-handler stack／cleanup fallback 與呼叫端的假設，
    區分可控制的本地／返回錯誤和 MPI／PETSc 內部程序故障；目前不同 helper
    的 Close 在第一個共同失敗後由 destructor 清理剩餘物件，與新 runtime 的

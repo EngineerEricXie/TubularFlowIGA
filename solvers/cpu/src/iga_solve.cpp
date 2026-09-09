@@ -756,6 +756,7 @@ int main(int argc, char** argv)
 		CheckPetsc("transport VecDestroy", VecDestroy(&forcing));
 		CheckPetsc("transport MatDestroy", MatDestroy(&previous));
 		CheckPetsc("transport MatDestroy", MatDestroy(&left));
+		memory.Close();
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport final summary", [&] {
 			if (!std::isfinite(norm)) throw std::runtime_error("transport state norm is not finite");
 			if (rank == 0) std::cout << "iga_solve system=" << system.name

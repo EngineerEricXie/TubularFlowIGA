@@ -41,6 +41,7 @@ public:
 		double local[6]{};
 		std::vector<double> gathered;
 		CollectiveLocalStage(communicator_, "memory report measurement", [&] {
+			if (closed_) throw std::logic_error("memory report is closed");
 			PetscCallThrow(PetscMallocGetCurrentUsage(&petsc_current), "PetscMallocGetCurrentUsage");
 			PetscCallThrow(PetscMallocGetMaximumUsage(&petsc_peak), "PetscMallocGetMaximumUsage");
 			PetscCallThrow(PetscMemoryGetCurrentUsage(&process_current), "PetscMemoryGetCurrentUsage");
@@ -80,7 +81,24 @@ public:
 		});
 	}
 
+	// Call before publishing successful completion. The stream destructor is
+	// only a local unwind fallback and cannot coordinate a failed close.
+	void Close()
+	{
+		if (path_.empty()) return;
+		CollectiveLocalStage(communicator_, "memory report close", [&] {
+			if (rank_ != 0) return;
+			if (!closed_) {
+				closed_ = true;
+				output_.close();
+			}
+			if (!output_) throw std::runtime_error("cannot close memory report: "+path_.string());
+		});
+		closed_ = true;
+	}
+
 private:
+	bool closed_ = false;
 	static constexpr double kGiB = 1024.0*1024.0*1024.0;
 
 	static double ReadStatusBytes(const std::string& key)
