@@ -44,8 +44,13 @@ material-aware walls (including optional inertial impedance), mixed traces,
 ghost stabilization, ports, and the gauge. Its
 [operator regression](../../docs/progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)
 compares five boundary modes against the serial transient runtime on 1/2/4 ranks.
-Transient Newton transactions, accepted-clock handling, and entry integration
-remain pending; transient/moving entry restrictions still apply.
+`ImmersedTransientDistributedRuntime` adds shared MPI Newton solves and owned
+committed/prepared fields with a transactional accepted clock. Frozen history
+survives Newton rollback; `AbortTrial` releases it before changing controls.
+The [runtime regression](../../docs/progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)
+covers two accepted steps, field/conservation parity, failures, split groups,
+and weighted work partitions. Transient case/graph integration remains pending;
+transient/moving entry restrictions still apply.
 
 | Executable | Purpose |
 | --- | --- |

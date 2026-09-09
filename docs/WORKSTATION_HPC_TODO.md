@@ -501,11 +501,14 @@ F05 的原始診斷例外保存與恢復亦通過，見
   組裝已凍結外力，驗證 compact／expanded 與分散式殘差／Jacobian action。
   完整固定幾何 operator 已接上 material-aware 零速壁面（含慣性係數）、
   ghost／port／gauge，五種邊界模式通過 1／2／4 ranks 與序列參考比較。
-  暫態 Newton／accepted clock／graph 尚未接入，故保持未勾選。見
+  暫態 Newton 與 accepted clock 已接入，兩步 history、候選失敗回復、
+  prepare／abort／重試與 Close 後禁止發布通過；graph 暫態接入仍待完成，
+  故保持未勾選。見
   [準靜態 graph MPI 進度](progress/HPC_03C_STATIC_GRAPH_PROGRESS.md) 與
   [分散式 history 進度](progress/HPC_03C_DISTRIBUTED_HISTORY_PROGRESS.md)、
   [暫態體積組裝進度](progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md)、
-  [暫態 operator 進度](progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)。
+  [暫態 operator 進度](progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)、
+  [暫態 runtime 進度](progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)。
 - [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。

@@ -383,7 +383,8 @@ private:
 		validate_map(result.material_wall_outward_flow_by_boundary_label_m3_s,result.total_material_wall_outward_flow_m3_s,"material wall");
 		if(!immersed_transient_detail::MovingWallContinuityIdentityReconciles(result.open_port_outward_flow_m3_s,
 			result.wall_outward_flow_m3_s,result.total_material_wall_outward_flow_m3_s,
-			result.discrete_moving_wall_continuity_defect_m3_s,result.wall_relative_leakage_m3_s,result.total_fluid_surface_outward_flow_m3_s))
+			result.discrete_moving_wall_continuity_defect_m3_s,result.wall_relative_leakage_m3_s,result.total_fluid_surface_outward_flow_m3_s,
+			inner.absolute_surface_flux_sum_m3_s,inner.surface_flux_term_count))
 			throw std::logic_error("moving immersed transient moving-wall continuity roundoff identity does not reconcile");
 		if(!(result.normalization_scale_m3_s>0.0)) throw std::runtime_error("moving immersed transient conservation normalization scale is invalid");
 		if(!(result.legacy_normalization_scale_m3_s>0.0)) throw std::runtime_error("moving immersed transient legacy normalization scale is invalid");

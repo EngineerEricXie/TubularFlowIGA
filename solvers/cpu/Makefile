@@ -27,6 +27,8 @@ PETSC_TARGETS += immersed_distributed_assembly_test
 PETSC_TARGETS += immersed_distributed_history_test
 PETSC_TARGETS += immersed_distributed_transient_volume_test
 PETSC_TARGETS += immersed_transient_distributed_operator_test
+PETSC_TARGETS += immersed_conservation_roundoff_test
+PETSC_TARGETS += immersed_transient_distributed_runtime_test
 PETSC_TARGETS += immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 
 immersed_distributed_history_test: tests/test_immersed_distributed_history.cpp include/ImmersedDistributedVelocityHistory.hpp include/ImmersedTransientState.hpp include/NavierStokesElement.hpp include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeCleanup.hpp
@@ -37,6 +39,15 @@ immersed_distributed_transient_volume_test: tests/test_immersed_distributed_tran
 
 immersed_transient_distributed_operator_test: tests/test_immersed_transient_distributed_operator.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_conservation_roundoff_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+immersed_conservation_roundoff_test: tests/test_immersed_conservation_roundoff.cpp include/ImmersedTransientFlowRuntime.hpp include/MovingImmersedTransientFlowRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_transient_distributed_runtime_test: tests/test_immersed_transient_distributed_runtime.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_distributed_static_flow_test immersed_distributed_domain_test: include/ImmersedDistributedNewtonRuntime.hpp
 
 immersed_distributed_static_flow_test: tests/test_immersed_distributed_static_flow.cpp include/ImmersedStaticDistributedRuntime.hpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp include/CollectivePetscOptions.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -635,6 +646,7 @@ clean:
 	$(RM) immersed_distributed_history_test
 	$(RM) immersed_distributed_transient_volume_test
 	$(RM) immersed_transient_distributed_operator_test
+	$(RM) immersed_conservation_roundoff_test immersed_transient_distributed_runtime_test
 	$(RM) immersed_distributed_physics_test immersed_distributed_static_flow_test immersed_distributed_domain_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test
@@ -665,4 +677,4 @@ test: weighted-work-partition-test
 immersed_distributed_domain_test: tests/test_immersed_distributed_domain.cpp ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../../include/ThreeDImmersedFlowDomain.hpp include/ImmersedStaticDistributedRuntime.hpp include/ImmersedStaticDistributedOperator.hpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp
+immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: include/ImmersedDistributedNewtonRuntime.hpp ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp

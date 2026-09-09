@@ -59,6 +59,9 @@ struct ImmersedTransientFlowConservationDiagnostics {
 	// the wall-only view is retained solely for u-w leakage reporting.
 	std::map<int,double> material_surface_outward_flow_by_boundary_label_m3_s;
 	std::map<int,double> material_wall_outward_flow_by_boundary_label_m3_s;
+	// Retain pre-cancellation summation data for the algebraic roundoff check.
+	double absolute_surface_flux_sum_m3_s = 0.0;
+	std::uint64_t surface_flux_term_count = 0;
 	double endpoint_volume_divergence_m3_s = 0.0, total_surface_outward_flow_m3_s = 0.0;
 	double open_port_outward_flow_m3_s = 0.0, wall_outward_flow_m3_s = 0.0;
 	double total_material_surface_outward_flow_m3_s = 0.0;
@@ -79,8 +82,8 @@ namespace immersed_transient_detail {
 
 // This identity is evaluated from separately reduced aggregates:
 // (Q_port + Q_w,material) + (Q_w,fluid - Q_w,material) = Q_total,fluid.
-// Its tolerance must retain the scale of raw terms that can cancel before the
-// final comparison.  The fixed operation allowance is strictly roundoff-only;
+// Its tolerance retains raw quadrature terms that can cancel even within a
+// single aggregate, plus the number of accumulated terms. The allowance is roundoff-only;
 // it is not a physical continuity tolerance.
 inline double MovingWallContinuityIdentityRoundoffTolerance(
 	double open_port_outward_flow_m3_s,
@@ -88,20 +91,29 @@ inline double MovingWallContinuityIdentityRoundoffTolerance(
 	double total_material_wall_outward_flow_m3_s,
 	double discrete_moving_wall_continuity_defect_m3_s,
 	double wall_relative_leakage_m3_s,
-	double total_fluid_surface_outward_flow_m3_s)
+	double total_fluid_surface_outward_flow_m3_s,
+	double absolute_surface_flux_sum_m3_s = 0.0,
+	std::uint64_t surface_flux_term_count = 0)
 {
 	for(const double value : {open_port_outward_flow_m3_s,wall_outward_flow_m3_s,
 		total_material_wall_outward_flow_m3_s,discrete_moving_wall_continuity_defect_m3_s,
-		wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s})
+		wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s,absolute_surface_flux_sum_m3_s})
 		if(!std::isfinite(value)) return std::numeric_limits<double>::quiet_NaN();
+	if(absolute_surface_flux_sum_m3_s<0.0) return std::numeric_limits<double>::quiet_NaN();
+	const double accumulated_epsilon=static_cast<double>(surface_flux_term_count)*std::numeric_limits<double>::epsilon();
+	if(accumulated_epsilon>=0.5) return std::numeric_limits<double>::quiet_NaN();
+	// gamma_n bounds sequential accumulation.  The extra factor accounts for
+	// the separate total/subset sums and the rounded absolute sum itself.
+	const double gamma=accumulated_epsilon/(1.0-accumulated_epsilon);
 	const double raw_term_scale_m3_s=std::max({std::numeric_limits<double>::min(),
+		absolute_surface_flux_sum_m3_s,
 		std::abs(open_port_outward_flow_m3_s),
 		std::abs(wall_outward_flow_m3_s),
 		std::abs(total_material_wall_outward_flow_m3_s),
 		std::abs(discrete_moving_wall_continuity_defect_m3_s),
 		std::abs(wall_relative_leakage_m3_s),
 		std::abs(total_fluid_surface_outward_flow_m3_s)});
-	return 128.0*std::numeric_limits<double>::epsilon()*raw_term_scale_m3_s;
+	return (128.0*std::numeric_limits<double>::epsilon()+4.0*gamma/(1.0-gamma))*raw_term_scale_m3_s;
 }
 
 inline bool MovingWallContinuityIdentityReconciles(
@@ -110,11 +122,14 @@ inline bool MovingWallContinuityIdentityReconciles(
 	double total_material_wall_outward_flow_m3_s,
 	double discrete_moving_wall_continuity_defect_m3_s,
 	double wall_relative_leakage_m3_s,
-	double total_fluid_surface_outward_flow_m3_s)
+	double total_fluid_surface_outward_flow_m3_s,
+	double absolute_surface_flux_sum_m3_s = 0.0,
+	std::uint64_t surface_flux_term_count = 0)
 {
 	const double tolerance=MovingWallContinuityIdentityRoundoffTolerance(open_port_outward_flow_m3_s,
 		wall_outward_flow_m3_s,total_material_wall_outward_flow_m3_s,
-		discrete_moving_wall_continuity_defect_m3_s,wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s);
+		discrete_moving_wall_continuity_defect_m3_s,wall_relative_leakage_m3_s,total_fluid_surface_outward_flow_m3_s,
+		absolute_surface_flux_sum_m3_s,surface_flux_term_count);
 	const double reconstructed_total_fluid_surface_outward_flow_m3_s=discrete_moving_wall_continuity_defect_m3_s+wall_relative_leakage_m3_s;
 	if(!std::isfinite(tolerance)||!std::isfinite(reconstructed_total_fluid_surface_outward_flow_m3_s)) return false;
 	const double residual_m3_s=reconstructed_total_fluid_surface_outward_flow_m3_s-total_fluid_surface_outward_flow_m3_s;
@@ -594,6 +609,12 @@ private:
 				throw std::runtime_error(std::string("immersed transient conservation ")+what+" is nonfinite");
 			total+=value;
 		};
+		auto add_raw_flux=[&](double value) {
+			if(d.surface_flux_term_count==std::numeric_limits<std::uint64_t>::max())
+				throw std::overflow_error("immersed transient conservation flux count overflows");
+			add(d.absolute_surface_flux_sum_m3_s,std::abs(value),"absolute surface flux");
+			++d.surface_flux_term_count;
+		};
 		for(std::uint64_t c=0;c<domain_.Cells().size();++c) if(Usable(c)) {
 			const auto e=domain_.Background().MaterializeElement(c); const auto n=Gather(e);
 			ForEachUsableVolumePoint(c,[&](const VolumeQuadraturePoint& p) {
@@ -607,11 +628,13 @@ private:
 			for(std::size_t i=0;i<rule.Points().size();++i) {
 				const auto& p=rule.Points()[i]; const auto b=EvaluateBasis(e,p.parametric[0],p.parametric[1],p.parametric[2],false); double fluid=0;
 				for(std::size_t a=0;a<n.size();++a) for(int q=0;q<3;++q) fluid+=n[a][q]*b.value[a]*p.normal[q]*p.weight;
+				add_raw_flux(fluid);
 				add(d.surface_flow_by_boundary_label_m3_s[p.boundary_id],fluid,"fluid boundary flux"); add(d.total_surface_outward_flow_m3_s,fluid,"total fluid boundary flux");
 				const auto w=MaterialVelocityAt(provenance[i]); double material=0;
 				for(int q=0;q<3;++q) { if(!std::isfinite(w[q])) throw std::runtime_error("immersed transient conservation material surface velocity is not finite"); material+=w[q]*p.normal[q]*p.weight; }
 				add(d.material_surface_outward_flow_by_boundary_label_m3_s[p.boundary_id],material,"material surface flux"); add(d.total_material_surface_outward_flow_m3_s,material,"total material surface flux");
 				if(std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),p.boundary_id)) {
+					add_raw_flux(material);
 					add(d.wall_outward_flow_m3_s,fluid,"wall fluid flux");
 					add(d.material_wall_outward_flow_by_boundary_label_m3_s[p.boundary_id],material,"material wall flux"); add(d.total_material_wall_outward_flow_m3_s,material,"total material wall flux");
 				} else if(std::any_of(options_.ports.begin(),options_.ports.end(),[&](const auto& port){return port.boundary_label==p.boundary_id;})) add(d.open_port_outward_flow_m3_s,fluid,"open port flux");
@@ -638,7 +661,8 @@ private:
 		for(const auto& item:d.material_wall_outward_flow_by_boundary_label_m3_s) if(!std::binary_search(options_.wall_labels.begin(),options_.wall_labels.end(),item.first)) throw std::logic_error("immersed transient conservation material-wall map contains an unconfigured label");
 		if(!immersed_transient_detail::MovingWallContinuityIdentityReconciles(d.open_port_outward_flow_m3_s,
 			d.wall_outward_flow_m3_s,d.total_material_wall_outward_flow_m3_s,
-			d.discrete_moving_wall_continuity_defect_m3_s,d.wall_relative_leakage_m3_s,d.total_surface_outward_flow_m3_s))
+			d.discrete_moving_wall_continuity_defect_m3_s,d.wall_relative_leakage_m3_s,d.total_surface_outward_flow_m3_s,
+			d.absolute_surface_flux_sum_m3_s,d.surface_flux_term_count))
 			throw std::logic_error("immersed transient moving-wall continuity roundoff identity does not reconcile");
 		const double legacy_scale=std::max(options_.flow_controller_reference_flow_m3_s,std::abs(d.open_port_outward_flow_m3_s));
 		d.normalized_wall_leakage=std::abs(d.wall_relative_leakage_m3_s)/legacy_scale;

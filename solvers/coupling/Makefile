@@ -257,3 +257,4 @@ three_d_staged_failure_test three_d_trial_failure_test three_d_port_failure_test
 pressure_flow_collective_failure_test species_collective_failure_test: tests/AbortReportAllocation.hpp
 
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp
+iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../cpu/include/ImmersedDistributedNewtonRuntime.hpp
