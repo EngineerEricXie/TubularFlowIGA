@@ -971,6 +971,11 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
 			for (const auto& volume : immersed)
+				if (volume.second->IsTransient()
+					&& (volume.second->Configuration().time.dt != configuration.time.dt_s
+						|| volume.second->Configuration().time.steps != configuration.time.steps))
+					throw std::runtime_error("transient immersed domain and graph time grids must match");
+			for (const auto& volume : immersed)
 				for (const auto& line : one_d)
 					if (line.second.runtime->FlowSystem().density
 							!= volume.second->RuntimeParameters().density
@@ -979,18 +984,21 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
 		});
-		if (mpi_size > 1) for (const auto& domain_id : plan.domain_order) if (immersed.count(domain_id)) {
-			auto& native = *immersed.at(domain_id); native.InitializeDistributed(communicator);
+		for (const auto& domain_id : plan.domain_order) if (immersed.count(domain_id)) {
+			auto& native = *immersed.at(domain_id);
+			if (mpi_size > 1) native.InitializeDistributed(communicator);
+			if (!native.IsDistributed()) continue;
 			iga::CollectiveLocalStage(communicator,"immersed distribution diagnostics",[&] {
 				const char* profile = std::getenv("IGA_PROFILE");
 				if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0] != '1' || profile[1] != '\0')) return;
-				const auto& runtime = native.DistributedRuntime();
+				const auto distribution = native.Distribution();
 				std::cout << "hpc_immersed_distribution {\"domain\":\"" << JsonEscape(domain_id)
 					<< "\",\"rank\":" << rank << ",\"ranks\":" << mpi_size
-					<< ",\"global_rows\":" << runtime.Diagnostics().total_dofs
-					<< ",\"owned_rows\":" << runtime.RowEnd()-runtime.RowBegin()
-					<< ",\"owned_stencils\":" << runtime.OwnedStencilCount()
-					<< ",\"required_rows\":" << runtime.RequiredStateRows() << "}\n";
+					<< ",\"time_integration\":\"" << (native.IsTransient() ? "backward_euler" : "steady") << "\""
+					<< ",\"global_rows\":" << distribution.global_rows
+					<< ",\"owned_rows\":" << distribution.owned_rows
+					<< ",\"owned_stencils\":" << distribution.owned_stencils
+					<< ",\"required_rows\":" << distribution.required_rows << "}\n";
 				iga::FlushCheckedText(std::cout);
 			});
 		}
@@ -1256,6 +1264,28 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 					accepted.push_back(std::move(accepted_step));
 					for (const auto& edge : accepted.back().result.iterations.back().edges)
 						pressure[edge.edge_id] = edge.measured_pressure_pa;
+				});
+			}
+			for (const auto& entry : immersed_audit) if (entry.second->IsTransient()) {
+				const auto& runtime = entry.second->TransientRuntime();
+				const auto conservation = runtime.ConservationDiagnostics();
+				iga::CollectiveLocalStage(communicator,"immersed accepted transient diagnostics",[&] {
+					const auto& clock = runtime.Clock(); const auto& diagnostic = runtime.Diagnostics();
+					if (clock.time_s != time || clock.index != static_cast<std::uint64_t>(step)
+						|| clock.trial_active || runtime.History().Active() || diagnostic.commit_count != static_cast<std::size_t>(step))
+						throw std::logic_error("immersed graph accepted backend clock differs");
+					const char* profile = std::getenv("IGA_PROFILE");
+					if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0] != '1' || profile[1] != '\0')) return;
+					std::cout << std::setprecision(17) << "hpc_immersed_transient_step {\"domain\":\"" << JsonEscape(entry.first)
+						<< "\",\"rank\":" << rank << ",\"ranks\":" << mpi_size << ",\"time_s\":" << clock.time_s
+						<< ",\"index\":" << clock.index << ",\"commits\":" << diagnostic.commit_count
+						<< ",\"residual_norm\":" << diagnostic.residual_norm
+						<< ",\"assembly_s\":" << diagnostic.aggregate_assembly_seconds
+						<< ",\"solve_s\":" << diagnostic.aggregate_linear_solve_seconds
+						<< ",\"surface_flow\":" << conservation.total_surface_outward_flow_m3_s
+						<< ",\"volume_divergence\":" << conservation.volume_divergence_integral_m3_s
+						<< ",\"wall_flow\":" << conservation.wall_outward_flow_m3_s << "}\n";
+					iga::FlushCheckedText(std::cout);
 				});
 			}
 			// Advance only after the executor's transactional commit and all

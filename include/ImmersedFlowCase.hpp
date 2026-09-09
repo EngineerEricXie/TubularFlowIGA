@@ -1,7 +1,7 @@
 #ifndef IGA_IMMERSED_FLOW_CASE_HPP
 #define IGA_IMMERSED_FLOW_CASE_HPP
 
-// Production owner for serial or distributed quasi-static immersed flow. Keep
+// Production owner for steady or fixed-geometry transient immersed flow. Keep
 // the catalog dependencies in declaration order: the runtime borrows ghost,
 // surface and volume, ghost borrows classification and volume, and all of
 // them ultimately retain the classified surface.
@@ -11,6 +11,9 @@
 #include "SimulationConfig.hpp"
 #include "ThreeDImmersedFlowDomain.hpp"
 #include "ThreeDImmersedDistributedFlowDomain.hpp"
+#include "ThreeDImmersedTransientDistributedFlowDomain.hpp"
+#include "Sha256.hpp"
+#include <type_traits>
 #include "../solvers/cpu/include/CartesianDomainClassification.hpp"
 #include "../solvers/cpu/include/CutCellGhostPenalty.hpp"
 #include "../solvers/cpu/include/ImmersedStaticFlowRuntime.hpp"
@@ -33,6 +36,10 @@
 
 namespace iga {
 
+struct ImmersedCaseDistribution {
+	std::size_t global_rows = 0,owned_rows = 0,owned_stencils = 0,required_rows = 0;
+};
+
 class ImmersedFlowCase final : public CoupledDomainRuntime {
 public:
 	static std::unique_ptr<ImmersedFlowCase> Load(const std::filesystem::path& case_directory,
@@ -40,6 +47,10 @@ public:
 	{
 		if (mpi_size != 1) throw std::runtime_error("immersed flow cases require MPI size 1 through the serial Load interface");
 		auto result = Preflight(case_directory,domain_id,ports);
+		if (result->IsTransient()) {
+			result->InitializeDistributed(PETSC_COMM_SELF);
+			return result;
+		}
 		result->runtime_ = std::make_unique<ImmersedStaticFlowRuntime>(*result->classification_,
 			*result->volume_,*result->surface_,*result->ghost_,result->runtime_options_);
 		result->adapter_ = std::make_unique<ThreeDImmersedFlowDomain>(domain_id,*result->runtime_,ports);
@@ -58,7 +69,7 @@ public:
 			throw std::runtime_error("immersed flow case directory is not a directory");
 		result->configuration_ = ReadSimulationConfiguration(
 			Contained(result->case_directory_, "simulation_config.json").string());
-		ValidateSimulation(result->configuration_);
+		result->transient_ = ValidateSimulation(result->configuration_);
 		const auto root = ParseJson(Contained(result->case_directory_, "immersed_geometry.json"));
 		const auto& object = config_detail::RequireObject(root, "immersed_geometry.json");
 		config_detail::RequireKnownKeys(object, {"surface", "boundary_array", "grid",
@@ -82,28 +93,67 @@ public:
 		result->ghost_ = std::make_unique<CutCellGhostPenaltyCatalog>(*result->classification_,
 			*result->volume_, ParseGhost(Required(object, "ghost_penalty")));
 		const auto wall_labels = ParseLabels(Required(object, "wall_labels"));
-		result->runtime_options_ = ParseRuntime(Required(object, "runtime"), result->configuration_,
-			wall_labels);
-		ValidateLabelPartition(result->classification_->SurfaceIndex().Surface(), wall_labels,
-			ports, result->runtime_options_.ports);
+		if (result->transient_) {
+			result->transient_options_ = ParseRuntime<ImmersedTransientFlowOptions>(Required(object,"runtime"),result->configuration_,wall_labels);
+			result->runtime_parameters_ = result->transient_options_.parameters;
+			result->runtime_parameters_.dt = result->configuration_.time.dt;
+		} else {
+			result->runtime_options_ = ParseRuntime<ImmersedStaticFlowOptions>(Required(object,"runtime"),result->configuration_,wall_labels);
+			result->runtime_parameters_ = result->runtime_options_.parameters;
+		}
+		ValidateLabelPartition(result->classification_->SurfaceIndex().Surface(),wall_labels,ports,
+			result->transient_ ? result->transient_options_.ports : result->runtime_options_.ports);
 		result->domain_id_ = domain_id; result->graph_ports_ = ports;
-		result->runtime_parameters_ = result->runtime_options_.parameters;
+		result->geometry_identity_ = result->FixedGeometryIdentity();
 		return result;
 	}
 	void InitializeDistributed(MPI_Comm communicator)
 	{
+		std::string signature;
 		CollectiveLocalStage(communicator,"immersed case distributed initialization",[&] {
-			if (runtime_ || distributed_runtime_ || adapter_ || !classification_ || !volume_ || !surface_ || !ghost_)
+			if (runtime_ || distributed_runtime_ || transient_runtime_ || adapter_ || !classification_ || !volume_ || !surface_ || !ghost_)
 				throw std::logic_error("immersed case is not an uninitialized preflight result");
+			std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
+			text << std::setprecision(std::numeric_limits<double>::max_digits10) << transient_;
+			if (transient_) text << ':' << configuration_.time.dt << ':' << configuration_.time.steps;
+			signature = text.str();
 		});
+		RequireCollectiveSameText(communicator,"immersed case time integration agreement",signature);
+		if (transient_) {
+			auto runtime = AllocateCollectiveRuntime<ImmersedTransientDistributedRuntime>(communicator,communicator,
+				*classification_,*volume_,*surface_,*ghost_,geometry_identity_,transient_options_);
+			auto adapter = AllocateCollectiveRuntime<ThreeDImmersedTransientDistributedFlowDomain>(communicator,domain_id_,*runtime,graph_ports_);
+			transient_runtime_ = std::move(runtime); adapter_ = std::move(adapter); return;
+		}
 		auto runtime = AllocateCollectiveRuntime<ImmersedStaticDistributedRuntime>(communicator,communicator,
 			*classification_,*volume_,*surface_,*ghost_,runtime_options_);
 		auto adapter = AllocateCollectiveRuntime<ThreeDImmersedDistributedFlowDomain>(communicator,domain_id_,*runtime,graph_ports_);
 		distributed_runtime_ = std::move(runtime); adapter_ = std::move(adapter);
 	}
-	bool IsDistributed() const noexcept { return static_cast<bool>(distributed_runtime_); }
+	bool IsTransient() const noexcept { return transient_; }
+	bool IsDistributed() const noexcept { return distributed_runtime_ || transient_runtime_; }
+	ImmersedCaseDistribution Distribution() const
+	{
+		if (transient_runtime_) return DistributionOf(*transient_runtime_);
+		if (distributed_runtime_) return DistributionOf(*distributed_runtime_);
+		throw std::logic_error("immersed case has no distributed ownership");
+	}
 	// Collective for a distributed case; geometry and audit metadata stay valid.
-	void CloseDistributed() const { if (distributed_runtime_) distributed_runtime_->Close(); }
+	void CloseDistributed() const
+	{
+		if (transient_runtime_) transient_runtime_->Close();
+		if (distributed_runtime_) distributed_runtime_->Close();
+	}
+	ImmersedTransientDistributedRuntime& TransientRuntime()
+	{
+		if (!transient_runtime_) throw std::logic_error("immersed case has no transient runtime");
+		return *transient_runtime_;
+	}
+	const ImmersedTransientDistributedRuntime& TransientRuntime() const
+	{
+		if (!transient_runtime_) throw std::logic_error("immersed case has no transient runtime");
+		return *transient_runtime_;
+	}
 	ImmersedStaticDistributedRuntime& DistributedRuntime()
 	{
 		if (!distributed_runtime_) throw std::logic_error("immersed case has no distributed runtime");
@@ -129,7 +179,13 @@ public:
 	const std::string& DomainId() const noexcept override { return domain_id_; }
 	DomainKind Kind() const noexcept override { return DomainKind::ThreeDImmersedFlow; }
 	const std::vector<CouplingPort>& Ports() const noexcept override { return graph_ports_; }
-	void BeginStep(const DomainStepContext& step) override { Adapter().BeginStep(step); }
+	void BeginStep(const DomainStepContext& step) override
+	{
+		if (transient_runtime_) CollectiveLocalStage(transient_runtime_->Communicator(),"immersed case timestep",[&] {
+			if (step.dt_s != configuration_.time.dt) throw std::invalid_argument("transient immersed timestep differs from case configuration");
+		});
+		Adapter().BeginStep(step);
+	}
 	void SetPortInput(const std::string& id, const PortBoundaryData& input) override
 	{ Adapter().SetPortInput(id, input); }
 	void SolveTrial() override { Adapter().SolveTrial(); }
@@ -140,6 +196,25 @@ public:
 	void FinalizeCommitStep() noexcept override { if (adapter_) adapter_->FinalizeCommitStep(); }
 
 private:
+	template<class Runtime> static ImmersedCaseDistribution DistributionOf(const Runtime& runtime)
+	{
+		return {runtime.Diagnostics().total_dofs,static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),
+			runtime.OwnedStencilCount(),runtime.RequiredStateRows()};
+	}
+	std::string FixedGeometryIdentity() const
+	{
+		Sha256 hash;
+		immersed_transient_detail::AppendString(hash,"FixedImmersedCaseGeometry/v1");
+		immersed_transient_detail::AppendString(hash,SurfaceHash());
+		for (int d = 0; d < 3; ++d) {
+			hash.AppendNormalizedDouble(Grid().lower_m[d]); hash.AppendNormalizedDouble(Grid().upper_m[d]);
+			hash.AppendLittleEndian64(Grid().cells[d]);
+		}
+		hash.AppendLittleEndian64(volume_->Options().max_depth);
+		hash.AppendLittleEndian64(volume_->Options().empty_rule_rescue_max_depth);
+		hash.AppendLittleEndian64(static_cast<std::uint64_t>(volume_->StorageMode()));
+		return hash.Hex();
+	}
 	CoupledDomainRuntime& Adapter() const
 	{
 		if (!adapter_) throw std::logic_error("immersed case runtime has not been initialized");
@@ -234,22 +309,28 @@ private:
 	}
 	static double Number(const std::map<std::string, config_detail::JsonValue>& o, const std::string& key, double fallback)
 	{ const auto v=config_detail::Find(o,key); return v ? config_detail::RequireNumber(*v,"immersed_geometry.json.runtime."+key) : fallback; }
-	static ImmersedStaticFlowOptions ParseRuntime(const config_detail::JsonValue& value,
+	template<class Options> static Options ParseRuntime(const config_detail::JsonValue& value,
 		const SimulationConfiguration& simulation, const std::vector<int>& wall_labels)
 	{
-		const auto& o=config_detail::RequireObject(value,"immersed_geometry.json.runtime"); config_detail::RequireKnownKeys(o,{"wall_gamma0","nonlinear_maximum_iterations","ksp_maximum_iterations","ksp_relative_tolerance","nonlinear_relative_tolerance","nonlinear_absolute_tolerance","flow_controller_relative_tolerance","flow_controller_absolute_tolerance_m3_s","flow_controller_reference_flow_m3_s","minimum_damping","lu_pivot_shift","ports"},"immersed_geometry.json.runtime");
+		const auto& o=config_detail::RequireObject(value,"immersed_geometry.json.runtime"); const std::set<std::string> common_keys{"wall_gamma0","nonlinear_maximum_iterations","ksp_maximum_iterations","ksp_relative_tolerance","nonlinear_relative_tolerance","nonlinear_absolute_tolerance","flow_controller_relative_tolerance","flow_controller_absolute_tolerance_m3_s","flow_controller_reference_flow_m3_s","minimum_damping","lu_pivot_shift","ports"};
+		auto keys = common_keys;
+		if constexpr (std::is_same<Options,ImmersedTransientFlowOptions>::value) keys.insert("wall_inertial_gamma0");
+		config_detail::RequireKnownKeys(o,keys,"immersed_geometry.json.runtime");
 		const EquationSystemDefinition* flow = nullptr;
 		for (const auto& system : simulation.equation_systems)
 			if (system.kind == EquationKind::NavierStokes) flow = &system;
 		if (!flow) throw std::runtime_error("immersed flow case has no Navier-Stokes system");
-		ImmersedStaticFlowOptions r;
+		Options r;
+		if constexpr (std::is_same<Options,ImmersedTransientFlowOptions>::value)
+			r.wall_inertial_gamma0 = Number(o,"wall_inertial_gamma0",r.wall_inertial_gamma0);
 		r.parameters = NavierStokesParameters{flow->density, flow->viscosity, 0.0};
 		r.wall_labels=wall_labels; r.wall_gamma0=Number(o,"wall_gamma0",r.wall_gamma0); r.nonlinear_maximum_iterations=Limit(o,"nonlinear_maximum_iterations",r.nonlinear_maximum_iterations,"runtime");r.ksp_maximum_iterations=Limit(o,"ksp_maximum_iterations",r.ksp_maximum_iterations,"runtime");r.ksp_relative_tolerance=Number(o,"ksp_relative_tolerance",r.ksp_relative_tolerance);r.nonlinear_relative_tolerance=Number(o,"nonlinear_relative_tolerance",r.nonlinear_relative_tolerance);r.nonlinear_absolute_tolerance=Number(o,"nonlinear_absolute_tolerance",r.nonlinear_absolute_tolerance);r.flow_controller_relative_tolerance=Number(o,"flow_controller_relative_tolerance",r.flow_controller_relative_tolerance);r.flow_controller_absolute_tolerance_m3_s=Number(o,"flow_controller_absolute_tolerance_m3_s",r.flow_controller_absolute_tolerance_m3_s);r.flow_controller_reference_flow_m3_s=Number(o,"flow_controller_reference_flow_m3_s",r.flow_controller_reference_flow_m3_s);r.minimum_damping=Number(o,"minimum_damping",r.minimum_damping);r.lu_pivot_shift=Number(o,"lu_pivot_shift",r.lu_pivot_shift);
 		const auto& a=config_detail::RequireArray(Required(o,"ports"),"immersed_geometry.json.runtime.ports"); for(const auto& v:a){const auto& p=config_detail::RequireObject(v,"runtime.ports[]");config_detail::RequireKnownKeys(p,{"id","boundary_label","control_mode","value"},"runtime.ports[]");ImmersedFlowPortDefinition d;d.id=config_detail::RequireString(Required(p,"id"),"runtime.ports[].id");d.boundary_label=PositiveInteger<int>(Required(p,"boundary_label"),"runtime.ports[].boundary_label");const auto mode=config_detail::RequireString(Required(p,"control_mode"),"runtime.ports[].control_mode");if(mode=="pressure")d.control_mode=ImmersedFlowPortControlMode::Pressure;else if(mode=="mean_normal_traction")d.control_mode=ImmersedFlowPortControlMode::MeanNormalTraction;else if(mode=="flow_rate")d.control_mode=ImmersedFlowPortControlMode::FlowRate;else throw std::runtime_error("immersed_geometry.json: total pressure and unknown port controls are unsupported");d.value=config_detail::RequireNumber(Required(p,"value"),"runtime.ports[].value");r.ports.push_back(std::move(d));} return r;
 	}
-	static void ValidateSimulation(const SimulationConfiguration& c)
+	static bool ValidateSimulation(const SimulationConfiguration& c)
 	{
-		int flows=0, transports=0; const EquationSystemDefinition* flow=nullptr; for(const auto& s:c.equation_systems){if(s.kind==EquationKind::NavierStokes){++flows;flow=&s;}if(s.kind==EquationKind::LinearTransport)++transports;} if(c.dimension!="3d"||c.has_mesh||flows!=1||transports||!flow||flow->unknowns.size()!=2||c.physiology.enabled||c.coupling.mode!=SimulationScopeMode::FlowOnly||flow->time_integration!="steady")throw std::runtime_error("immersed flow case requires one steady flow-only 3D Navier-Stokes system without a body-fitted mesh or transport"); for(const auto& f:c.fields)if(f.kind==FieldKind::Scalar)throw std::runtime_error("immersed flow case rejects transport/species fields"); if(!c.velocity_sources.empty())throw std::runtime_error("immersed flow case rejects body-fitted reference velocity profiles"); for(const auto& b:c.boundaries)for(const auto& condition:b.conditions)if(condition.pressure_gauge||condition.kind==FieldBoundaryKind::Resistance||condition.kind==FieldBoundaryKind::WindkesselRC||condition.kind==FieldBoundaryKind::WindkesselRCR||condition.kind==FieldBoundaryKind::PressureTraction||!condition.profile.empty())throw std::runtime_error("immersed flow case rejects body-fitted boundary, outlet-model, gauge, and reference-profile assumptions");
+		int flows=0, transports=0; const EquationSystemDefinition* flow=nullptr; for(const auto& s:c.equation_systems){if(s.kind==EquationKind::NavierStokes){++flows;flow=&s;}if(s.kind==EquationKind::LinearTransport)++transports;} if(c.dimension!="3d"||c.has_mesh||flows!=1||transports||!flow||flow->unknowns.size()!=2||c.physiology.enabled||c.coupling.mode!=SimulationScopeMode::FlowOnly||(flow->time_integration!="steady"&&flow->time_integration!="backward_euler"))throw std::runtime_error("immersed flow case requires one steady or backward-Euler flow-only 3D Navier-Stokes system without a body-fitted mesh or transport"); for(const auto& f:c.fields)if(f.kind==FieldKind::Scalar)throw std::runtime_error("immersed flow case rejects transport/species fields"); if(!c.velocity_sources.empty())throw std::runtime_error("immersed flow case rejects body-fitted reference velocity profiles"); for(const auto& b:c.boundaries)for(const auto& condition:b.conditions)if(condition.pressure_gauge||condition.kind==FieldBoundaryKind::Resistance||condition.kind==FieldBoundaryKind::WindkesselRC||condition.kind==FieldBoundaryKind::WindkesselRCR||condition.kind==FieldBoundaryKind::PressureTraction||!condition.profile.empty())throw std::runtime_error("immersed flow case rejects body-fitted boundary, outlet-model, gauge, and reference-profile assumptions");
+		return flow->time_integration == "backward_euler";
 	}
 	static void ValidateLabelPartition(const ClosedTriangulatedSurface& surface, const std::vector<int>& walls,
 		const std::vector<CouplingPort>& ports, const std::vector<ImmersedFlowPortDefinition>& runtime_ports)
@@ -264,10 +345,14 @@ private:
 	std::unique_ptr<ImmersedSurfaceQuadratureCatalog> surface_;
 	std::unique_ptr<CutCellGhostPenaltyCatalog> ghost_;
 	ImmersedStaticFlowOptions runtime_options_;
+	ImmersedTransientFlowOptions transient_options_;
+	bool transient_ = false;
+	std::string geometry_identity_;
 	std::string domain_id_;
 	std::vector<CouplingPort> graph_ports_;
 	std::unique_ptr<ImmersedStaticFlowRuntime> runtime_;
 	std::unique_ptr<ImmersedStaticDistributedRuntime> distributed_runtime_;
+	std::unique_ptr<ImmersedTransientDistributedRuntime> transient_runtime_;
 	NavierStokesParameters runtime_parameters_;
 	std::unique_ptr<CoupledDomainRuntime> adapter_;
 };

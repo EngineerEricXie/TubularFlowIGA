@@ -260,3 +260,5 @@ iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../inc
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../cpu/include/ImmersedDistributedNewtonRuntime.hpp
 
 iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedDomain.hpp
+
+iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp ../cpu/include/ImmersedTransientDistributedRuntime.hpp ../cpu/include/ImmersedTransientDistributedOperator.hpp ../cpu/include/ImmersedDistributedTransientVolume.hpp ../cpu/include/ImmersedDistributedVelocityHistory.hpp ../cpu/include/ImmersedTransientFlowRuntime.hpp ../cpu/include/ImmersedTransientState.hpp

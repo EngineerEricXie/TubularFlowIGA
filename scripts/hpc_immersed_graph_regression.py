@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the production steady immersed graph entry across local MPI ranks."""
+"""Exercise the production steady or fixed-transient immersed graph entry across local MPI ranks."""
 import argparse
 import csv
 import json
@@ -13,14 +13,19 @@ import sys
 from hpc_inventory import digest
 
 
-def fixture(repo, root, execution):
+def fixture(repo, root, execution, transient=False, wall_inertial_gamma0=None):
     source = repo/'examples/vascular_flow/immersed_aneurysm_chain'
     target = root/'fixture'
     shutil.copytree(source, target)
-    for relative in ['simulation_config.json', 'source/simulation_config.json', 'sink/simulation_config.json']:
+    configurations = ['simulation_config.json', 'source/simulation_config.json', 'sink/simulation_config.json']
+    if transient:
+        configurations.append('immersed/simulation_config.json')
+    for relative in configurations:
         path = target/relative
         config = json.loads(path.read_text())
         config['time']['steps'] = 2
+        if relative == 'immersed/simulation_config.json':
+            config['equation_systems'][0]['time_integration'] = 'backward_euler'
         if relative == 'simulation_config.json':
             config['execution']['kind'] = execution
             config['execution']['maximum_iterations'] = 1 if execution == 'explicit' else 64
@@ -29,6 +34,8 @@ def fixture(repo, root, execution):
     geometry = json.loads(path.read_text())
     geometry['grid'] = dict(lower_m=[0, 0, 0], upper_m=[1, 1, 1], cells=[4, 1, 1])
     geometry['volume_quadrature']['max_depth'] = 2
+    if wall_inertial_gamma0 is not None:
+        geometry['runtime']['wall_inertial_gamma0'] = wall_inertial_gamma0
     path.write_text(json.dumps(geometry, indent=2)+'\n')
     (target/'immersed/surface.vtp').write_text('''<?xml version="1.0"?>
 <VTKFile type="PolyData" version="1.0" byte_order="LittleEndian"><PolyData><Piece NumberOfPoints="8" NumberOfPolys="12"><Points><DataArray type="Float64" NumberOfComponents="3" format="ascii">0 0 0 1 0 0 1 1 0 0 1 0 0 0 1 1 0 1 1 1 1 0 1 1</DataArray></Points><Polys><DataArray type="Int32" Name="connectivity" format="ascii">0 2 1 0 3 2 4 5 6 4 6 7 0 1 5 0 5 4 1 2 6 1 6 5 2 3 7 2 7 6 3 0 4 3 4 7</DataArray><DataArray type="Int32" Name="offsets" format="ascii">3 6 9 12 15 18 21 24 27 30 33 36</DataArray></Polys><CellData Scalars="boundary_id"><DataArray type="UInt32" Name="boundary_id" format="ascii">1 1 2 2 0 0 0 0 0 0 0 0</DataArray></CellData></Piece></PolyData></VTKFile>
@@ -65,19 +72,24 @@ def compare_ports(reference, actual):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--wall-inertial-gamma0', type=float, help='Optional transient wall impedance coefficient')
+    parser.add_argument('--transient', action='store_true', help='Use the fixed-geometry backward-Euler immersed backend')
     parser.add_argument('--execution', choices=['explicit', 'fixed', 'aitken'], default='fixed')
     args = parser.parse_args()
+    if args.wall_inertial_gamma0 is not None and (not args.transient or not math.isfinite(args.wall_inertial_gamma0) or args.wall_inertial_gamma0 < 0):
+        parser.error('wall inertia requires --transient and a finite nonnegative value')
     repo = Path(__file__).resolve().parents[1]
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    case = fixture(repo, root, args.execution)
+    case = fixture(repo, root, args.execution, args.transient, args.wall_inertial_gamma0)
     binary = repo/'solvers/coupling/iga_multidomain_flow'
     inputs = {str(p.relative_to(case)): digest(p) for p in case.rglob('*') if p.is_file()}
-    result = dict(status='running', execution=args.execution, binary=str(binary), binary_sha256=digest(binary), input_sha256=inputs, cases=[])
+    result = dict(status='running', execution=args.execution, transient=args.transient, wall_inertial_gamma0=args.wall_inertial_gamma0, binary=str(binary), binary_sha256=digest(binary), input_sha256=inputs, cases=[])
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1', IGA_PROFILE='1')
     for key in ['PETSC_OPTIONS', 'TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP', 'TUBULARFLOWIGA_INJECT_BIFURCATION_FAILURE_STEP']:
         env.pop(key, None)
     reference_ports = None
+    reference_diagnostics = {}
     try:
         # A fresh successful process follows the failed 2-rank process. The
         # adapter test separately proves rollback/retry within one object.
@@ -91,7 +103,7 @@ def main():
             environment = dict(env)
             if failure:
                 environment['TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP'] = '2'
-            record = dict(ranks=ranks, injected_precommit_failure=failure, argv=command, rank_reports=[], distributions=[])
+            record = dict(ranks=ranks, injected_precommit_failure=failure, argv=command, rank_reports=[], distributions=[], transient_diagnostics=[])
             result['cases'].append(record)
             with (directory/'launcher.log').open('w') as log:
                 completed = subprocess.run(command, env=environment, stdout=log, stderr=subprocess.STDOUT)
@@ -104,17 +116,41 @@ def main():
                 record['rank_reports'].append(report)
                 if report['timed_out'] or not report['resource'] or bool(report['returncode']) != failure:
                     raise RuntimeError('failed, timed out, or unmeasured graph rank')
-                if ranks > 1:
+                if ranks > 1 or args.transient:
                     lines = [line for line in (rd/'stdout.log').read_text().splitlines() if line.startswith('hpc_immersed_distribution ')]
                     if len(lines) != 1:
                         raise RuntimeError('missing distributed graph ownership report')
                     observation = json.loads(lines[0].split(' ', 1)[1])
                     if (observation['rank'] != rank or observation['ranks'] != ranks
                             or observation['owned_rows'] <= 0 or observation['owned_stencils'] <= 0
-                            or not 0 < observation['required_rows'] < observation['global_rows']):
+                            or not 0 < observation['required_rows'] <= observation['global_rows']
+                            or (ranks > 1 and observation['required_rows'] == observation['global_rows'])
+                            or observation['time_integration'] != ('backward_euler' if args.transient else 'steady')):
                         raise RuntimeError('invalid distributed graph ownership')
                     record['distributions'].append(observation)
-            if ranks > 1 and sum(o['owned_rows'] for o in record['distributions']) != record['distributions'][0]['global_rows']:
+                if args.transient:
+                    lines = [line for line in (rd/'stdout.log').read_text().splitlines()
+                             if line.startswith('hpc_immersed_transient_step ')]
+                    if len(lines) != (1 if failure else 2):
+                        raise RuntimeError('transient backend committed an incorrect number of steps')
+                    for index, line in enumerate(lines, 1):
+                        observation = json.loads(line.split(' ', 1)[1])
+                        if (observation['rank'] != rank or observation['ranks'] != ranks
+                                or observation['domain'] != 'immersed'
+                                or observation['index'] != index or observation['commits'] != index
+                                or observation['time_s'] != index*.01
+                                or any(not math.isfinite(v) for k, v in observation.items() if k != 'domain')
+                                or observation['assembly_s'] <= 0 or observation['solve_s'] <= 0
+                                or not 0 <= observation['residual_norm'] < 1e-8):
+                            raise RuntimeError('invalid accepted transient backend diagnostics')
+                        if ranks == 1:
+                            reference_diagnostics[index] = observation
+                        for key in ['surface_flow', 'volume_divergence', 'wall_flow']:
+                            expected = reference_diagnostics[index][key]
+                            if abs(observation[key]-expected) > 1e-12+1e-6*abs(expected):
+                                raise RuntimeError('global transient conservation differs across ranks')
+                        record['transient_diagnostics'].append(observation)
+            if (ranks > 1 or args.transient) and sum(o['owned_rows'] for o in record['distributions']) != record['distributions'][0]['global_rows']:
                 raise RuntimeError('graph row ownership does not cover the operator')
             if failure:
                 stderr = (directory/'rank-0/stderr.log').read_text()

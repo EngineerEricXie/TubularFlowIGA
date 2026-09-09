@@ -17,8 +17,8 @@ geometry setup and existing physics kernels, with global port/wall/pressure
 diagnostics. `ImmersedStaticDistributedRuntime` adds owned Newton/KSP updates,
 global convergence and conservation checks, and transactional commit/rollback.
 Its C++ interface and the quasi-static graph entry support distributed steady
-solves. Fixed-geometry backward-Euler and moving immersed entry points remain
-serial pending further HPC-03C/D work. See
+solves. Fixed-geometry backward-Euler case/graph support is described below;
+moving-geometry MPI remains HPC-03D. See
 the [assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md),
 [static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md),
 and [static runtime report](../../docs/progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md).
@@ -53,7 +53,12 @@ and weighted work partitions.
 `ThreeDImmersedTransientDistributedFlowDomain` supplies graph transactions that
 restore accepted controls and discard frozen trial inputs before coupling retry;
 see the [adapter regression](../../docs/progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md).
-Transient case/native-graph integration remains pending; entry restrictions still apply.
+The production `ImmersedFlowCase` and `iga_multidomain_flow --graph-case` now accept
+`backward_euler` with stationary catalogs and matching domain/graph time grids.
+`wall_inertial_gamma0` is optional in the transient geometry runtime configuration.
+Steady configuration remains supported; moving geometry and species are rejected
+by this flow-only case path. See the [case/graph acceptance report](../../docs/progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md)
+for commands, numerical gates, and the limits of the local MPI evidence.
 
 | Executable | Purpose |
 | --- | --- |
@@ -286,7 +291,8 @@ coupling runner with `IGA_MULTIDOMAIN_NO_MAIN` when embedding it. Independent
 graphs require distinct output paths. Existing CLIs continue to select world.
 This is whole-graph isolation; assigning separate groups to individual domains
 remains HPC-08. See the [communicator report](../../docs/progress/HPC_01A_PROGRESS.md)
-for tests, numerical limits, and the currently serial immersed/FSI paths.
+for tests and numerical limits. Fixed-geometry immersed graphs now also support
+MPI; moving immersed/FSI execution remains serial.
 
 `OwnedRowAssembler::RequiredRows` validates the global IDs and PETSc row
 arithmetic used by the runtime scatters. Its optional collective

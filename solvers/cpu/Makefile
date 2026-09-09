@@ -685,3 +685,5 @@ immersed_distributed_domain_test: tests/test_immersed_distributed_domain.cpp ../
 immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: include/ImmersedDistributedNewtonRuntime.hpp ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp
 
 immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedDistributedDomain.hpp
+
+immersed_aneurysm_jacobian_test phase6_aneurysm_runtime_closure_test: ../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp include/ImmersedTransientDistributedRuntime.hpp include/ImmersedTransientDistributedOperator.hpp include/ImmersedDistributedTransientVolume.hpp include/ImmersedDistributedVelocityHistory.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedTransientState.hpp

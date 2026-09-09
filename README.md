@@ -24,7 +24,7 @@ general-purpose CFD package.
 |---|---|---|
 | Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
 | Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer | Executable graphs require supported acyclic topology. 0D supports one-port compliant sources and terminal RCR models; 0D species and a full closed-loop 0D heart are deferred |
-| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, and ghost stabilization; prescribed moving-anatomy runtime | The graph-integrated immersed path is quasi-static and flow-only. Prescribed motion uses a fixed Eulerian background; distributed immersed execution and ALE/remeshing are deferred |
+| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, and ghost stabilization; prescribed moving-anatomy runtime | Steady and fixed-geometry backward-Euler flow-only graphs support MPI. Prescribed motion uses a fixed Eulerian background; moving-geometry MPI and ALE/remeshing remain deferred |
 | Foundational FSI | Two-way immersed flow coupled to a pre-tensioned membrane with strong Dirichlet--Neumann iteration and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark using one partition and `PETSC_COMM_SELF`; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
 | Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
@@ -90,7 +90,7 @@ pressure/flow and species ports, using SI units and outward-positive flow.
 |---|---|---|
 | Schema v3 | Standalone native 1D flow and transport | `iga_1d` |
 | Schema v4 | Standalone body-fitted 3D geometry, mesh, flow, and transport | `prepare_example.sh`, then CPU or CUDA solver |
-| Schema v5 graph | Heterogeneous flow-only coupling, including supported 0D and quasi-static immersed domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
+| Schema v5 graph | Heterogeneous flow-only coupling, including supported 0D and steady/fixed-transient immersed domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
 | Schema v6 graph | Conservative species transport across native 1D and body-fitted 3D domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
 
 Graph manifests reference each domain's native inputs. Schema v6 rejects 0D

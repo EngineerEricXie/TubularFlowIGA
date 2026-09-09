@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。HPC-03C 已補完整固定幾何暫態 operator；暫態 Newton／graph 仍待接續；
+最近更新：2026-09-09。HPC-03C 固定幾何暫態 runtime／case／graph 已通過必要驗收；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -47,11 +47,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（11 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B |
-| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-03C |
+| 已勾選完成（12 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C |
+| 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
 | 其餘待辦（24 項） | HPC-03D 至 HPC-09；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 27 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 26 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -148,7 +148,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
 | CPU 貼體 3D 流場／傳輸 | MPI/PETSc、owned-row 組裝 | 擴展性證據、可配置 communicator、求解與 I/O 改善 |
 | 原生 1D | 部分隱式求解使用 MPI；部分顯式／物種更新使用 OpenMP | 釐清各方法的執行模式、減少大型案例的重複資料 |
 | 0D／1D／貼體 3D graph | 有 MPI 耦合案例及 trial/commit/rollback | 全域 checkpoint、程序群配置與可靠失敗處理 |
-| 浸入式／移動流場 | 靜態 runtime／準靜態 graph、固定幾何暫態 C++ runtime／adapter 已接 MPI | 暫態 case／graph 入口、移動 ownership／halo 與狀態移轉 |
+| 浸入式／移動流場 | 靜態與固定幾何暫態 runtime／case／graph 已接 MPI | 移動 ownership／halo、狀態移轉與跨節點驗收 |
 | FSI | 單分區膜結構與流體強耦合 | 分散式介面、全域收斂與回復 |
 | Spline | 部分 OpenMP、分塊與串流輸出 | 大型案例的時間／記憶體證據 |
 | Mesh／packer | 單程序工具 | 先量測，只有成為瓶頸時才擴充 |
@@ -491,7 +491,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   1／2／4 ranks 固定核心比較已完成；此案例的 cell-count 原已達模型最適，
   未觀察到明確加速，故保留預設。見
   [工作量分區與單機比較](progress/HPC_03B_WORK_PARTITION_PROGRESS.md)。
-- [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、
+- [x] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、
   全域守恆及 trial rollback。只有這些門檻通過後，才移除對應已支援路徑的
   MPI size 1 限制；未完成的模式維持明確拒絕。
   準靜態 graph 的 collective port 更新、owned runtime／adapter 與 case 建立
@@ -503,14 +503,17 @@ F05 的原始診斷例外保存與恢復亦通過，見
   ghost／port／gauge，五種邊界模式通過 1／2／4 ranks 與序列參考比較。
   暫態 Newton 與 accepted clock 已接入，兩步 history、候選失敗回復、
   prepare／abort／重試與 Close 後禁止發布通過。暫態 graph adapter 已接上
-  accepted-history 重試、port controls 回復與場／時鐘共同發布；case／正式
-  graph 入口與整體耦合驗收仍待完成，故保持未勾選。見
+  accepted-history 重試、port controls 回復與場／時鐘共同發布。case 與正式
+  backward-Euler graph 已接入，explicit／fixed／Aitken、壁面慣性選項與
+  precommit failure 通過 1／2／4 ranks；錯誤時鐘／不支援模式一致拒絕。
+  固定幾何已放行，移動幾何依 HPC-03D 追蹤。見
   [準靜態 graph MPI 進度](progress/HPC_03C_STATIC_GRAPH_PROGRESS.md) 與
   [分散式 history 進度](progress/HPC_03C_DISTRIBUTED_HISTORY_PROGRESS.md)、
   [暫態體積組裝進度](progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md)、
   [暫態 operator 進度](progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)、
   [暫態 runtime 進度](progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)、
-  [暫態 graph adapter 進度](progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md)。
+  [暫態 graph adapter 進度](progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md)、
+  [case／正式 graph 驗收](progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md)。
 - [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。

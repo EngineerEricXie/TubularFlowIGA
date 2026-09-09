@@ -115,8 +115,15 @@ trial state. 0D areas remain absent, and machine-readable output includes
 model identity/role plus committed pressure and storage-balance history.
 
 Schema-v6/species execution continues to reject 0D domains. Restart,
-multirate, valves, 0D species, distributed immersed execution, and the full
+multirate, valves, 0D species, distributed moving-geometry execution, and the full
 closure benchmark remain follow-on work.
+
+Fixed stationary immersed flow now supports MPI through `ImmersedFlowCase`,
+including steady and backward-Euler schema-v5 graphs. The transient backend owns
+committed velocity history and accepted time; its graph adapter discards trial
+history and restores controls on coupling rollback. Domain and graph dt/step
+counts must match. Moving geometry and immersed species are still rejected by
+this case path. See the [HPC-03C acceptance](../progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md).
 
 ## Current runtime boundaries
 

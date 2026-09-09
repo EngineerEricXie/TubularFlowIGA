@@ -125,7 +125,17 @@ int main(int argc, char** argv)
 		WriteCase(root, Geometry());
 		RewriteSimulation(root, "\"time_integration\":\"steady\"",
 			"\"time_integration\":\"backward_euler\"");
-		Reject([&] { (void)iga::ImmersedFlowCase::Load(root, "immersed", ports, 1); });
+		{
+			auto transient = iga::ImmersedFlowCase::Load(root,"immersed",ports,1);
+			assert(transient->IsTransient() && transient->IsDistributed());
+			assert(transient->RuntimeParameters().dt == 1 && transient->TransientRuntime().Clock().index == 0);
+			assert(transient->Distribution().owned_rows == transient->Distribution().global_rows);
+			Reject([&] { transient->BeginStep({0,0,.5}); });
+			transient->BeginStep({0,0,1}); transient->AbortStep();
+			assert(transient->TransientRuntime().Clock().index == 0);
+			Reject([&] { transient->InitializeDistributed(PETSC_COMM_SELF); });
+			transient->CloseDistributed();
+		}
 		WriteCase(root, Geometry());
 		RewriteSimulation(root, "{\"name\":\"pressure\",\"kind\":\"pressure\"}",
 			"{\"name\":\"pressure\",\"kind\":\"pressure\"},{\"name\":\"species\",\"kind\":\"scalar\"}");
