@@ -31,7 +31,7 @@ struct Fixture {
 	iga::CutCellGhostPenaltyCatalog ghost{domain, volume};
 };
 
-void Run(MPI_Comm comm, const std::string& mode)
+void Run(MPI_Comm comm, const std::string& mode,iga::ImmersedWorkPartition partition,int repetitions)
 {
 	int rank = 0, size = 1;
 	MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
@@ -70,16 +70,22 @@ void Run(MPI_Comm comm, const std::string& mode)
 	iga::CollectiveLocalStage(comm, "immersed physics reference setup", [&] { if (setup_error) std::rethrow_exception(setup_error); });
 	auto& f = *fixture;
 	if (mode == "faults") {
-		for (int scenario = 0; scenario < (size > 1 ? 2 : 1); ++scenario) {
+		for (int scenario = 0; scenario < 4; ++scenario) {
+			if (size == 1 && scenario%2) continue;
 			auto invalid = options;
-			if (rank == size-1) invalid.wall_gamma0 = scenario == 0 ? -1.0 : 3.0;
+			auto invalid_partition = partition;
+			if (rank == size-1) {
+				if (scenario < 2) invalid.wall_gamma0 = scenario == 0 ? -1.0 : 3.0;
+				else invalid_partition = scenario == 2 ? static_cast<iga::ImmersedWorkPartition>(-1)
+					: partition == iga::ImmersedWorkPartition::CellCount ? iga::ImmersedWorkPartition::WeightedContiguous : iga::ImmersedWorkPartition::CellCount;
+			}
 			bool rejected = false;
-			try { iga::ImmersedStaticDistributedOperator bad(comm,f.domain,f.volume,f.surface,f.ghost,invalid); }
+			try { iga::ImmersedStaticDistributedOperator bad(comm,f.domain,f.volume,f.surface,f.ghost,invalid,invalid_partition); }
 			catch (const std::exception&) { rejected = true; }
 			iga::CollectiveLocalStage(comm,"physics invalid collective setup",[&] { if (!rejected) throw std::runtime_error("invalid or inconsistent controls accepted"); });
 		}
 	}
-	iga::ImmersedStaticDistributedOperator op(comm,f.domain,f.volume,f.surface,f.ghost,options);
+	iga::ImmersedStaticDistributedOperator op(comm,f.domain,f.volume,f.surface,f.ghost,options,partition);
 	auto& distributed = op.Assembly();
 	iga::CollectiveLocalStage(comm, "immersed physics state insertion", [&] {
 		for (PetscInt row = distributed.RowBegin(); row < distributed.RowEnd(); ++row)
@@ -100,9 +106,19 @@ void Run(MPI_Comm comm, const std::string& mode)
 			values.Restore();
 		});
 	}
-	const auto start = std::chrono::steady_clock::now();
-	op.Assemble();
-	const double assembly_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+	double assembly_seconds = 0.0;
+	for (int repeat = 0; repeat < repetitions; ++repeat) {
+		MPI_Barrier(comm);
+		const auto start = std::chrono::steady_clock::now();
+		op.Assemble();
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+		assembly_seconds += seconds;
+		const auto& timing = distributed.LastAssemblyTiming();
+		std::cout << std::setprecision(17) << "immersed_work_sample rank=" << rank << " repeat=" << repeat
+			<< " assembly_s=" << seconds << " integration_insert_s=" << timing.local_integration_insert_seconds
+			<< " halo_s=" << timing.halo_seconds << " stash_s=" << timing.stash_exchange_seconds << '\n';
+	}
+	assembly_seconds /= repetitions;
 	Vec action = nullptr;
 	iga::RequireCollectivePetscSuccess(comm,"physics action create",VecDuplicate(distributed.State(),&action));
 	iga::RequireCollectivePetscSuccess(comm,"physics matrix action",MatMult(distributed.Matrix(),distributed.State(),action));
@@ -156,7 +172,10 @@ void Run(MPI_Comm comm, const std::string& mode)
 	std::cout << std::setprecision(17) << "immersed_physics rank=" << rank << " ranks=" << size
 		<< " cells=" << f.domain.Cells().size() << " ghost_faces=" << f.ghost.Faces().size()
 		<< " owned_stencils=" << distributed.OwnedStencils().size() << " owned_rows=" << distributed.RowEnd()-distributed.RowBegin()
-		<< " halo_rows=" << distributed.RequiredRows().size() << " global_rows=" << distributed.Rows()
+		<< " halo_rows=" << distributed.RequiredRows().size()
+		<< " remote_halo_rows=" << std::count_if(distributed.RequiredRows().begin(),distributed.RequiredRows().end(),[&](PetscInt row) { return row < distributed.RowBegin() || row >= distributed.RowEnd(); })
+		<< " global_rows=" << distributed.Rows()
+		<< " estimated_work=" << op.EstimatedOwnedWork() << " weighted=" << (partition == iga::ImmersedWorkPartition::WeightedContiguous)
 		<< " local_nz=" << info.nz_used << " assembly_s=" << assembly_seconds
 		<< " residual_relative_l2=" << residual_error << " action_relative_l2=" << action_error << " passed\n";
 	op.Close(); serial.reset();
@@ -166,7 +185,13 @@ int main(int argc,char** argv)
 {
 	PetscInitialize(&argc,&argv,nullptr,nullptr);
 	int status = 0;
-	try { Run(PETSC_COMM_WORLD,argc > 1 ? argv[1] : "flow"); }
+	try {
+		const std::string partition = argc > 2 ? argv[2] : "cell-count";
+		if (partition != "cell-count" && partition != "weighted") throw std::invalid_argument("unknown partition");
+		const int repetitions = argc > 3 ? std::stoi(argv[3]) : 1;
+		if (repetitions < 1 || repetitions > 10) throw std::invalid_argument("invalid assembly repetition count");
+		Run(PETSC_COMM_WORLD,argc > 1 ? argv[1] : "flow",partition == "weighted" ? iga::ImmersedWorkPartition::WeightedContiguous : iga::ImmersedWorkPartition::CellCount,repetitions);
+	}
 	catch (const std::exception& error) { std::cerr << error.what() << '\n'; status = 1; }
 	PetscFinalize(); return status;
 }

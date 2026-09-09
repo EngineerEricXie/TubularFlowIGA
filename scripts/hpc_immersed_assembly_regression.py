@@ -2,6 +2,7 @@
 """Validate owned immersed assembly, halo exchange, and serial physical parity."""
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -17,6 +18,9 @@ def main():
     parser.add_argument('--kind', choices=['unit', 'physics', 'all'], default='all')
     parser.add_argument('--physics-mode', choices=['flow', 'pressure', 'traction', 'closed', 'wall-only', 'faults', 'padded', 'expanded'], default='flow')
     parser.add_argument('--split', action='store_true', help='Also run the unit checks in 1+2 groups on three ranks')
+    parser.add_argument('--bind-to-core', action='store_true', help='Bind MPI processes to separate cores for timing comparisons')
+    parser.add_argument('--partition', choices=['cell-count', 'weighted'], default='cell-count')
+    parser.add_argument('--repetitions', type=int, choices=range(1, 11), default=1)
     args = parser.parse_args()
     if any(r < 1 for r in args.ranks) or len(set(args.ranks)) != len(args.ranks):
         parser.error('require distinct positive rank counts')
@@ -36,14 +40,17 @@ def main():
         for kind, ranks, split in cases:
             directory = root/(kind+'-'+str(ranks)+('-split' if split else ''))
             directory.mkdir()
-            command = ['timeout', '--kill-after=5s', '240s', 'mpiexec', '--oversubscribe', '-np', str(ranks),
+            launcher = ['mpiexec', '--oversubscribe']
+            if args.bind_to_core:
+                launcher.extend(['--bind-to', 'core', '--map-by', 'core'])
+            command = ['timeout', '--kill-after=5s', '240s']+launcher+['-np', str(ranks),
                        sys.executable, str(repo/'scripts/hpc_rank_run.py'), '--expected-ranks', str(ranks),
                        '--timeout', '210', '--output-dir', str(directory), '--', str(binaries[kind])]
             if kind == 'physics':
-                command.append(args.physics_mode)
+                command.extend([args.physics_mode, args.partition, str(args.repetitions)])
             if split:
                 command.append('split')
-            record = dict(kind=kind, ranks=ranks, split=split, physics_mode=args.physics_mode if kind == 'physics' else None, argv=command, rank_reports=[], observations=[])
+            record = dict(bind_to_core=args.bind_to_core, partition=args.partition, repetitions=args.repetitions, kind=kind, ranks=ranks, split=split, physics_mode=args.physics_mode if kind == 'physics' else None, argv=command, rank_reports=[], observations=[], work_samples=[])
             summary['cases'].append(record)
             with (directory/'launcher.log').open('w') as log:
                 result = subprocess.run(command, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -56,6 +63,19 @@ def main():
                 record['rank_reports'].append(report)
                 if report['returncode'] or report['timed_out'] or not report['resource']:
                     raise RuntimeError(directory.name+': failed or unmeasured rank')
+                if kind == 'physics':
+                    samples = [line for line in (rd/'stdout.log').read_text().splitlines()
+                               if line.startswith('immersed_work_sample ')]
+                    if len(samples) != args.repetitions:
+                        raise RuntimeError('missing assembly work samples')
+                    for repeat, line in enumerate(samples):
+                        sample = {key: float(value) for key, value in
+                                  (token.split('=') for token in line.split()[1:])}
+                        if (sample['rank'] != rank or sample['repeat'] != repeat
+                                or any(not math.isfinite(v) or v < 0 for v in sample.values())
+                                or sample['assembly_s'] <= 0):
+                            raise RuntimeError('invalid assembly work sample')
+                        record['work_samples'].append(sample)
                 prefix = 'immersed_physics ' if kind == 'physics' else 'immersed_distributed_test '
                 lines = [line for line in (rd/'stdout.log').read_text().splitlines() if line.startswith(prefix)]
                 if len(lines) != (1 if kind == 'physics' else 3):

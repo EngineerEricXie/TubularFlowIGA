@@ -22,6 +22,13 @@ the [assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md),
 [static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md),
 and [static runtime report](../../docs/progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md).
 
+Static distributed constructors also accept
+`ImmersedWorkPartition::WeightedContiguous` to distribute cell work using
+quadrature and stabilization cost estimates. The default remains `CellCount`;
+the measured small case showed no clear speedup. See the
+[partition comparison](../../docs/progress/HPC_03B_WORK_PARTITION_PROGRESS.md)
+for per-rank work, halo, assembly timings, and reproducible benchmark commands.
+
 | Executable | Purpose |
 | --- | --- |
 | `iga_pack` | Validate sparse cache or legacy text and create indexed `.ntiga` |

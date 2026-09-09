@@ -4,12 +4,15 @@
 #include "ImmersedStaticFlowSetup.hpp"
 #include "ImmersedDistributedAssembly.hpp"
 #include "RuntimeConstruction.hpp"
+#include "WeightedWorkPartition.hpp"
 #include <chrono>
 #include <iomanip>
 #include <optional>
 #include <memory>
 
 namespace iga {
+
+enum class ImmersedWorkPartition { CellCount, WeightedContiguous };
 
 // Immutable geometry and controls for a steady four-field operator. Local
 // evaluators must represent the same physical functions on every MPI member.
@@ -22,14 +25,16 @@ public:
 	ImmersedStaticDistributedOperator(MPI_Comm communicator,
 		const CartesianDomainClassification& domain, const CutCellVolumeQuadratureCatalog& volume,
 		const ImmersedSurfaceQuadratureCatalog& surface, const CutCellGhostPenaltyCatalog& ghost,
-		const ImmersedStaticFlowOptions& options)
-		: communicator_(communicator), domain_(domain), volume_(volume), surface_(surface), ghost_(ghost)
+		const ImmersedStaticFlowOptions& options,ImmersedWorkPartition partition = ImmersedWorkPartition::CellCount)
+		: partition_(partition), communicator_(communicator), domain_(domain), volume_(volume), surface_(surface), ghost_(ghost)
 	{
 		MPI_Comm_rank(communicator_, &rank_); MPI_Comm_size(communicator_, &size_);
 		std::vector<PetscInt> offsets;
 		std::vector<ImmersedAssemblyStencil> stencils;
 		std::string signature;
 		CollectiveLocalStage(communicator_, "immersed static setup", [&] {
+			if (partition_ != ImmersedWorkPartition::CellCount && partition_ != ImmersedWorkPartition::WeightedContiguous)
+				throw std::invalid_argument("unknown immersed work partition");
 			setup_ = std::make_unique<ImmersedStaticFlowSetup>(domain,volume,surface,ghost,options);
 			diagnostics_ = setup_->Diagnostics();
 			local_ports_.resize(options.ports.size()); global_ports_.resize(options.ports.size());
@@ -83,6 +88,8 @@ public:
 	~ImmersedStaticDistributedOperator() { ReleaseVectors(); }
 	ImmersedStaticDistributedOperator(const ImmersedStaticDistributedOperator&) = delete;
 	ImmersedStaticDistributedOperator& operator=(const ImmersedStaticDistributedOperator&) = delete;
+	std::uint64_t EstimatedOwnedWork() const noexcept { return rank_work_[rank_]; }
+	const std::vector<std::uint64_t>& EstimatedRankWork() const noexcept { return rank_work_; }
 	const ImmersedStaticFlowSetup& Topology() const noexcept { return *setup_; }
 	const ImmersedStaticFlowOptions& Options() const noexcept { return setup_->Options(); }
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
@@ -224,7 +231,7 @@ private:
 	std::string Signature() const
 	{
 		std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
-		text << std::setprecision(std::numeric_limits<double>::max_digits10) << domain_.SurfaceCanonicalHash();
+		text << std::setprecision(std::numeric_limits<double>::max_digits10) << domain_.SurfaceCanonicalHash() << ' ' << static_cast<int>(partition_);
 		const auto& grid = domain_.Background().Spec();
 		for (int d = 0; d < 3; ++d) text << ' ' << grid.lower_m[d] << ' ' << grid.upper_m[d] << ' ' << grid.cells[d];
 		const auto& q = volume_.Options(); const auto& s = surface_.Options(); const auto& g = ghost_.Options(); const auto& o = Options();
@@ -295,6 +302,57 @@ private:
 		for (std::size_t port = 0; port < Options().ports.size(); ++port)
 			if (diagnostics_.ports[port].multiplier_row >= 0)
 				add(size_-1,ImmersedStencilPattern::Scalar,{diagnostics_.ports[port].multiplier_row},{Kind::Target,0,port});
+		AssignWorkOwners(stencils);
+	}
+	// Entry-visit estimate: volume/trace/wall dense blocks, same-field ghost
+	// blocks, plus stencil clearing and port work. Catalog construction is
+	// replicated and deliberately excluded from this assembly cost model.
+	std::uint64_t WorkEstimate(const ImmersedAssemblyStencil& stencil) const
+	{
+		const auto& task = work_[stencil.id];
+		if (task.kind == Kind::Target) return 0;
+		const auto rows = static_cast<std::uint64_t>(stencil.rows.size());
+		const auto entries = CheckedWorkProduct(rows,rows);
+		std::uint64_t cost = entries;
+		const auto add = [&](std::uint64_t points,std::uint64_t per_point) { cost = CheckedWorkSum(cost,CheckedWorkProduct(points,per_point)); };
+		if (task.kind == Kind::Ghost) {
+			if (Options().assemble_ghost) add(16,entries/4);
+		} else if (task.kind == Kind::Volume) {
+			add(volume_.Cell(task.cell).diagnostics.logical_output_points,entries);
+			const auto& rule = surface_.UsableRule(domain_,task.cell);
+			if (Options().assemble_volume) add(rule.Points().size(),entries);
+			if (domain_.Cells()[task.cell].classification == CellClassification::Cut)
+				for (const auto& point : rule.Points())
+					if (Options().ports.empty() || std::binary_search(Options().wall_labels.begin(),Options().wall_labels.end(),point.boundary_id)) add(1,entries);
+		} else if (task.kind == Kind::Port || task.kind == Kind::Measurement) {
+			for (const auto& point : surface_.UsableRule(domain_,task.cell).Points())
+				if (point.boundary_id == Options().ports[task.port].boundary_label) add(1,task.kind == Kind::Measurement ? rows : entries);
+		}
+		return cost;
+	}
+	void AssignWorkOwners(std::vector<ImmersedAssemblyStencil>& stencils)
+	{
+		std::vector<std::uint64_t> cell_work(domain_.Cells().size(),0),costs(stencils.size(),0),ids,weights;
+		for (const auto& stencil : stencils) {
+			const auto& task = work_[stencil.id];
+			if (task.kind == Kind::Target) continue;
+			const auto cell = task.kind == Kind::Ghost ? ghost_.Faces()[task.cell].minus_cell : task.cell;
+			costs[stencil.id] = WorkEstimate(stencil);
+			cell_work[cell] = CheckedWorkSum(cell_work[cell],costs[stencil.id]);
+		}
+		if (partition_ == ImmersedWorkPartition::WeightedContiguous) {
+			for (std::uint64_t cell = 0; cell < cell_work.size(); ++cell) if (cell_work[cell]) { ids.push_back(cell); weights.push_back(cell_work[cell]); }
+			const auto owners = PartitionContiguousWork(weights,size_);
+			std::vector<int> owner_by_cell(cell_work.size(),-1);
+			for (std::size_t i = 0; i < ids.size(); ++i) owner_by_cell[ids[i]] = owners[i];
+			for (auto& stencil : stencils) {
+				const auto& task = work_[stencil.id]; if (task.kind == Kind::Target) continue;
+				const auto cell = task.kind == Kind::Ghost ? ghost_.Faces()[task.cell].minus_cell : task.cell;
+				stencil.owner = owner_by_cell[cell];
+			}
+		}
+		rank_work_.assign(size_,0);
+		for (const auto& stencil : stencils) rank_work_[stencil.owner] = CheckedWorkSum(rank_work_[stencil.owner],costs[stencil.id]);
 	}
 	std::vector<std::array<double,4>> Gather(const Element& element) const
 	{
@@ -376,6 +434,8 @@ private:
 		if (pressure_defect_) { cleanup_.Observe("pressure defect destroy",VecDestroy(&pressure_defect_)); pressure_defect_ = nullptr; }
 		if (constant_pressure_) { cleanup_.Observe("pressure constant destroy",VecDestroy(&constant_pressure_)); constant_pressure_ = nullptr; }
 	}
+	ImmersedWorkPartition partition_;
+	std::vector<std::uint64_t> rank_work_;
 	MPI_Comm communicator_;
 	int rank_ = 0,size_ = 1;
 	const CartesianDomainClassification& domain_;

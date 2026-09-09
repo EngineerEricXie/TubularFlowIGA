@@ -103,6 +103,7 @@ $(PETSC_TARGETS): include/PetscPhaseProfile.hpp ../../include/PhaseProfile.hpp
 $(PETSC_TARGETS): include/ParallelOwnershipValidation.hpp ../../include/ParallelOwnership.hpp
 $(PETSC_TARGETS): include/CollectiveFailure.hpp include/PetscReadArray.hpp include/RuntimeConstruction.hpp include/RuntimeCleanup.hpp
 $(PETSC_TARGETS): include/ImmersedStaticFlowSetup.hpp
+immersed_distributed_physics_test immersed_distributed_static_flow_test: ../../include/WeightedWorkPartition.hpp
 $(PETSC_TARGETS): include/PetscGather.hpp
 $(PETSC_TARGETS): include/PetscCheckpointRead.hpp
 $(PETSC_TARGETS): include/PetscCheckpointWrite.hpp
@@ -618,7 +619,7 @@ clean:
 	$(RM) petsc_checkpoint_write_test
 	$(RM) execution_resources_test execution_resources_serial_test
 	$(RM) memory_report_test
-	$(RM) immersed_distributed_assembly_test
+	$(RM) immersed_distributed_assembly_test weighted_work_partition_test
 	$(RM) immersed_distributed_physics_test immersed_distributed_static_flow_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test
@@ -636,3 +637,12 @@ iga_assembly_smoke: include/CollectivePetscOptions.hpp
 
 legacy_transport_failure_test: tests/test_legacy_transport_failure.cpp src/iga_transport.cpp include/ExecutionResources.hpp include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/CollectiveFailure.hpp include/OwnedRowAssembler.hpp include/PetscGather.hpp include/PetscReadArray.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ -Wl,--wrap=MatCreateAIJ,--wrap=VecCreateMPI,--wrap=KSPCreate,--wrap=VecScatterCreateToZero,--wrap=MatAssemblyEnd,--wrap=MatZeroRows,--wrap=MatMult,--wrap=VecCopy,--wrap=KSPSetFromOptions,--wrap=KSPSolve,--wrap=VecNorm,--wrap=VecScatterEnd,--wrap=KSPDestroy,--wrap=MatSetValues,--wrap=VecSetValues,--wrap=VecGetArrayRead,--wrap=VecRestoreArrayRead $(PETSC_LIB)
+
+weighted_work_partition_test: tests/test_weighted_work_partition.cpp ../../include/WeightedWorkPartition.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+.PHONY: weighted-work-partition-test
+weighted-work-partition-test: weighted_work_partition_test
+	./weighted_work_partition_test
+
+test: weighted-work-partition-test

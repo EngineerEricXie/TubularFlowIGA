@@ -1,6 +1,8 @@
 #ifndef IGA_IMMERSED_DISTRIBUTED_ASSEMBLY_HPP
 #define IGA_IMMERSED_DISTRIBUTED_ASSEMBLY_HPP
 
+#include <chrono>
+
 #include "CollectiveFailure.hpp"
 #include "ExecutionResources.hpp"
 #include "PetscReadArray.hpp"
@@ -43,6 +45,10 @@ struct ImmersedAssemblyStencil {
 // public operation that performs MPI must be entered by all its members.
 class ImmersedDistributedAssembly {
 public:
+	struct AssemblyTiming {
+		double halo_seconds = 0.0,local_integration_insert_seconds = 0.0,stash_exchange_seconds = 0.0;
+	};
+	const AssemblyTiming& LastAssemblyTiming() const noexcept { return last_timing_; }
 	ImmersedDistributedAssembly(MPI_Comm communicator, const std::vector<PetscInt>& row_offsets,
 		const std::vector<ImmersedAssemblyStencil>& stencils)
 		: communicator_(communicator)
@@ -175,12 +181,16 @@ public:
 	{
 		CollectiveLocalStage(communicator_, "immersed assembly preparation", [&] { RequireOpen(); });
 		assembled_ = false;
+		AssemblyTiming timing;
+		const auto halo_start = std::chrono::steady_clock::now();
 		RefreshRequiredState();
+		timing.halo_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-halo_start).count();
 		Check("immersed matrix reset", MatZeroEntries(matrix_));
 		Check("immersed residual reset", VecSet(residual_, 0.0));
 		std::exception_ptr error;
 		try {
 			CollectiveLocalStage(communicator_, "immersed owned integration", [&] {
+				const auto integration_start = std::chrono::steady_clock::now();
 				std::vector<PetscScalar> matrix, residual;
 				for (const auto& stencil : owned_) {
 					matrix.clear(); residual.clear();
@@ -198,13 +208,17 @@ public:
 						|| VecSetValues(residual_, static_cast<PetscInt>(n), stencil.rows.data(), residual.data(), ADD_VALUES))
 						throw std::runtime_error("cannot insert immersed local block");
 				}
+				timing.local_integration_insert_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-integration_start).count();
 			});
 		} catch (...) { error = std::current_exception(); }
+		const auto exchange_start = std::chrono::steady_clock::now();
 		Check("immersed matrix assembly begin", MatAssemblyBegin(matrix_, MAT_FINAL_ASSEMBLY));
 		Check("immersed matrix assembly end", MatAssemblyEnd(matrix_, MAT_FINAL_ASSEMBLY));
 		Check("immersed residual assembly begin", VecAssemblyBegin(residual_));
 		Check("immersed residual assembly end", VecAssemblyEnd(residual_));
+		timing.stash_exchange_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-exchange_start).count();
 		if (error) std::rethrow_exception(error);
+		last_timing_ = timing;
 		assembled_ = true;
 	}
 
@@ -255,6 +269,7 @@ private:
 	Vec state_ = nullptr, residual_ = nullptr, halo_ = nullptr;
 	IS source_rows_ = nullptr, target_rows_ = nullptr;
 	VecScatter scatter_ = nullptr;
+	AssemblyTiming last_timing_;
 	RuntimeCleanupResult cleanup_;
 	bool assembled_ = false, closed_ = false;
 };

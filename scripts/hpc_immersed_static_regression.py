@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--ranks', type=int, nargs='+', choices=[1, 2, 4], default=[1, 2, 4])
     parser.add_argument('--mode', choices=['closed', 'flow', 'pressure', 'empty-work'], default='closed')
     parser.add_argument('--split', action='store_true', help='Also validate separate 1+2 groups on three ranks')
+    parser.add_argument('--partition', choices=['cell-count', 'weighted'], default='cell-count')
     args = parser.parse_args()
     if len(set(args.ranks)) != len(args.ranks):
         parser.error('rank counts must be distinct')
@@ -24,7 +25,7 @@ def main():
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
     binary = repo/'solvers/cpu/immersed_distributed_static_flow_test'
-    summary = dict(status='running', mode=args.mode, binary=str(binary), binary_sha256=digest(binary), cases=[])
+    summary = dict(status='running', mode=args.mode, partition=args.partition, binary=str(binary), binary_sha256=digest(binary), cases=[])
     env = dict(os.environ, OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', MKL_NUM_THREADS='1')
     env.pop('PETSC_OPTIONS', None)
     try:
@@ -37,6 +38,8 @@ def main():
             command = ['timeout', '--kill-after=5s', '660s', 'mpiexec', '--oversubscribe', '-np', str(ranks),
                        sys.executable, str(repo/'scripts/hpc_rank_run.py'), '--expected-ranks', str(ranks),
                        '--timeout', '630', '--output-dir', str(directory), '--', str(binary), args.mode]
+            if args.partition == 'weighted':
+                command.append('weighted')
             if split:
                 command.append('split')
             case = dict(ranks=ranks, split=split, argv=command, rank_reports=[], observations=[])

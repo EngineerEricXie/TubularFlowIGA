@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-09。完成 HPC-03A 靜態 MPI Newton、全域守恆與交易回復；
+最近更新：2026-09-09。完成 HPC-03A 靜態 MPI 與 HPC-03B 可選工作量分區／單機比較；
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -47,11 +47,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（10 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A |
+| 已勾選完成（11 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B |
 | 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
-| 其餘待辦（26 項） | HPC-03B 至 HPC-09；既有程式能力不等於已通過各項驗收 |
+| 其餘待辦（25 項） | HPC-03C 至 HPC-09；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 28 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 27 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -484,8 +484,13 @@ F05 的原始診斷例外保存與恢復亦通過，見
   另行接入與放行。見 [組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md)、
   [operator 進度](progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md) 與
   [靜態 runtime 驗收](progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md)。
-- [ ] **HPC-03B：按計算量分區。** 以積分點、切割與穩定化工作量建立初始權重，
+- [x] **HPC-03B：按計算量分區。** 以積分點、切割與穩定化工作量建立初始權重，
   比較加權／未加權分區的最大 rank 耗時與通訊成本；避免只按 cell 數量分配。
+  已加入穩定 cell 順序的 weighted contiguous 選項與 checked work model，
+  驗證分區最小最大權重、全域物理一致性、Newton／空工作 rank 及故障回復。
+  1／2／4 ranks 固定核心比較已完成；此案例的 cell-count 原已達模型最適，
+  未觀察到明確加速，故保留預設。見
+  [工作量分區與單機比較](progress/HPC_03B_WORK_PARTITION_PROGRESS.md)。
 - [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、
   全域守恆及 trial rollback。只有這些門檻通過後，才移除對應已支援路徑的
   MPI size 1 限制；未完成的模式維持明確拒絕。

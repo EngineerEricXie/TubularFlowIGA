@@ -15,10 +15,10 @@ public:
 	ImmersedStaticDistributedRuntime(MPI_Comm communicator,
 		const CartesianDomainClassification& domain,const CutCellVolumeQuadratureCatalog& volume,
 		const ImmersedSurfaceQuadratureCatalog& surface,const CutCellGhostPenaltyCatalog& ghost,
-		const ImmersedStaticFlowOptions& options)
+		const ImmersedStaticFlowOptions& options,ImmersedWorkPartition partition = ImmersedWorkPartition::CellCount)
 		: communicator_(communicator)
 	{
-		op_ = AllocateCollectiveRuntime<ImmersedStaticDistributedOperator>(communicator_,communicator_,domain,volume,surface,ghost,options);
+		op_ = AllocateCollectiveRuntime<ImmersedStaticDistributedOperator>(communicator_,communicator_,domain,volume,surface,ghost,options,partition);
 		try {
 			CollectiveLocalStage(communicator_,"distributed static diagnostics storage",[&] { diagnostics_ = op_->Diagnostics(); });
 			for (auto entry : {&committed_,&prepared_,&update_,&linear_rhs_,&linear_action_})

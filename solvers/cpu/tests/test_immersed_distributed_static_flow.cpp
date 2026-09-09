@@ -39,7 +39,7 @@ void Reject(MPI_Comm comm,Function&& function)
 	try { function(); } catch (const std::exception&) { rejected = true; }
 	iga::CollectiveLocalStage(comm,"static MPI expected rejection",[&] { if (!rejected) throw std::runtime_error("expected collective rejection"); });
 }
-void Run(MPI_Comm comm,const std::string& mode)
+void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partition)
 {
 	int rank = 0,size = 1; MPI_Comm_rank(comm,&rank); MPI_Comm_size(comm,&size);
 	if (mode != "closed" && mode != "flow" && mode != "pressure" && mode != "empty-work") throw std::invalid_argument("unknown static MPI mode");
@@ -75,7 +75,7 @@ void Run(MPI_Comm comm,const std::string& mode)
 		reference_conservation = serial->ConservationDiagnostics();
 	});
 	auto& f = *fixture;
-	iga::ImmersedStaticDistributedRuntime runtime(comm,f.domain,f.volume,f.surface,f.ghost,options);
+	iga::ImmersedStaticDistributedRuntime runtime(comm,f.domain,f.volume,f.surface,f.ghost,options,partition);
 	std::vector<PetscScalar> zero(static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),0.0);
 	runtime.SetCommittedOwnedState(zero);
 	calls = 0; runtime.Assemble(); const auto calls_per_assembly = calls;
@@ -83,7 +83,7 @@ void Run(MPI_Comm comm,const std::string& mode)
 	MPI_Allreduce(&candidate_rank,&failure_rank,1,MPI_INT,MPI_MAX,comm);
 	iga::CollectiveLocalStage(comm,"static MPI integration coverage",[&] {
 		if (failure_rank < 0 || (mode != "empty-work" && !calls_per_assembly)) throw std::runtime_error("test rank has no volume work");
-		if (mode == "empty-work" && size == 4 && (rank == 1 || rank == 3)
+		if (mode == "empty-work" && size == 4 && (partition == iga::ImmersedWorkPartition::WeightedContiguous ? rank >= 2 : rank == 1 || rank == 3)
 			&& (calls_per_assembly || runtime.OwnedStencilCount() || runtime.RequiredStateRows())) throw std::runtime_error("empty-work rank integrated or retained a halo");
 	});
 	calls = 0; throw_on = calls_per_assembly+1;
@@ -220,12 +220,20 @@ int main(int argc,char** argv)
 	MPI_Comm group = MPI_COMM_NULL;
 	try {
 		const std::string mode = argc > 1 ? argv[1] : "closed";
-		if (argc > 2 && std::string(argv[2]) == "split") {
+		bool split = false;
+		auto partition = iga::ImmersedWorkPartition::CellCount;
+		for (int i = 2; i < argc; ++i) {
+			const std::string arg = argv[i];
+			if (arg == "split") split = true;
+			else if (arg == "weighted") partition = iga::ImmersedWorkPartition::WeightedContiguous;
+			else throw std::invalid_argument("unknown static test option");
+		}
+		if (split) {
 			int rank = 0,size = 1; MPI_Comm_rank(PETSC_COMM_WORLD,&rank); MPI_Comm_size(PETSC_COMM_WORLD,&size);
 			if (size != 3) throw std::invalid_argument("static split test requires three ranks");
 			MPI_Comm_split(PETSC_COMM_WORLD,rank == 0 ? 0 : 1,rank,&group);
-			Run(group,mode);
-		} else Run(PETSC_COMM_WORLD,mode);
+			Run(group,mode,partition);
+		} else Run(PETSC_COMM_WORLD,mode,partition);
 	}
 	catch (const std::exception& error) { std::cerr << error.what() << '\n'; status = 1; }
 	if (group != MPI_COMM_NULL) MPI_Comm_free(&group);
