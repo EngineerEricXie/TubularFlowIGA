@@ -23,6 +23,14 @@ PETSC_TARGETS += petsc_checkpoint_read_test
 PETSC_TARGETS += petsc_checkpoint_write_test
 PETSC_TARGETS += execution_resources_test execution_resources_serial_test
 PETSC_TARGETS += memory_report_test
+PETSC_TARGETS += immersed_distributed_assembly_test
+PETSC_TARGETS += immersed_distributed_physics_test
+
+immersed_distributed_physics_test: tests/test_immersed_distributed_physics.cpp include/ImmersedDistributedAssembly.hpp include/ImmersedStaticFlowRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_distributed_assembly_test: tests/test_immersed_distributed_assembly.cpp include/ImmersedDistributedAssembly.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 memory_report_test: tests/test_memory_report.cpp include/MemoryReport.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -606,6 +614,8 @@ clean:
 	$(RM) petsc_checkpoint_write_test
 	$(RM) execution_resources_test execution_resources_serial_test
 	$(RM) memory_report_test
+	$(RM) immersed_distributed_assembly_test
+	$(RM) immersed_distributed_physics_test
 	$(RM) text_helper_failure_test
 	$(RM) geometry_inspection_failure_test
 	$(RM) petsc_gather_test

@@ -48,10 +48,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（9 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C |
-| 已有部分進度、尚未完成（2 項） | HPC-01C、HPC-01D |
-| 其餘待辦（27 項） | HPC-03 至 HPC-09；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（3 項） | HPC-01C、HPC-01D、HPC-03A |
+| 其餘待辦（26 項） | HPC-03B 至 HPC-09；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 29 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 29 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -476,6 +476,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-03A：靜態 owned rows 與 halo。** 分配 active cells／自由度，
   建立精確稀疏配置與必要鄰接資料交換，保留單 rank 比較路徑。
   處理 pressure gauge、port multiplier、ghost penalty 跨分區貢獻與空 rank。
+  分散式 stencil 組裝層已完成 owned Mat／Vec、required-state scatter、唯一積分
+  與失敗後重試。27 cells／54 ghost faces 的完整體積、壁面、兩個 flow controller
+  與 gauge 在 1／2／4 ranks 對照既有序列殘差及 Jacobian action 通過；空 rank
+  及 split1+2 亦通過。靜態 nonlinear runtime／診斷尚未接入，故保持未勾選，見
+  [分散式組裝進度](progress/HPC_03A_ASSEMBLY_PROGRESS.md)。
 - [ ] **HPC-03B：按計算量分區。** 以積分點、切割與穩定化工作量建立初始權重，
   比較加權／未加權分區的最大 rank 耗時與通訊成本；避免只按 cell 數量分配。
 - [ ] **HPC-03C：固定幾何暫態與 graph。** 驗證上一時間步速度、port 測量、

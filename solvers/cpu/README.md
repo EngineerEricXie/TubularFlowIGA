@@ -10,6 +10,13 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 
 ## Capabilities
 
+The immersed MPI assembly layer now supports uniquely owned cell/ghost
+integration, distributed sparse rows, scalar constraints, and required-state
+exchange. Its 1/2/4-rank physical operator checks match the serial immersed
+runtime. Integration into the nonlinear/runtime and graph paths is still in
+progress; their existing single-rank restrictions remain. See the
+[HPC-03A assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md).
+
 | Executable | Purpose |
 | --- | --- |
 | `iga_pack` | Validate sparse cache or legacy text and create indexed `.ntiga` |

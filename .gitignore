@@ -159,6 +159,8 @@ __pycache__/
 /solvers/cpu/petsc_checkpoint_write_test
 /solvers/cpu/execution_resources_test
 /solvers/cpu/memory_report_test
+/solvers/cpu/immersed_distributed_assembly_test
+/solvers/cpu/immersed_distributed_physics_test
 /solvers/cpu/execution_resources_serial_test
 /solvers/cpu/geometry_inspection_failure_test
 solvers/cpu/reference_state_output_test
