@@ -49,9 +49,8 @@ public:
 			if (!EqualNormalized(full_reference.ReferenceMaterialVerticesM()[vertex], full_reference.SourceVerticesM()[vertex])
 				|| !EqualNormalized(full_reference.SourceVertexVelocitiesMPerS()[vertex], {{0.0, 0.0, 0.0}}))
 				throw std::runtime_error("material patch map requires an undeformed, zero-velocity full reference state");
-		if (patch_layout.partition_count != 1 || patch_layout.partition_rank != 0
-			|| patch_layout.owned_global_node_ids.size() != patch_layout.global_node_count)
-			throw std::runtime_error("material patch map currently requires one fully owned partition");
+		// The reference map remains complete on each partition. Publication
+		// ownership is a separate slice and is certified by the MPI caller.
 		if (patch_interface.boundary_labels.size() != 1
 			|| patch_interface.boundary_labels[0] < 0
 			|| static_cast<std::uint64_t>(patch_interface.boundary_labels[0]) != patch_label)
@@ -72,8 +71,7 @@ public:
 			|| patch_layout.reference_positions.size() != global_to_source_vertex.size())
 			throw std::runtime_error("material patch map has missing or extra patch vertices");
 		for (const auto& mapping : global_to_source_vertex) {
-			if (!std::binary_search(patch_layout.owned_global_node_ids.begin(), patch_layout.owned_global_node_ids.end(), mapping.first)
-				|| mapping.second >= full_reference.ReferenceMaterialVerticesM().size())
+			if (mapping.second >= full_reference.ReferenceMaterialVerticesM().size())
 				throw std::runtime_error("material patch map vertex mapping is invalid");
 			const auto position = FindPosition(patch_layout, mapping.first);
 			if (!EqualNormalized(position, full_reference.ReferenceMaterialVerticesM()[mapping.second]))

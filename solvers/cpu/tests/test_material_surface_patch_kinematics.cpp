@@ -56,7 +56,35 @@ int main()
 	Reject([&]{auto l=Layout(full);auto i=Interface(l.reference_mesh_identity_sha256);i.boundary_labels={7,8};iga::MaterialSurfacePatchMap::Create(i,l,full,7,MappingData(),TriangleData(),Clamps());});
 	Reject([&]{auto l=Layout(full);auto i=Interface(l.reference_mesh_identity_sha256);i.provides={iga::SurfaceFieldQuantity::Displacement};i.requires={iga::SurfaceFieldQuantity::Velocity,iga::SurfaceFieldQuantity::TractionOnStructure};iga::MaterialSurfacePatchMap::Create(i,l,full,7,MappingData(),TriangleData(),Clamps());});
 	Reject([&]{auto clamps=std::vector<std::uint64_t>{10,11};auto l=Layout(full,MappingData(),TriangleData(),clamps);iga::MaterialSurfacePatchMap::Create(Interface(l.reference_mesh_identity_sha256),l,full,7,MappingData(),TriangleData(),clamps);});
-	Reject([&]{auto l=Layout(full);l.partition_count=2;l.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(l);iga::MaterialSurfacePatchMap::Create(Interface(l.reference_mesh_identity_sha256),l,full,7,MappingData(),TriangleData(),Clamps());});
+	// Complete reference mappings can serve empty or partial publication slices.
+	std::vector<std::string> partition_map_ids;
+	for(std::uint64_t rank=0;rank<3;++rank) {
+		auto l=Layout(full);l.partition_count=3;l.partition_rank=rank;
+		const auto all=l.owned_global_node_ids;
+		l.owned_global_node_ids.clear();l.owned_reference_lumped_areas_m2.clear();
+		for(std::size_t i=0;i<all.size();++i)if(rank!=0 && i%2==rank-1) {
+			l.owned_global_node_ids.push_back(all[i]);l.owned_reference_lumped_areas_m2.push_back(1.);
+		}
+		l.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(l);
+		const auto partition=iga::MaterialSurfacePatchMap::Create(Interface(l.reference_mesh_identity_sha256),l,full,7,MappingData(),TriangleData(),Clamps());
+		assert(partition.ReferenceIdentitySha256()==map.ReferenceIdentitySha256());
+		for(auto id:all)assert(partition.SourceVertexForGlobalNode(id)==map.SourceVertexForGlobalNode(id));
+		for(std::size_t i=0;i<TriangleData().size();++i)assert(partition.CanonicalTriangleForLayoutTriangle(i)==map.CanonicalTriangleForLayoutTriangle(i));
+		partition_map_ids.push_back(partition.IdentitySha256());
+		// A partial publication must never silently compose a full surface.
+		iga::FsiTrialContext trial;
+		trial.step=1;trial.start_time_s=0.;trial.dt_s=1.;trial.coupling_iteration=0;
+		auto partial=Trial(partition,trial);
+		partial.displacement_m.assign(l.owned_global_node_ids.size(),{{0.,0.,0.}});
+		partial.velocity_m_per_s.assign(l.owned_global_node_ids.size(),{{0.,0.,0.}});
+		iga::ValidateSurfaceKinematics(partial,l);
+		bool bounded=false;
+		try { (void)iga::MaterialSurfacePatchKinematics::ComposeTarget(partition,full,partial,trial); }
+		catch(const std::runtime_error& error) { bounded=std::string(error.what()).find("complete single partition")!=std::string::npos; }
+		assert(bounded);
+	}
+	assert(partition_map_ids[0]!=partition_map_ids[1] && partition_map_ids[1]!=partition_map_ids[2]
+		&& partition_map_ids[0]!=partition_map_ids[2]);
 	// Patch reference authority is local to the selected mesh; whole-material
 	// and interface/mapping bindings remain visible in the map identity.
 	const auto changed_nonpatch=FullWithChangedNonpatchLabel(); const auto changed_map=Map(changed_nonpatch);

@@ -216,3 +216,27 @@ node，以及非有限 displacement。原 tuple／area／Aitken／ownership 測�
 
 目前是已驗證的 stamped ghost exchange 元件；尚未移除正式 FSI runtime／patch
 map 的單分區限制，也沒有將 traction 或膜求解分散。HPC-07A–D 保持原未完成範圍。
+
+
+## 分區 reference patch map
+
+`MaterialSurfacePatchMap` 現在允許空或部分 owned publication slice，各 rank
+仍保存完整 reference positions、triangles 與 material vertex mapping。全域
+reference identity 與映射不隨 ownership 改變，map identity 仍包含 partition
+identity，因此不同分區的 map 不會混用。跨 rank 的唯一 ownership 與完整覆蓋
+由 MPI caller 驗證；建立局部 map 本身不宣稱完成這項集體驗證。
+
+`MaterialSurfacePatchKinematics::ComposeTarget` 明確保留完整單分區要求，避免
+將部分位移套用至完整封閉曲面而靜默遺漏其他 owner。正式 runtime 的既有單分區
+檢查也保持；下一步需接入經 stamp 驗證的遠端節點值，再處理完整 trial。
+
+契約測試建立三個 partition maps（含空 root），核對所有 reference vertex／
+triangle mappings 與單分區一致、reference identity 相同、partition map identities
+相異。有效的部分 publication 先通過其 layout 驗證，再確認 serial composition
+以指定單分區錯誤拒絕。原有 patch geometry／kinematics 契約測試亦通過。
+
+重現：`make -C solvers/cpu material_surface_patch_kinematics_test` 後執行
+`solvers/cpu/material_surface_patch_kinematics_test`。本次建置及執行綁定 CPU 14、15，
+均 exit 0，編譯無新增 warning；來源、binary 與 logs hashes 記錄於
+`outputs/hpc07/partition-patch-map-v1/audit.json`。這是 reference map 層的支援，
+尚非正式分散式 FSI runtime，HPC-07A 保持未勾選。

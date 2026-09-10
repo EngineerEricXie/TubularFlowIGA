@@ -694,7 +694,8 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   接入唯一 triangle owner 的分送，非等面積共享節點與全域面積一致性驗證通過。
   UInt64 owner-to-ghost tuple 元件亦通過三 rank、空 requester 與六種錯誤／
   重試；FSI ghost wrapper 的 expected stamp／全域 epoch 驗證也已接線，
-  七種拒絕／重試通過。正式 runtime／patch map 的多分區接線仍待完成。
+  七種拒絕／重試通過。Reference patch map 已允許空／部分 owned slice，
+  並保留 serial composition 的完整單分區檢查；正式 runtime 的多分區接線仍待完成。
 - [ ] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
   位移與速度；用全域合力、力矩及離散功／能量一致性檢查防止遺漏或重算。
   可先由單一 owner 求解小型膜再分送結果，但須明確記錄其串行成本；

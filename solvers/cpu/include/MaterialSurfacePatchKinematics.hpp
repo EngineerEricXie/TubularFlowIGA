@@ -23,6 +23,8 @@ public:
 		const FsiTrialContext& context)
 	{
 		map.FullReference().Validate(); committed_full.Validate(); ValidateFsiTrialContext(context);
+		if (map.Layout().partition_count != 1 || map.Layout().partition_rank != 0)
+			throw std::runtime_error("serial patch composition requires the complete single partition");
 		ValidateSurfaceKinematics(trial_patch, map.Layout());
 		if (!(trial_patch.interface == map.Interface().id)
 			|| trial_patch.stamp.time_s != context.EndTime() || trial_patch.stamp.step != context.step
