@@ -52,3 +52,6 @@ python3 scripts/hpc_duct_solver_candidates.py \
 
 還須固定網格的無干擾 rank sweep、其他 pressure reference／nullspace、immersed
 切割條件、更大網格與排程資源驗收。不能由這兩種網格的候選結果宣稱 HPC-04B／C 完成。
+
+後續 1024-element、4-rank 的 LU／block-Jacobi 已完成並通過原門檻，見
+[較大方管進度](HPC_04B_LARGE_DUCT_PROGRESS.md)。

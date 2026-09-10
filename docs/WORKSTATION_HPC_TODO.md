@@ -558,6 +558,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   並保留 Schur-LU 高迭代成本的結果，見
   [方管候選進度](progress/HPC_04B_DUCT_CANDIDATES_PROGRESS.md)。128-element、4-rank
   的原四候選也已通過，見 [加密方管進度](progress/HPC_04B_REFINED_DUCT_PROGRESS.md)。
+  1024-element、4-rank 的 LU／block-Jacobi 亦通過原物理與場值門檻，全部 rank
+  RSS 已記錄，見 [較大方管進度](progress/HPC_04B_LARGE_DUCT_PROGRESS.md)；
+  並行回歸期間的時間不作無干擾 scaling 證據。
   selfp Schur 近似已完成
   小案例評估，保留速度 GAMG／壓力 Jacobi 不收斂的結果，見
   [Schur 近似進度](progress/HPC_04B_SCHUR_APPROXIMATION_PROGRESS.md)。同一方管的
