@@ -17,3 +17,4 @@ polyhedral_volume_moments_test
 nonnegative_least_squares_test
 fitted_cut_cell_volume_rule_test
 moving_immersed_rigid_translation_test
+moving_fitted_geometry_identity_test

@@ -17,6 +17,10 @@ PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closur
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += moving_immersed_rigid_translation_test
+PETSC_TARGETS += moving_fitted_geometry_identity_test
+
+moving_fitted_geometry_identity_test: tests/test_moving_fitted_geometry_identity.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving_immersed_rigid_translation_test: tests/test_moving_immersed_rigid_translation.cpp tests/test_moving_immersed_transient_flow.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -649,6 +653,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) moving_fitted_geometry_identity_test
 	$(RM) moving_immersed_rigid_translation_test
 	$(RM) fitted_cut_cell_volume_rule_test
 	$(RM) nonnegative_least_squares_test

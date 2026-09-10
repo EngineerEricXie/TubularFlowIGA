@@ -355,6 +355,21 @@ Compact 測試刻意設定 `max_points=1`，仍成功使用 streamed seed 與新
 六次 polynomial moments 的驗收不代表非線性／stabilization 積分完全精確；
 其餘非剛體、static／distributed 比較與更廣泛的配置驗收仍須繼續。
 
+### Geometry identity 與失敗建構相容性
+
+新增 `moving_fitted_geometry_identity_test`，使用固定單 cell cube fixture，並以
+pre-catalog revision `53b3238` 實際執行取得的 v5 digest 作為預設模式相容性基準：
+`f2b2333e955112adb2663fb95214d01981b9fa2f195bd382b8809d44ee8140b1`。
+現行預設模式維持相同 digest；啟用 fitting 後 identity 不同，重複建構則一致。
+只增加未耗盡的 fitting iteration cap，規則座標／權重逐位元不變，identity 仍改變，
+確認有效資源政策有納入身分。
+
+無效 query cap 的下一次建構會拒絕；先前 geometry 的 identity、規則大小、
+座標與權重均維持原值。測試以建構失敗前的 points 副本直接比較，未只依賴 cached hash。
+此驗證涵蓋配置預檢失敗，不代表所有中途 fitting 失敗或 runtime rollback 已窮盡。
+測試 exit 0；來源、binary 與 logs 見 `rigid-debug/fitting-identity-audit.json`。
+完整 moving 回歸仍由獨立 frozen `c4fee00` executable 執行，尚未列為通過。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
