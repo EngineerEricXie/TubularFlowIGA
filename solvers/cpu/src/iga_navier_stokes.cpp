@@ -288,9 +288,10 @@ void WriteFlowOutput(Vec state, std::uint64_t nodes, const fs::path& path,
 			output.close();
 			pressure_output.close();
 			if (!output || !pressure_output) throw std::runtime_error("cannot write Navier-Stokes output");
-			std::vector<iga::VtkPointArray> arrays{
-				{"velocity", 3, std::move(velocity)},
-				{"pressure", 1, std::move(pressure)}};
+			std::vector<iga::VtkPointArray> arrays;
+			arrays.reserve(2);
+			arrays.push_back({"velocity", 3, std::move(velocity)});
+			arrays.push_back({"pressure", 1, std::move(pressure)});
 			if (visualization_format == iga::VisualizationFormat::Vtu) {
 				RequireRegularOutput(vtk_path);
 				iga::WriteVtu(mesh_path, vtk_path, arrays, physical_time);
