@@ -117,12 +117,23 @@ MPI／PETSc 的 process-exit leaks。指令向量保存於 `asan-final-command.j
 此為 revision `01aa4c8` 的完整既有 FSI fixture，原驗收條件保留。
 完整 moving 的 `moving-regression-final-v1` 達 1800 秒 timeout，未計通過；
 `moving-regression-final-v2` 保留原 fixture，改用 7200 秒上限與
-`-immersed_transient_ksp_converged_reason`，仍執行中。
+`-immersed_transient_ksp_converged_reason`，於 4924.678 秒退出 1（非 timeout），
+失敗點為 `rigid target quadrature u-w gate failed`。Peak RSS 380,329,984 bytes。
+獨立抽出的同一 rigid fixture 已比較 `bc5de4f`（改動前）與 `01aa4c8`
+（改動後 runtime）：兩者皆退出 1，`u-w` gap 完全相同，為
+`8.998129639693216e-6`，原門檻為 `5.684341886080802e-14`。
+兩者 nonlinear residual 均為 `1.0010909032568383e-14`，2 次 Newton、48 次 KSP。
+因此此 gate failure 在 options 改動前即存在，仍須定位修復，不能列為通過。
+證據位於 `outputs/hpc04/rigid-debug/{before-v1,after-v1}/rank-0/`，
+`source.json` 保存測試來源、兩個 binary 與編譯紀錄的 SHA-256。
+測試共用原 fixture helpers、相同參數與環境，僅抽出 rigid case 並輸出數值；
+原 `256*epsilon` gate 未放寬。
 
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
-另有上述完整 FSI 回歸通過；仍須等待 `moving-regression-final-v2` 終結結果，再補上
+另有上述完整 FSI 回歸通過；`moving-regression-final-v2` 已終結且失敗，須定位並修復
+rigid wall trace 誤差，再重驗及補上
 整體驗收與 source/evidence 彙整；不得把正在執行的測試列為通過。
 新增巢狀 viewer 與本機後端能力驗證見 [診斷進度](HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
-舊版 `iga_transport` 的 options 隔離，以及 HPC-04B／C 的預條件器與大小案例評估仍待完成。
+舊版 `iga_transport` options 隔離已完成，見 [legacy options 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。HPC-04B／C 的其餘預條件器與大小案例評估仍待完成。

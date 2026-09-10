@@ -77,5 +77,5 @@ builder 與輸入 hashes，防止混用。每 rank `run.json` 保存 argv、環�
 
 ## 剩餘工作
 
-舊版 `iga_transport` 尚須接入 options 隔離與有效配置記錄；完整 moving 回歸仍在執行。
+舊版 `iga_transport` options 隔離已完成，見 [legacy transport 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)；完整 moving 回歸在 rigid wall trace gate 失敗，尚待修復。
 多層診斷及 HPC-04B／C 的預條件器、網格與大小案例評估仍待完成。

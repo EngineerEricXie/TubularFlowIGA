@@ -66,4 +66,4 @@ python3 scripts/hpc_duct_solver_candidates.py \
 該作業使用加入失敗 stderr 保存前的 interim harness，report 記錄其獨立 harness hash；
 不能歸為本次最終 harness revision 的實測。
 還須不同 rank 的同網格場比較、更多 pressure reference／nullspace 與 immersed 條件，
-以及排程資源的大案例與無干擾 timing。完整 moving 回歸仍另行執行。
+以及排程資源的大案例與無干擾 timing。完整 moving 回歸已在 rigid wall trace gate 失敗，定位進度見 [immersed options 回歸](HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
