@@ -4,6 +4,7 @@
 #include "CollectivePetscOptions.hpp"
 #include "PetscGather.hpp"
 #include "PetscReadArray.hpp"
+#include "PetscSolverOptions.hpp"
 #include <memory>
 #include <optional>
 #include "CaseInput.hpp"
@@ -160,6 +161,7 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 			[&assembler](const iga::Element& element) {
 				return assembler.OwnsElementByMinimumNode(element);
 			}, communicator);
+		iga::PetscSolverOptions solver_options(communicator, "domain_neuron_transport_transport_");
 		TransportObjects objects;
 		auto& left = objects.left;
 		auto& previous = objects.previous;
@@ -214,6 +216,7 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 		iga::OwnedRowAssembler::Assemble(current, communicator);
 
 		CheckPetsc(communicator, "legacy transport KSPCreate", KSPCreate(communicator, &solver));
+		solver_options.Attach(solver);
 		CheckPetsc(communicator, "legacy transport KSPSetOperators", KSPSetOperators(solver, left, left));
 		CheckPetsc(communicator, "legacy transport KSPSetType", KSPSetType(solver, KSPGMRES));
 		CheckPetsc(communicator, "legacy transport KSPGMRESSetRestart", KSPGMRESSetRestart(solver, 50));
@@ -221,9 +224,10 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 		PC preconditioner = nullptr;
 		CheckPetsc(communicator, "legacy transport KSPGetPC", KSPGetPC(solver, &preconditioner));
 		CheckPetsc(communicator, "legacy transport PCSetType", PCSetType(preconditioner, PCBJACOBI));
-		CheckPetsc(communicator, "legacy transport KSPSetFromOptions", KSPSetFromOptions(solver));
+		solver_options.Call("legacy transport KSPSetFromOptions", [&] { return KSPSetFromOptions(solver); });
 		iga::RequireKspFactorBackend(solver, left, communicator);
-		CheckPetsc(communicator, "legacy transport solver setup", KSPSetUp(solver));
+		solver_options.Call("legacy transport solver setup", [&] { return KSPSetUp(solver); });
+		solver_options.RecordUsed();
 		const auto assembly_end = std::chrono::steady_clock::now();
 
 		std::uint64_t total_iterations = 0;
@@ -235,7 +239,8 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 			iga::OwnedRowAssembler::Assemble(rhs, communicator);
 			if (step > 0) CheckPetsc(communicator, "legacy transport VecCopy", VecCopy(current, next));
 			CheckPetsc(communicator, "legacy transport KSPSetInitialGuessNonzero", KSPSetInitialGuessNonzero(solver, step > 0 ? PETSC_TRUE : PETSC_FALSE));
-			CheckPetsc(communicator, "legacy transport linear solve", KSPSolve(solver, rhs, next));
+			solver_options.Call("legacy transport linear solve", [&] { return KSPSolve(solver, rhs, next); });
+			solver_options.RecordUsed();
 			KSPConvergedReason reason;
 			PetscInt iterations = 0;
 			iga::CollectiveLocalStage(communicator, "legacy transport convergence", [&] {
@@ -245,6 +250,16 @@ void RunLegacyTransport(int argc, char** argv, MPI_Comm communicator)
 					> std::numeric_limits<std::uint64_t>::max()-total_iterations)
 					throw std::runtime_error("transport KSP iteration count is out of range");
 				if (reason <= 0) throw std::runtime_error("transport KSP did not converge at step " + std::to_string(step));
+			});
+			iga::CollectiveLocalStage(communicator, "legacy transport solver diagnostics", [&] {
+				if (rank != 0) return;
+				const auto configuration = iga::CaptureKspConfiguration(solver);
+				std::cout << "solver_configuration prefix=" << configuration.prefix
+					<< " ksp=" << configuration.ksp << " pc=" << configuration.pc
+					<< " factor_backend=" << configuration.factor_backend
+					<< " step=" << step+1 << " iterations=" << iterations
+					<< " reason=" << static_cast<int>(reason) << '\n';
+				iga::FlushCheckedText(std::cout);
 			});
 			total_iterations += static_cast<std::uint64_t>(iterations);
 			CheckPetsc(communicator, "legacy transport VecSwap", VecSwap(current, next));

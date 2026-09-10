@@ -174,3 +174,19 @@ mpiexec -np 3 solvers/coupling/iga_multidomain_flow \
 Viewer 失敗會回傳錯誤，須檢查 process exit status。驗證與本機 factor capability
 矩陣見 [診斷報告](progress/HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)；該矩陣只代表
 目前 PETSc build 對測試 AIJ 矩陣註冊的介面，不代表各 PDE 的效能或適用性。
+
+
+## Legacy transport CLI
+
+`iga_transport` 使用 `domain_neuron_transport_transport_`，未加 prefix 的選項仍為
+共同基線。位置參數介面保留；使用環境變數傳入 PETSc 選項，例如：
+
+```bash
+PETSC_OPTIONS='-domain_neuron_transport_transport_ksp_type fgmres -domain_neuron_transport_transport_ksp_rtol 1e-12' \
+mpiexec -np 2 solvers/cpu/iga_transport DATABASE.ntiga CASE_DIR 2 result.txt
+```
+
+既有 GMRES／block-Jacobi 預設不變，後續步仍使用非零初始猜測。新的每步
+`solver_configuration` 記錄有效 prefix、KSP／PC、backend、iterations／reason。
+範例的較嚴格 tolerance 是候選配置驗收所得，並非普遍效能建議；詳見
+[legacy 驗收](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。

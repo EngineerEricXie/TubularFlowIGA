@@ -544,8 +544,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   本機 1／2／3／4-rank factor 能力矩陣、block-Jacobi／fieldsplit 子求解器
   viewer、native KSP／SNES viewer 已驗證，見
   [後端與診斷進度](progress/HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
-  舊版 `iga_transport` 的 options 隔離仍待實作；完整 multilevel 診斷與大小案例驗收
-  尚未完成，因此本項維持未勾選。
+  舊版 `iga_transport` 也已接入，單／雙 rank 相容性、錯誤及清理驗證通過，見
+  [legacy 進度](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。完整 multilevel 診斷與
+  大小案例驗收尚未完成，因此本項維持未勾選。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point
