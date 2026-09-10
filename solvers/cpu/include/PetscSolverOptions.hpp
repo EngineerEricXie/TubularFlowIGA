@@ -8,6 +8,12 @@
 
 namespace iga {
 
+inline std::string CanonicalPetscOptionName(std::string name)
+{
+	for (auto& c : name) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c-'A'+'a');
+	return name;
+}
+
 inline std::string PetscDomainOptionsPrefix(const std::string& domain, const std::string& role)
 {
 	if (domain.empty() || role.empty() || role.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos)
@@ -46,13 +52,14 @@ inline PetscKspConfiguration CaptureKspConfiguration(KSP solver)
 }
 
 // An immutable per-runtime snapshot. Explicit prefixed options override inherited
-// unprefixed options, which override the runtime's supplied option defaults.
+// family options, optionally unprefixed options, then supplied defaults.
 // Keep this owner alive until every attached PETSc object has been destroyed.
 class PetscSolverOptions {
 public:
 	PetscSolverOptions(MPI_Comm communicator, const std::string& prefix,
 		PetscOptions source = nullptr, const PetscOptionEntries& defaults = {},
-		const std::set<std::string>& excluded = {}) : communicator_(communicator), source_(source)
+		const std::set<std::string>& excluded = {},
+		const std::string& inherited_prefix = {}, bool inherit_unprefixed = true) : communicator_(communicator), source_(source)
 	{
 		std::string agreement;
 		try {
@@ -60,27 +67,43 @@ public:
 				if (prefix.size() > 128 || (!prefix.empty() && (prefix.back() != '_'
 					|| prefix.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos)))
 					throw std::invalid_argument("solver options prefix must contain only ASCII letters, digits or underscores and end in underscore");
+				if (inherited_prefix.size() > 128 || (!inherited_prefix.empty() && (inherited_prefix.back() != '_'
+					|| inherited_prefix.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos)))
+					throw std::invalid_argument("invalid inherited solver options prefix");
 				prefix_ = prefix;
 				const auto inputs = CapturePetscOptionEntries(source, excluded);
-				auto entries = defaults;
-				for (const auto& entry : inputs) entries[entry.first] = entry.second;
+				PetscOptionEntries entries;
+				std::set<std::string> default_names;
+				for (const auto& entry : defaults) { const auto key = CanonicalPetscOptionName(entry.first); entries[key] = entry.second; default_names.insert(key); }
+				std::map<std::string, std::string> entry_origins;
+				if (inherit_unprefixed) for (const auto& entry : inputs) {
+					const auto key = CanonicalPetscOptionName(entry.first); entries[key] = entry.second; entry_origins[key] = entry.first;
+				}
+				if (!inherited_prefix.empty()) for (const auto& entry : inputs) {
+					const auto family = "-"+CanonicalPetscOptionName(inherited_prefix);
+					const auto input_name = CanonicalPetscOptionName(entry.first);
+					if (input_name.size() <= family.size() || input_name.compare(0, family.size(), family)!=0) continue;
+					const auto key = "-"+input_name.substr(family.size());
+					entries[key] = entry.second; entry_origins[key] = entry.first;
+				}
 				PetscOptionEntries effective;
 				for (const auto& entry : entries) {
 					if (entry.first.size() < 2 || entry.first.front() != '-') throw std::invalid_argument("invalid default solver option name");
-					const auto name = "-"+prefix_+entry.first.substr(1);
+					const auto name = CanonicalPetscOptionName("-"+prefix_+entry.first.substr(1));
 					if (name.size() >= PETSC_MAX_OPTION_NAME) {
-						if (defaults.count(entry.first)) throw std::invalid_argument("prefixed default solver option exceeds PETSc name capacity");
+						if (default_names.count(entry.first)) throw std::invalid_argument("prefixed default solver option exceeds PETSc name capacity");
 						// Unrelated long source keys remain available unchanged;
 						// PETSc could not request this overlong prefixed alias.
 						continue;
 					}
 					effective[name] = entry.second;
-					if (inputs.count(entry.first)) origins_[name] = entry.first;
+					if (entry_origins.count(entry.first)) origins_[name] = entry_origins.at(entry.first);
 				}
 				// Retain the original keys too: PETSc can query non-prefixed global
 				// controls, and explicit keys must win over inherited aliases.
-				for (const auto& entry : inputs) { effective[entry.first] = entry.second; origins_[entry.first] = entry.first; }
-				agreement = std::to_string(prefix_.size())+":"+prefix_+SerializePetscOptionEntries(effective);
+				for (const auto& entry : inputs) { const auto key = CanonicalPetscOptionName(entry.first); effective[key] = entry.second; origins_[key] = entry.first; }
+				agreement = std::to_string(prefix_.size())+":"+prefix_+std::to_string(inherited_prefix.size())+":"+inherited_prefix
+					+(inherit_unprefixed ? "G" : "P")+SerializePetscOptionEntries(effective);
 				petsc_options_detail::Check(PetscOptionsCreate(&options_), "PetscOptionsCreate solver snapshot");
 				for (const auto& entry : effective)
 					petsc_options_detail::Check(PetscOptionsSetValue(options_, entry.first.c_str(), entry.second ? entry.second->c_str() : nullptr), "PetscOptionsSetValue solver snapshot");

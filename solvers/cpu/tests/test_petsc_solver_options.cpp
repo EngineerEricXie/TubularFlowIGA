@@ -84,6 +84,38 @@ void Solve(MPI_Comm comm, iga::PetscSolverOptions& options, const char* type, co
 	std::cout << "solver_options rank=" << rank << " ranks=" << size << " prefix=" << options.Prefix()
 		<< " ksp=" << type << " pc=" << (split ? "fieldsplit" : "bjacobi") << " sub_pc=" << sub_pc << " iterations=" << iterations << " error=" << norm << '\n';
 }
+void RunFamily(MPI_Comm comm)
+{
+	int rank = 0, size = 0; MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
+	Options source;
+	// Immersed families have never inherited the root KSP/PC defaults.
+	source.Set("-ksp_type", "unavailable_solver"); source.Set("-pc_type", "none");
+	source.Set("-IMMERSED_STATIC_ksp_type", "gmres"); source.Set("-immersed_static_ksp_rtol", "1e-12");
+	source.Set("-immersed_static_pc_type", "bjacobi"); source.Set("-immersed_static_sub_ksp_type", "preonly");
+	source.Set("-immersed_static_sub_pc_type", "lu");
+	source.Set("-DOMAIN_RIGHT_FLOW_KSP_TYPE", "fgmres"); source.Set("-domain_right_flow_sub_pc_type", "jacobi");
+	const auto before = iga::CapturePetscOptions(source.value);
+	iga::PetscSolverOptions left(comm, "DOMAIN_LEFT_FLOW_", source.value, {}, {}, "immersed_static_", false);
+	iga::PetscSolverOptions right(comm, "domain_right_flow_", source.value, {}, {}, "immersed_static_", false);
+	source.Set("-immersed_static_ksp_type", "unavailable_solver");
+	Solve(comm, left, "gmres", "lu"); Solve(comm, right, "fgmres", "jacobi");
+	source.Set("-immersed_static_ksp_type", "gmres");
+	Require(before==iga::CapturePetscOptions(source.value), "family snapshot changed source values");
+	PetscBool used = PETSC_FALSE;
+	Check(PetscOptionsUsed(source.value, "immersed_static_sub_pc_type", &used)); Require(used, "family child usage was not propagated");
+	Check(PetscOptionsUsed(source.value, "domain_right_flow_ksp_type", &used)); Require(used, "domain usage was not propagated");
+	Check(PetscOptionsUsed(source.value, "ksp_type", &used)); Require(!used, "family consumed ignored root KSP");
+	int rejected = 0;
+	try { iga::PetscSolverOptions bad(comm, "domain_left_flow_", source.value, {}, {}, rank==size-1 ? "bad" : "immersed_static_", false); }
+	catch (const std::exception&) { ++rejected; }
+	if (size>1) {
+		try { iga::PetscSolverOptions bad(comm, "domain_left_flow_", source.value, {}, {}, "immersed_static_", rank==size-1); }
+		catch (const std::exception&) { ++rejected; }
+		try { iga::PetscSolverOptions bad(comm, "domain_left_flow_", source.value, {}, {}, rank==size-1 ? "immersed_transient_" : "immersed_static_", false); }
+		catch (const std::exception&) { ++rejected; }
+	}
+	Require(rejected==(size>1 ? 3 : 1), "family policy disagreement was not rejected collectively");
+}
 void Run(MPI_Comm comm)
 {
 	int rank = 0, size = 0; MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
@@ -179,9 +211,9 @@ int main(int argc, char** argv)
 	PetscInitialize(&argc, &argv, nullptr, nullptr);
 	int rank = 0; MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	try {
-		Run(PETSC_COMM_WORLD);
+		Run(PETSC_COMM_WORLD); RunFamily(PETSC_COMM_WORLD);
 		MPI_Comm group = MPI_COMM_NULL; MPI_Comm_split(PETSC_COMM_WORLD, rank==0 ? 0 : 1, rank, &group);
-		Run(group); MPI_Comm_free(&group);
+		Run(group); RunFamily(group); MPI_Comm_free(&group);
 	} catch (const std::exception& error) { std::cerr << "rank " << rank << ": " << error.what() << '\n'; MPI_Abort(PETSC_COMM_WORLD, 2); }
 	PetscFinalize();
 }
