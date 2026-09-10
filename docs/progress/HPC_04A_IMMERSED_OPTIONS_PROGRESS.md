@@ -153,6 +153,26 @@ gap 為 `5.5293885617803503e-17`；求解後升至上述 `8.998129639693216e-6`�
 完整 moving 測試已補上高精度 seed／solved gap 與求解殘差輸出，保留所有原 gate。
 其 binary 會因診斷重建而改變；前述 `01aa4c8` 完整失敗的執行身分仍以原 run 記錄為準。
 
+### 積分修復的體積矩基礎
+
+新增 `PolyhedralVolumeMoments.hpp`，由已驗證的 `ClosedTriangulatedSurface`
+計算物理體積上的正規化 tensor monomial moments，逐軸最高六次。
+使用 x 方向反導函數、散度定理與 triangle Duffy 映射；一維 Gauss 階數依
+多項式總次數決定，並以 long double 補償加總降低帶符號邊界項的消去誤差。
+原理參考 [Quadrature-free immersed isogeometric analysis](https://arxiv.org/abs/2107.09024)。
+此實作處理封閉多面體，無凸性假設；它只提供目標矩，不產生帶負權重的 runtime 規則。
+
+`make -C solvers/cpu polyhedral_volume_moments_test` 與
+`solvers/cpu/polyhedral_volume_moments_test` 通過；1,029 個解析矩比較涵蓋所有
+`0 <= a,b,c <= 6` 的四面體、非凸 L 柱體，以及大平移／非等向縮放／反向輸入面序。
+最大相對誤差 `9.75782e-19`（本機 long double）；另驗證超出次數、零尺度及非有限原點拒絕。
+測試使用解析體積積分，未以另一個相同演算法的結果作 oracle。
+
+這是積分修復的基礎，尚未接入 cut-cell catalog：仍須建立每個裁切 cell 的封閉邊界，
+由目標矩求得符合既有有限正權重契約的規則，並驗證體積／表面分部積分、cap／失敗處理、
+compact／expanded 路徑與 static／moving／distributed 結果。
+現有 `rigid` failure 尚未修復，HPC-04A 不勾選完成。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。

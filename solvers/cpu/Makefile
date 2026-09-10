@@ -439,6 +439,9 @@ cartesian_background_test: tests/test_cartesian_background.cpp include/Cartesian
 sha256_test: tests/test_sha256.cpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
+polyhedral_volume_moments_test: tests/test_polyhedral_volume_moments.cpp include/PolyhedralVolumeMoments.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
 surface_geometry_test: tests/test_surface_geometry.cpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
@@ -636,6 +639,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) polyhedral_volume_moments_test
 	$(RM) petsc_solver_options_test
 	$(RM) body_fitted_checkpoint_bundle_test
 	$(RM) body_fitted_accepted_checkpoint_test
