@@ -1,5 +1,6 @@
 #include "FluidSurfaceTraction.hpp"
 #include "OwnedFluidSurfaceTractionPoints.hpp"
+#include "DistributedFluidSurfaceTraction.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
@@ -292,6 +293,31 @@ int main(int argc, char** argv)
 				points=iga::BuildTrialFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state,expected_trial,expected_material,expected_fluid);
 			}
 			const auto distributed=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,interface.id,distributed_layout,domain.Cells().size(),points,0);
+			const auto distributed_map=iga::MaterialSurfacePatchMap::Create(patch_map.Interface(),distributed_layout,patch_map.FullReference(),patch_map.PatchLabel(),
+				patch_map.GlobalToSourceVertices(),patch_map.LayoutTriangleToSourceTriangles(),patch_map.ConfiguredClampedGlobalNodeIds());
+			const auto producer=iga::BuildFluidSurfaceTractionStateIdentitySha256(domain,catalog,material,distributed_map,viscosity,local_state);
+			const auto publish=[&] {
+				return iga::BuildDistributedFluidSurfaceTraction(PETSC_COMM_WORLD,domain,catalog,material,distributed_map,interface,viscosity,
+					owned_cells,local_state,expected_trial,expected_material,producer,0);
+			};
+			const auto publication=publish();iga::ValidateSurfaceTraction(publication,distributed_layout);
+			assert(publication.stamp.step==expected_trial.step&&publication.stamp.coupling_iteration==expected_trial.coupling_iteration);
+			assert(publication.stamp.producer_state_identity_sha256==producer);
+			for(std::size_t row=0;row<publication.consistent_nodal_force_n.size();++row) {
+				CheckVector(publication.consistent_nodal_force_n[row],distributed.owned_force_n[row],1.e-12);
+				CheckVector(publication.traction_on_structure_pa[row],distributed.owned_traction_pa[row],1.e-12);
+			}
+			for(int mode=0;mode<2;++mode) {
+				auto incoming=interface;auto expected_producer=producer;
+				if(rank==0&&mode==0)incoming.boundary_labels={9};
+				if(mode==1)expected_producer=std::string(64,'0');
+				int rejected=0,total=0;
+				try { (void)iga::BuildDistributedFluidSurfaceTraction(PETSC_COMM_WORLD,domain,catalog,material,distributed_map,incoming,viscosity,
+					owned_cells,local_state,expected_trial,expected_material,expected_producer,0); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				const auto retry=publish();assert(retry.projection_identity_sha256==publication.projection_identity_sha256);
+			}
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];

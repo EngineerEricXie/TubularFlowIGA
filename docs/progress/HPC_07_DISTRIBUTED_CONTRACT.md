@@ -495,3 +495,31 @@ Expected local fluid hash 可因各 rank 的 retained states 不同而不同；�
 `fluid_surface_traction_test` 的 1／3／5 rank 指令。這提供可綁定 transaction
 的擷取入口；正式 runtime 仍需供應可信 expected identities、產生 stamped
 traction publication 並完成守恆與結構 trial 更新。HPC-07B 尚未勾選。
+
+
+## 分散式 stamped traction publication
+
+`BuildDistributedFluidSurfaceTraction` 將 fluid interface／patch role 驗證、expected
+trial 擷取、owned-cell force assembly、bounded consistent projection 及
+`SurfaceTraction` publication 串成單一集體入口。Layout 直接來自已驗證的
+partition patch map，避免傳入另一份 layout。Stamp 綁定 exact context、reference、
+layout、partition 與經驗證的 local producer-state identity；回傳前通過既有
+`ValidateSurfaceTraction`。
+
+Projection identity 使用新 `DistributedFluidSurfaceTraction/projection/v1` domain，
+納入全部 ranks 按 rank 順序的 contributor hashes、介面、局部 stamp、projection
+owner／node cap 與 owned force／traction values。每個 contributor hash 綁定其
+producer identity、partition map 與 owned cells。此 metadata allgather 每 rank
+保存 64×rank_count bytes，沒有 allgather 完整流場；仍需納入後續通訊成本量測。
+舊 serial projection identity 與檔案格式不變。
+
+1／3／5 ranks 測試使用真實 partition maps（包括五 rank 配置的空 publication
+partitions），壓力／黏性結果與已驗證的 owned values 相符，stamp step／iteration
+及 producer identity 正確。錯誤 patch label、錯誤 expected producer identity
+共同拒絕，健康重試的 projection identity 與原 publication 相同。原 IGA
+traction 與失敗回歸通過，九份 reports exit 0、無 timeout。
+
+證據為 `outputs/hpc07/traction-publication-v1/audit.json`，重現沿用
+`fluid_surface_traction_test` 的 1／3／5 rank 指令。此入口不提交或回復 runtime
+state；正式 FSI adapter 仍需提供 transaction authority、加入全域守恆診斷並
+接入膜 trial 更新。HPC-07B 保持未勾選。

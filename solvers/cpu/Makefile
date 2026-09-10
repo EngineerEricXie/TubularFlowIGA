@@ -492,7 +492,7 @@ moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/MaterialSur
 moving-cut-geometry-test: moving_cut_geometry_test
 	./moving_cut_geometry_test
 
-fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp ../../include/FsiDomainRuntime.hpp include/SharedFluidSurfaceCoefficients.hpp include/OwnedFluidSurfaceTractionPoints.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/SurfaceP1TractionContribution.hpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
+fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp include/DistributedFluidSurfaceTraction.hpp ../../include/FsiDomainRuntime.hpp include/SharedFluidSurfaceCoefficients.hpp include/OwnedFluidSurfaceTractionPoints.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/SurfaceP1TractionContribution.hpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 fluid-surface-traction-test: fluid_surface_traction_test
