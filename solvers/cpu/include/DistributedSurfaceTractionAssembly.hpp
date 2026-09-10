@@ -9,7 +9,7 @@ namespace iga {
 struct SurfaceP1TractionPoint {
 	// Node IDs and barycentric values use the same canonical corner order.
 	std::array<std::uint64_t,3> node_ids{};
-	std::array<double,3> barycentric{},traction_pa{};
+	std::array<double,3> barycentric{},traction_pa{},physical_m{};
 	double weight_m2=0.;
 };
 struct SurfaceCellTractionPoints {

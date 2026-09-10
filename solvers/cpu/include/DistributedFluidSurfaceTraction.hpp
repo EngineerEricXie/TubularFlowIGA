@@ -2,11 +2,12 @@
 #define IGA_DISTRIBUTED_FLUID_SURFACE_TRACTION_HPP
 
 #include "OwnedFluidSurfaceTractionPoints.hpp"
+#include "DistributedSurfaceConservation.hpp"
 
 namespace iga {
 // Complete traction publication boundary. The caller owns the transaction and
 // supplies independently captured expected state identities. No state commits
-// occur here. Global conservation diagnostics remain a separate acceptance gate.
+// occur here. Global force, moment and discrete work are checked before return.
 inline SurfaceTraction BuildDistributedFluidSurfaceTraction(MPI_Comm comm,
 	const CartesianDomainClassification& domain,const ImmersedSurfaceQuadratureCatalog& catalog,
 	const MaterialSurfaceKinematics& material,const MaterialSurfacePatchMap& map,
@@ -30,6 +31,7 @@ inline SurfaceTraction BuildDistributedFluidSurfaceTraction(MPI_Comm comm,
 	const auto points=BuildTrialFluidSurfaceTractionPoints(comm,domain,catalog,material,map,viscosity,owned_cells,state,
 		expected_context,expected_material_identity,expected_local_fluid_identity,limits);
 	auto values=AssembleDistributedSurfaceTraction(comm,surface.id,map.Layout(),domain.Cells().size(),points,projection_owner,maximum_nodes,limits);
+	(void)CheckDistributedSurfaceConservation(comm,points,material,map,values.owned_force_n);
 	int ranks=0;MPI_Comm_size(comm,&ranks);
 	std::string local_identity,all_identities;
 	CollectiveLocalStage(comm,"distributed traction contributing identities",[&] {

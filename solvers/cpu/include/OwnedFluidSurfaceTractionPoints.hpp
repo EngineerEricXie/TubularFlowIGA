@@ -55,7 +55,7 @@ inline std::vector<SurfaceCellTractionPoints> BuildOwnedFluidSurfaceTractionPoin
 					if(triangle.source_triangle!=map.SourceTriangleForLayoutTriangle(selected->second)
 						||triangle.boundary_id!=map.PatchLabel()||p.boundary_id!=static_cast<std::int32_t>(map.PatchLabel()))
 						throw std::invalid_argument("owned traction point provenance mismatch");
-					SurfaceP1TractionPoint point;point.barycentric=origin.canonical_barycentric;point.weight_m2=p.weight;
+					SurfaceP1TractionPoint point;point.barycentric=origin.canonical_barycentric;point.weight_m2=p.weight;point.physical_m=p.physical;
 					for(int corner=0;corner<3;++corner) {
 						const auto source=triangle.source_vertex_indices[triangle.canonical_corner_to_source_corner[corner]];
 						bool mapped=false;

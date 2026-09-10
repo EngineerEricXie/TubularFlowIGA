@@ -295,6 +295,27 @@ int main(int argc, char** argv)
 			const auto distributed=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,interface.id,distributed_layout,domain.Cells().size(),points,0);
 			const auto distributed_map=iga::MaterialSurfacePatchMap::Create(patch_map.Interface(),distributed_layout,patch_map.FullReference(),patch_map.PatchLabel(),
 				patch_map.GlobalToSourceVertices(),patch_map.LayoutTriangleToSourceTriangles(),patch_map.ConfiguredClampedGlobalNodeIds());
+			std::vector<iga::RawSurfaceTriangle> work_triangles;
+			for(const auto& triangle:material.SourceTriangles()) { iga::RawSurfaceTriangle item;for(int corner=0;corner<3;++corner)item.indices[corner]=triangle.source_vertex_indices[corner];item.boundary_id=triangle.boundary_id;work_triangles.push_back(item); }
+			std::vector<std::array<double,3>> work_velocities;
+			for(const auto& x:material.SourceVerticesM())work_velocities.push_back({{x[0],x[1],1.}});
+			const auto work_material=iga::MaterialSurfaceKinematics::CreateFromSourceTopology(material.ReferenceMaterialVerticesM(),material.SourceVerticesM(),work_velocities,work_triangles,.5,0.,.5);
+			const auto work=iga::CheckDistributedSurfaceConservation(PETSC_COMM_WORLD,points,work_material,distributed_map,distributed.owned_force_n);
+			assert(std::abs(work.quadrature[6]-work.nodal[6])<1.e-12L);
+			for(int mode=0;mode<3;++mode) {
+				auto altered=distributed.owned_force_n;
+				for(std::size_t row=0;row<altered.size();++row) {
+					const auto id=distributed_layout.owned_global_node_ids[row];
+					if(mode==0&&id==11)altered[row][0]+=1.;
+					if(mode==1){if(id==11)altered[row][2]-=1.;if(id==20)altered[row][2]+=1.;}
+					if(mode==2){if(id==11)altered[row][0]-=1.;if(id==20)altered[row][0]+=1.;}
+				}
+				int rejected=0,total=0;
+				try { (void)iga::CheckDistributedSurfaceConservation(PETSC_COMM_WORLD,points,work_material,distributed_map,altered); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				(void)iga::CheckDistributedSurfaceConservation(PETSC_COMM_WORLD,points,work_material,distributed_map,distributed.owned_force_n);
+			}
 			const auto producer=iga::BuildFluidSurfaceTractionStateIdentitySha256(domain,catalog,material,distributed_map,viscosity,local_state);
 			const auto publish=[&] {
 				return iga::BuildDistributedFluidSurfaceTraction(PETSC_COMM_WORLD,domain,catalog,material,distributed_map,interface,viscosity,

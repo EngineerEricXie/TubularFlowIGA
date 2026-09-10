@@ -523,3 +523,29 @@ traction 與失敗回歸通過，九份 reports exit 0、無 timeout。
 `fluid_surface_traction_test` 的 1／3／5 rank 指令。此入口不提交或回復 runtime
 state；正式 FSI adapter 仍需提供 transaction authority、加入全域守恆診斷並
 接入膜 trial 更新。HPC-07B 保持未勾選。
+
+
+## Publication 前的全域合力／力矩／離散功率 gate
+
+`CheckDistributedSurfaceConservation` 現在於 stamped publication 回傳前執行。
+Quadrature moment 使用 catalog 的 physical point coordinates；nodal moment
+使用完整 material state 中唯一 owned nodes 的當前位置。功率使用材料 P1
+速度插值的 `traction·velocity` 積分，對照 owned nodal force·velocity，避免
+把 ghost 納入第二次總和。P1 point records 新增 physical coordinates，實際 IGA
+extractor 直接由 catalog 填入；沒有改動既有檔案格式。
+
+七個量（合力三分量、原點力矩三分量、功率）及其絕對貢獻尺度，以固定 28 個
+long-double scalars 全域 SUM。每個量使用其 SI 單位的 1e-12 absolute tolerance，
+加 `2e-10 * (quadrature absolute sum + nodal absolute sum)`；非有限輸入或累加
+也共同拒絕。此為介面離散功率，不能當成完整流固能量收支或時間積分驗收。
+
+1／3／5 ranks 的壓力／黏性與 publication 回歸通過，九份 reports exit 0、
+無 timeout。以相同幾何上的非零測試速度 `v=(x,y,1)` 驗證功率，另逐項注入：
+單節點合力錯誤、等反向力造成純力矩錯誤，以及沿邊等反向力造成合力／力矩
+不變但功率改變。三種均共同拒絕，健康重試通過。非零速度場只用於這項離散
+功測試，未宣稱是已通過 backward-Euler 的材料運動。
+
+證據為 `outputs/hpc07/traction-conservation-v1/audit.json`；初版測試索引陣列
+型別錯誤導致 build failure，修正後 final build 與所有測試成功，原 log 保留。
+重現沿用 `fluid_surface_traction_test` 的 1／3／5 rank 指令。正式 FSI adapter、
+膜 trial 更新、共同 rollback 與完整能量／收斂驗收仍待完成。
