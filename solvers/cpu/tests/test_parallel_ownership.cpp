@@ -7,6 +7,7 @@
 #include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
 #include "SurfaceGhostKinematics.hpp"
+#include "DistributedSurfaceTriangleKinematics.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -348,6 +349,26 @@ void CheckSurfaceOwnership(int rank)
 
 	// Reference triangle owner need not own any of its material nodes.
 	const std::vector<std::uint64_t> triangles = rank == 2 ? std::vector<std::uint64_t>{0} : std::vector<std::uint64_t>{};
+	const auto check_triangles=[&] {
+		const auto local=iga::BuildDistributedSurfaceTriangleKinematics(PETSC_COMM_WORLD,sparse,publication,reference,expected_stamp,triangles);
+		Require(local.size()==triangles.size(),"wrong local triangle count");
+		if(rank==2) {
+			Require(local[0].reference_triangle_index==0 && local[0].node_ids==std::array<std::uint64_t,3>{{10,20,30}},"triangle identity changed");
+			Require(local[0].positions_m==std::array<std::array<double,3>,3>{{{{10,0,0}},{{21,0,0}},{{30,1,0}}}},"wrong deformed triangle positions");
+			Require(local[0].velocities_m_per_s==std::array<std::array<double,3>,3>{{{{0,10,0}},{{0,20,0}},{{0,30,0}}}},"wrong triangle velocities");
+		}
+	};
+	check_triangles();
+	for(int mode=0;mode<4;++mode) {
+		auto selected=triangles;auto incoming=publication;iga::PointIdentityLimits limits;
+		if(mode==0 && rank==0)selected.push_back(0);
+		if(mode==1)selected.clear();
+		if(mode==2 && rank==2)limits.max_local_occurrences=2;
+		if(mode==3 && rank==0)incoming.stamp.time_s=.5;
+		RejectCollectively([&] {(void)iga::BuildDistributedSurfaceTriangleKinematics(PETSC_COMM_WORLD,sparse,incoming,reference,expected_stamp,selected,limits);},PETSC_COMM_WORLD);
+		check_triangles();
+	}
+	if(rank==0)std::cout << "surface_triangle_kinematics=passed failures=4 retries=4\n";
 	for(const auto& partition : {layout, sparse}) {
 		const auto before=iga::BuildDistributedSurfacePartitionIdentitySha256(partition);
 		const auto areas=iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, partition, triangles);

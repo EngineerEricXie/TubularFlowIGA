@@ -240,3 +240,26 @@ triangle mappings 與單分區一致、reference identity 相同、partition map
 均 exit 0，編譯無新增 warning；來源、binary 與 logs hashes 記錄於
 `outputs/hpc07/partition-patch-map-v1/audit.json`。這是 reference map 層的支援，
 尚非正式分散式 FSI runtime，HPC-07A 保持未勾選。
+
+
+## Triangle owner 的變形座標與速度
+
+`DistributedSurfaceTriangleKinematics.hpp` 將 reference triangle ownership 接入
+stamped ghost 交換。每個 rank 只查詢其 triangles 所需的不重複 nodes，並按
+原 triangle 順序與 winding 回傳 reference index、node IDs、reference position
+加 displacement 的當前座標，以及 nodal velocity。Triangle owner 可以完全
+不持有節點；先共同驗證 triangle coverage，再沿用 publication ownership、
+expected stamp 與全域 epoch 檢查。Reference geometry 目前仍完整複製。
+
+此元件提供後續 P1 牽引力積分的幾何輸入，不驗證封閉曲面、自交、變形 Jacobian、
+clamped seam 或 backward-Euler 一致性；這些仍是外層 material trial 的責任。
+回傳資料的生命週期由 caller 的 transaction 管理，不能跨 epoch 隱含快取。
+
+三 rank 測試以 rank 1 持有全部 nodes、rank 2 持有 triangle、空 root 不持有
+任何資料，解析比較三個非均勻位移／速度的結果。重複 triangle、遺漏 triangle、
+record cap 與空 root 的 stale publication 四項共同拒絕及逐項健康重試通過，
+原 ghost／area／Aitken／ownership 測試也通過。三份 rank reports 均 exit 0、
+無 timeout，CPU affinity 為 14、15；來源、binary 與 logs hashes 在
+`outputs/hpc07/triangle-kinematics-v1/audit.json`。重現沿用
+`make -C solvers/cpu parallel-ownership-test`。正式流體牽引力與 FSI trial 接線
+尚未完成，HPC-07A/B 維持未勾選。
