@@ -197,7 +197,7 @@ collective_failure_test: tests/test_collective_failure.cpp tests/test_parallel_o
 collective_petsc_options_test: tests/test_collective_petsc_options.cpp include/CollectivePetscOptions.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-parallel_ownership_test: tests/test_parallel_ownership.cpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/DistributedSurfaceTriangleKinematics.hpp include/SurfaceGhostKinematics.hpp include/OwnedPointValues.hpp include/DistributedSurfaceAreas.hpp include/OwnedScalarContributions.hpp include/DistributedPointIdentity.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp include/OwnedRowAssembler.hpp include/IgaDatabase.hpp include/SurfaceOwnershipValidation.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
+parallel_ownership_test: tests/test_parallel_ownership.cpp include/DistributedSurfaceProjection.hpp include/FluidSurfaceTraction.hpp include/SurfaceP1TractionContribution.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/DistributedSurfaceTriangleKinematics.hpp include/SurfaceGhostKinematics.hpp include/OwnedPointValues.hpp include/DistributedSurfaceAreas.hpp include/OwnedScalarContributions.hpp include/DistributedPointIdentity.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp include/OwnedRowAssembler.hpp include/IgaDatabase.hpp include/SurfaceOwnershipValidation.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 .PHONY: parallel-ownership-test

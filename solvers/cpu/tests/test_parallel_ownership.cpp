@@ -5,6 +5,7 @@
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceForces.hpp"
+#include "DistributedSurfaceProjection.hpp"
 #include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
 #include "SurfaceGhostKinematics.hpp"
@@ -323,6 +324,34 @@ void CheckSurfaceForces(int rank)
 		check();
 	}
 	if(rank==0)std::cout << "surface_cell_forces=passed failures=5 retries=5\n";
+	std::vector<iga::SurfaceMassEntry> mass;
+	for(auto triangle:triangles)for(int row=0;row<3;++row)for(int col=0;col<3;++col)
+		mass.push_back({layout.reference_triangles[triangle][row],layout.reference_triangles[triangle][col],row==col?1./12.:1./24.});
+	std::vector<Vector> rhs;
+	if(rank==1)rhs={{{5./24.,9./24.,14./24.}},{{13./24.,19./24.,32./24.}},{{11./24.,21./24.,32./24.}},{{7./24.,11./24.,18./24.}}};
+	const auto check_projection=[&](int owner) {
+		const auto projected=iga::ProjectDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,rhs,mass,owner);
+		Require(projected.size()==rhs.size(),"wrong projection local size");
+		for(std::size_t row=0;row<projected.size();++row) {
+			const auto& x=layout.reference_positions[row].position_m;
+			const Vector exact{{1+x[0],2+x[1],3+x[0]+x[1]}};
+			for(int axis=0;axis<3;++axis)Require(std::abs(projected[row][axis]-exact[axis])<1.e-13,"consistent projection manufactured field mismatch");
+		}
+	};
+	check_projection(0);check_projection(2);
+	for(int mode=0;mode<5;++mode) {
+		auto entries=mass;int owner=0;std::size_t cap=4096;
+		if(mode==0)entries.clear();
+		if(rank==2) {
+			if(mode==1)entries[0].row_node=17;
+			if(mode==2)entries[1].value_m2+=1.;
+			if(mode==3)cap=3;
+			if(mode==4)owner=2;
+		}
+		RejectCollectively([&] {(void)iga::ProjectDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,rhs,entries,owner,cap);},PETSC_COMM_WORLD);
+		check_projection(0);
+	}
+	if(rank==0)std::cout << "surface_consistent_projection=passed failures=5 retries=5\n";
 	if(rank==0)std::cout << "surface_corner_forces=passed failures=6 retries=6\n";
 }
 

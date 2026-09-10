@@ -336,3 +336,33 @@ overflow 五項拒絕通過。原 fluid traction 壓力、黏性、非均勻場�
 `make -C solvers/cpu fluid-surface-traction-test`（指定本機 PETSC_DIR）。
 這次驗證針對單分區正式 traction consumer；分散式 cell integration 與
 consistent mass projection 接線仍未完成。
+
+
+## 單 owner 的 bounded consistent projection
+
+`ProjectDistributedSurfaceTraction` 接受各 rank 的 `(row material ID, column
+material ID, mass entry)` 與已加總的 owned nodal forces。Mass entries 路由至
+指定 projection owner，force tuples 亦按 node IDs 取到該 owner；只有它配置
+完整 dense mass matrix，使用既有 consistent Cholesky solver，然後將 traction
+送回各 node owner。Projection owner 與 node owner 可以不同，不要求 root
+持有 material nodes。這符合先集中小型 projection 的契約，尚非分散式線性求解。
+
+預設最多 4096 nodes，dense double matrix 本身最多 128 MiB；wire cap 限制
+每次交換，不能解讀成包含 packets、layout、matrix 與 solver vectors 的 RSS
+上限。Replicated reference geometry 仍在。核對 node coverage、projection owner
+agreement、dimensions、有限 mass／force、未知 IDs、mass symmetry 與 Cholesky
+正定性；反覆同一 matrix entry 是合法的跨 cell 積分加總。Caller 仍須證明
+force／mass 來自同一 trial 與唯一 quadrature authority，代數元件不自行產生
+可信的 publication stamp。
+
+三 rank 製造解使用共享邊的兩個 P1 triangles，rank 0／2 分別提供局部 consistent
+mass，rank 1 持有全部 nodal RHS。解析 traction 為 `(1+x,2+y,3+x+y)`，分別
+選 rank 0、2 求解，全部 component 誤差小於 1e-13，空 node owners 回傳空場。
+零 mass、未知 mass node、非對稱 matrix、node cap 與 owner 分歧五項共同拒絕
+並健康重試；完整 ownership 回歸也通過。三份 reports exit 0、無 timeout，
+整套測試約 15.6 秒，RSS 分別 38,879,232／38,739,968／38,662,144 bytes。
+這些是整套正確性測試數據，不能當成單獨 projection 效能或大型記憶體證據。
+
+來源、binary 與 logs hashes 在 `outputs/hpc07/surface-projection-v1/audit.json`，
+重現沿用 `make -C solvers/cpu parallel-ownership-test`。正式 fluid quadrature、
+projection stamp、膜更新及 FSI runtime 接線仍待完成，HPC-07B 尚未勾選。
