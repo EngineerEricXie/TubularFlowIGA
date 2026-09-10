@@ -437,3 +437,12 @@ options 隔離見 [legacy options 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。
 1024-element duct 的 LU／block-Jacobi 亦已通過原門檻，見
 [較大方管進度](HPC_04B_LARGE_DUCT_PROGRESS.md)；HPC-04B／C 其他條件與
 無干擾 mesh／rank／硬體擴展仍待完成。
+
+### 整合稽核進度
+
+已重算貼體 options、1D 與 standalone 完成 manifests 所列全部 evidence hashes：
+分別 10867、8601、539 個檔案，合計 20007 個，無遺失或修改。此檢查只證明
+既存證據完整，不把歷史 source 當成目前 HEAD。記錄在
+`outputs/hpc04/completion-audit-v1/evidence.json`。現有 CPU／1D production 的
+10 個 KSP／SNES SetFromOptions 呼叫均經共用 options Call 層；較晚的 immersed、
+backend／multilevel 與 legacy 證據仍須合併作 requirement-by-requirement 稽核。

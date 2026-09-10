@@ -319,3 +319,33 @@ pvpython scripts/test_flow_pvtu_paraview.py outputs/hpc06/duct-output-v1/same-st
 求解命令、輸入與 binary hashes、rank reports、獨立求解 L2、同一 state 精確
 比較及檔案／RSS 統計：`outputs/hpc06/duct-output-v1/audit.json`。原小案例
 13 幀零容差 reader 回歸亦保留於 `original-reader-regression.log`。
+
+## 1024 元素輸出比較
+
+以相同 C2 duct 產生方式擴大至 8×8×16、1024 元素、2299 控制點、4 ranks，
+CPU flow frozen binary 為 `1f09b18` 建置，兩步 dt=0.01。HDF 與 PVTU 兩作業、
+八份 rank reports 全部 exit 0、無 timeout。ParaView 5.13 實際讀取三幀，
+座標完全一致、共享 tuple 與 cell／point IDs 覆蓋一致；場最大 relative L2
+2.25445e-15、最大逐值 absolute 差 1.50990e-13，通過原門檻。
+Checkpoint 速度／壓力 relative L2 分別 3.77248e-15／5.09984e-15。
+
+| 觀察值 | HDF | PVTU |
+|---|---|---|
+| 各 rank RSS 歷史峰值 bytes | 348966912, 412311552, 326963200, 308318208 | 342953984, 410812416, 326205440, 307474432 |
+| 三幀可視化檔案數 | 1 | 16 |
+| 可視化 bytes | 1538011 | 14583075 |
+
+最後 output_begin 時各 rank RSS 已接近最後 peak，沒有以此證明輸出是全程
+記憶體瓶頸或 PVTU 可降低全程峰值。Root geometry 釋放前後 current RSS 不變，
+符合 allocator 可保留已釋放配置的情況；不能據此判為 live mesh leak，亦不能
+由釋放語句聲稱 OS RSS 已下降。各 phase 原始數據完整保存。
+
+PVTU 的 ASCII／每幀完整幾何在此案例成本大於壓縮 HDF，需在 HPC-06C 繼續
+評估 encoding、metadata 與必要的 aggregator。1024 元素提高了實際 PDE 輸出
+覆蓋，2299 個控制點仍不足以代表記憶體受限的大型場；其他 runtime／transport
+及跨節點驗證尚未完成。本次期間曾有 moving 回歸，不作無干擾 scaling 宣告。
+
+證據：`outputs/hpc06/duct-output-large-v1/audit.json`；`run.py` 保存完整命令，
+`acceptance.json` 保存 frozen binary／input hashes 與 per-rank reports，
+`paraview.log` 保存逐幀場比較。讀回命令沿用上一節，root 改為
+`outputs/hpc06/duct-output-large-v1`。
