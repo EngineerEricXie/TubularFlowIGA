@@ -726,7 +726,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   膜更新接線仍待完成。Publication 前已加入全域合力／力矩／P1 離散功率
   gate，1／3／5 ranks 的三種獨立守恆破壞拒絕與健康重試通過。Stamped
   traction 收集到指定膜 owner 的元件也通過含空 owner 的 1／3／5 rank
-  數值比較及三種拒絕／重試；膜 runtime 的集中求解與 trial 接線仍待完成。
+  數值比較及三種拒絕／重試。指定 solver owner 的單分區 layout／面積轉換
+  也已通過與 serial identity 的比較及三種拒絕／重試；膜 runtime 的集中
+  求解與 trial 接線仍待完成。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank

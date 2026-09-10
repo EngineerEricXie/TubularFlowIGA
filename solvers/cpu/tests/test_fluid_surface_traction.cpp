@@ -2,6 +2,7 @@
 #include "OwnedFluidSurfaceTractionPoints.hpp"
 #include "DistributedFluidSurfaceTraction.hpp"
 #include "SurfaceGhostTraction.hpp"
+#include "SingleOwnerSurfaceLayout.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
@@ -227,6 +228,30 @@ int main(int argc, char** argv)
 			distributed_layout.owned_reference_lumped_areas_m2.push_back(layout.owned_reference_lumped_areas_m2[i]);
 		}
 		distributed_layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(distributed_layout);
+		const auto check_owner_layout=[&] {
+			const auto gathered=iga::GatherSurfaceLayoutAtOwner(PETSC_COMM_WORLD,interface.id,distributed_layout,ranks-1);
+			assert(gathered.has_value()==(rank==ranks-1));
+			if(gathered) {
+				assert(gathered->layout_identity_sha256==layout.layout_identity_sha256);
+				assert(iga::BuildDistributedSurfacePartitionIdentitySha256(*gathered)==iga::BuildDistributedSurfacePartitionIdentitySha256(layout));
+				assert(gathered->owned_global_node_ids==layout.owned_global_node_ids);
+				assert(gathered->owned_reference_lumped_areas_m2==layout.owned_reference_lumped_areas_m2);
+			}
+		};
+		check_owner_layout();
+		for(int mode=0;mode<3;++mode) {
+			int owner=ranks-1;std::size_t cap=4096;auto partition=distributed_layout;
+			if(rank==0) {
+				if(mode==0)owner=ranks;
+				if(mode==1)cap=2;
+				if(mode==2){partition.owned_global_node_ids.pop_back();partition.owned_reference_lumped_areas_m2.pop_back();}
+			}
+			int rejected=0,total=0;
+			try { (void)iga::GatherSurfaceLayoutAtOwner(PETSC_COMM_WORLD,interface.id,partition,owner,cap); }
+			catch(const std::runtime_error&) { rejected=1; }
+			MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+			check_owner_layout();
+		}
 		std::vector<std::uint64_t> owned_cells;
 		for(std::uint64_t id=0;id<domain.Cells().size();++id)if(static_cast<int>(id%ranks)==rank)owned_cells.push_back(id);
 		for(const auto* all_state:{&pressure_state,&affine_state}) {

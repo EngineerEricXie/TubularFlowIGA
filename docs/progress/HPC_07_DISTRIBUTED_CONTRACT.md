@@ -574,3 +574,25 @@ nodes，也正常收到完整資料。錯誤 iteration、projection identity 與
 這批完成膜 owner 所需的資料收集元件，尚未在 `PretensionedMembraneFsiRuntime`
 接入集中求解、kinematics 分送或共同 prepare／commit／abort。HPC-07B/C 保持
 未完成範圍。
+
+
+## 集中膜求解的單 owner layout
+
+`GatherSurfaceLayoutAtOwner` 先核對原 distributed publication ownership，再將
+各 node owner 的 reference lumped areas 送至指定 solver owner。只有該 owner
+建立新的 single-partition layout，保留所有 physical IDs、reference positions／
+triangles 與實際 owned area values，重新計算 layout／partition identity。
+其他 ranks 回傳空 optional；預設最多 4096 nodes，仍受 tuple record／wire caps
+限制。輸入 reference geometry 目前仍 replicated，這不代表已消除其成本。
+
+這是明確的數值求解 layout 轉換，不能拿新 hashes 直接重貼在尚未驗證的
+分散式 publication 上。Traction 仍須先走上一節的 stamped owner transfer，
+再由接下來的膜 bridge 建立新內部輸入契約。
+
+1／3／5 ranks 測試以最後一個 rank 為 solver owner，含原本沒有 owned nodes
+的五 rank 配置。新 layout 的 physical IDs、areas、layout hash 與 partition
+hash 均與原 serial oracle 完全一致，只有指定 owner 有額外 layout。錯誤 owner、
+node cap 與缺少 owned node 三種情境共同拒絕並健康重試；完整 traction 回歸
+保持通過。九份 reports exit 0、無 timeout；來源與 logs hashes 在
+`outputs/hpc07/single-owner-layout-v1/audit.json`，重現沿用 traction test 的
+1／3／5 rank 指令。膜 runtime 的集中求解與共同 trial 生命週期仍待完成。
