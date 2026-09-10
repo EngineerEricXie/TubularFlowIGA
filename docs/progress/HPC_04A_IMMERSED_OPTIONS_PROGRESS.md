@@ -370,6 +370,21 @@ pre-catalog revision `53b3238` 實際執行取得的 v5 digest 作為預設模�
 測試 exit 0；來源、binary 與 logs 見 `rigid-debug/fitting-identity-audit.json`。
 完整 moving 回歸仍由獨立 frozen `c4fee00` executable 執行，尚未列為通過。
 
+### Fitting 空規則與資源上限拒絕
+
+補強 fitting constructor 的零支撐分支：只有 certified／unresolved volume 均為零的
+seed 可以作為空規則返回。對仍有未解析體積的零取樣 seed，立即拒絕建構。
+原預設 octree 模式仍保留其既有「建構後由 consumer validation 拒絕」行為。
+
+`fitted_cut_cell_volume_rule_test` 新增 expanded／compact 的三類驗證：有效但耗盡的
+query budget 與不足的 record workspace 拒絕；僅面接觸、物理體積確為零的 Cut cell
+保持空規則且不執行 fitting；微小內部非凸幾何在 depth 0 無取樣支撐且 unresolved volume
+為正時，fitting constructor 拒絕。既有 343 解析矩與兩種儲存模式逐點一致性亦通過。
+首次邊界 fixture 未包含完整 surface，正確被背景域檢查拒絕，記於
+`catalog-boundaries-test.log`；修正為包含 surface 的網格後，
+`catalog-boundaries-v2-test.log` exit 0，未改動背景域驗證。
+證據 hashes 見 `rigid-debug/catalog-boundaries-audit.json`。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。

@@ -99,6 +99,31 @@ int main()
 		Reject([&]{auto limited=quadrature;limited.max_points=1;iga::CutCellVolumeQuadratureCatalog failed(domain,limited,iga::CutCellVolumeQuadratureStorageMode::Expanded,&fitting);});
 		Reject([&]{auto limited=fitting;limited.max_point_queries=0;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Compact,&limited);});
 		Reject([&]{auto limited=fitting;limited.max_seed_points=1;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Compact,&limited);});
+		// A valid but exhausted query budget must fail during fitting, after
+		// seed construction, without publishing the seed as a fallback rule.
+		for(const auto mode:{iga::CutCellVolumeQuadratureStorageMode::Expanded,iga::CutCellVolumeQuadratureStorageMode::Compact}) {
+			Reject([&]{auto limited=fitting;limited.max_point_queries=1;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,mode,&limited);});
+			Reject([&]{auto limited=quadrature;limited.max_retained_bytes=2*343*sizeof(iga::VolumeQuadraturePoint)-1;iga::CutCellVolumeQuadratureCatalog failed(domain,limited,mode,&fitting);});
+			// This cell touches the prism at its x=2 face but has no interior
+			// intersection. Its certified empty seed must remain empty.
+			iga::CartesianDomainClassification tangent_domain(iga::CubicCartesianBackground({{{0,0,0}},{{3,3,1}},{{3,3,1}}}),
+				iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(ConcavePrism())));
+			const iga::CutCellVolumeQuadratureCatalog tangent(tangent_domain,quadrature,mode,&fitting);
+			const auto& empty=tangent.Cell(2);
+			Check(empty.classification==iga::CellClassification::Cut&&empty.usable&&!empty.moment_fitted,"tangent fitted catalog classification changed");
+			Check(empty.rule.Points().empty()&&iga::CompactCutCellVolumeLogicalPointCount(empty.compact_rule)==0,"tangent fitted catalog is not empty");
+			Check(empty.diagnostics.estimated_physical_volume==0&&empty.diagnostics.unresolved_physical_volume==0&&empty.fitting_queries==0,"tangent fitted catalog performed fitting or retained unresolved volume");
+			if(mode==iga::CutCellVolumeQuadratureStorageMode::Expanded)tangent.ValidateUsableRule(tangent_domain,2);
+			else tangent.ValidateUsableCompactRule(tangent_domain,2);
+			auto small=ConcavePrism();
+			for(auto& point:small.vertices)for(auto& value:point)value=.49+.001*value;
+			iga::CartesianDomainClassification small_domain(iga::CubicCartesianBackground({{{0,0,0}},{{1,1,1}},{{1,1,1}}}),
+				iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(small)));
+			auto shallow=quadrature;shallow.max_depth=0;shallow.empty_rule_rescue_max_depth=0;
+			const iga::CutCellVolumeQuadratureCatalog unresolved(small_domain,shallow,mode);
+			Check(unresolved.Cell(0).diagnostics.logical_output_points==0&&unresolved.Cell(0).diagnostics.unresolved_reference_volume>0,"small fixture is not provisionally empty");
+			Reject([&]{iga::CutCellVolumeQuadratureCatalog failed(small_domain,shallow,mode,&fitting);});
+		}
 		std::cout<<"fitted_cut_cell_volume_rule_test: PASS nonconvex geometry, 343 analytic moments, caps and exhausted candidates; max_error="<<maximum_error<<'\n';
 		std::cout<<"fitted_catalog: PASS expanded/compact point identity, physical volume, diagnostics and caps\n";
 	} catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }

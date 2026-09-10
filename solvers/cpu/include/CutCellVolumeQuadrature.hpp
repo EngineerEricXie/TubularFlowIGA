@@ -523,7 +523,11 @@ private:
 		BuildCompactCellWithRescue(domain,source,result);
 		if(!result.usable)throw std::runtime_error("moment fitting requires an unambiguous cut-cell seed");
 		const auto logical=CompactCutCellVolumeLogicalPointCount(result.compact_rule);
-		if(!logical)return;
+		if(!logical) {
+			if(!IsExactCertifiedEmpty(result,true))
+				throw std::runtime_error("moment fitting seed is empty but not certified empty");
+			return;
+		}
 		if(logical>fitting.max_seed_points)throw std::runtime_error("fitted cut-cell seed traversal cap reached");
 		std::array<double,3> lower{{1,1,1}},upper{{0,0,0}};
 		ForEachVolumePoint(result.compact_rule,[&](const VolumeQuadraturePoint& point){
