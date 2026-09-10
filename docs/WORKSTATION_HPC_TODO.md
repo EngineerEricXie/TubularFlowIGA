@@ -685,6 +685,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 - [ ] **HPC-07A：分散式表面介面。** 定義 owned／ghost surface nodes、
   參考面積權重與跨分區三角形貢獻；驗證全域覆蓋、唯一歸屬與物理身分。
   保留目前匹配介面，不同時導入非匹配投影。
+  已盤點現有 publication ownership 與單分區限制，並訂定 ghost、reference
+  area、owned-cell traction 及空 rank 的接線契約，見
+  [FSI 分區契約](progress/HPC_07_DISTRIBUTED_CONTRACT.md)；實作與數值驗收待完成。
 - [ ] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
   位移與速度；用全域合力、力矩及離散功／能量一致性檢查防止遺漏或重算。
   可先由單一 owner 求解小型膜再分送結果，但須明確記錄其串行成本；
