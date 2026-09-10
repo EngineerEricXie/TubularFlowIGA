@@ -23,6 +23,26 @@ int main()
 		Check(!result.rule.Points().empty()&&result.relative_moment_residual<1e-13L,"nonconvex fitted rule failed");
 		iga::CompactCutCellVolumeRule compact;compact.fitted_points=result.rule.Points();
 		iga::ValidateCompactCutCellVolumeRule(compact);
+		Check(iga::CompactCutCellVolumeRecordCount(compact)==compact.fitted_points.size(),"compact fitted records were not counted");
+		Check(iga::CompactCutCellVolumeCapacityBytes(compact)==compact.fitted_points.capacity()*sizeof(iga::VolumeQuadraturePoint),"compact fitted storage was not counted");
+		Reject([&]{iga::CompactCutCellVolumeCapacityBytes(std::numeric_limits<std::size_t>::max(),0,0);});
+		const auto digest=[](const iga::CompactCutCellVolumeRule& rule){iga::Sha256 hash;iga::AppendCompactCutCellVolumeRuleHash(hash,rule);return hash.Hex();};
+		auto changed=compact;changed.fitted_points[0].weight=std::nextafter(changed.fitted_points[0].weight,1.);
+		Check(digest(changed)!=digest(compact),"compact fitted weight was not bound by hash");
+		changed=compact;changed.fitted_points[0].parametric[0]=std::nextafter(changed.fitted_points[0].parametric[0],1.);
+		Check(digest(changed)!=digest(compact),"compact fitted coordinate was not bound by hash");
+		iga::CompactCutCellVolumeRule legacy;legacy.max_depth=1;legacy.certified_blocks.push_back({{{0,0,0}},{{2,2,2}}});
+		iga::Sha256 legacy_bytes;legacy_bytes.AppendLittleEndian32(1);legacy_bytes.AppendLittleEndian64(1);
+		for(unsigned q=0;q<3;++q)legacy_bytes.AppendLittleEndian32(0);
+		for(unsigned q=0;q<3;++q)legacy_bytes.AppendLittleEndian32(2);
+		legacy_bytes.AppendLittleEndian64(0);
+		Check(digest(legacy)==legacy_bytes.Hex(),"legacy compact hash byte stream changed");
+		legacy.certified_blocks.clear();legacy.sample_leaves.push_back({{{1,0,1}},1,0x55u});
+		iga::Sha256 sample_bytes;sample_bytes.AppendLittleEndian32(1);sample_bytes.AppendLittleEndian64(0);sample_bytes.AppendLittleEndian64(1);
+		sample_bytes.AppendLittleEndian32(1);sample_bytes.AppendLittleEndian32(0);sample_bytes.AppendLittleEndian32(1);
+		sample_bytes.AppendLittleEndian32(1);sample_bytes.AppendLittleEndian64(0x55u);
+		Check(digest(legacy)==sample_bytes.Hex(),"legacy compact sample hash byte stream changed");
+		Check(iga::CompactCutCellVolumeRecordCount(legacy)==1,"legacy sample record count changed");
 		Check(iga::CompactCutCellVolumeLogicalPointCount(compact)==result.rule.Points().size(),"fitted compact point count differs");
 		std::size_t emitted=0;
 		iga::ForEachVolumePoint(compact,[&](const iga::VolumeQuadraturePoint& point){

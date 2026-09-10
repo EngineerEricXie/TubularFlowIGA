@@ -79,6 +79,50 @@ inline void ValidateCompactFittedVolumePoints(const CompactCutCellVolumeRule& ru
 	}
 }
 
+inline std::size_t CompactCutCellVolumeRecordCount(const CompactCutCellVolumeRule& rule)
+{
+	std::size_t count=0;
+	for(auto size:{rule.certified_blocks.size(),rule.sample_leaves.size(),rule.fitted_points.size()}) {
+		if(size>std::numeric_limits<std::size_t>::max()-count)throw std::overflow_error("compact cut-cell record count overflows");
+		count+=size;
+	}
+	return count;
+}
+
+inline std::size_t CompactCutCellVolumeCapacityBytes(std::size_t blocks,std::size_t samples,std::size_t fitted)
+{
+	std::size_t bytes=0;
+	for(const auto& entry:{std::pair<std::size_t,std::size_t>{blocks,sizeof(CompactCutCellVolumeBlock)},
+		{samples,sizeof(CompactCutCellVolumeSampleLeaf)},{fitted,sizeof(VolumeQuadraturePoint)}}) {
+		if(entry.first>(std::numeric_limits<std::size_t>::max()-bytes)/entry.second)
+			throw std::overflow_error("compact cut-cell capacity overflows");
+		bytes+=entry.first*entry.second;
+	}
+	return bytes;
+}
+
+inline std::size_t CompactCutCellVolumeCapacityBytes(const CompactCutCellVolumeRule& rule)
+{
+	return CompactCutCellVolumeCapacityBytes(rule.certified_blocks.capacity(),rule.sample_leaves.capacity(),rule.fitted_points.capacity());
+}
+
+// Preserve the legacy octree byte stream. A reserved, invalid legacy depth
+// tags the fitted representation before its version and complete point data.
+// As with the other hash appenders, callers validate before publication.
+inline void AppendCompactCutCellVolumeRuleHash(Sha256& hash,const CompactCutCellVolumeRule& rule)
+{
+	if(!rule.fitted_points.empty()) { hash.AppendLittleEndian32(0xffffffffu);hash.AppendLittleEndian32(1); }
+	hash.AppendLittleEndian32(rule.max_depth);
+	hash.AppendLittleEndian64(rule.certified_blocks.size());
+	for(const auto& block:rule.certified_blocks) { for(auto value:block.lower)hash.AppendLittleEndian32(value);for(auto value:block.upper)hash.AppendLittleEndian32(value); }
+	hash.AppendLittleEndian64(rule.sample_leaves.size());
+	for(const auto& leaf:rule.sample_leaves) { for(auto value:leaf.key)hash.AppendLittleEndian32(value);hash.AppendLittleEndian32(leaf.depth);hash.AppendLittleEndian64(leaf.inside_mask); }
+	if(!rule.fitted_points.empty()) {
+		hash.AppendLittleEndian64(rule.fitted_points.size());
+		for(const auto& point:rule.fitted_points) { for(auto value:point.parametric)hash.AppendNormalizedDouble(value);hash.AppendNormalizedDouble(point.weight); }
+	}
+}
+
 inline std::size_t CompactCutCellVolumeLogicalPointCount(const CompactCutCellVolumeRule& rule)
 {
 	ValidateCompactFittedVolumePoints(rule);
@@ -643,23 +687,12 @@ private:
 			&& (cell.diagnostics.certified_reference_volume != 0.0
 				|| cell.diagnostics.unresolved_reference_volume != 0.0))
 			throw std::runtime_error("empty compact cut-cell rule is not certified empty");
-		if (rule.certified_blocks.size() > std::numeric_limits<std::size_t>::max()-rule.sample_leaves.size()
-			|| cell.diagnostics.record_attempts < rule.certified_blocks.size()+rule.sample_leaves.size())
+		if (cell.diagnostics.record_attempts < CompactCutCellVolumeRecordCount(rule))
 			throw std::runtime_error("stored compact cut-cell record diagnostics are inconsistent");
 		if (cell.diagnostics.rolled_back_records > cell.diagnostics.record_attempts)
 			throw std::runtime_error("stored compact cut-cell rollback diagnostics are inconsistent");
-		const auto capacity_bytes = [](std::size_t block_capacity, std::size_t sample_capacity) {
-			if (block_capacity > std::numeric_limits<std::size_t>::max()/sizeof(CompactCutCellVolumeBlock)
-				|| sample_capacity > std::numeric_limits<std::size_t>::max()/sizeof(CompactCutCellVolumeSampleLeaf))
-				throw std::runtime_error("stored compact cut-cell capacity overflows");
-			const std::size_t block_bytes = block_capacity*sizeof(CompactCutCellVolumeBlock);
-			const std::size_t sample_bytes = sample_capacity*sizeof(CompactCutCellVolumeSampleLeaf);
-			if (sample_bytes > std::numeric_limits<std::size_t>::max()-block_bytes)
-				throw std::runtime_error("stored compact cut-cell capacity overflows");
-			return block_bytes+sample_bytes;
-		};
 		if (cell.diagnostics.observed_retained_bytes
-			< capacity_bytes(rule.certified_blocks.capacity(), rule.sample_leaves.capacity()))
+			< CompactCutCellVolumeCapacityBytes(rule))
 			throw std::runtime_error("stored compact cut-cell observed retained byte diagnostics are inconsistent");
 		if (element && (!std::isfinite(physical_sum) || !QuadratureClose(physical_sum, cell.diagnostics.estimated_physical_volume)))
 			throw std::runtime_error("stored compact cut-cell physical volume is inconsistent");

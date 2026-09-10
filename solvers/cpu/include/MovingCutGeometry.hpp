@@ -246,11 +246,7 @@ private:
 		AppendVolumeDiagnostics(hash, cell.diagnostics);
 		AppendCount(hash, cell.rule.Points().size());
 		for (const auto& point : cell.rule.Points()) { for (double value : point.parametric) hash.AppendNormalizedDouble(value); hash.AppendNormalizedDouble(point.weight); }
-		const auto& compact = cell.compact_rule; hash.AppendLittleEndian32(compact.max_depth);
-		AppendCount(hash, compact.certified_blocks.size());
-		for (const auto& block : compact.certified_blocks) { for (auto value : block.lower) hash.AppendLittleEndian32(value); for (auto value : block.upper) hash.AppendLittleEndian32(value); }
-		AppendCount(hash, compact.sample_leaves.size());
-		for (const auto& leaf : compact.sample_leaves) { for (auto value : leaf.key) hash.AppendLittleEndian32(value); hash.AppendLittleEndian32(leaf.depth); hash.AppendLittleEndian64(leaf.inside_mask); }
+		AppendCompactCutCellVolumeRuleHash(hash,cell.compact_rule);
 	}
 	std::string HashGeometryState() const
 	{

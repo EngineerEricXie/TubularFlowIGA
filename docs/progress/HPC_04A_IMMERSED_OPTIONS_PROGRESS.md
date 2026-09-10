@@ -296,13 +296,31 @@ cube 特例 membership 判斷。總計 47,612 次 surface point queries；所有
 `[0,1]^3` 座標與嚴格遞增節點順序，拒絕重複／逆序節點及混合表示。
 非凸 L 案例的 343 個解析矩同時檢查 expanded 與 compact；另逐點比較座標與權重的
 浮點位元以及遍歷順序，全部相同。無效表示的拒絕測試亦通過。
-`make mesh-test` 通過；完整既有 `cut_cell_volume_quadrature_test` 仍執行中，
-尚未列為通過。build／test logs 與 binary/source hashes 保存於
+`make mesh-test` 通過；完整既有 `cut_cell_volume_quadrature_test` 已退出 0 並通過
+（`cfe6ca0` 表示變更，binary/source 身分見 `compact-fitted-source.json`）。build／test logs 與 binary/source hashes 保存於
 `outputs/hpc04/rigid-debug/compact-fitted-*` 與 `compact-legacy-test.log`。
 
 尚未由 catalog 發布新表示：其 record／retained-byte diagnostics、hash 版本、
 expanded／compact 共用的 fitting seed 與失敗傳遞須在接入時一併完成。
 本次不宣稱完整 runtime 回歸已通過。
+
+### Compact 計數與 hash 接線
+
+共同 record 計數與容量計算已包含 fitted points，並檢查乘法／加法溢位。
+`ValidateCompactStoredRule` 使用此計數，不能漏記新表示的 records 或 vector capacity。
+容量數字依舊是 record backing storage，並非整個 process RSS。
+
+`MovingCutGeometry` 改用共同 compact hash appender：原 block／sample 表示的 bytes
+不變；fitted 表示以前置保留標記（合法舊 depth 不可能使用的 `0xffffffff`）與版本 1
+區分，並綁定所有節點座標及權重。舊預設 geometry hash 不因空 fitted vector 而改變。
+測試直接比較舊 block 及 sample 的原 byte stream，並驗證改動 fitted 座標或權重會改 hash。
+record／容量計數及 overflow 拒絕、非凸解析矩與逐點一致性測試通過。
+
+`moving_cut_geometry_test` 與 `make mesh-test` 通過；證據為
+`rigid-debug/compact-hash-geometry-v1`、`compact-accounting-final-{build,test}.log`，
+以及 `compact-accounting-audit.json` 中的 source／binary／log hashes。
+Catalog 尚未建立 fitted 規則；下一步仍須加入共同 seed、規則發布與 fitting 診斷，
+並重驗真正的 rigid flow solve。
 
 ## 剩餘工作
 
