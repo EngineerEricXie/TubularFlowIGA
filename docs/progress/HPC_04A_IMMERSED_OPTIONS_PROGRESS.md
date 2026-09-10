@@ -229,6 +229,36 @@ NNLS 原型使用 NumPy 1.21.5／SciPy 1.8.0，未新增 runtime Python 依賴�
 候選點的域內判斷在此實驗使用已知 cube 邊界；正式版本須使用既有驗證過的
 surface predicates，並加入 C++ 受限擬合、資源 caps、矩殘差拒絕與完整回歸。
 
+### C++ 非負擬合器
+
+新增無外部線性代數依賴的 `NonnegativeLeastSquares.hpp`。以 column／RHS scaling、
+兩次正交化 QR 插入、Givens QR 移除與 active-set 非負線搜尋求解，使用 long double
+工作陣列，最後以原矩陣重新檢查實際回傳的 double 權重殘差。
+`within_tolerance` 必須由呼叫端檢查；無法符合精確矩的輸入不會被誤報為通過。
+明確限制 rows、columns、內部 workspace bytes 與 iterations，非有限輸入／不可表示
+係數拒絕。工作記憶體上界不包含呼叫端已持有的矩陣與 RHS。
+
+`make -C solvers/cpu nonnegative_least_squares_test` 與執行檔通過：
+解析可行／不可行解、零 RHS、重複／零 columns、極端尺度、200 組獨立 KKT
+最優性檢查、active-set 移除及各類 cap／輸入拒絕。
+ASan／UBSan 同一測試通過且保持 leak detection；sandbox 版本在測試結束後因
+LeakSanitizer 不支援 ptrace 而退出 1，該紀錄保留，未算通過；非 sandbox 重跑退出 0。
+
+同一 26 個 rigid cells 的候選點與目標矩改由 C++ 擬合，全部通過 `rtol=1e-14`。
+每個回傳 343 個正權重，獨立 long-double monomial 重算的最大相對矩殘差
+`7.62447e-17`、最小正權重 `5.80472e-8`。最多 577 次 active-set 操作，
+單 cell 最多 117 次 QR 移除；保守 workspace 上界最大 11,306,272 bytes。
+26 cells 作業 wall 9.430 秒、peak RSS 19,001,344 bytes；不是跨實作速度比較。
+
+以 C++ 權重再次量測原 basis 的連續方程積分缺陷，L2 為 `5.19439e-18`、
+最大節點缺陷 `1.45045e-18`，通過獨立 `256*epsilon` gate。
+證據為 `rigid-debug/{cpp-fit-v1,quadrature-cpp-v1,cpp-fit-independent.json}`，
+`cpp-nnls-audit.json` 保存 source／binary／權重／test logs hashes 與 run reports。
+
+正式 runtime 尚未接入：仍須以 surface predicates 產生合法候選點，
+整合逐 cell moment fitting 與 cap／失敗處理、更新規則 diagnostics／hash 身分，
+再重驗完整 rigid、static、moving 與 distributed 案例。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。

@@ -14,3 +14,4 @@
 
 /immersed_small_cut_solver_test
 polyhedral_volume_moments_test
+nonnegative_least_squares_test
