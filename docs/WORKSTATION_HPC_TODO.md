@@ -49,10 +49,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（15 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-04A、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（8 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C |
-| 其餘待辦（15 項） | HPC-03D、HPC-05D、HPC-06D、HPC-07A–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（9 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07A |
+| 其餘待辦（14 項） | HPC-03D、HPC-05D、HPC-06D、HPC-07B–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 23 項未勾選，其中 8 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 23 項未勾選，其中 9 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -687,7 +687,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   保留目前匹配介面，不同時導入非匹配投影。
   已盤點現有 publication ownership 與單分區限制，並訂定 ghost、reference
   area、owned-cell traction 及空 rank 的接線契約，見
-  [FSI 分區契約](progress/HPC_07_DISTRIBUTED_CONTRACT.md)；實作與數值驗收待完成。
+  [FSI 分區契約](progress/HPC_07_DISTRIBUTED_CONTRACT.md)。多分區空 publication
+  slice 已接線，含空 root 的三 rank 覆蓋／拒絕／重試通過；reference 面積與
+  ghost／traction 的實際分散仍待完成。
 - [ ] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
   位移與速度；用全域合力、力矩及離散功／能量一致性檢查防止遺漏或重算。
   可先由單一 owner 求解小型膜再分送結果，但須明確記錄其串行成本；

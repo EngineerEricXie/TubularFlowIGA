@@ -152,7 +152,8 @@ inline void ValidateLayoutContents(const DistributedSurfaceLayout& layout)
 	if (layout.global_node_count == 0) throw std::runtime_error("surface layout global node count must be positive");
 	if (layout.partition_count == 0 || layout.partition_rank >= layout.partition_count)
 		throw std::runtime_error("surface layout partition metadata is invalid");
-	if (layout.owned_global_node_ids.empty()) throw std::runtime_error("surface layout owned node IDs must be nonempty");
+	// Empty publication slices are valid on a multi-rank communicator. Global
+	// coverage is checked collectively; a single rank must still own all nodes.
 	if (!std::is_sorted(layout.owned_global_node_ids.begin(), layout.owned_global_node_ids.end())
 		|| std::adjacent_find(layout.owned_global_node_ids.begin(), layout.owned_global_node_ids.end()) != layout.owned_global_node_ids.end())
 		throw std::runtime_error("surface layout owned node IDs must be sorted and unique");

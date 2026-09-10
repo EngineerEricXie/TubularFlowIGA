@@ -204,6 +204,20 @@ void CheckSurfaceOwnership(int rank)
 	layout.owned_reference_lumped_areas_m2 = {1.0/6.0};
 	layout.layout_identity_sha256 = iga::BuildDistributedSurfaceLayoutIdentitySha256(layout);
 	iga::ValidateSurfacePublicationOwnership(reference, layout, PETSC_COMM_WORLD);
+	// Both the catalog root and another peer may publish no nodes.
+	auto sparse = layout;
+	sparse.owned_global_node_ids = rank == 1 ? std::vector<std::uint64_t>{10, 20, 30} : std::vector<std::uint64_t>{};
+	sparse.owned_reference_lumped_areas_m2.assign(sparse.owned_global_node_ids.size(), 1.0/6.0);
+	iga::ValidateSurfacePublicationOwnership(reference, sparse, PETSC_COMM_WORLD);
+	auto missing = sparse;
+	if (rank == 1) {
+		missing.owned_global_node_ids.pop_back();
+		missing.owned_reference_lumped_areas_m2.pop_back();
+	}
+	RejectCollectively([&] { iga::ValidateSurfacePublicationOwnership(reference, missing,
+		PETSC_COMM_WORLD); }, PETSC_COMM_WORLD);
+	iga::ValidateSurfacePublicationOwnership(reference, sparse, PETSC_COMM_WORLD);
+
 	auto duplicate = layout;
 	if (rank == 2) duplicate.owned_global_node_ids = {20};
 	RejectCollectively([&] { iga::ValidateSurfacePublicationOwnership(reference, duplicate,

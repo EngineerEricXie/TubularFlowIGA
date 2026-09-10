@@ -61,3 +61,29 @@ rank、反向 traction、rollback／retry、checkpoint／restart 與收斂歷史
 原單分區 reference 保留，作為數值 oracle；移除拒絕條件只能發生在相應行為
 與測試接線完成後。跨節點仍須實際 allocation，不能由單機 MPI 代替。
 本報告只建立具體接線順序與驗收邊界，尚未宣稱任何分散式 FSI 求解已通過。
+
+## 空 publication 分區已接線
+
+`DistributedSurfaceLayout` 現在允許多分區中的 owned nodes／area vectors 同時為空；
+全域 reference node count 仍須正、完整 reference positions／triangles 仍須合法，
+單分區仍必須擁有全部 global nodes。非空 layout 的 hash stream 不變；空分區
+也有由 partition rank 區分的 publication identity，不能交換 stamp。
+
+契約測試驗證空 kinematics／traction、不同空分區 stamp 拒絕、非空 force 對空
+layout 拒絕及 single-rank 空 layout 拒絕。MPI ownership 測試新增 rank 0／2
+均空、rank 1 擁有三個節點的配置；覆蓋檢查通過，漏一節點共同拒絕，健康重試
+通過。原 ownership 故障測試保持。三份 rank reports exit 0、無 timeout。
+
+證據：`outputs/hpc07/empty-surface-v1/audit.json`。兩個測試目標均以 warnings
+開啟重建；dependency-free contract 測試 exit 0。編譯與測試限制在 CPU 14／15，
+MPI 三 ranks 共用這兩個 CPU，這是正確性測試，不是效能資料。
+
+```bash
+make -C solvers/coupling surface-contracts-test
+make -C solvers/cpu parallel-ownership-test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+```
+
+原表中的空 layout 限制已在本批解除；Aitken local weights 的正總和限制與各 FSI
+單分區限制仍在。Reference 面積貢獻路由、ghost exchange 與真正分散式 fluid
+traction 尚未完成，HPC-07A 仍未勾選。

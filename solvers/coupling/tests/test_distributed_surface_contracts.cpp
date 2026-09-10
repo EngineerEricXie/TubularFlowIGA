@@ -119,6 +119,27 @@ int main()
 	assert(iga::MakeCartesianSurfaceLumpedAreaWeights(layout)
 		== std::vector<double>({1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0}));
 
+	// A surface communicator may include ranks with no publication authority.
+	const auto empty_partition = MakeFourNodeLayout(0, {}, {});
+	const auto other_empty_partition = MakeFourNodeLayout(1, {}, {});
+	iga::ValidateDistributedSurfaceLayout(empty_partition);
+	assert(empty_partition.layout_identity_sha256 == other_empty_partition.layout_identity_sha256);
+	assert(iga::BuildDistributedSurfacePartitionIdentitySha256(empty_partition)
+		!= iga::BuildDistributedSurfacePartitionIdentitySha256(other_empty_partition));
+	assert(iga::MakeCartesianSurfaceLumpedAreaWeights(empty_partition).empty());
+	auto empty_kinematics = MakeKinematics(empty_partition);
+	empty_kinematics.displacement_m.clear(); empty_kinematics.velocity_m_per_s.clear();
+	iga::ValidateSurfaceKinematics(empty_kinematics, empty_partition);
+	auto empty_traction = MakeTraction(empty_partition);
+	empty_traction.traction_on_structure_pa.clear(); empty_traction.consistent_nodal_force_n.clear();
+	iga::ValidateSurfaceTraction(empty_traction, empty_partition);
+	RequireRejected([&] { iga::ValidateSurfaceKinematics(empty_kinematics, other_empty_partition); });
+	empty_traction.consistent_nodal_force_n.push_back({{1., 0., 0.}});
+	RequireRejected([&] { iga::ValidateSurfaceTraction(empty_traction, empty_partition); });
+	auto empty_single = layout;
+	empty_single.owned_global_node_ids.clear(); empty_single.owned_reference_lumped_areas_m2.clear();
+	RequireRejected([&] { iga::BuildDistributedSurfaceLayoutIdentitySha256(empty_single); });
+
 	// Same global topology and local vector shape/weights, but a different
 	// rank-owned ID slice. Equal-sized slices are not interchangeable.
 	auto first_partition = MakeFourNodeLayout(0, {10, 20}, {1.0, 2.0});
