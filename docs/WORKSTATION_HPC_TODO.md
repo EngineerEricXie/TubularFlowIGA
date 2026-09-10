@@ -646,6 +646,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 - [ ] **HPC-06B：分散式視覺化。** 先選擇與 ParaView 相容的分片輸出或
   Parallel HDF5 路徑，分別驗證格式、shared-point／cell 身分、時間索引與
   collective 規則。保留既有序列輸出作相容路徑。
+  已完成 [分片 VTU／PVTU 格式元件](progress/HPC_06B_PARTITIONED_VTK_PROGRESS.md)，
+  本機 ParaView 5.13 讀回共享 Int64 IDs、空分片與兩個時間點通過；尚待 solver
+  局部幾何／場交換與 collective 發布整合，不能宣稱已移除 root gather。
 - [ ] **HPC-06C：I/O 控制。** 分別設定場輸出、純量診斷與 checkpoint 頻率；
   測試 rank 增加時的檔案數、metadata 成本與寫入吞吐。
   依結果決定是否引入有限數量的 I/O aggregator，避免每 rank 每步大量小檔案。
