@@ -577,7 +577,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
   已建立序列重複的 fixed-mesh rank sweep，保留原 validator 並比較跨 rank
-  checkpoint；最小流程驗證通過，正式 128 元素 1／2／4-rank 數據待完成，見
+  checkpoint；128 元素 1／2／4 ranks、兩次重複、12 次求解已通過並核對證據。
+  4 ranks 觀察 speedup 僅 LU 1.037×／block-Jacobi 1.012×，未更改預設；
+  含背景活動限制與迭代數負收益，見
   [rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md)。
 
 驗收：相同數值門檻下完成小／中／大案例比較；報告失敗與負收益組合。
