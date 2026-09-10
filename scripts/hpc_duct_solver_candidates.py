@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -21,6 +22,9 @@ def main():
     parser.add_argument('--axial', type=int, default=4)
     parser.add_argument('--ranks', type=int, default=2)
     parser.add_argument('--timeout', type=int, default=600)
+    parser.add_argument('--candidates', nargs='+', choices=['bjacobi', 'schur-lu', 'schur-gamg', 'selfp-lu', 'selfp-gamg', 'selfp-gamg-lu'],
+                        default=['bjacobi', 'schur-lu', 'schur-gamg'], help='LU reference is always evaluated first')
+    parser.add_argument('--solver-view', action='store_true', help='capture nested diagnostics; not a timing configuration')
     args = parser.parse_args()
     if min(args.transverse, args.axial, args.ranks, args.timeout) < 1:
         parser.error('dimensions, ranks and timeout must be positive')
@@ -39,10 +43,18 @@ def main():
         'schur-lu': split+'-domain_root3d_flow_fieldsplit_0_pc_type lu -domain_root3d_flow_fieldsplit_0_pc_factor_mat_solver_type mumps -domain_root3d_flow_fieldsplit_1_pc_type lu -domain_root3d_flow_fieldsplit_1_pc_factor_mat_solver_type mumps',
         'schur-gamg': split+'-domain_root3d_flow_fieldsplit_0_pc_type gamg -domain_root3d_flow_fieldsplit_1_pc_type jacobi',
     }
+    configurations['selfp-lu'] = configurations['schur-lu'].replace('schur_precondition a11', 'schur_precondition selfp')
+    configurations['selfp-gamg'] = configurations['schur-gamg'].replace('schur_precondition a11', 'schur_precondition selfp')
+    configurations['selfp-gamg-lu'] = configurations['selfp-lu'].replace('fieldsplit_0_pc_type lu', 'fieldsplit_0_pc_type gamg').replace('-domain_root3d_flow_fieldsplit_0_pc_factor_mat_solver_type mumps ', '')
+    selected = ['lu'] + list(dict.fromkeys(args.candidates))
     report = dict(status='running', binaries={str(p): digest(p) for p in (binary, builder)},
-                  mesh=dict(transverse=args.transverse, axial=args.axial, ranks=args.ranks), candidates=[])
+                  mesh=dict(transverse=args.transverse, axial=args.axial, ranks=args.ranks), candidates=[],
+                  harness_sha256=digest(Path(__file__)), selected=selected, solver_view=args.solver_view)
     try:
-        for name, options in configurations.items():
+        for name in selected:
+            options = configurations[name]
+            if args.solver_view:
+                options += ' -domain_root3d_flow_ksp_view'
             folder = root/name
             folder.mkdir()
             case = folder/'case'
@@ -58,23 +70,50 @@ def main():
                 result = subprocess.run(command, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT)
             row = dict(name=name, command=command, options=options, inputs=inputs, returncode=result.returncode, status='failed')
             report['candidates'].append(row)
+            # Keep resource and failure evidence even when the native solve fails.
+            row['rank_reports'], row['stderr_tails'] = [], {}
+            for rank in range(args.ranks):
+                directory = folder/f'rank-{rank}'
+                measured_path = directory/'run.json'
+                if measured_path.is_file():
+                    row['rank_reports'].append(json.loads(measured_path.read_text()))
+                stderr_path = directory/'stderr.log'
+                if stderr_path.is_file():
+                    row['stderr_tails'][str(rank)] = stderr_path.read_text()[-8192:]
+            if result.returncode:
+                row['error'] = 'native process failed or timed out; inspect rank reports and stderr tails'
             if result.returncode == 0:
                 try:
                     validation = subprocess.run([str(builder), '--validate', str(output)], capture_output=True, text=True)
                     row['validation'] = dict(returncode=validation.returncode, stdout=validation.stdout, stderr=validation.stderr)
                     if validation.returncode:
                         raise RuntimeError('original coupled physical gates failed')
-                    row['profiles'], row['rank_reports'] = [], []
+                    row['profiles'] = []
                     for rank in range(args.ranks):
                         measured = json.loads((folder/f'rank-{rank}/run.json').read_text())
                         if measured['returncode'] or measured['timed_out'] or not measured['resource']:
                             raise RuntimeError('rank failed or lacks measurement')
-                        row['rank_reports'].append(measured)
                         log = (folder/f'rank-{rank}/stdout.log').read_text()
                         profiles = [json.loads(line.split(' ', 1)[1]) for line in log.splitlines() if line.startswith('hpc_profile ')]
                         if len(profiles) != 1 or profiles[0]['status'] != 0:
                             raise RuntimeError('missing final phase profile')
                         row['profiles'].extend(profiles)
+                        if rank == 0:
+                            configured = [json.loads(line.split(' ', 1)[1]) for line in log.splitlines()
+                                          if line.startswith('solver_configuration ')]
+                            expected_pc = {'lu': 'lu', 'bjacobi': 'bjacobi'}.get(name, 'fieldsplit')
+                            if len(configured) != 2 or any(c['domain'] != 'root3d' or c['prefix'] != 'domain_root3d_flow_'
+                                    or c['ksp'] != 'fgmres' or c['pc'] != expected_pc or c['last_reason'] <= 0 for c in configured):
+                                raise RuntimeError('effective solver configuration differs')
+                            row['solver_configuration'] = configured
+                            row['total_linear_iterations'] = sum(map(int, re.findall(r'linear_iterations=(\d+)', log)))
+                            if args.solver_view:
+                                if 'KSP Object: (domain_root3d_flow_)' not in log:
+                                    raise RuntimeError('missing solver view')
+                                if expected_pc == 'fieldsplit':
+                                    for child in ('0', '1'):
+                                        if 'KSP Object: (domain_root3d_flow_fieldsplit_'+child+'_)' not in log:
+                                            raise RuntimeError('missing fieldsplit child view')
                     if name != 'lu':
                         row['fields'] = field_comparison(root/'lu/case/bundle', bundle, False)
                     row['status'] = 'passed'
