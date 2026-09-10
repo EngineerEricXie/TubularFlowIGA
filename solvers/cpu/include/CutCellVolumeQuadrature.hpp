@@ -3,6 +3,7 @@
 
 #include "CartesianDomainClassification.hpp"
 #include "Quadrature.hpp"
+#include "FittedCutCellVolumeRule.hpp"
 
 #include <algorithm>
 #include <array>
@@ -386,6 +387,8 @@ struct CutCellVolumeQuadratureCell {
 	CompactCutCellVolumeRule compact_rule;
 	CutCellVolumeQuadratureDiagnostics diagnostics;
 	bool usable = true;
+	bool moment_fitted = false;
+	std::size_t fitting_queries=0,fitting_candidates=0,fitting_iterations=0;
 };
 
 class CutCellVolumeQuadratureCatalog {
@@ -396,10 +399,12 @@ public:
 
 	explicit CutCellVolumeQuadratureCatalog(const CartesianDomainClassification& domain,
 		OctreeCutQuadratureOptions options = {},
-		CutCellVolumeQuadratureStorageMode storage_mode = CutCellVolumeQuadratureStorageMode::Expanded)
+		CutCellVolumeQuadratureStorageMode storage_mode = CutCellVolumeQuadratureStorageMode::Expanded,
+		const FittedCutCellVolumeRuleOptions* fitting = nullptr)
 		: grid_spec_(domain.Background().Spec()), surface_canonical_hash_(domain.SurfaceCanonicalHash()),
 		options_(ValidateOptions(options)), storage_mode_(storage_mode)
 	{
+		if(fitting)ValidateFittedCutCellVolumeRuleOptions(*fitting);
 		const auto& cells = domain.Cells();
 		if (cells.size() != domain.Background().ElementCount())
 			throw std::runtime_error("Cartesian domain catalog is incomplete");
@@ -409,7 +414,8 @@ public:
 			CutCellVolumeQuadratureCell result;
 			result.id = cell.id;
 			result.classification = cell.classification;
-			if (storage_mode_ == CutCellVolumeQuadratureStorageMode::Expanded) BuildCellWithRescue(domain, cell, result);
+			if (fitting && cell.classification == CellClassification::Cut) BuildFittedCell(domain,cell,result,*fitting);
+			else if (storage_mode_ == CutCellVolumeQuadratureStorageMode::Expanded) BuildCellWithRescue(domain, cell, result);
 			else BuildCompactCellWithRescue(domain, cell, result);
 			Accumulate(diagnostics_, result.diagnostics);
 			cells_.push_back(std::move(result));
@@ -509,6 +515,52 @@ public:
 	}
 
 private:
+	void BuildFittedCell(const CartesianDomainClassification& domain,const CartesianDomainCell& source,
+		CutCellVolumeQuadratureCell& result,const FittedCutCellVolumeRuleOptions& fitting) const
+	{
+		// Both final representations use this same compact seed. Only its
+		// support extrema are streamed; no expanded seed array is allocated.
+		BuildCompactCellWithRescue(domain,source,result);
+		if(!result.usable)throw std::runtime_error("moment fitting requires an unambiguous cut-cell seed");
+		const auto logical=CompactCutCellVolumeLogicalPointCount(result.compact_rule);
+		if(!logical)return;
+		if(logical>fitting.max_seed_points)throw std::runtime_error("fitted cut-cell seed traversal cap reached");
+		std::array<double,3> lower{{1,1,1}},upper{{0,0,0}};
+		ForEachVolumePoint(result.compact_rule,[&](const VolumeQuadraturePoint& point){
+			for(unsigned q=0;q<3;++q) { lower[q]=std::min(lower[q],point.parametric[q]);upper[q]=std::max(upper[q],point.parametric[q]); }
+		});
+		const auto seed_bytes=CompactCutCellVolumeCapacityBytes(result.compact_rule);
+		// The fitting rule and its published copy may coexist. Degree six has
+		// 343 constraints and at most 343 positive active-set coefficients.
+		const auto point_budget=CompactCutCellVolumeCapacityBytes(0,0,2*343);
+		if(seed_bytes>options_.max_retained_bytes||point_budget>options_.max_retained_bytes-seed_bytes)
+			throw std::runtime_error("fitted cut-cell record workspace cap reached");
+		const auto cell=domain.Background().Cell(source.id);
+		const VolumeQuadratureRule support({{lower,1.},{upper,1.}});
+		const auto fitted=BuildFittedCutCellVolumeRule(domain.SurfaceIndex(),cell.lower_m,cell.upper_m,support,fitting);
+		const auto count=fitted.rule.Points().size();
+		if(count>options_.max_logical_points||(storage_mode_==CutCellVolumeQuadratureStorageMode::Expanded&&count>options_.max_points))
+			throw std::runtime_error("fitted cut-cell output point cap reached");
+		CheckAdd(result.diagnostics.record_attempts,count,options_.max_records,"fitted cut-cell record cap reached");
+		result.diagnostics.retained_bytes=std::max(result.diagnostics.retained_bytes,seed_bytes+point_budget);
+		result.compact_rule=CompactCutCellVolumeRule();
+		result.compact_rule.max_depth=options_.max_depth;
+		if(storage_mode_==CutCellVolumeQuadratureStorageMode::Expanded)result.rule=fitted.rule;
+		else result.compact_rule.fitted_points=fitted.rule.Points();
+		result.diagnostics.certified_blocks=0;result.diagnostics.sample_leaves=0;
+		result.diagnostics.output_points=storage_mode_==CutCellVolumeQuadratureStorageMode::Expanded?count:0;
+		result.diagnostics.logical_output_points=count;
+		result.diagnostics.observed_retained_bytes=CompactCutCellVolumeCapacityBytes(result.compact_rule);
+		result.diagnostics.estimated_reference_volume=0;
+		for(const auto& point:fitted.rule.Points())result.diagnostics.estimated_reference_volume+=point.weight;
+		const auto element=domain.Background().MaterializeElement(source.id);
+		result.diagnostics.estimated_physical_volume=PhysicalRuleVolume(element,fitted.rule);
+		result.moment_fitted=true;result.fitting_queries=fitted.point_queries;
+		result.fitting_candidates=fitted.candidates;result.fitting_iterations=fitted.fit.iterations;
+		ValidateDiagnostics(result.diagnostics);
+		if(storage_mode_==CutCellVolumeQuadratureStorageMode::Compact)ValidateCompactStoredRule(result,&element);
+		else ValidateStoredRule(result);
+	}
 	struct Node {
 		std::array<double, 3> reference_lower{};
 		std::array<double, 3> reference_upper{};

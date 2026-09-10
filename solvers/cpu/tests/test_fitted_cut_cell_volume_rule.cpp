@@ -77,7 +77,30 @@ int main()
 		Reject([&]{auto options=iga::FittedCutCellVolumeRuleOptions();options.candidate_orders={2};iga::BuildFittedCutCellVolumeRule(surface,lower,upper,seed,options);});
 		Reject([&]{auto options=iga::FittedCutCellVolumeRuleOptions();options.candidate_orders={16,8};iga::BuildFittedCutCellVolumeRule(surface,lower,upper,seed,options);});
 		Reject([&]{iga::BuildFittedCutCellVolumeRule(surface,lower,upper,iga::VolumeQuadratureRule());});
+		iga::CartesianDomainClassification domain(iga::CubicCartesianBackground({lower,upper,{{1,1,1}}}),
+			iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(ConcavePrism())));
+		iga::OctreeCutQuadratureOptions quadrature;quadrature.max_depth=2;
+		iga::FittedCutCellVolumeRuleOptions fitting;fitting.fit.max_columns=32768;
+		const iga::CutCellVolumeQuadratureCatalog expanded(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Expanded,&fitting);
+		auto packed_options=quadrature;packed_options.max_points=1;
+		const iga::CutCellVolumeQuadratureCatalog packed(domain,packed_options,iga::CutCellVolumeQuadratureStorageMode::Compact,&fitting);
+		expanded.ValidateUsableRule(domain,0);packed.ValidateUsableCompactRule(domain,0);
+		Check(expanded.Cell(0).moment_fitted&&packed.Cell(0).moment_fitted,"catalog did not publish fitted rule");
+		Check(std::abs(expanded.Cell(0).diagnostics.estimated_physical_volume-3)<2e-13,"fitted catalog volume is inaccurate");
+		const auto& published=expanded.UsableRule(domain,0).Points();emitted=0;
+		iga::ForEachVolumePoint(packed.UsableCompactRule(domain,0),[&](const iga::VolumeQuadraturePoint& point){
+			const auto& original=published.at(emitted++);
+			Check(std::memcmp(point.parametric.data(),original.parametric.data(),3*sizeof(double))==0
+				&&std::memcmp(&point.weight,&original.weight,sizeof(double))==0,"catalog storage modes produced different fitted points");
+		});
+		Check(emitted==published.size(),"catalog storage point counts differ");
+		Check(packed.Cell(0).rule.Points().empty(),"compact fitted catalog retained expanded points");
+		Check(packed.Cell(0).diagnostics.observed_retained_bytes==iga::CompactCutCellVolumeCapacityBytes(packed.Cell(0).compact_rule),"fitted catalog capacity was not recorded");
+		Reject([&]{auto limited=quadrature;limited.max_points=1;iga::CutCellVolumeQuadratureCatalog failed(domain,limited,iga::CutCellVolumeQuadratureStorageMode::Expanded,&fitting);});
+		Reject([&]{auto limited=fitting;limited.max_point_queries=0;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Compact,&limited);});
+		Reject([&]{auto limited=fitting;limited.max_seed_points=1;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Compact,&limited);});
 		std::cout<<"fitted_cut_cell_volume_rule_test: PASS nonconvex geometry, 343 analytic moments, caps and exhausted candidates; max_error="<<maximum_error<<'\n';
+		std::cout<<"fitted_catalog: PASS expanded/compact point identity, physical volume, diagnostics and caps\n";
 	} catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
 	return 0;
 }

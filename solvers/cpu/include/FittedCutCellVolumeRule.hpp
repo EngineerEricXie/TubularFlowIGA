@@ -24,6 +24,22 @@ struct FittedCutCellVolumeRuleResult {
 	NonnegativeLeastSquaresResult fit;
 };
 
+inline void ValidateFittedCutCellVolumeRuleOptions(const FittedCutCellVolumeRuleOptions& options)
+{
+	if(options.candidate_orders.empty()||!options.max_point_queries||!options.max_seed_points
+		||!std::isfinite(options.support_expansion)||options.support_expansion<1
+		||options.fit.max_rows<343||!options.fit.max_columns||!options.fit.max_workspace_bytes||!options.fit.max_iterations
+		||!std::isfinite(options.fit.relative_tolerance)||!(options.fit.relative_tolerance>0)
+		||!std::isfinite(options.fit.absolute_tolerance)||options.fit.absolute_tolerance<0
+		||!options.moments.max_triangles||!options.moments.max_quadrature_points)
+		throw std::invalid_argument("invalid fitted cut-cell options");
+	unsigned previous=0;
+	for(auto order:options.candidate_orders) {
+		if(order<2||order>64||order<=previous)throw std::invalid_argument("fitted cut-cell candidate orders must increase within [2,64]");
+		previous=order;
+	}
+}
+
 // Build a positive tensor-degree-six rule on a cut cell. The seed supplies
 // only the support frame, never an acceptance fallback. Geometry predicates
 // select every new node. Catalog publication and its diagnostics/hash updates
@@ -33,19 +49,9 @@ inline FittedCutCellVolumeRuleResult BuildFittedCutCellVolumeRule(
 	const std::array<double,3>& upper,const VolumeQuadratureRule& seed,
 	FittedCutCellVolumeRuleOptions options={})
 {
-	if(seed.Points().empty()||options.candidate_orders.empty()||!options.max_point_queries||!options.max_seed_points
-		||!std::isfinite(options.support_expansion)||options.support_expansion<1)
-		throw std::invalid_argument("invalid fitted cut-cell support or options");
+	ValidateFittedCutCellVolumeRuleOptions(options);
+	if(seed.Points().empty())throw std::invalid_argument("fitted cut-cell seed is empty");
 	if(seed.Points().size()>options.max_seed_points)throw std::runtime_error("fitted cut-cell seed cap reached");
-	if(options.fit.max_rows<343||!options.fit.max_columns||!options.fit.max_workspace_bytes||!options.fit.max_iterations
-		||!std::isfinite(options.fit.relative_tolerance)||!(options.fit.relative_tolerance>0)
-		||!std::isfinite(options.fit.absolute_tolerance)||options.fit.absolute_tolerance<0)
-		throw std::invalid_argument("invalid fitted cut-cell NNLS options");
-	unsigned previous=0;
-	for(auto order:options.candidate_orders) {
-		if(order<2||order>64||order<=previous)throw std::invalid_argument("fitted cut-cell candidate orders must increase within [2,64]");
-		previous=order;
-	}
 	std::array<double,3> minimum{{1,1,1}},maximum{{0,0,0}};
 	std::array<long double,3> extent;
 	long double determinant=1;
@@ -119,6 +125,7 @@ inline FittedCutCellVolumeRuleResult BuildFittedCutCellVolumeRule(
 		result.candidates=candidates.size();
 		if(!result.fit.within_tolerance)continue;
 		std::vector<VolumeQuadraturePoint> retained;
+		retained.reserve(exponents.size());
 		for(std::size_t j=0;j<candidates.size();++j)if(result.fit.coefficients[j]>0) {
 			candidates[j].weight=result.fit.coefficients[j];retained.push_back(candidates[j]);
 		}

@@ -15,6 +15,7 @@
 #include <cmath>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -27,6 +28,7 @@ struct MovingCutGeometryOptions {
 	CutCellVolumeQuadratureStorageMode volume_storage = CutCellVolumeQuadratureStorageMode::Expanded;
 	ImmersedSurfaceQuadratureOptions surface;
 	CutCellGhostPenaltyOptions ghost;
+	std::optional<FittedCutCellVolumeRuleOptions> volume_fitting;
 };
 
 struct MovingCutCellTransition {
@@ -92,7 +94,8 @@ private:
 	MovingCutGeometry(CubicCartesianGridSpec grid, MaterialSurfaceKinematics kinematics,
 		MovingCutGeometryOptions options, const MovingCutGeometry* previous)
 		: kinematics_(std::move(kinematics)), domain_(CubicCartesianBackground(grid),
-			SurfaceSpatialIndex(kinematics_.Surface())), volume_(domain_, options.volume, options.volume_storage),
+			SurfaceSpatialIndex(kinematics_.Surface())), volume_(domain_, options.volume, options.volume_storage,
+			options.volume_fitting?&*options.volume_fitting:nullptr),
 		  surface_(domain_, options.surface), ghost_(domain_, volume_, options.ghost), options_(std::move(options))
 	{
 		kinematics_.Validate();
@@ -244,13 +247,17 @@ private:
 	{
 		hash.AppendLittleEndian64(cell.id); AppendClassification(hash, cell.classification); hash.AppendLittleEndian32(cell.usable ? 1u : 0u);
 		AppendVolumeDiagnostics(hash, cell.diagnostics);
+		if(options_.volume_fitting) {
+			hash.AppendLittleEndian32(cell.moment_fitted?1u:0u);
+			AppendCount(hash,cell.fitting_queries);AppendCount(hash,cell.fitting_candidates);AppendCount(hash,cell.fitting_iterations);
+		}
 		AppendCount(hash, cell.rule.Points().size());
 		for (const auto& point : cell.rule.Points()) { for (double value : point.parametric) hash.AppendNormalizedDouble(value); hash.AppendNormalizedDouble(point.weight); }
 		AppendCompactCutCellVolumeRuleHash(hash,cell.compact_rule);
 	}
 	std::string HashGeometryState() const
 	{
-		Sha256 hash; AppendString(hash, "MovingCutGeometry/current/v5");
+		Sha256 hash; AppendString(hash, options_.volume_fitting?"MovingCutGeometry/current/v6":"MovingCutGeometry/current/v5");
 		// The content digest binds current coordinates and wall velocities even
 		// when an adapter retains a compatibility epoch identifier.
 		AppendString(hash, kinematics_.ContentIdentitySha256());
@@ -258,6 +265,14 @@ private:
 		for (double value : domain_.Background().Spec().upper_m) hash.AppendNormalizedDouble(value);
 		for (auto value : domain_.Background().Spec().cells) hash.AppendLittleEndian32(value);
 		hash.AppendLittleEndian32(options_.volume.max_depth); hash.AppendLittleEndian64(options_.volume.max_nodes); hash.AppendLittleEndian64(options_.volume.max_leaves); hash.AppendLittleEndian64(options_.volume.max_points); hash.AppendLittleEndian64(options_.volume.max_records); hash.AppendLittleEndian64(options_.volume.max_retained_bytes); hash.AppendLittleEndian64(options_.volume.max_logical_points); hash.AppendLittleEndian32(options_.volume.empty_rule_rescue_max_depth); hash.AppendLittleEndian32(static_cast<std::uint32_t>(options_.volume_storage));
+		if(options_.volume_fitting) {
+			const auto& fitting=*options_.volume_fitting;
+			AppendCount(hash,fitting.candidate_orders.size());for(auto order:fitting.candidate_orders)hash.AppendLittleEndian32(order);
+			hash.AppendNormalizedDouble(fitting.support_expansion);AppendCount(hash,fitting.max_point_queries);AppendCount(hash,fitting.max_seed_points);
+			AppendCount(hash,fitting.fit.max_rows);AppendCount(hash,fitting.fit.max_columns);AppendCount(hash,fitting.fit.max_iterations);AppendCount(hash,fitting.fit.max_workspace_bytes);
+			hash.AppendNormalizedDouble(fitting.fit.relative_tolerance);hash.AppendNormalizedDouble(fitting.fit.absolute_tolerance);
+			AppendCount(hash,fitting.moments.max_triangles);AppendCount(hash,fitting.moments.max_quadrature_points);
+		}
 		hash.AppendLittleEndian64(options_.surface.max_candidates); hash.AppendLittleEndian64(options_.surface.max_fragments); hash.AppendLittleEndian64(options_.surface.max_points); hash.AppendLittleEndian64(options_.surface.max_exact_limbs);
 		hash.AppendNormalizedDouble(options_.ghost.gamma_u); hash.AppendNormalizedDouble(options_.ghost.gamma_p); hash.AppendLittleEndian64(options_.ghost.max_faces); hash.AppendLittleEndian64(options_.ghost.max_quadrature_points); hash.AppendLittleEndian64(options_.ghost.max_trace_entries);
 		AppendCount(hash, domain_.Cells().size());

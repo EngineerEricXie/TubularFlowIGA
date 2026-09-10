@@ -123,7 +123,7 @@ MPI／PETSc 的 process-exit leaks。指令向量保存於 `asan-final-command.j
 （改動後 runtime）：兩者皆退出 1，`u-w` gap 完全相同，為
 `8.998129639693216e-6`，原門檻為 `5.684341886080802e-14`。
 兩者 nonlinear residual 均為 `1.0010909032568383e-14`，2 次 Newton、48 次 KSP。
-因此此 gate failure 在 options 改動前即存在，仍須定位修復，不能列為通過。
+因此此 gate failure 在 options 改動前即存在；下述 fitting 修復已通過 focused rigid 驗收，完整回歸仍待重驗。
 證據位於 `outputs/hpc04/rigid-debug/{before-v1,after-v1}/rank-0/`，
 `source.json` 保存測試來源、兩個 binary 與編譯紀錄的 SHA-256。
 測試共用原 fixture helpers、相同參數與環境，僅抽出 rigid case 並輸出數值；
@@ -171,7 +171,7 @@ gap 為 `5.5293885617803503e-17`；求解後升至上述 `8.998129639693216e-6`�
 這是積分修復的基礎，尚未接入 cut-cell catalog：每個裁切 cell 的目標矩已由下述截斷反導函數提供，
 仍須由目標矩求得符合既有有限正權重契約的規則，並驗證體積／表面分部積分、cap／失敗處理、
 compact／expanded 路徑與 static／moving／distributed 結果。
-現有 `rigid` failure 尚未修復，HPC-04A 不勾選完成。
+此階段尚未修復 `rigid` failure；後續 catalog／rigid 結果見下節，HPC-04A 仍不勾選完成。
 
 ### Cartesian cell 的目標矩
 
@@ -322,11 +322,44 @@ record／容量計數及 overflow 拒絕、非凸解析矩與逐點一致性測�
 Catalog 尚未建立 fitted 規則；下一步仍須加入共同 seed、規則發布與 fitting 診斷，
 並重驗真正的 rigid flow solve。
 
+### Catalog 發布與 rigid flow 修復
+
+`CutCellVolumeQuadratureCatalog` 的第四個參數可提供 `FittedCutCellVolumeRuleOptions`。
+正的 Cut cells 使用共同 compact octree seed，以串流方式擷取支撐 extrema；expanded
+與 compact 不再各自選 seed，也不建立完整 expanded seed 陣列。發布前檢查原 octree
+體積上下界、新規則的實際體積、正權重、output／logical／record caps 與 record workspace。
+更新 published point counts、retained capacity、fit queries／candidates／iterations；
+失敗發生在 constructor 的 cell 發布之前，不退回不符合矩的舊規則。
+
+Moving geometry 以 `options.volume_fitting.emplace()` 選用此模式。
+預設仍使用原 octree 模式與 v5 geometry hash；啟用 fitting 時使用 v6，綁定有效 fitting
+參數、work counters 與規則內容。此選項尚未延伸至 native graph JSON 配置。
+
+非凸 L catalog 測試同時建構 expanded／compact，逐點位元完全相同，物理體積通過解析值。
+Compact 測試刻意設定 `max_points=1`，仍成功使用 streamed seed 與新表示；expanded
+同上限會在發布前拒絕。測試另涵蓋 seed cap 與無效 fitting 配置拒絕。
+此非凸 catalog 案例需要較大的候選集合，使用 `fit.max_columns=32768`；初次 8192-cap
+失敗保留於 `catalog-fit-test.log`，未放寬矩殘差容差。
+
+原 rigid fixture 已選用 moment fitting，其幾何、初始速度、時間步、KSP／Newton 容差
+及 trace／conservation gates 保留。抽為共用 `RunRigidTranslation`，完整 moving 測試
+與新 `moving_immersed_rigid_translation_test` 使用同一段驗收程式。
+後者 expanded／compact 均通過原全部 trace 與 conservation gates：`u-w=5.52939e-17`，
+門檻 `5.68434e-14`，nonlinear residual `3.97034e-16`，Newton／KSP iterations 均為 0。
+這是正確常數初始場的離散殘差已消除；沒有改動驗收門檻或強制覆寫求解結果。
+
+`fitted_cut_cell_volume_rule_test`、`moving_cut_geometry_test`、上述 focused rigid 與
+`make mesh-test` 均通過。來源、binary、build／test logs 與 rank report 由
+`rigid-debug/catalog-fitting-audit.json` 彙整。完整 moving executable 已重建，
+接續作業為 `outputs/hpc04/immersed/moving-regression-fitted-v1`，尚未有完成結果。
+六次 polynomial moments 的驗收不代表非線性／stabilization 積分完全精確；
+其餘非剛體、static／distributed 比較與更廣泛的配置驗收仍須繼續。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
-另有上述完整 FSI 回歸通過；`moving-regression-final-v2` 已終結且失敗，須定位並修復
-rigid wall trace 誤差，再重驗及補上
+另有上述完整 FSI 回歸通過；`moving-regression-final-v2` 的 rigid failure 已由新 fitting 模式在 focused 測試修復；須完成
+`moving-regression-fitted-v1` 全回歸，再補上
 整體驗收與 source/evidence 彙整；不得把正在執行的測試列為通過。
 新增巢狀 viewer 與本機後端能力驗證見 [診斷進度](HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
 舊版 `iga_transport` options 隔離已完成，見 [legacy options 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。HPC-04B／C 的其餘預條件器與大小案例評估仍待完成。
