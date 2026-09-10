@@ -1,6 +1,8 @@
 #include "ParallelOwnershipValidation.hpp"
 #include "OwnedRowAssembler.hpp"
 #include "SurfaceOwnershipValidation.hpp"
+#include "DynamicWeightedAitkenRelaxation.hpp"
+#include "CollectiveFailure.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -190,6 +192,35 @@ void CheckIndependentCatalogs(int rank)
 		<< directory << '\n';
 }
 
+void CheckEmptyAitken(int rank)
+{
+	const std::string identity(64, static_cast<char>('a'+rank));
+	const std::vector<double> weights = rank == 1 ? std::vector<double>{1., 3.} : std::vector<double>{};
+	iga::DynamicWeightedAitkenRelaxation distributed(identity, weights, 4.);
+	iga::DynamicWeightedAitkenRelaxation serial(std::string(64, 'f'), {1., 3.}, 4.);
+	for (const auto& full : {std::vector<double>{2., -1.}, std::vector<double>{1., 2.}}) {
+		const auto local = rank == 1 ? full : std::vector<double>{};
+		const auto control = distributed.ControlStateIdentitySha256();
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "empty Aitken control", control);
+		const auto terms = distributed.LocalContributions(local, identity);
+		double contributions[2]{terms.numerator, terms.denominator}, global[2]{};
+		MPI_Allreduce(contributions, global, 2, MPI_DOUBLE, MPI_SUM, PETSC_COMM_WORLD);
+		const double scale = distributed.LocalRequiredResidualScale(local, 1., identity);
+		double global_scale = 0.;
+		MPI_Allreduce(&scale, &global_scale, 1, MPI_DOUBLE, MPI_MAX, PETSC_COMM_WORLD);
+		const auto proposal = distributed.ProposeWithGlobalReduction(std::vector<double>(local.size(), 0.),
+			local, 1., global_scale, global[0], global[1], control, identity);
+		const auto reference = serial.Propose({0., 0.}, full, 1., std::string(64, 'f'));
+		Require(proposal.relaxation_factor == reference.relaxation_factor, "empty Aitken changed global relaxation");
+		if (rank != 1) Require(proposal.next.empty(), "empty Aitken published values");
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "empty Aitken pending", distributed.ControlStateIdentitySha256());
+		distributed.AcceptApplied(proposal, local, proposal.relaxation_factor, identity);
+		serial.AcceptApplied(reference, full, reference.relaxation_factor, std::string(64, 'f'));
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "empty Aitken accepted", distributed.ControlStateIdentitySha256());
+	}
+	if (rank == 0) std::cout << "empty_aitken_reduction=passed iterations=2 empty_ranks=2\n";
+}
+
 void CheckSurfaceOwnership(int rank)
 {
 	iga::SurfaceInterfaceRef reference{"fluid", "flow", "wall"};
@@ -259,6 +290,7 @@ int main(int argc, char** argv)
 		CheckDistributed(PETSC_COMM_WORLD, 0);
 		CheckIndependentCatalogs(rank);
 		CheckSurfaceOwnership(rank);
+		CheckEmptyAitken(rank);
 		std::vector<std::uint64_t> balanced;
 		for (std::uint64_t id = rank; id < 6; id += ranks) balanced.push_back(id);
 		// Replace 1,4 with 2,3: global count AND ID sum remain unchanged.

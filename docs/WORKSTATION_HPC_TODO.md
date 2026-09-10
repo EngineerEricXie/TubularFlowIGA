@@ -49,10 +49,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（15 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-04A、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（9 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07A |
-| 其餘待辦（14 項） | HPC-03D、HPC-05D、HPC-06D、HPC-07B–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（10 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07A、HPC-07C |
+| 其餘待辦（13 項） | HPC-03D、HPC-05D、HPC-06D、HPC-07B、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 23 項未勾選，其中 9 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 23 項未勾選，其中 10 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -696,6 +696,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   若膜成為瓶頸，再加入分散式結構矩陣與求解。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
+  Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank
+  係數／控制身分比較通過，見 [FSI 接線進度](progress/HPC_07_DISTRIBUTED_CONTRACT.md)；
+  正式 coordinator 的全域收斂與共同 rollback 尚待接線。
 - [ ] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。
 

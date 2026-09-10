@@ -20,7 +20,8 @@ namespace iga {
 
 inline void ValidateDynamicAitkenWeights(const std::vector<double>& weights)
 {
-	if (weights.empty()) throw std::runtime_error("dynamic Aitken weights must be nonempty");
+	// An empty ownership slice contributes zero; the global total is validated
+	// separately and remains strictly positive.
 	for (const double weight : weights)
 		if (!std::isfinite(weight) || !(weight > 0.0))
 			throw std::runtime_error("dynamic Aitken weights must be finite and positive");
@@ -105,7 +106,7 @@ public:
 	{
 		ValidateAitkenRelaxationControls(controls_);
 		for (const double weight : local_weights_) local_weight_total_ += weight;
-		if (!std::isfinite(local_weight_total_) || !(local_weight_total_ > 0.0)
+		if (!std::isfinite(local_weight_total_) || local_weight_total_ < 0.0
 			|| local_weight_total_ > global_weight_total_)
 			throw std::runtime_error("dynamic Aitken local weights are inconsistent with global total");
 		previous_residual_.resize(local_weights_.size());

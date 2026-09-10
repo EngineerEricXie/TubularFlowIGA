@@ -87,3 +87,26 @@ make -C solvers/cpu parallel-ownership-test \
 原表中的空 layout 限制已在本批解除；Aitken local weights 的正總和限制與各 FSI
 單分區限制仍在。Reference 面積貢獻路由、ghost exchange 與真正分散式 fluid
 traction 尚未完成，HPC-07A 仍未勾選。
+
+## 空 rank 的 Aitken 局部貢獻
+
+`DynamicWeightedAitkenRelaxation` 現在接受空 local weights 與空 iterate／residual。
+空 inner product、numerator、denominator 均為 0，local residual scale 提供既有
+reference floor；global weight total 仍須有限且嚴格為正，非空 weight 每項仍須
+有限且正。空 rank 不得使用單 rank `Propose` 繞過 global reduction。既有非空
+weight／state 的 hash stream 不變。
+
+契約測試比較空 participant 與完整 owner 的 initial／dynamic proposal、pending／
+accepted control identity、係數、reset；錯誤 residual size、foreign proposal、
+global total=0、非空 zero weight 仍拒絕。原加權／不等分區與 stale proposal
+測試保持通過。
+
+三 rank ownership 測試另接真正 MPI SUM／MAX：rank 1 有兩個殘差分量，rank 0／2
+為空，兩次 proposal 的 relaxation 與單 rank reference 完全相等，且全部 ranks
+的 pending／accepted control identity 一致。三份 rank reports exit 0、無 timeout。
+此處 reduction 位於測試 driver，不冒充正式 FSI coordinator 已接線；原強耦合
+與膜的單分區限制仍在。
+
+證據：`outputs/hpc07/empty-aitken-v1/audit.json`。重現沿用前節兩個 make test
+目標。本次 compile／test 限於 CPU 14／15，背景活動也記錄於正在執行的 rank
+scaling 目錄，不能因 CPU binding 分離就宣稱系統資源完全無干擾。

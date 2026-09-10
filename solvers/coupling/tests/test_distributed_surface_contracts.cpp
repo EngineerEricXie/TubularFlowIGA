@@ -268,6 +268,40 @@ int main()
 	RequireRejected([&] { distributed_zero.ProposeWithGlobalReduction({0.0, 0.0}, current_zero, 1.0, 1.0, numerator, denominator, reduced_control_identity, rank_zero_id); });
 	RequireRejected([&] { distributed_zero.LocalContributions(current_zero, rank_one_id); });
 
+	// Empty participants follow the same global control state and proposal,
+	// without contributing area, inner products or local vector entries.
+	const auto empty_id = iga::BuildDistributedSurfacePartitionIdentitySha256(empty_partition);
+	iga::DynamicWeightedAitkenRelaxation empty_relaxation(empty_id, {}, total_area);
+	iga::DynamicWeightedAitkenRelaxation owner_relaxation(one_rank_id, {1., 4., 2., 3.}, total_area);
+	assert(empty_relaxation.LocalWeightTotal() == 0.);
+	assert(iga::DynamicWeightedAitkenInnerProduct({}, {}, {}) == 0.);
+	assert(empty_relaxation.LocalRequiredResidualScale({}, 1., empty_id) == 1.);
+	RequireRejected([&] { empty_relaxation.Propose({}, {}, 1., empty_id); });
+	RequireRejected([&] { empty_relaxation.LocalContributions({1.}, empty_id); });
+	RequireRejected([&] { iga::DynamicWeightedAitkenRelaxation invalid(empty_id, {}, 0.); });
+	RequireRejected([&] { iga::DynamicWeightedAitkenRelaxation invalid(empty_id, {0.}, total_area); });
+	for (const auto& residual : {std::vector<double>{2., -1., 3., 1.}, std::vector<double>{1., 1., 2., 4.}}) {
+		assert(empty_relaxation.ControlStateIdentitySha256() == owner_relaxation.ControlStateIdentitySha256());
+		const auto control = empty_relaxation.ControlStateIdentitySha256();
+		const auto zero = empty_relaxation.LocalContributions({}, empty_id);
+		assert(zero.numerator == 0. && zero.denominator == 0.);
+		const auto terms = owner_relaxation.LocalContributions(residual, one_rank_id);
+		const double scale = owner_relaxation.LocalRequiredResidualScale(residual, 1., one_rank_id);
+		const auto owner_proposal = owner_relaxation.ProposeWithGlobalReduction({0., 0., 0., 0.}, residual,
+			1., scale, terms.numerator, terms.denominator, control, one_rank_id);
+		const auto empty_proposal = empty_relaxation.ProposeWithGlobalReduction({}, {},
+			1., scale, terms.numerator, terms.denominator, control, empty_id);
+		assert(empty_proposal.next.empty() && empty_proposal.update.empty());
+		assert(empty_proposal.relaxation_factor == owner_proposal.relaxation_factor);
+		assert(empty_relaxation.ControlStateIdentitySha256() == owner_relaxation.ControlStateIdentitySha256());
+		RequireRejected([&] { empty_relaxation.AcceptApplied(owner_proposal, {}, owner_proposal.relaxation_factor, empty_id); });
+		empty_relaxation.AcceptApplied(empty_proposal, {}, empty_proposal.relaxation_factor, empty_id);
+		owner_relaxation.AcceptApplied(owner_proposal, residual, owner_proposal.relaxation_factor, one_rank_id);
+		assert(empty_relaxation.ControlStateIdentitySha256() == owner_relaxation.ControlStateIdentitySha256());
+	}
+	empty_relaxation.Reset(); owner_relaxation.Reset();
+	assert(empty_relaxation.ControlStateIdentitySha256() == owner_relaxation.ControlStateIdentitySha256());
+
 	// This two-component example proves that reference-area weights affect omega.
 	iga::DynamicWeightedAitkenRelaxation weighted(one_rank_id, {1.0, 3.0}, 4.0);
 	iga::DynamicWeightedAitkenRelaxation uniform(one_rank_id, {1.0, 1.0}, 2.0);
