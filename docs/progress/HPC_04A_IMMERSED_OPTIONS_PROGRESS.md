@@ -129,6 +129,30 @@ MPI／PETSc 的 process-exit leaks。指令向量保存於 `asan-final-command.j
 測試共用原 fixture helpers、相同參數與環境，僅抽出 rigid case 並輸出數值；
 原 `256*epsilon` gate 未放寬。
 
+### Rigid failure 的積分定位
+
+`rigid-debug/trace-v1` 保留原參數與 gate，結果為預期的既有失敗，非 timeout。
+轉移後節點速度與原常數完全一致（最大誤差 0），求解前 surface `u-w`
+gap 為 `5.5293885617803503e-17`；求解後升至上述 `8.998129639693216e-6`。
+第一次 Newton residual 為 `6.2062113278804282e-5`，第二次為
+`8.2403680970955447e-8`。因此誤差不是初始場轉移造成的。
+
+另以 `quadrature-v1` 在同一 target geometry 直接累加每個全域 spline basis 的
+`∫Ω grad(N_a)·w dV − ∫∂Ω N_a (w·n) dS`，使用 runtime 原體積及表面規則，
+沒有 KSP／Newton 求解。缺陷 L2 為 `6.2062113278804906e-5`，
+最大節點缺陷為 `1.8973701844825705e-5`，全域帶符號總和為
+`7.297457341648011e-19`。L2 與初始 nonlinear residual 相符，
+但總和幾乎為零：只驗證總流量不足以發現這個 basis-wise 積分不相容。
+目前體積規則採 octree 內部採樣，表面規則則積分實際裁切面；
+此組合在此 fixture 不滿足常數速度所需的離散分部積分恆等式。
+
+`trace-source.json` 保存兩個診斷 source／binary／build log SHA-256 與 rank reports。
+`quadrature-v1` 的退出 0 只表示量測完成，不代表此缺陷通過物理驗收。
+下一步須修復積分一致性並驗證 conservative mixed form、Jacobian、既有靜態／移動
+案例；不能以放寬 rigid gate、修改常數初始場或略過測試取代修復。
+完整 moving 測試已補上高精度 seed／solved gap 與求解殘差輸出，保留所有原 gate。
+其 binary 會因診斷重建而改變；前述 `01aa4c8` 完整失敗的執行身分仍以原 run 記錄為準。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
