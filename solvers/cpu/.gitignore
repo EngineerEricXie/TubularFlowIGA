@@ -11,3 +11,5 @@
 *.out
 
 /slurm/*.out
+
+/immersed_small_cut_solver_test

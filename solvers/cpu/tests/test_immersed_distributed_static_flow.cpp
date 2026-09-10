@@ -6,10 +6,17 @@
 #include <memory>
 
 namespace {
+#ifdef IGA_TEST_SMALL_CUT
+constexpr double kFixtureInset = 0.3;
+constexpr unsigned kFixtureCutDepth = 3;
+#else
+constexpr double kFixtureInset = 0.1;
+constexpr unsigned kFixtureCutDepth = 2;
+#endif
 iga::CartesianDomainClassification Domain(bool padded,bool empty_work)
 {
 	iga::RawSurfaceSoup soup;
-	const double a = empty_work ? 0.0 : padded ? 0.3 : 0.1, b = empty_work ? 1.0 : padded ? 0.7 : 0.9;
+	const double a = empty_work ? 0.0 : padded ? 0.3 : kFixtureInset, b = empty_work ? 1.0 : padded ? 0.7 : 1.0-kFixtureInset;
 	soup.vertices = {{{{a,a,a}},{{b,a,a}},{{b,b,a}},{{a,b,a}},{{a,a,b}},{{b,a,b}},{{b,b,b}},{{a,b,b}}}};
 	const std::array<std::array<std::int64_t,3>,12> triangles{{{{0,2,1}},{{0,3,2}},{{4,5,6}},{{4,6,7}},
 		{{0,1,5}},{{0,5,4}},{{1,2,6}},{{1,6,5}},{{2,3,7}},{{2,7,6}},{{3,0,4}},{{3,4,7}}}};
@@ -25,7 +32,7 @@ iga::CartesianDomainClassification Domain(bool padded,bool empty_work)
 }
 struct Fixture {
 	Fixture(bool padded,bool expanded,bool empty_work)
-		: domain(Domain(padded,empty_work)),volume(domain,{2,500000,500000,3000000},expanded ? iga::CutCellVolumeQuadratureStorageMode::Expanded : iga::CutCellVolumeQuadratureStorageMode::Compact) {}
+		: domain(Domain(padded,empty_work)),volume(domain,{kFixtureCutDepth,500000,500000,3000000},expanded ? iga::CutCellVolumeQuadratureStorageMode::Expanded : iga::CutCellVolumeQuadratureStorageMode::Compact) {}
 	iga::CartesianDomainClassification domain;
 	iga::CutCellVolumeQuadratureCatalog volume;
 	iga::ImmersedSurfaceQuadratureCatalog surface{domain};
@@ -54,6 +61,18 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 	iga::ImmersedStaticFlowConservationDiagnostics reference_conservation;
 	iga::CollectiveLocalStage(comm,"static MPI serial reference",[&] {
 		fixture = std::make_unique<Fixture>(false,false,mode == "empty-work");
+#ifdef IGA_TEST_SMALL_CUT
+		double minimum_fraction = 1.0;
+		for (const auto& cell : fixture->volume.Cells()) {
+			if (cell.usable && cell.diagnostics.estimated_reference_volume>0.0)
+				minimum_fraction = std::min(minimum_fraction,cell.diagnostics.estimated_reference_volume);
+		}
+		if (!(minimum_fraction>0.0 && minimum_fraction<0.01)) throw std::runtime_error("small-cut fixture has no small usable fluid fraction");
+		std::cout << std::setprecision(17) << "immersed_small_cut rank=" << rank
+			<< " inset=" << kFixtureInset << " nominal_depth=" << kFixtureCutDepth
+			<< " analytic_corner_fraction=" << std::pow(1.0-3.0*kFixtureInset,3)
+			<< " minimum_estimated_fraction=" << minimum_fraction << std::endl;
+#endif
 		options.wall_labels = {7,8,9}; options.lu_pivot_shift = 1e-12;
 		// Both reference and distributed paths use the same tighter tolerance:
 		// tiny flow fields must converge beyond the first Newton correction.

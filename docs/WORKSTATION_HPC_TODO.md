@@ -564,8 +564,10 @@ F05 的原始診斷例外保存與恢復亦通過，見
   1／2／4-rank 速度與壓力場亦已比較，見
   [rank 一致性進度](progress/HPC_04B_DUCT_RANK_PARITY_PROGRESS.md)。其他網格、rank、
   pressure nullspace 與 immersed 條件仍待評估。Immersed gauge／port 候選驗證已
-  啟動，封閉 LU 參考通過，其餘尚未完成，見
-  [immersed 候選進度](progress/HPC_04B_IMMERSED_CANDIDATES_PROGRESS.md)。
+  完成原切割幾何九候選驗收，見
+  [immersed 候選進度](progress/HPC_04B_IMMERSED_CANDIDATES_PROGRESS.md)。小切割
+  gauge 案例亦已評估，LU 通過、兩個 block 候選不收斂，見
+  [小切割結果](progress/HPC_04B_SMALL_CUT_PROGRESS.md)。
 - [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
 

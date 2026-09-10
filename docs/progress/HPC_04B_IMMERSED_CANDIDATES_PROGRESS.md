@@ -1,6 +1,6 @@
 # HPC-04B immersed 候選驗證
 
-- 狀態：進行中，封閉與 flow 案例的三候選均通過，pressure 案例仍進行中。
+- 狀態：進行中，原切割幾何的 closed／flow／pressure 九候選均通過。
 - 日期：2026-09-09（美東），基準 `d3a08e6`。本次只擴充既有 static MPI test
   的 layout 診斷及候選 harness；production solver／operator／資料格式未變。
 
@@ -70,6 +70,11 @@ LU 參考失敗會停止該次 evaluation；其他候選失敗則保存並繼續
 KSP iterations 為 124／114；flow 三候選全場相對 L2 皆約 3.33575e-11，
 KSP iterations 依 LU／block-ILU／block-LU-shift 為 3／138／121。
 這六個作業最大 peak rank RSS=99,385,344 bytes；原序列參考與數值／守恆 gate 保留。
-Pressure LU 也已通過，另外兩候選仍執行中，待完整彙整。還須彙整全部成功／失敗原因與場 gate，再處理更小切割
+Pressure 三候選亦已通過，總計 9 作業、18 rank reports，見 `regular-acceptance.json`
+及 `audit_regular.py`。Pressure LU／block-ILU／block-LU-shift 相對 L2 分別為
+9.95969e-14／9.96206e-14／9.96123e-14，KSP iterations 為 2／143／123；
+assembly 最大 rank 秒為 27.3637／26.5182／26.0157，linear 為
+0.240324／0.0527229／0.0692620。九個作業最大 peak rank RSS=100,704,256 bytes。
+後續小切割幾何的結果另見 [小切割評估](HPC_04B_SMALL_CUT_PROGRESS.md)。還須彙整全部成功／失敗原因與場 gate，再處理更小切割
 元素、其他網格／rank 與排程資源驗收。128-element 方管四候選已通過，見
 [加密方管結果](HPC_04B_REFINED_DUCT_PROGRESS.md)；完整 moving regression 仍在執行；HPC-04 整體保持未完成。
