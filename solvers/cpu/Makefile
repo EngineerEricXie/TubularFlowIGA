@@ -492,7 +492,7 @@ moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/MaterialSur
 moving-cut-geometry-test: moving_cut_geometry_test
 	./moving_cut_geometry_test
 
-fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
+fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp include/SurfaceP1TractionContribution.hpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 fluid-surface-traction-test: fluid_surface_traction_test
@@ -763,3 +763,6 @@ petsc_factor_matrix_test: tests/test_petsc_factor_matrix.cpp include/PetscSolver
 
 immersed_small_cut_solver_test: tests/test_immersed_small_cut_solver.cpp tests/test_immersed_distributed_static_flow.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+# Rebuild all direct traction consumers when the shared P1 kernel changes.
+moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test: include/SurfaceP1TractionContribution.hpp

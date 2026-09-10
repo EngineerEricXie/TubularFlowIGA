@@ -6,6 +6,7 @@
 // geometry but does not publish it through a runtime or mutate either input.
 #include "DistributedSurfaceInterface.hpp"
 #include "FluidCauchyStress.hpp"
+#include "SurfaceP1TractionContribution.hpp"
 #include "ImmersedSurfaceQuadrature.hpp"
 #include "MaterialSurfacePatchMap.hpp"
 #include "MaterialSurfaceKinematics.hpp"
@@ -393,16 +394,14 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 			const auto traction = FluidOnStructureCauchyTraction(pressure, gradient, dynamic_viscosity_pa_s, point.normal);
 			quadrature_resultant.AddScaled(traction, point.weight, "fluid surface traction resultant");
 			quadrature_moment.AddScaled(Cross(point.physical, traction), point.weight, "fluid surface traction moment");
+			const auto contribution = BuildSurfaceP1TractionContribution(
+				material_point.canonical_barycentric, traction, point.weight);
 			for (std::size_t left = 0; left < 3; ++left) {
-				const double shape_left = material_point.canonical_barycentric[left];
-				if (!std::isfinite(shape_left)) throw std::runtime_error("fluid surface traction barycentric provenance is nonfinite");
-				for (int component = 0; component < 3; ++component) {
-					const double addition = traction[component]*shape_left*point.weight;
-					if (!std::isfinite(addition)) throw std::overflow_error("fluid surface traction force is nonfinite");
-					force_accumulator[3*local_nodes[left]+component].Add(addition, "fluid surface traction force");
-				}
+				for (int component = 0; component < 3; ++component)
+					force_accumulator[3*local_nodes[left]+component].Add(contribution.corner_force_n[left][component],
+						"fluid surface traction force");
 				for (std::size_t right = 0; right < 3; ++right)
-					mass[local_nodes[left]*nodes+local_nodes[right]] += shape_left*material_point.canonical_barycentric[right]*point.weight;
+					mass[local_nodes[left]*nodes+local_nodes[right]] += contribution.consistent_mass_m2[left][right];
 			}
 			++diagnostics.retained_quadrature_points;
 		}

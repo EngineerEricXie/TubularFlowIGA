@@ -37,6 +37,33 @@ template <class Function> void RejectContaining(const char* expected, Function&&
 	assert(rejected);
 }
 
+void CheckP1Contribution()
+{
+	// Degree-two triangle rule integrates P1 traction and consistent mass.
+	std::array<std::array<double,3>,3> mass{},force{};
+	const std::array<std::array<double,3>,3> nodal_traction{{{{1,2,3}},{{4,5,6}},{{7,8,9}}}};
+	for(int point=0;point<3;++point) {
+		std::array<double,3> shape{{1./6.,1./6.,1./6.}},traction{};shape[point]=2./3.;
+		for(int node=0;node<3;++node)for(int axis=0;axis<3;++axis)traction[axis]+=shape[node]*nodal_traction[node][axis];
+		const auto value=iga::BuildSurfaceP1TractionContribution(shape,traction,1./6.);
+		for(int left=0;left<3;++left)for(int right=0;right<3;++right) {
+			mass[left][right]+=value.consistent_mass_m2[left][right];
+			force[left][right]+=value.corner_force_n[left][right];
+		}
+	}
+	for(int node=0;node<3;++node)for(int axis=0;axis<3;++axis) {
+		assert(Near(mass[node][axis],node==axis?1./12.:1./24.,1.e-14));
+		double exact=0.;for(int other=0;other<3;++other)exact+=(node==other?1./12.:1./24.)*nodal_traction[other][axis];
+		assert(Near(force[node][axis],exact,1.e-14));
+	}
+	const double inf=std::numeric_limits<double>::infinity(),large=std::numeric_limits<double>::max();
+	Reject([&]{iga::BuildSurfaceP1TractionContribution({{1,0,0}},{{1,2,3}},inf);});
+	Reject([&]{iga::BuildSurfaceP1TractionContribution({{1,inf,0}},{{1,2,3}},1);});
+	Reject([&]{iga::BuildSurfaceP1TractionContribution({{1,0,0}},{{1,2,inf}},1);});
+	Reject([&]{iga::BuildSurfaceP1TractionContribution({{1,0,0}},{{large,0,0}},2);});
+	Reject([&]{iga::BuildSurfaceP1TractionContribution({{large,0,0}},{{0,0,0}},1);});
+}
+
 iga::RawSurfaceTriangle Face(int a, int b, int c, std::uint32_t label)
 { iga::RawSurfaceTriangle result; result.indices = {{a,b,c}}; result.boundary_id = label; return result; }
 
@@ -166,6 +193,7 @@ int main(int argc, char** argv)
 	PetscInitialize(&argc, &argv, nullptr, nullptr);
 	int status = 0;
 	try {
+		CheckP1Contribution();
 		const auto material = Material(); const auto patch_map = PatchMap(material);
 		const auto interface = Interface(patch_map); const auto& layout = patch_map.Layout();
 		assert(!(interface.id == patch_map.Interface().id));

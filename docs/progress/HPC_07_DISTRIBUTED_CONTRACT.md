@@ -312,3 +312,27 @@ exit 0、無 timeout，CPU affinity 14、15；證據在
 `outputs/hpc07/surface-cell-forces-v1/audit.json`。重現沿用
 `make -C solvers/cpu parallel-ownership-test`。HPC-07B 尚未完成正式流體積分、
 consistent projection 與結構更新驗收。
+
+
+## 共用 P1 force／consistent mass 單點核心
+
+`SurfaceP1TractionContribution.hpp` 將單一 quadrature point 的
+`traction_component * Ni * weight` 與 `Ni * Nj * weight` 整理為三個 corner
+forces 和 3×3 consistent mass block。現有 `BuildFluidSurfaceTraction` 已使用
+此核心，原 Cauchy stress、canonical corner provenance、乘法順序、force
+compensated accumulation、mass 累加及 projection identity stream 保持。
+
+此核心驗證輸入與乘積有限性，不自行限制 signed quadrature weight 或重新
+正規化 barycentric values；幾何與 shape provenance 仍由 catalog authority
+驗證。後續分散式 cell integration 可共用相同公式，同時保留 force 與 mass，
+不改成 lumped projection。
+
+三點 degree-two triangle rule 對線性 nodal traction 的解析驗證通過：面積
+0.5 的 consistent mass 對角 1/12、非對角 1/24，nodal force 等於解析 mass
+乘 nodal traction。非有限 weight／shape／traction、force overflow 與 mass
+overflow 五項拒絕通過。原 fluid traction 壓力、黏性、非均勻場、抵銷、平移
+及 publication authority 回歸全部 exit 0，無 timeout，編譯未啟用 NDEBUG。
+證據為 `outputs/hpc07/p1-traction-kernel-v1/audit.json`，重現命令為
+`make -C solvers/cpu fluid-surface-traction-test`（指定本機 PETSC_DIR）。
+這次驗證針對單分區正式 traction consumer；分散式 cell integration 與
+consistent mass projection 接線仍未完成。
