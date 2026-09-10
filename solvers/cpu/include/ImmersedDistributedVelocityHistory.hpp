@@ -7,14 +7,16 @@
 #include "NavierStokesElement.hpp"
 #include "PetscReadArray.hpp"
 #include "RuntimeCleanup.hpp"
+#include "DistributedImmersedVelocityExtension.hpp"
 #include <petscvec.h>
 #include <iomanip>
 #include <sstream>
 
 namespace iga {
 
-// Fixed-layout identity history. Only three velocity fields per owned node
-// and the requested local halo are stored. Pressure and scalar controller
+// Velocity history on an immutable target layout. Freeze preserves a fixed
+// layout; FreezeMapped uses a certified extension onto a different layout.
+// Only owned velocity fields and the requested local halo are stored. Pressure and scalar controller
 // rows never enter the history. The immutable layout and communicator must
 // outlive this object. Construction, Freeze and Close are collective.
 // ReleaseTrial is a local, noexcept publication operation: the runtime calls
@@ -45,6 +47,7 @@ public:
 				for (PetscInt field = 0; field < 3; ++field)
 					halo_rows.push_back(static_cast<PetscInt>(3*layout.LocalNode(id))+field);
 			frozen_.resize(halo_rows.size()); candidate_.resize(halo_rows.size());
+			provenance_.resize(required_ids_.size(),ImmersedVelocityHistoryProvenance::Committed);
 			signature = layout.HashSha256();
 		});
 		RequireCollectiveSameText(communicator_, "immersed history layout agreement", signature);
@@ -71,7 +74,7 @@ public:
 	void Freeze(Vec committed, const ImmersedActiveLayout& source_layout, double source_time,
 		std::uint64_t source_index, double target_time, std::uint64_t target_index, double dt)
 	{
-		std::string signature;
+		std::string signature,source_geometry;
 		CollectiveLocalStage(communicator_, "immersed history freeze preflight", [&] {
 			RequireOpen();
 			if (active_) throw std::logic_error("immersed velocity history is already frozen");
@@ -86,6 +89,7 @@ public:
 			text << std::setprecision(std::numeric_limits<double>::max_digits10)
 				<< source_time << ':' << source_index << ':' << target_time << ':' << target_index << ':' << dt;
 			signature = text.str();
+			source_geometry=source_layout.GeometryIdentity();
 		});
 		RequireCollectiveSameText(communicator_, "immersed history time agreement", signature);
 		Check("history extraction begin",VecScatterBegin(extract_,committed,owned_,INSERT_VALUES,SCATTER_FORWARD));
@@ -107,7 +111,39 @@ public:
 			view.Restore();
 		});
 		frozen_.swap(candidate_); source_time_ = source_time; target_time_ = target_time;
+		source_geometry_.swap(source_geometry);mapped_=false;
+		std::fill(provenance_.begin(),provenance_.end(),ImmersedVelocityHistoryProvenance::Committed);
 		source_index_ = source_index; target_index_ = target_index; active_ = true;
+	}
+
+	// Freeze the old committed field on this target layout using the extension's
+	// verified geometry/clock mapping. Store only the required target halo.
+	void FreezeMapped(DistributedImmersedVelocityExtension& extension,Vec committed,
+		const ImmersedActiveLayout& source_layout,double source_time,std::uint64_t source_index,
+		double target_time,std::uint64_t target_index,double dt)
+	{
+		std::vector<std::uint64_t> queries;
+		CollectiveLocalStage(communicator_,"mapped history preflight",[&] {
+			RequireOpen();
+			if(active_)throw std::logic_error("immersed velocity history is already frozen");
+			extension.RequireTargetLayout(communicator_,layout_);
+			queries.assign(required_ids_.begin(),required_ids_.end());
+		});
+		const auto mapped=extension.ExtendCommitted(committed,source_layout,source_time,source_index,target_time,target_index,dt,queries);
+		std::vector<ImmersedVelocityHistoryProvenance> provenance;
+		std::string source_geometry;
+		CollectiveLocalStage(communicator_,"mapped history candidate",[&] {
+			if(mapped.size()!=4*required_ids_.size())throw std::runtime_error("mapped history tuple count differs");
+			source_geometry=source_layout.GeometryIdentity();provenance.reserve(required_ids_.size());
+			for(std::size_t row=0;row<required_ids_.size();++row) {
+				for(int c=0;c<3;++c)candidate_[3*row+c]=mapped[4*row+c];
+				provenance.push_back(std::binary_search(source_layout.NodeIds().begin(),source_layout.NodeIds().end(),required_ids_[row])
+					?ImmersedVelocityHistoryProvenance::Committed:ImmersedVelocityHistoryProvenance::Extended);
+			}
+		});
+		frozen_.swap(candidate_);provenance_.swap(provenance);source_geometry_.swap(source_geometry);
+		source_time_=source_time;target_time_=target_time;source_index_=source_index;target_index_=target_index;
+		mapped_=true;active_=true;
 	}
 
 	std::vector<std::array<double,3>> Localize(const Element& element, double target_time) const
@@ -132,6 +168,9 @@ public:
 	std::uint64_t SourceIndex() const { RequireActive(); return source_index_; }
 	std::uint64_t TargetIndex() const { RequireActive(); return target_index_; }
 	const ImmersedActiveLayout& Layout() const noexcept { return layout_; }
+	const std::string& SourceGeometryIdentity() const { RequireActive();return source_geometry_; }
+	bool HasMappedSource() const { RequireActive();return mapped_; }
+	const std::vector<ImmersedVelocityHistoryProvenance>& RequiredProvenance() const { RequireActive();return provenance_; }
 	void ReleaseTrial() noexcept { active_ = false; }
 	void Close() { Release(); cleanup_.Check(communicator_,"immersed history close"); }
 private:
@@ -170,6 +209,9 @@ private:
 	VecScatter extract_ = nullptr,scatter_ = nullptr;
 	std::vector<std::int32_t> required_ids_;
 	std::vector<double> frozen_,candidate_;
+	std::vector<ImmersedVelocityHistoryProvenance> provenance_;
+	std::string source_geometry_;
+	bool mapped_=false;
 	double source_time_ = 0,target_time_ = 0;
 	std::uint64_t source_index_ = 0,target_index_ = 0;
 	bool active_ = false,closed_ = false;

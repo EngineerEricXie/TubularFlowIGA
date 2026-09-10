@@ -59,7 +59,8 @@ public:
 	// A failed callback discards both force candidate and newly frozen history.
 	void Freeze(Vec committed, const ImmersedActiveLayout& source_layout,
 		double source_time, std::uint64_t source_index, double target_time, std::uint64_t target_index,
-		const NavierStokesParameters& parameters, const NavierStokesBodyForceEvaluator& body_force)
+		const NavierStokesParameters& parameters, const NavierStokesBodyForceEvaluator& body_force,
+		DistributedImmersedVelocityExtension* extension=nullptr)
 	{
 		std::string signature;
 		CollectiveLocalStage(communicator_,"transient volume freeze preflight",[&] {
@@ -70,11 +71,12 @@ public:
 				throw std::invalid_argument("invalid transient volume viscosity or force evaluator");
 			std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
 			text << std::setprecision(std::numeric_limits<double>::max_digits10)
-				<< parameters.density << ':' << parameters.dynamic_viscosity << ':' << parameters.dt;
+				<< parameters.density << ':' << parameters.dynamic_viscosity << ':' << parameters.dt << ':' << (extension?1:0);
 			signature = text.str();
 		});
 		RequireCollectiveSameText(communicator_,"transient volume parameter agreement",signature);
-		history_->Freeze(committed,source_layout,source_time,source_index,target_time,target_index,parameters.dt);
+		if(extension)history_->FreezeMapped(*extension,committed,source_layout,source_time,source_index,target_time,target_index,parameters.dt);
+		else history_->Freeze(committed,source_layout,source_time,source_index,target_time,target_index,parameters.dt);
 		std::map<std::uint64_t,std::vector<std::array<double,3>>> candidate;
 		try {
 			CollectiveLocalStage(communicator_,"transient volume force freeze",[&] {

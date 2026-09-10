@@ -522,7 +522,15 @@ F05 的原始診斷例外保存與恢復亦通過，見
   Extension 的幾何拓樸已與完整場／dense solve 拆開，serial 回歸數值與四個
   identity 保持。MPI sparse extension 的 1／2／4 rank 移動 active-set 對串行
   比較、anchor bitwise、錯誤拒絕／retry、零 unknown 與空 source ranks 通過；
-  target history／clock 與移動 runtime 尚待接線，見
+  committed PETSc Vec owned rows／共同 clock 驗證、source 不變與
+  controller／gauge-only owner 排除通過。Mapped target history／provenance 與
+  暫態體積組裝的 1／2／4 rank 比較、force failure／retry 通過；
+  target owned seed／controller 跨 rank 搬移／gauge 歸零與失敗重試亦通過；
+  移動壁面 operator 五模式 1／2／4 ranks 對串行比較通過；
+  固定背景分區與 active-set 改變的 1／2／4 ranks、split communicator 通過；
+  moving runtime 兩步 active-set 改變的 1／2／4 ranks 串行場對照、
+  exact publication、失敗重試與跨 epoch options snapshot 通過；
+  moving 守恆驗收及正式 graph／FSI 接線仍待完成，見
   [移動 extension 進度](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)。
 
 驗收：靜態、暫態、移動案例依序通過 1／2／4 rank 比較、介面守恆及失敗重試；

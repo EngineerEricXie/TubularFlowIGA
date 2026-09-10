@@ -114,7 +114,14 @@ public:
 		if (error) std::rethrow_exception(error);
 	}
 private:
+	friend class ImmersedMovingTransientDistributedOperator;
 	ImmersedOwnedVolumeContribution BuildCell(std::uint64_t cell,const std::vector<std::array<double,4>>& nodal) const
+	{
+		return BuildCellWithVelocity(cell,nodal,
+			[](const SurfaceQuadraturePoint&,const ImmersedSurfaceQuadraturePointProvenance&) { return std::array<double,3>{{0,0,0}}; });
+	}
+	ImmersedOwnedVolumeContribution BuildCellWithVelocity(std::uint64_t cell,const std::vector<std::array<double,4>>& nodal,
+		const ImmersedMaterialWallVelocityEvaluator& wall_velocity) const
 	{
 		ImmersedOwnedVolumeContribution result;
 		const auto volume = inputs_->BuildVolume(cell,nodal); result.system = volume;
@@ -129,8 +136,7 @@ private:
 			std::vector<std::array<double,4>> old(velocity.size());
 			for (std::size_t i = 0; i < old.size(); ++i) for (int c = 0; c < 3; ++c) old[i][c] = velocity[i][c];
 			const auto wall = BuildImmersedNitscheWallElementFromVolumeSystemMaterialAware(domain_,volume_,surface_,cell,nodal,old,
-				options_.parameters,options_.wall_labels,volume,ghost_,options_.wall_gamma0,options_.wall_inertial_gamma0,
-				[](const SurfaceQuadraturePoint&,const ImmersedSurfaceQuadraturePointProvenance&) { return std::array<double,3>{{0,0,0}}; });
+				options_.parameters,options_.wall_labels,volume,ghost_,options_.wall_gamma0,options_.wall_inertial_gamma0,wall_velocity);
 			for (std::size_t i = 0; i < result.system.jacobian.size(); ++i) result.system.jacobian[i] += wall.system.jacobian[i]-volume.jacobian[i];
 			for (std::size_t i = 0; i < result.system.negative_residual.size(); ++i) result.system.negative_residual[i] += wall.system.negative_residual[i]-volume.negative_residual[i];
 			for (const auto& item : wall.diagnostics.by_boundary_id) result.wall_selected_points[item.first] = item.second.selected_points;

@@ -189,6 +189,7 @@ public:
 		if (solver_options_->Prefix() != (options_.solver_options_prefix.empty() ? "immersed_transient_" : options_.solver_options_prefix))
 			throw std::invalid_argument("transient shared solver prefix differs from runtime options");
 		solver_options_->Attach(ksp_);
+		solver_options_->Attach(jacobian_);
 		solver_options_->Call("immersed transient solver options", [&] { return KSPSetFromOptions(ksp_); });
 		solver_options_->RecordUsed();
 		std::vector<std::array<double,4>> zero(layout_.NodeIds().size());
@@ -479,7 +480,33 @@ private:
 		ValidateAllFlowCompatibility();
 	}
 	void ValidateAllFlowCompatibility() const { if(options_.ports.empty()||std::any_of(options_.ports.begin(),options_.ports.end(),[](const auto&p){return IsImmersedFlowPressureLike(p.control_mode);})) return; long double sum=0,scale=0; for(const auto&p:options_.ports){sum+=p.value;scale+=std::abs(static_cast<long double>(p.value));} const long double tolerance=options_.flow_controller_absolute_tolerance_m3_s+options_.flow_controller_relative_tolerance*std::max(scale,static_cast<long double>(options_.flow_controller_reference_flow_m3_s)); if(std::abs(sum)>tolerance) throw std::invalid_argument("all flow-controlled immersed ports require compatible net outward flow"); }
-	void PreflightCatalogs() const { for(std::uint64_t c=0;c<domain_.Cells().size();++c){const auto classification=domain_.Cells()[c].classification; if(classification!=CellClassification::Inside&&classification!=CellClassification::Cut)continue; if(!volume_.Cell(c).usable)throw std::runtime_error("classified immersed transient cell has an unusable volume rule"); if(volume_.StorageMode()==CutCellVolumeQuadratureStorageMode::Expanded) volume_.ValidateUsableRule(domain_,c); else volume_.ValidateUsableCompactRule(domain_,c); const auto expected=VolumePointCount(c); std::size_t visited=0; ForEachUsableVolumePoint(c,[&](const VolumeQuadraturePoint&){if(visited==std::numeric_limits<std::size_t>::max())throw std::overflow_error("immersed transient volume point count overflows");++visited;}); if(visited!=expected)throw std::logic_error("immersed transient volume point iterator count is invalid"); if(visited==0){if(classification==CellClassification::Inside)throw std::runtime_error("inside immersed transient cell has an empty volume rule");continue;} if(classification==CellClassification::Cut && volume_.Cell(c).diagnostics.estimated_reference_volume>0){if(!ghost_.Covered(c))throw std::runtime_error("positive immersed transient cut cell "+std::to_string(c)+" requires ghost coverage");surface_.ValidateUsableRule(domain_,c);}} }
+	void PreflightCatalogs() const
+	{
+		for (std::uint64_t cell=0;cell<domain_.Cells().size();++cell) {
+			const auto classification=domain_.Cells()[cell].classification;
+			if (classification!=CellClassification::Inside && classification!=CellClassification::Cut) continue;
+			if (!volume_.Cell(cell).usable) throw std::runtime_error("classified immersed transient cell has an unusable volume rule");
+			if (volume_.StorageMode()==CutCellVolumeQuadratureStorageMode::Expanded) volume_.ValidateUsableRule(domain_,cell);
+			else volume_.ValidateUsableCompactRule(domain_,cell);
+			const auto expected=VolumePointCount(cell);
+			// Catalog validation above certifies an empty rule. The positive-rule
+			// iterator deliberately rejects empty rules, so do not enter it here.
+			if (!expected) {
+				if (classification==CellClassification::Inside) throw std::runtime_error("inside immersed transient cell has an empty volume rule");
+				continue;
+			}
+			std::size_t visited=0;
+			ForEachUsableVolumePoint(cell,[&](const VolumeQuadraturePoint&) {
+				if (visited==std::numeric_limits<std::size_t>::max()) throw std::overflow_error("immersed transient volume point count overflows");
+				++visited;
+			});
+			if (visited!=expected) throw std::logic_error("immersed transient volume point iterator count is invalid");
+			if (classification==CellClassification::Cut && volume_.Cell(cell).diagnostics.estimated_reference_volume>0) {
+				if (!ghost_.Covered(cell)) throw std::runtime_error("positive immersed transient cut cell "+std::to_string(cell)+" requires ghost coverage");
+				surface_.ValidateUsableRule(domain_,cell);
+			}
+		}
+	}
 	// Force callbacks are deliberately evaluated only here, at BeginTrial.  The
 	// stored cell/point order is the canonical volume-rule order and therefore
 	// neither retries nor later callback mutation can change an assembly.

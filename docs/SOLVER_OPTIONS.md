@@ -63,6 +63,29 @@ Embedding caller 可在 `TransientFlowRuntime`／`TransientTransportRuntime` 建
 constructor 的全域 fieldsplit defaults 行為；新的 scoped graph 使用 private defaults。
 `SolverConfiguration()` 是 runtime 開啟時的本地查詢；外層須自行提供群組錯誤協調。
 
+## 矩陣後端選項
+
+KSP／PC 的 prefix 不足以讓 factor package 讀取矩陣專用的設定。Embedding
+runtime 可對 operator matrix 呼叫 `PetscSolverOptions::Attach(Mat)`，將相同的
+private database 與 prefix 綁到矩陣；必須在 factor setup 前完成。目前接入
+共用 immersed MPI Newton core，以及 serial immersed transient／moving
+Jacobian，以及 distributed extension 的 scaled matrix。其他 runtime 的矩陣後端
+選項尚未逐一驗證。
+
+例如新的 distributed moving runtime 使用 `immersed_moving_` 時，可設定
+`-immersed_moving_mat_mumps_icntl_14 100`。這會增加 MUMPS 相對預估值的
+factor workspace 裕量，不改變方程、Jacobian 或 KSP／Newton tolerances。
+是否需要增加應依 factor failure 與有效設定判斷；不是所有案例的預設建議。
+`-immersed_moving_ksp_view` 可核對 factor 的實際 ICNTL(14)。
+
+本機 1／2／4 ranks 與 split communicator 測試直接讀取 MUMPS factor，確認
+兩個同時存在的 private snapshots 分別採用 ICNTL(14)=37／81，優先於
+unprefixed 5，且來源後續改動不影響快照；線性解保持正確。證據位於
+`outputs/hpc04/matrix-options-v1/audit.json`。此測試驗證選項隔離，並非大型
+factor 記憶體效能結論。共用 immersed Newton 的 KSP 失敗訊息也會附上
+PC failure reason，區分 structural／numerical zero pivot 與 factor memory
+exhaustion，透過同一個 collective failure stage 傳回。
+
 ## Immersed static、transient 與 moving／FSI
 
 Immersed graph domain 同樣使用 `domain_<id>_flow_`。相容性優先順序為：

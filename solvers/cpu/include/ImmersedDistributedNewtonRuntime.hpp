@@ -7,6 +7,10 @@
 
 namespace iga {
 
+// Borrowed source database. A null database preserves the global-source API.
+// A supplied database must outlive this numerical runtime.
+struct ImmersedNewtonOptionsSource { PetscOptions value=nullptr; };
+
 // Shared MPI Newton solve with owned committed/prepared states. Public MPI
 // operations are collective on the borrowed communicator. FinalizeCommit is
 // the nonthrowing publication half of a collectively successful preparation.
@@ -14,6 +18,10 @@ template<class Operator> class ImmersedDistributedNewtonRuntime {
 public:
 	template<class... Arguments>
 	ImmersedDistributedNewtonRuntime(MPI_Comm communicator,const char* prefix,Arguments&&... arguments)
+		: ImmersedDistributedNewtonRuntime(communicator,ImmersedNewtonOptionsSource{},prefix,std::forward<Arguments>(arguments)...)
+	{}
+	template<class... Arguments>
+	ImmersedDistributedNewtonRuntime(MPI_Comm communicator,ImmersedNewtonOptionsSource source,const char* prefix,Arguments&&... arguments)
 		: communicator_(communicator)
 	{
 		op_ = AllocateCollectiveRuntime<Operator>(communicator_,communicator_,std::forward<Arguments>(arguments)...);
@@ -30,7 +38,7 @@ public:
 			for (auto entry : {&committed_,&prepared_,&update_,&linear_rhs_,&linear_action_})
 				Check("distributed static vector create",VecDuplicate(op_->Assembly().State(),entry));
 			Check("distributed static committed clear",VecSet(committed_,0.0));
-			RequireCollectivePetscOptions(communicator_);
+			RequireCollectivePetscOptions(communicator_,source.value);
 			Check("distributed static KSP create",KSPCreate(communicator_,&solver_));
 			Check("distributed static KSP type",KSPSetType(solver_,KSPGMRES));
 			// A shifted LU is only a preconditioner. Stop on the physical residual,
@@ -49,7 +57,7 @@ public:
 				Check("distributed static LU shift amount",PCFactorSetShiftAmount(pc,options.lu_pivot_shift));
 			}
 			solver_options_ = AllocateCollectiveRuntime<PetscSolverOptions>(communicator_, communicator_, checked_prefix,
-				nullptr, PetscOptionEntries{}, std::set<std::string>{}, inherited_prefix, false);
+				source.value, PetscOptionEntries{}, std::set<std::string>{}, inherited_prefix, false);
 			solver_options_->Attach(solver_);
 			solver_options_->Call("distributed static KSP options", [&] { return KSPSetFromOptions(solver_); });
 			solver_options_->RecordUsed();
@@ -141,6 +149,12 @@ public:
 				if (Converged(residual,initial,initial_blocks)) { diagnostics_.converged = true; return true; }
 				ImmersedStaticFlowNewtonStep step; step.iteration = iteration; step.residual_norm = residual;
 				Check("distributed static original linear RHS",VecCopy(op_->Assembly().Residual(),linear_rhs_));
+				if (!matrix_options_bound_) {
+					// Matrix() becomes available after the first assembly. Bind
+					// before setup creates a backend factor, not in construction.
+					solver_options_->Attach(op_->Assembly().Matrix());
+					matrix_options_bound_=true;
+				}
 				Check("distributed static operators",KSPSetOperators(solver_,op_->Assembly().Matrix(),op_->Assembly().Matrix()));
 				RequireKspFactorBackend(solver_,op_->Assembly().Matrix(),communicator_);
 				const auto start = std::chrono::steady_clock::now();
@@ -156,7 +170,22 @@ public:
 				diagnostics_.ksp_reason = step.ksp_reason; diagnostics_.ksp_iterations += step.ksp_iterations;
 				CollectiveLocalStage(communicator_,"distributed static linear convergence",[&] {
 					if (!std::isfinite(step.ksp_residual_norm)) throw std::runtime_error("nonfinite static KSP residual");
-					if (step.ksp_reason <= 0) throw std::runtime_error("static immersed-flow KSP failed with reason "+std::to_string(static_cast<int>(step.ksp_reason)));
+					if (step.ksp_reason <= 0) {
+						std::string message="static immersed-flow KSP failed with reason "+std::to_string(static_cast<int>(step.ksp_reason));
+						// These local getters do not enter MPI. Preserve the original
+						// KSP reason even if the additional PC lookup is unavailable.
+						PC pc=nullptr;PCFailedReason failure=PC_NOERROR;
+						if (!KSPGetPC(solver_,&pc) && !PCGetFailedReason(pc,&failure)) {
+							message+="; PC failure reason "+std::to_string(static_cast<int>(failure));
+							switch (failure) {
+							case PC_FACTOR_STRUCT_ZEROPIVOT: message+=" (structural zero pivot)";break;
+							case PC_FACTOR_NUMERIC_ZEROPIVOT: message+=" (numerical zero pivot)";break;
+							case PC_FACTOR_OUTMEMORY: message+=" (factor memory exhausted)";break;
+							default: break;
+							}
+						}
+						throw std::runtime_error(message);
+					}
 				});
 				step.update_norm = Norm(update_);
 				Check("distributed static true linear action",MatMult(op_->Assembly().Matrix(),update_,linear_action_));
@@ -300,6 +329,7 @@ private:
 	KSP solver_ = nullptr;
 	ImmersedStaticFlowDiagnostics diagnostics_{};
 	bool fail_next_prepare_ = false,fail_next_candidate_ = false,candidate_assembly_ = false;
+	bool matrix_options_bound_ = false;
 	RuntimeCleanupResult cleanup_;
 };
 

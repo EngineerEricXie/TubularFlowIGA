@@ -12,7 +12,7 @@
 
 namespace iga {
 
-enum class ImmersedWorkPartition { CellCount, WeightedContiguous };
+enum class ImmersedWorkPartition { CellCount, WeightedContiguous, FixedBackground };
 
 struct ImmersedOwnedVolumeContribution {
 	NavierStokesSystem system;
@@ -39,7 +39,8 @@ public:
 		std::vector<ImmersedAssemblyStencil> stencils;
 		std::string signature;
 		CollectiveLocalStage(communicator_, "immersed static setup", [&] {
-			if (partition_ != ImmersedWorkPartition::CellCount && partition_ != ImmersedWorkPartition::WeightedContiguous)
+			if (partition_ != ImmersedWorkPartition::CellCount && partition_ != ImmersedWorkPartition::WeightedContiguous
+				&& partition_ != ImmersedWorkPartition::FixedBackground)
 				throw std::invalid_argument("unknown immersed work partition");
 			setup_ = std::make_unique<ImmersedStaticFlowSetup>(domain,volume,surface,ghost,options,topology_mode);
 			diagnostics_ = setup_->Diagnostics();
@@ -406,6 +407,23 @@ private:
 				const auto& task = work_[stencil.id]; if (task.kind == Kind::Target) continue;
 				const auto cell = task.kind == Kind::Ghost ? ghost_.Faces()[task.cell].minus_cell : task.cell;
 				stencil.owner = owner_by_cell[cell];
+			}
+		}
+		if (partition_ == ImmersedWorkPartition::FixedBackground) {
+			// Partition the complete background, including inactive cells. These
+			// boundaries depend only on the grid and communicator size, so moving
+			// active sets cannot migrate volume, port or gauge work. A ghost face
+			// follows its canonical minus cell. Scalar targets stay on the last rank.
+			const auto count = domain_.Background().ElementCount();
+			const auto quotient = count/static_cast<std::uint64_t>(size_);
+			const auto remainder = count%static_cast<std::uint64_t>(size_);
+			std::vector<std::uint64_t> ends;
+			for (int rank = 1; rank <= size_; ++rank)
+				ends.push_back(quotient*rank+std::min(remainder,static_cast<std::uint64_t>(rank)));
+			for (auto& stencil : stencils) {
+				const auto& task = work_[stencil.id]; if (task.kind == Kind::Target) continue;
+				const auto cell = task.kind == Kind::Ghost ? ghost_.Faces()[task.cell].minus_cell : task.cell;
+				stencil.owner = static_cast<int>(std::upper_bound(ends.begin(),ends.end(),cell)-ends.begin());
 			}
 		}
 		rank_work_.assign(size_,0);

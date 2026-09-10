@@ -7,6 +7,7 @@
 #include "RuntimeCleanup.hpp"
 #include "RuntimeConstruction.hpp"
 #include "ExecutionResources.hpp"
+#include "PetscReadArray.hpp"
 #include <petscksp.h>
 #include <map>
 
@@ -20,7 +21,8 @@ public:
 	DistributedImmersedVelocityExtension(MPI_Comm comm,const MovingCutGeometry& old_geometry,
 		const ImmersedActiveLayout& old_layout,const MovingCutGeometry& new_geometry,
 		const ImmersedActiveLayout& new_layout,std::uint32_t layers,
-		ImmersedVelocityExtensionOptions options={}) : comm_(comm)
+		ImmersedVelocityExtensionOptions options={},PetscOptions source_options=nullptr)
+		: comm_(comm),source_options_(source_options)
 	{
 		int rank=0,ranks=1;MPI_Comm_rank(comm_,&rank);MPI_Comm_size(comm_,&ranks);
 		std::string identity;
@@ -64,6 +66,111 @@ public:
 	~DistributedImmersedVelocityExtension() { Release(); }
 	DistributedImmersedVelocityExtension(const DistributedImmersedVelocityExtension&)=delete;
 	DistributedImmersedVelocityExtension& operator=(const DistributedImmersedVelocityExtension&)=delete;
+	void RequireTargetLayout(MPI_Comm communicator,const ImmersedActiveLayout& layout) const
+	{
+		int relation=MPI_UNEQUAL;
+		if(closed_||layout.HashSha256()!=topology_.new_layout_identity_
+			||MPI_Comm_compare(comm_,communicator,&relation)!=MPI_SUCCESS
+			||(relation!=MPI_IDENT&&relation!=MPI_CONGRUENT))
+			throw std::invalid_argument("extension target layout or communicator differs");
+	}
+
+	// Extract only locally owned node rows from the runtime's committed Vec.
+	// Controller/gauge rows do not enter the extension. The runtime remains
+	// responsible for certifying that this Vec is its committed state.
+	std::vector<double> ExtendCommitted(Vec committed,const ImmersedActiveLayout& source_layout,
+		double source_time,std::uint64_t source_index,double target_time,
+		std::uint64_t target_index,double dt,const std::vector<std::uint64_t>& target_ids,
+		PointIdentityLimits limits={})
+	{
+		std::vector<std::uint64_t> owned;
+		std::vector<double> coefficients;
+		std::string clock;
+		CollectiveLocalStage(comm_,"extension committed state extraction",[&] {
+			if(closed_||!committed)throw std::invalid_argument("extension committed source is unavailable");
+			if(source_layout.HashSha256()!=topology_.old_layout_identity_)
+				throw std::invalid_argument("extension committed source layout differs");
+			if(source_time!=topology_.old_time_s_||target_time!=topology_.new_time_s_
+				||!std::isfinite(dt)||!(dt>0.)||target_time!=CheckedTransientTargetTime(source_time,dt)
+				||source_index==std::numeric_limits<std::uint64_t>::max()||target_index!=source_index+1)
+				throw std::invalid_argument("extension committed clock differs");
+			MPI_Comm source_comm=MPI_COMM_NULL;int relation=MPI_UNEQUAL;
+			Local(PetscObjectGetComm(reinterpret_cast<PetscObject>(committed),&source_comm));
+			if(MPI_Comm_compare(comm_,source_comm,&relation)!=MPI_SUCCESS
+				||(relation!=MPI_IDENT&&relation!=MPI_CONGRUENT))
+				throw std::invalid_argument("extension committed communicator differs");
+			PetscInt total=0,first=0,last=0;
+			Local(VecGetSize(committed,&total));Local(VecGetOwnershipRange(committed,&first,&last));
+			if(total<0||static_cast<std::size_t>(total)!=source_layout.Rows())
+				throw std::invalid_argument("extension committed row count differs");
+			const auto physical=static_cast<PetscInt>(source_layout.NodeFieldRows());
+			const auto node_first=std::min(first,physical),node_last=std::min(last,physical);
+			if(node_first%4||node_last%4)throw std::invalid_argument("extension committed ownership splits a node");
+			PetscReadArray view;view.Acquire(committed);
+			for(PetscInt row=node_first;row<node_last;row+=4) {
+				owned.push_back(source_layout.NodeIds()[row/4]);
+				for(PetscInt component=0;component<4;++component)
+					coefficients.push_back(PetscRealPart(view.Data()[row-first+component]));
+			}
+			view.Restore();
+			Sha256 hash;hash.AppendNormalizedDouble(source_time);hash.AppendLittleEndian64(source_index);
+			hash.AppendNormalizedDouble(target_time);hash.AppendLittleEndian64(target_index);hash.AppendNormalizedDouble(dt);
+			clock=hash.Hex();
+		});
+		RequireCollectiveSameText(comm_,"extension committed clock agreement",clock);
+		return Extend(owned,coefficients,target_ids,limits);
+	}
+
+	// Stage coefficients in the target Vec's local row order, without writing
+	// either Vec. Controllers follow stable IDs; the target gauge is canonical
+	// positive zero, matching the serial moving-runtime seed policy.
+	std::vector<PetscScalar> BuildOwnedTargetSeed(Vec committed,const ImmersedActiveLayout& source_layout,
+		Vec target_template,const ImmersedActiveLayout& target_layout,double source_time,
+		std::uint64_t source_index,double target_time,std::uint64_t target_index,double dt,
+		PointIdentityLimits limits={})
+	{
+		PetscInt first=0,last=0,node_first=0,node_last=0;
+		std::vector<std::uint64_t> nodes,ports;
+		CollectiveLocalStage(comm_,"extension target seed layout",[&] {
+			RequireTargetLayout(comm_,target_layout);
+			if(!target_template)throw std::invalid_argument("extension target Vec is null");
+			MPI_Comm target_comm=MPI_COMM_NULL;int relation=MPI_UNEQUAL;
+			Local(PetscObjectGetComm(reinterpret_cast<PetscObject>(target_template),&target_comm));
+			if(MPI_Comm_compare(comm_,target_comm,&relation)!=MPI_SUCCESS
+				||(relation!=MPI_IDENT&&relation!=MPI_CONGRUENT))throw std::invalid_argument("extension target Vec communicator differs");
+			PetscInt rows=0;Local(VecGetSize(target_template,&rows));Local(VecGetOwnershipRange(target_template,&first,&last));
+			if(rows<0||static_cast<std::size_t>(rows)!=target_layout.Rows())throw std::invalid_argument("extension target Vec rows differ");
+			const auto physical=static_cast<PetscInt>(target_layout.NodeFieldRows());
+			node_first=std::min(first,physical);node_last=std::min(last,physical);
+			if(node_first%4||node_last%4)throw std::invalid_argument("extension target Vec splits a node");
+			for(PetscInt row=node_first;row<node_last;row+=4)nodes.push_back(target_layout.NodeIds()[row/4]);
+			for(auto id:target_layout.PortIds()) {
+				const auto row=target_layout.ControllerRow(id);
+				if(row>=static_cast<std::size_t>(first)&&row<static_cast<std::size_t>(last))ports.push_back(id);
+			}
+		});
+		const auto coefficients=ExtendCommitted(committed,source_layout,source_time,source_index,target_time,target_index,dt,nodes,limits);
+		std::vector<std::uint64_t> owned_ports;std::vector<double> port_values;
+		CollectiveLocalStage(comm_,"extension source controllers",[&] {
+			PetscInt source_first=0,source_last=0;Local(VecGetOwnershipRange(committed,&source_first,&source_last));
+			PetscReadArray view;view.Acquire(committed);
+			for(auto id:source_layout.PortIds()) {
+				const auto row=source_layout.ControllerRow(id);
+				if(row>=static_cast<std::size_t>(source_first)&&row<static_cast<std::size_t>(source_last)) {
+					owned_ports.push_back(id);port_values.push_back(PetscRealPart(view.Data()[row-source_first]));
+				}
+			}
+			view.Restore();
+		});
+		const auto controllers=FetchOwnedPointValues(comm_,owned_ports,port_values,ports,1,limits);
+		std::vector<PetscScalar> seed;
+		CollectiveLocalStage(comm_,"extension target seed candidate",[&] {
+			seed.assign(last-first,0.);
+			std::copy(coefficients.begin(),coefficients.end(),seed.begin());
+			for(std::size_t i=0;i<ports.size();++i)seed[target_layout.ControllerRow(ports[i])-first]=controllers[i];
+		});
+		return seed;
+	}
 
 	// Four coefficients per node: velocity xyz and scalar pressure warm start.
 	// Returns only requested target IDs, in request order, including duplicates.
@@ -185,8 +292,9 @@ private:
 		Check("extension PC type",PCSetType(pc,PCLU));
 		Check("extension LU backend",PCFactorSetMatSolverType(pc,MATSOLVERMUMPS));
 		Check("extension solver operator",KSPSetOperators(solver_,scaled_,scaled_));
-		solver_options_=AllocateCollectiveRuntime<PetscSolverOptions>(comm_,comm_,"immersed_extension_",nullptr,PetscOptionEntries{},std::set<std::string>{},"immersed_extension_",false);
+		solver_options_=AllocateCollectiveRuntime<PetscSolverOptions>(comm_,comm_,"immersed_extension_",source_options_,PetscOptionEntries{},std::set<std::string>{},"immersed_extension_",false);
 		solver_options_->Attach(solver_);
+		solver_options_->Attach(scaled_);
 		solver_options_->Call("extension solver options",[&] { return KSPSetFromOptions(solver_); });
 		solver_options_->RecordUsed();
 	}
@@ -198,6 +306,7 @@ private:
 		cleanup_.Observe("extension MatDestroy scaled",MatDestroy(&scaled_));cleanup_.Observe("extension MatDestroy original",MatDestroy(&matrix_));
 	}
 	MPI_Comm comm_;ImmersedVelocityExtension topology_;std::vector<std::int32_t> target_ids_;
+	PetscOptions source_options_=nullptr;
 	PetscInt begin_=0,end_=0;std::vector<std::map<PetscInt,double>> rows_;std::vector<std::size_t> faces_;
 	std::vector<std::uint64_t> needed_anchors_;std::array<double,4> residuals_{};
 	Mat matrix_=nullptr,scaled_=nullptr;Vec solution_=nullptr,rhs_=nullptr,work_=nullptr,scaling_=nullptr;

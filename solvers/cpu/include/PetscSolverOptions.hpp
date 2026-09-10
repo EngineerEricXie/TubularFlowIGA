@@ -117,6 +117,14 @@ public:
 	const std::string& Prefix() const noexcept { return prefix_; }
 	PetscOptions Database() const noexcept { return options_; }
 
+	// Factor packages read matrix options, including the matrix prefix. Bind
+	// the operator before KSP setup creates its factor matrix.
+	void Attach(Mat matrix) const
+	{
+		RequireCollectivePetscSuccess(communicator_, "solver matrix options database", PetscObjectSetOptions(reinterpret_cast<PetscObject>(matrix), options_));
+		RequireCollectivePetscSuccess(communicator_, "solver matrix options prefix", MatSetOptionsPrefix(matrix, prefix_.c_str()));
+	}
+
 	// Attach before creating fieldsplit children and before SetFromOptions.
 	// An already-created, unconfigured PC is updated as well.
 	void Attach(KSP solver) const

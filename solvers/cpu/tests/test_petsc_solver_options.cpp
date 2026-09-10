@@ -158,8 +158,43 @@ void RunFamily(MPI_Comm comm)
 	}
 	Require(rejected==(size>1 ? 3 : 1), "family policy disagreement was not rejected collectively");
 }
+void RunMatrixOptions(MPI_Comm comm)
+{
+#if defined(PETSC_HAVE_MUMPS)
+	int ranks=0;MPI_Comm_size(comm,&ranks);
+	Options source;
+	source.Set("-mat_mumps_icntl_14","5");
+	source.Set("-matrix_first_mat_mumps_icntl_14","37");
+	source.Set("-matrix_second_mat_mumps_icntl_14","81");
+	iga::PetscSolverOptions first(comm,"matrix_first_",source.value,{}, {},{},false);
+	iga::PetscSolverOptions second(comm,"matrix_second_",source.value,{}, {},{},false);
+	source.Set("-matrix_first_mat_mumps_icntl_14","99");
+	for(const auto& entry:std::array<std::pair<iga::PetscSolverOptions*,PetscInt>,2>{{{&first,37},{&second,81}}}) {
+		auto& options=*entry.first;Linear objects;
+		Check(MatCreateAIJ(comm,2,2,2*ranks,2*ranks,1,nullptr,0,nullptr,&objects.matrix));
+		PetscInt begin=0,end=0;Check(MatGetOwnershipRange(objects.matrix,&begin,&end));
+		for(PetscInt row=begin;row<end;++row)Check(MatSetValue(objects.matrix,row,row,2.,INSERT_VALUES));
+		Check(MatAssemblyBegin(objects.matrix,MAT_FINAL_ASSEMBLY));Check(MatAssemblyEnd(objects.matrix,MAT_FINAL_ASSEMBLY));
+		options.Attach(objects.matrix);
+		Check(MatCreateVecs(objects.matrix,&objects.solution,&objects.rhs));Check(VecSet(objects.rhs,2.));
+		Check(KSPCreate(comm,&objects.solver));Check(KSPSetType(objects.solver,KSPPREONLY));
+		PC pc=nullptr;Check(KSPGetPC(objects.solver,&pc));Check(PCSetType(pc,PCLU));Check(PCFactorSetMatSolverType(pc,MATSOLVERMUMPS));
+		options.Attach(objects.solver);Check(KSPSetOperators(objects.solver,objects.matrix,objects.matrix));
+		options.Call("matrix backend options solve",[&] { return KSPSolve(objects.solver,objects.rhs,objects.solution); });
+		KSPConvergedReason reason;Check(KSPGetConvergedReason(objects.solver,&reason));Require(reason>0,"matrix options solve failed");
+		Mat factor=nullptr;Check(PCFactorGetMatrix(pc,&factor));PetscInt actual=0;Check(MatMumpsGetIcntl(factor,14,&actual));
+		Require(actual==entry.second,"private matrix backend options were not isolated");
+		Check(VecShift(objects.solution,-1.));PetscReal error=0;Check(VecNorm(objects.solution,NORM_INFINITY,&error));Require(error<1e-12,"matrix options changed the solution");
+		options.RecordUsed();
+	}
+	std::cout<<"matrix_options ranks="<<ranks<<" workspace_percent=37,81 isolated=1 passed\n";
+#else
+	(void)comm;
+#endif
+}
 void Run(MPI_Comm comm)
 {
+	RunMatrixOptions(comm);
 	int rank = 0, size = 0; MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
 	Options source; EnableView(source);
 	source.Set("-ksp_type", "gmres"); source.Set("-ksp_rtol", "1e-12"); source.Set("-pc_type", "bjacobi");
