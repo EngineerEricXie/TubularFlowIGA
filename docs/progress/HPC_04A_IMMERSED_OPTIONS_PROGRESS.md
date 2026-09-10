@@ -168,10 +168,35 @@ gap 為 `5.5293885617803503e-17`；求解後升至上述 `8.998129639693216e-6`�
 最大相對誤差 `9.75782e-19`（本機 long double）；另驗證超出次數、零尺度及非有限原點拒絕。
 測試使用解析體積積分，未以另一個相同演算法的結果作 oracle。
 
-這是積分修復的基礎，尚未接入 cut-cell catalog：仍須建立每個裁切 cell 的封閉邊界，
-由目標矩求得符合既有有限正權重契約的規則，並驗證體積／表面分部積分、cap／失敗處理、
+這是積分修復的基礎，尚未接入 cut-cell catalog：每個裁切 cell 的目標矩已由下述截斷反導函數提供，
+仍須由目標矩求得符合既有有限正權重契約的規則，並驗證體積／表面分部積分、cap／失敗處理、
 compact／expanded 路徑與 static／moving／distributed 結果。
 現有 `rigid` failure 尚未修復，HPC-04A 不勾選完成。
+
+### Cartesian cell 的目標矩
+
+新增 `PolyhedralBoxVolumeMoments.hpp`，計算封閉多面體與任意軸向 box
+交集的正規化 monomial moments。令 `xi, eta, zeta` 為 box 正規化座標，
+採用只有 x 分量的反導函數：
+
+`F_x = dx/(a+1) * clamp(xi,0,1)^(a+1) * eta^b * zeta^c`
+
+並將 y／z 支撐限制於 `[0,1]`。其散度是 box 內所需多項式、box 外為零。
+在原封閉三角面上積分 `F_x n_x` 即得交集體積矩；x 大於 box 上界的面仍須保留，
+其飽和反導函數提供截面項。因此不能只查詢與 cell AABB 相交的三角面。
+實作裁切 y／z 支撐，再於 x 上界分段，避免非凸截面或多個截面環的 cap 三角化。
+剛好落在 x 上界的完整 facet 只分配至一個分支，避免重複計數。
+
+新增 686 個解析矩比較，涵蓋非凸 L 柱體與 box 交集、斜面四面體的 x-slab，
+仍逐軸最高六次。最大相對誤差 `8.13152e-18`。另驗證 32 個相鄰 boxes 的
+體積及 x 一階矩加總、完全內部 box（原面不與 cell 相交）、外部空 box、
+重合邊界，以及 triangle／quadrature caps 與無效 bounds 拒絕。
+原先 1,029 個全域矩測試亦通過。命令同上一節；本次 build／test logs 為
+`outputs/hpc04/rigid-debug/box-moments-{build,test}.log`。
+
+此路徑目前採 long double 裁切，不宣稱 exact predicates 或任意病態幾何下的
+誤差保證；runtime 尚未使用它。接入前仍須處理精確裁切／退化幾何、正權重擬合、
+目標矩殘差 gate 與完整失敗傳遞，並重驗原 rigid gate。
 
 ## 剩餘工作
 

@@ -439,7 +439,7 @@ cartesian_background_test: tests/test_cartesian_background.cpp include/Cartesian
 sha256_test: tests/test_sha256.cpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-polyhedral_volume_moments_test: tests/test_polyhedral_volume_moments.cpp include/PolyhedralVolumeMoments.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
+polyhedral_volume_moments_test: tests/test_polyhedral_volume_moments.cpp include/PolyhedralVolumeMoments.hpp include/PolyhedralBoxVolumeMoments.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 surface_geometry_test: tests/test_surface_geometry.cpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
