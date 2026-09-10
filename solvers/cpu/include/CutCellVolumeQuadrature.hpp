@@ -59,10 +59,30 @@ struct CompactCutCellVolumeRule {
 	std::uint32_t max_depth = 0;
 	std::vector<CompactCutCellVolumeBlock> certified_blocks;
 	std::vector<CompactCutCellVolumeSampleLeaf> sample_leaves;
+	// A fitted rule is already small and has non-lattice nodes. It exclusively
+	// uses explicit positive points, preserving their expanded order and bits.
+	std::vector<VolumeQuadraturePoint> fitted_points;
 };
+
+inline void ValidateCompactFittedVolumePoints(const CompactCutCellVolumeRule& rule)
+{
+	if(rule.fitted_points.empty())return;
+	if(!rule.certified_blocks.empty()||!rule.sample_leaves.empty())
+		throw std::invalid_argument("compact fitted points cannot mix with octree records");
+	for(std::size_t i=0;i<rule.fitted_points.size();++i) {
+		const auto& point=rule.fitted_points[i];
+		if(!std::isfinite(point.weight)||!(point.weight>0))throw std::invalid_argument("compact fitted point weight is invalid");
+		for(auto coordinate:point.parametric)if(!std::isfinite(coordinate)||coordinate<0||coordinate>1)
+			throw std::invalid_argument("compact fitted point coordinate is invalid");
+		if(i&&!(rule.fitted_points[i-1].parametric<point.parametric))
+			throw std::invalid_argument("compact fitted points are not strictly ordered");
+	}
+}
 
 inline std::size_t CompactCutCellVolumeLogicalPointCount(const CompactCutCellVolumeRule& rule)
 {
+	ValidateCompactFittedVolumePoints(rule);
+	if(!rule.fitted_points.empty())return rule.fitted_points.size();
 	if (rule.certified_blocks.size() > std::numeric_limits<std::size_t>::max()/64)
 		throw std::overflow_error("compact cut-cell logical point count overflows");
 	std::size_t result = 64*rule.certified_blocks.size();
@@ -78,6 +98,11 @@ inline std::size_t CompactCutCellVolumeLogicalPointCount(const CompactCutCellVol
 template <class Callback> void ForEachVolumePoint(const CompactCutCellVolumeRule& rule, Callback&& callback)
 {
 	if (rule.max_depth > 20) throw std::invalid_argument("compact cut-cell depth exceeds supported cap");
+	ValidateCompactFittedVolumePoints(rule);
+	if(!rule.fitted_points.empty()) {
+		for(const auto& point:rule.fitted_points)callback(point);
+		return;
+	}
 	const double lattice = static_cast<double>(std::uint64_t(1) << rule.max_depth);
 	const auto emit = [&](const std::array<std::uint32_t, 3>& lower, const std::array<std::uint32_t, 3>& upper,
 		std::uint64_t mask) {
@@ -191,6 +216,8 @@ inline bool CompactCutCellVolumeBvhOverlaps(const std::vector<CompactCutCellVolu
 inline void ValidateCompactCutCellVolumeRule(const CompactCutCellVolumeRule& rule)
 {
 	if (rule.max_depth > 20) throw std::invalid_argument("compact cut-cell depth exceeds supported cap");
+	ValidateCompactFittedVolumePoints(rule);
+	if(!rule.fitted_points.empty())return;
 	const std::uint64_t lattice = std::uint64_t(1) << rule.max_depth;
 	const auto valid_box = [&](const std::array<std::uint32_t, 3>& lower, const std::array<std::uint32_t, 3>& upper) {
 		for (std::size_t axis = 0; axis < 3; ++axis)

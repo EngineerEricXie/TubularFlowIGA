@@ -286,6 +286,24 @@ cube 特例 membership 判斷。總計 47,612 次 surface point queries；所有
 再驗證原 rigid solve 與完整 static／moving／distributed 回歸。
 邊界 moment clipping 仍是 long double 路徑，不宣稱 exact-predicate 積分誤差保證。
 
+### Compact 正權重節點表示
+
+`CompactCutCellVolumeRule` 新增獨立的 `fitted_points` 表示。非格點正權重規則
+不能再編碼為原 octree block／sample mask；新表示直接保存小型擬合規則的節點與權重，
+並禁止與 block／sample records 混用。既有 octree 建構器目前仍只產生原表示。
+
+共同 point-count、iterator 與 validation 已支援此表示：要求有限、正權重、
+`[0,1]^3` 座標與嚴格遞增節點順序，拒絕重複／逆序節點及混合表示。
+非凸 L 案例的 343 個解析矩同時檢查 expanded 與 compact；另逐點比較座標與權重的
+浮點位元以及遍歷順序，全部相同。無效表示的拒絕測試亦通過。
+`make mesh-test` 通過；完整既有 `cut_cell_volume_quadrature_test` 仍執行中，
+尚未列為通過。build／test logs 與 binary/source hashes 保存於
+`outputs/hpc04/rigid-debug/compact-fitted-*` 與 `compact-legacy-test.log`。
+
+尚未由 catalog 發布新表示：其 record／retained-byte diagnostics、hash 版本、
+expanded／compact 共用的 fitting seed 與失敗傳遞須在接入時一併完成。
+本次不宣稱完整 runtime 回歸已通過。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
