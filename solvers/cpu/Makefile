@@ -13,7 +13,7 @@ HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-conf
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+PETSC_TARGETS := distributed_immersed_extension_test distributed-immersed-extension-test body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += parallel_vtk_output_test
@@ -197,7 +197,7 @@ collective_failure_test: tests/test_collective_failure.cpp tests/test_parallel_o
 collective_petsc_options_test: tests/test_collective_petsc_options.cpp include/CollectivePetscOptions.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-parallel_ownership_test: tests/test_parallel_ownership.cpp include/DistributedWeightedAitken.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/FluidSurfaceTraction.hpp include/SurfaceP1TractionContribution.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/DistributedSurfaceTriangleKinematics.hpp include/SurfaceGhostKinematics.hpp include/OwnedPointValues.hpp include/DistributedSurfaceAreas.hpp include/OwnedScalarContributions.hpp include/DistributedPointIdentity.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp include/OwnedRowAssembler.hpp include/IgaDatabase.hpp include/SurfaceOwnershipValidation.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
+parallel_ownership_test: tests/test_parallel_ownership.cpp include/DistributedFsiConvergence.hpp include/DistributedWeightedAitken.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/FluidSurfaceTraction.hpp include/SurfaceP1TractionContribution.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/DistributedSurfaceTriangleKinematics.hpp include/SurfaceGhostKinematics.hpp include/OwnedPointValues.hpp include/DistributedSurfaceAreas.hpp include/OwnedScalarContributions.hpp include/DistributedPointIdentity.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp include/OwnedRowAssembler.hpp include/IgaDatabase.hpp include/SurfaceOwnershipValidation.hpp ../../include/DistributedSurfaceInterface.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 .PHONY: parallel-ownership-test
@@ -310,7 +310,7 @@ immersed_transient_state_test: tests/test_immersed_transient_state.cpp include/I
 immersed-transient-state-test: immersed_transient_state_test
 	./immersed_transient_state_test
 
-immersed_velocity_extension_test: tests/test_immersed_velocity_extension.cpp include/ImmersedVelocityExtension.hpp include/ImmersedTransientState.hpp include/MovingCutGeometry.hpp include/CubicCartesianSplineFace.hpp include/CutCellVolumeQuadrature.hpp include/CartesianBackground.hpp
+immersed_velocity_extension_test: tests/test_immersed_velocity_extension.cpp include/PrescribedSurfaceMotion.hpp include/ImmersedVelocityExtension.hpp include/ImmersedTransientState.hpp include/MovingCutGeometry.hpp include/CubicCartesianSplineFace.hpp include/CutCellVolumeQuadrature.hpp include/CartesianBackground.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed_velocity_extension_test: CPPFLAGS += -DIGA_IMMERSED_VELOCITY_EXTENSION_TESTING
@@ -493,7 +493,7 @@ moving-cut-geometry-test: moving_cut_geometry_test
 	./moving_cut_geometry_test
 
 fluid_surface_traction_test: CPPFLAGS += -DIGA_SINGLE_OWNER_MEMBRANE_TESTING
-fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp include/SingleOwnerMembraneRuntime.hpp include/SingleOwnerSurfaceKinematics.hpp include/SingleOwnerSurfaceTraction.hpp include/PretensionedMembrane.hpp include/SingleOwnerSurfaceLayout.hpp include/SurfaceGhostTraction.hpp include/DistributedSurfaceConservation.hpp include/DistributedFluidSurfaceTraction.hpp ../../include/FsiDomainRuntime.hpp include/SharedFluidSurfaceCoefficients.hpp include/OwnedFluidSurfaceTractionPoints.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/SurfaceP1TractionContribution.hpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
+fluid_surface_traction_test: tests/test_fluid_surface_traction.cpp include/DistributedFsiCommitCoordinator.hpp include/DistributedFsiConvergence.hpp include/DistributedWeightedAitken.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp include/SingleOwnerMembraneRuntime.hpp include/SingleOwnerSurfaceKinematics.hpp include/SingleOwnerSurfaceTraction.hpp include/PretensionedMembrane.hpp include/SingleOwnerSurfaceLayout.hpp include/SurfaceGhostTraction.hpp include/DistributedSurfaceConservation.hpp include/DistributedFluidSurfaceTraction.hpp ../../include/FsiDomainRuntime.hpp include/SharedFluidSurfaceCoefficients.hpp include/OwnedFluidSurfaceTractionPoints.hpp include/DistributedSurfaceTractionAssembly.hpp include/DistributedSurfaceProjection.hpp include/DistributedSurfaceForces.hpp include/OwnedVectorContributions.hpp include/SurfaceP1TractionContribution.hpp include/FluidSurfaceTraction.hpp include/FluidCauchyStress.hpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/MaterialSurfaceKinematics.hpp include/MaterialSurfacePatchMap.hpp include/NavierStokesElement.hpp ../../include/DistributedSurfaceInterface.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 fluid-surface-traction-test: fluid_surface_traction_test
@@ -672,6 +672,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) distributed_immersed_extension_test
 	$(RM) parallel_bezier_visualization_test
 	$(RM) distributed_point_identity_test
 	$(RM) bezier_point_signature_test
@@ -767,3 +768,10 @@ immersed_small_cut_solver_test: tests/test_immersed_small_cut_solver.cpp tests/t
 
 # Rebuild all direct traction consumers when the shared P1 kernel changes.
 moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test: include/SurfaceP1TractionContribution.hpp
+
+distributed_immersed_extension_test: tests/test_distributed_immersed_extension.cpp include/DistributedImmersedVelocityExtension.hpp include/ImmersedVelocityExtension.hpp include/OwnedPointValues.hpp include/PetscSolverOptions.hpp include/RuntimeConstruction.hpp include/RuntimeCleanup.hpp include/PrescribedSurfaceMotion.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+.PHONY: distributed-immersed-extension-test
+distributed-immersed-extension-test: distributed_immersed_extension_test
+	@for ranks in 1 2 4; do OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 180s mpiexec --bind-to core --oversubscribe -np $$ranks ./distributed_immersed_extension_test || exit $$?; done

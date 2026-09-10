@@ -6,6 +6,9 @@
 #include "SingleOwnerSurfaceTraction.hpp"
 #include "SingleOwnerSurfaceKinematics.hpp"
 #include "SingleOwnerMembraneRuntime.hpp"
+#include "DistributedWeightedAitken.hpp"
+#include "DistributedFsiConvergence.hpp"
+#include "DistributedFsiCommitCoordinator.hpp"
 #include "PretensionedMembrane.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
@@ -43,6 +46,142 @@ template <class Function> void RejectContaining(const char* expected, Function&&
 		assert(std::string(error.what()).find(expected) != std::string::npos);
 	}
 	assert(rejected);
+}
+
+// A collective fluid transaction test double: no flow numerics are claimed.
+struct PairedFluidFixture
+{
+	MPI_Comm comm=PETSC_COMM_WORLD;
+	iga::FsiTrialContext context;
+	int rank=0, failure=0, committed=1;
+	bool solved=false,prepared=false;
+	void Begin(const iga::FsiTrialContext& next) { context=next;solved=true;prepared=false; }
+	void PrepareCommit()
+	{
+		iga::CollectiveLocalStage(comm,"paired fixture fluid prepare",[&] {
+			if (!solved || (rank==0 && failure==1))throw std::runtime_error("injected fluid preparation failure");
+		});
+		prepared=true;
+	}
+	void CoordinatorRequireCommitContext(MPI_Comm incoming,const iga::FsiTrialContext& expected) const
+	{
+		int match=MPI_UNEQUAL;MPI_Comm_compare(comm,incoming,&match);
+		if ((match!=MPI_IDENT && match!=MPI_CONGRUENT) || !solved || expected.step!=context.step
+			|| expected.start_time_s!=context.start_time_s || expected.dt_s!=context.dt_s
+			|| expected.coupling_iteration!=context.coupling_iteration)
+			throw std::runtime_error("paired fixture context mismatch");
+	}
+	void CoordinatorRequireFinalizeAllowed() const
+	{
+		if (!prepared || (rank==0 && failure==2))throw std::runtime_error("injected fluid finalize gate failure");
+	}
+	void CoordinatorAbortNoexcept() noexcept { solved=false;prepared=false; }
+	void CoordinatorFinalizeCommitNoexcept() noexcept { ++committed;solved=false;prepared=false; }
+};
+
+void CheckPairedMembraneCommit(iga::SingleOwnerMembraneRuntime& membrane,
+	const iga::DistributedSurfaceLayout& layout, iga::SurfaceTraction load, int rank, int ranks)
+{
+	const auto previous=iga::BuildSurfaceKinematicsIdentitySha256(membrane.CommittedKinematics(),layout);
+	iga::FsiTrialContext context;context.step=2;context.start_time_s=.5;context.dt_s=.5;
+	load.stamp.step=2;load.stamp.time_s=1.;load.stamp.coupling_iteration=0;
+	PairedFluidFixture fluid;fluid.rank=rank;
+	for (int failure=1;failure<=4;++failure) {
+		membrane.SolveTrial(context,load,load.stamp,load.projection_identity_sha256);
+		fluid.Begin(context);fluid.failure=failure;
+		auto expected=context;
+		if(failure==3 && rank==0)expected.coupling_iteration=1;
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+		if(failure==4)membrane.SetFailureForTesting(iga::SingleOwnerMembraneRuntime::FailurePoint::AfterPrepare,0);
+#else
+		if(failure==4 && rank==0)fluid.context.dt_s=.25;
+#endif
+		int rejected=0,total=0;
+		try { iga::DistributedFsiCommitCoordinator::Commit(PETSC_COMM_WORLD,expected,fluid,membrane); }
+		catch(const std::runtime_error&) { rejected=1; }
+		MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);
+		assert(total==ranks && fluid.committed==1 && !fluid.solved && !fluid.prepared);
+		assert(iga::BuildSurfaceKinematicsIdentitySha256(membrane.CommittedKinematics(),layout)==previous);
+		Reject([&] { (void)membrane.TrialKinematics(); });
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+		membrane.SetFailureForTesting(iga::SingleOwnerMembraneRuntime::FailurePoint::None,0);
+#endif
+	}
+	fluid.failure=0;fluid.Begin(context);
+	membrane.SolveTrial(context,load,load.stamp,load.projection_identity_sha256);
+	const auto expected_publication=iga::BuildSurfaceKinematicsIdentitySha256(membrane.TrialKinematics(),layout);
+	iga::DistributedFsiCommitCoordinator::Commit(PETSC_COMM_WORLD,context,fluid,membrane);
+	assert(fluid.committed==2 && !fluid.solved && !fluid.prepared);
+	assert(iga::BuildSurfaceKinematicsIdentitySha256(membrane.CommittedKinematics(),layout)==expected_publication);
+	assert(expected_publication!=previous);
+	if(rank==0)std::cout << "paired_membrane_commit=passed failures=4 retry=passed ranks=" << ranks << '\n';
+}
+
+// Manufactured feedback law exercises real membrane solves and collective
+// coupling controls. It is not a Navier--Stokes or moving-geometry solve.
+void CheckMembraneFeedback(const iga::DistributedSurfaceLayout& layout,
+	const iga::DistributedSurfaceInterface& structure, const iga::DistributedSurfaceInterface& fluid,
+	int rank, int ranks)
+{
+	iga::PretensionedMembraneMaterial properties;
+	properties.areal_mass_kg_per_m2=1.;properties.foundation_n_per_m3=1.;
+	iga::SingleOwnerMembraneRuntime membrane(PETSC_COMM_WORLD,layout,ranks-1,structure,fluid,properties,{});
+	iga::DistributedWeightedAitken aitken(PETSC_COMM_WORLD,
+		iga::BuildDistributedSurfacePartitionIdentitySha256(layout),layout.owned_reference_lumped_areas_m2);
+	std::vector<double> first_history;
+	for (int attempt=0;attempt<2;++attempt) {
+		aitken.Reset();
+		std::vector<double> current(layout.owned_global_node_ids.size(),0.), history;
+		bool converged=false;
+		for (std::uint64_t iteration=0;iteration<8;++iteration) {
+			iga::FsiTrialContext context;context.step=1;context.dt_s=.5;context.coupling_iteration=iteration;
+			iga::SurfaceTraction load;load.interface=fluid.id;
+			load.stamp={.5,1,iteration,layout.reference_mesh_identity_sha256,layout.layout_identity_sha256,
+				iga::BuildDistributedSurfacePartitionIdentitySha256(layout),{}};
+			iga::Sha256 hash;hash.AppendLittleEndian64(iteration);
+			for (std::size_t row=0;row<current.size();++row) {
+				// Normal is -z. rho_A/dt^2 + k_A = 5, so the exact
+				// scalar membrane response is raw = 1 - 3 * current.
+				const double traction=-5.*(1.-3.*current[row]);
+				load.traction_on_structure_pa.push_back({{0.,0.,traction}});
+				load.consistent_nodal_force_n.push_back({{0.,0.,traction*layout.owned_reference_lumped_areas_m2[row]}});
+				hash.AppendNormalizedDouble(current[row]);
+			}
+			load.stamp.producer_state_identity_sha256=hash.Hex();
+			load.projection_identity_sha256=hash.Hex();
+			membrane.SolveTrial(context,load,load.stamp,load.projection_identity_sha256);
+			std::vector<double> raw(current.size()),residual(current.size());
+			for (std::size_t row=0;row<current.size();++row) {
+				raw[row]=-membrane.TrialKinematics().displacement_m[row][2];
+				assert(Near(raw[row],1.-3.*current[row],1.e-12));
+				residual[row]=raw[row]-current[row];
+			}
+			const auto decision=iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,
+				layout.owned_reference_lumped_areas_m2,residual,raw,current,1.,1.e-11,0.);
+			history.push_back(decision.area_weighted_rms_residual_m);
+			if (decision.converged) {
+				assert(iteration==2);
+				for (double value:raw)assert(Near(value,.25,1.e-12));
+				if (attempt==0) membrane.AbortTrial();
+				else { membrane.PrepareCommit();membrane.Commit(); }
+				converged=true;break;
+			}
+			membrane.AbortTrial();
+			const auto proposal=aitken.Propose(current,residual,1.);
+			assert(Near(proposal.relaxation_factor,iteration==0?.5:.25,1.e-12));
+			current=proposal.next;
+			aitken.AcceptApplied(proposal,residual,proposal.relaxation_factor);
+		}
+		assert(converged && history.size()==3);
+		assert(Near(history[0],1.,1.e-12) && Near(history[1],1.,1.e-12) && history[2]<1.e-11);
+		if (attempt==0) first_history=history;
+		else {
+			assert(history==first_history);
+			for (const auto& value:membrane.CommittedKinematics().displacement_m)CheckVector(value,{{0.,0.,-.25}},1.e-12);
+			for (const auto& value:membrane.CommittedKinematics().velocity_m_per_s)CheckVector(value,{{0.,0.,-.5}},1.e-12);
+		}
+	}
+	if(rank==0)std::cout << "membrane_collective_feedback=passed iterations=3 abort_retry=identical ranks=" << ranks << '\n';
 }
 
 void CheckP1Contribution()
@@ -463,6 +602,12 @@ int main(int argc, char** argv)
 			auto next_load=publication;next_load.stamp.time_s=1.;next_load.stamp.step=2;next_load.stamp.coupling_iteration=0;
 			next_load.stamp.producer_state_identity_sha256=std::string(64,'a');next_load.projection_identity_sha256=std::string(64,'b');
 			auto next_context=expected_trial;next_context.step=2;next_context.start_time_s=.5;next_context.coupling_iteration=0;
+			if(all_state==&pressure_state) {
+				iga::SingleOwnerMembraneRuntime paired(PETSC_COMM_WORLD,distributed_layout,ranks-1,patch_map.Interface(),interface,properties,{});
+				paired.SolveTrial(expected_trial,publication,publication.stamp,publication.projection_identity_sha256);
+				paired.PrepareCommit();paired.Commit();
+				CheckPairedMembraneCommit(paired,distributed_layout,next_load,rank,ranks);
+			}
 			{ auto stale=next_load;if(rank==0)stale.stamp.coupling_iteration++;
 				reject_runtime([&] { runtime.SolveTrial(next_context,stale,next_load.stamp,next_load.projection_identity_sha256); });
 				assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
@@ -500,6 +645,7 @@ int main(int argc, char** argv)
 			for(const auto& value:runtime.CommittedKinematics().displacement_m)CheckVector(value,{{0.,0.,-second_displacement}},1.e-12);
 #endif
 
+			if(all_state==&pressure_state)CheckMembraneFeedback(distributed_layout,patch_map.Interface(),interface,rank,ranks);
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];

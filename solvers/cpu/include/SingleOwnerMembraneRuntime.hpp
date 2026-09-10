@@ -121,16 +121,34 @@ public:
 	void Commit()
 	{
 		CollectiveLocalStage(comm_,"single owner membrane finalize preflight",[&] {
-			if(phase_!=Phase::Prepared)throw std::runtime_error("single owner membrane finalize requires preparation");
-			if(rank_==owner_)membrane_->RequireFinalizeAllowed(*trial_);
+			CoordinatorRequireFinalizeAllowed();
 		});
+		CoordinatorFinalizeCommitNoexcept();
+	}
+private:
+	friend class DistributedFsiCommitCoordinator;
+	void CoordinatorRequireCommitContext(MPI_Comm comm,const FsiTrialContext& context) const
+	{
+		int comparison=MPI_UNEQUAL;MPI_Comm_compare(comm_,comm,&comparison);
+		if((comparison!=MPI_IDENT&&comparison!=MPI_CONGRUENT)||phase_!=Phase::Solved
+			||context.step!=context_.step||context.start_time_s!=context_.start_time_s
+			||context.dt_s!=context_.dt_s||context.coupling_iteration!=context_.coupling_iteration)
+			throw std::runtime_error("single owner membrane paired commit context mismatch");
+	}
+	void CoordinatorRequireFinalizeAllowed() const
+	{
+		if(phase_!=Phase::Prepared)throw std::runtime_error("single owner membrane finalize requires preparation");
+		if(rank_==owner_)membrane_->RequireFinalizeAllowed(*trial_);
+	}
+	void CoordinatorAbortNoexcept() noexcept { ClearTrial(); }
+	void CoordinatorFinalizeCommitNoexcept() noexcept
+	{
 		// Every fallible check completed collectively before the first mutation.
 		if(rank_==owner_)membrane_->FinalizePreparedTrialNoexcept(std::move(*trial_));
 		using std::swap;swap(committed_publication_,prepared_publication_);
 		committed_time_=context_.EndTime();committed_step_=context_.step;has_committed_publication_=true;
 		ClearTrial();
 	}
-private:
 #ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
 	void InjectFailureForTesting(FailurePoint point)
 	{

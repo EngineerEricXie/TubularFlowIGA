@@ -65,44 +65,14 @@ public:
 		const MovingCutGeometry& new_geometry, const ImmersedActiveLayout& new_layout,
 		std::uint32_t layers, ImmersedVelocityExtensionOptions options = {})
 	{
-		ImmersedVelocityExtension result;
-		result.options_ = ValidateOptions(options); result.layers_ = layers;
-#ifdef IGA_IMMERSED_VELOCITY_EXTENSION_TESTING
-		TestingResetCapCounters();
-#endif
-		result.old_geometry_identity_ = old_geometry.GeometryIdentitySha256();
-		result.new_geometry_identity_ = new_geometry.GeometryIdentitySha256();
-		result.old_layout_identity_ = old_layout.HashSha256(); result.new_layout_identity_ = new_layout.HashSha256();
-		result.old_state_identity_ = old_state.HashSha256();
-		result.old_time_s_ = old_state.TimeS(); result.new_time_s_ = new_geometry.Evaluation().EvaluatedTimeS();
-		if (!old_layout.Valid() || !new_layout.Valid() || !old_state.Valid()) throw std::invalid_argument("immersed velocity extension received invalid state or layout");
-		if (old_layout.GeometryIdentity() != result.old_geometry_identity_ || new_layout.GeometryIdentity() != result.new_geometry_identity_
-			|| old_state.GeometryIdentity() != old_layout.GeometryIdentity() || old_state.NodeIds() != old_layout.NodeIds()
+		if (!old_state.Valid()) throw std::invalid_argument("immersed velocity extension received invalid state or layout");
+		if (old_state.GeometryIdentity() != old_layout.GeometryIdentity() || old_state.NodeIds() != old_layout.NodeIds()
 			|| old_state.PortIds() != old_layout.PortIds() || old_state.HasGaugeMultiplier() != old_layout.HasGaugeRow()
 			|| old_state.TimeS() != old_geometry.Evaluation().EvaluatedTimeS())
 			throw std::invalid_argument("immersed velocity extension geometry, layout, and state identities do not match");
-		if (!(result.new_time_s_ > result.old_time_s_) || !std::isfinite(result.new_time_s_))
-			throw std::invalid_argument("immersed velocity extension requires strictly increasing geometry time");
-		if (!SameGrid(old_geometry.Domain().Background().Spec(), new_geometry.Domain().Background().Spec()))
-			throw std::invalid_argument("immersed velocity extension requires one fixed Cartesian grid");
-		result.background_ = old_geometry.Domain().Background(); result.grid_ = result.background_.Spec();
-		auto old_cells = PositiveCells(old_geometry), new_cells = PositiveCells(new_geometry);
-#ifdef IGA_IMMERSED_VELOCITY_EXTENSION_TESTING
-		if (TestingFaultActive(TestingFault::EmptyOldCells)) old_cells.clear();
-		if (TestingFaultActive(TestingFault::EmptyNewCells)) new_cells.clear();
-#endif
-		if (old_cells.empty() || new_cells.empty()) throw std::invalid_argument("immersed velocity extension positive-cell set is empty");
-		result.old_cells_ = old_cells; result.new_cells_ = new_cells;
-		if (old_cells.size() > options.max_band_cells) throw std::length_error("immersed velocity extension old positive-cell set exceeds band cap");
-		if (new_cells.size() > options.max_band_cells) throw std::length_error("immersed velocity extension new positive-cell set exceeds band cap");
-		RequireLayoutNodes(old_geometry, old_cells, old_layout, options.max_nodes, "old");
-		RequireLayoutNodes(new_geometry, new_cells, new_layout, options.max_nodes, "new");
-		result.BuildBand(old_geometry.Domain().Background(), old_cells);
-		if (result.band_cells_.size() > options.max_band_cells) throw std::length_error("immersed velocity extension band cell cap exceeded");
-		result.CheckNewCells();
-		result.BuildNodes(old_layout, old_state);
-		result.BuildFaces(old_geometry.Domain().Background());
-		result.PreflightTraceGraph();
+		ImmersedVelocityExtension result;
+		result.InitializeTopology(old_geometry,old_layout,new_geometry,new_layout,layers,options);
+		result.old_state_identity_ = old_state.HashSha256();
 		result.BuildMatrixAndFactor();
 		result.ExtendVelocity(old_state);
 		result.BuildHistory(new_layout);
@@ -200,6 +170,47 @@ public:
 	}
 
 private:
+	friend class DistributedImmersedVelocityExtension;
+	// Geometry-only phase shared by the serial reference and distributed
+	// extension. It allocates no dense matrix and reads no numerical field.
+	void InitializeTopology(const MovingCutGeometry& old_geometry, const ImmersedActiveLayout& old_layout,
+		const MovingCutGeometry& new_geometry, const ImmersedActiveLayout& new_layout,
+		std::uint32_t layers, ImmersedVelocityExtensionOptions options)
+	{
+		options_ = ValidateOptions(options); layers_ = layers;
+#ifdef IGA_IMMERSED_VELOCITY_EXTENSION_TESTING
+		TestingResetCapCounters();
+#endif
+		old_geometry_identity_ = old_geometry.GeometryIdentitySha256();
+		new_geometry_identity_ = new_geometry.GeometryIdentitySha256();
+		old_layout_identity_ = old_layout.HashSha256(); new_layout_identity_ = new_layout.HashSha256();
+		old_time_s_ = old_geometry.Evaluation().EvaluatedTimeS(); new_time_s_ = new_geometry.Evaluation().EvaluatedTimeS();
+		if (!old_layout.Valid() || !new_layout.Valid()) throw std::invalid_argument("immersed velocity extension received invalid state or layout");
+		if (old_layout.GeometryIdentity() != old_geometry_identity_ || new_layout.GeometryIdentity() != new_geometry_identity_)
+			throw std::invalid_argument("immersed velocity extension geometry, layout, and state identities do not match");
+		if (!(new_time_s_ > old_time_s_) || !std::isfinite(new_time_s_))
+			throw std::invalid_argument("immersed velocity extension requires strictly increasing geometry time");
+		if (!SameGrid(old_geometry.Domain().Background().Spec(), new_geometry.Domain().Background().Spec()))
+			throw std::invalid_argument("immersed velocity extension requires one fixed Cartesian grid");
+		background_ = old_geometry.Domain().Background(); grid_ = background_.Spec();
+		auto old_cells = PositiveCells(old_geometry), new_cells = PositiveCells(new_geometry);
+#ifdef IGA_IMMERSED_VELOCITY_EXTENSION_TESTING
+		if (TestingFaultActive(TestingFault::EmptyOldCells)) old_cells.clear();
+		if (TestingFaultActive(TestingFault::EmptyNewCells)) new_cells.clear();
+#endif
+		if (old_cells.empty() || new_cells.empty()) throw std::invalid_argument("immersed velocity extension positive-cell set is empty");
+		old_cells_ = old_cells; new_cells_ = new_cells;
+		if (old_cells.size() > options.max_band_cells) throw std::length_error("immersed velocity extension old positive-cell set exceeds band cap");
+		if (new_cells.size() > options.max_band_cells) throw std::length_error("immersed velocity extension new positive-cell set exceeds band cap");
+		RequireLayoutNodes(old_geometry, old_cells, old_layout, options.max_nodes, "old");
+		RequireLayoutNodes(new_geometry, new_cells, new_layout, options.max_nodes, "new");
+		BuildBand(old_geometry.Domain().Background(), old_cells);
+		if (band_cells_.size() > options.max_band_cells) throw std::length_error("immersed velocity extension band cell cap exceeded");
+		CheckNewCells();
+		BuildNodes(old_layout);
+		BuildFaces(old_geometry.Domain().Background());
+		PreflightTraceGraph();
+	}
 	ImmersedVelocityExtension() = default;
 	struct FaceTrace { std::uint64_t minus_cell=0, plus_cell=0; std::uint8_t axis=0; double h=0.0, area=0.0; std::vector<std::int32_t> nodes; std::vector<double> alpha; std::vector<std::vector<double>> jumps; };
 #ifdef IGA_IMMERSED_VELOCITY_EXTENSION_TESTING
@@ -355,7 +366,7 @@ private:
 		reverse_cells_.clear(); reverse_distances_.clear(); reverse_cells_.reserve(reverse.size()); reverse_distances_.reserve(reverse.size()); for(const auto& value:reverse){reverse_cells_.push_back(value.first);reverse_distances_.push_back(value.second);}
 #endif
 	}
-	void BuildNodes(const ImmersedActiveLayout& old_layout,const ImmersedGlobalFlowState& old_state)
+	void BuildNodes(const ImmersedActiveLayout& old_layout)
 	{old_layout_nodes_=old_layout.NodeIds();band_nodes_=BoundedBandNodes(background_); anchor_nodes_=old_layout.NodeIds();unknown_nodes_.clear();unknown_nodes_.reserve(std::min(options_.max_unknowns,band_nodes_.size()));for(auto n:band_nodes_)if(!std::binary_search(anchor_nodes_.begin(),anchor_nodes_.end(),n)){
 			if(unknown_nodes_.size()>=options_.max_unknowns)throw std::length_error("immersed velocity extension unknown cap exceeded");
 			unknown_nodes_.push_back(n);
@@ -363,7 +374,7 @@ private:
 			TestingCapCountersState().unknown_nodes=unknown_nodes_.size();
 #endif
 		}anchor_band_positions_.reserve(anchor_nodes_.size());old_layout_positions_.reserve(anchor_nodes_.size());for(std::size_t i=0;i<anchor_nodes_.size();++i){anchor_band_positions_.push_back(BandPosition(anchor_nodes_[i]));old_layout_positions_.push_back(i);}
-		unknown_band_positions_.reserve(unknown_nodes_.size());for(auto n:unknown_nodes_)unknown_band_positions_.push_back(BandPosition(n));diagnostics_.old_nodes=old_layout.NodeIds().size();diagnostics_.band_nodes=band_nodes_.size();diagnostics_.anchors=anchor_nodes_.size();diagnostics_.unknowns=unknown_nodes_.size();(void)old_state;}
+		unknown_band_positions_.reserve(unknown_nodes_.size());for(auto n:unknown_nodes_)unknown_band_positions_.push_back(BandPosition(n));diagnostics_.old_nodes=old_layout.NodeIds().size();diagnostics_.band_nodes=band_nodes_.size();diagnostics_.anchors=anchor_nodes_.size();diagnostics_.unknowns=unknown_nodes_.size();}
 	std::size_t BandPosition(std::int32_t n) const {const auto it=std::lower_bound(band_nodes_.begin(),band_nodes_.end(),n);if(it==band_nodes_.end()||*it!=n)throw std::out_of_range("immersed velocity extension node is absent from band");return static_cast<std::size_t>(it-band_nodes_.begin());}
 	void BuildFaces(const CubicCartesianBackground& bg)
 	{

@@ -3,6 +3,7 @@
 #include "SurfaceOwnershipValidation.hpp"
 #include "DynamicWeightedAitkenRelaxation.hpp"
 #include "DistributedWeightedAitken.hpp"
+#include "DistributedFsiConvergence.hpp"
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceForces.hpp"
@@ -456,6 +457,48 @@ void CheckDistributedAitken(int rank)
 	if(rank==0)std::cout << "distributed_aitken_transaction=passed partitions=2 iterations=2\n";
 }
 
+void CheckDistributedConvergence(int rank)
+{
+	for (bool split:{false,true}) {
+		auto local=[&](std::vector<double> full) {
+			return split ? (rank==0 ? std::vector<double>{} : std::vector<double>{full[rank-1]})
+				: (rank==1 ? full : std::vector<double>{});
+		};
+		const auto weights=local({1.,3.}), residual=local({2.,-4.});
+		const auto raw=local({7.,-1.}), current=local({5.,3.});
+		auto evaluate=[&](double absolute, double relative) {
+			return iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,weights,residual,raw,current,1.,absolute,relative);
+		};
+		const auto result=evaluate(0.,.5);
+		Require(std::abs(result.area_weighted_rms_residual_m-std::sqrt(13.))<1.e-14,"global FSI RMS mismatch");
+		Require(result.max_residual_m==4. && result.displacement_scale_m==7.,"global FSI extrema mismatch");
+		Require(result.convergence_threshold_m==3.5 && !result.converged,"premature global FSI convergence");
+		Require(evaluate(3.7,0.).converged,"RMS stopping rule changed to maximum");
+		for (int fault=0;fault<5;++fault) {
+			auto bad_weights=weights, bad_residual=residual;
+			if (rank==1 && fault==0) bad_residual[0]=std::numeric_limits<double>::infinity();
+			if (rank==1 && fault==1) bad_weights[0]=0.;
+			if (rank==0 && fault==2) bad_residual.push_back(1.);
+			RejectCollectively([&] {
+				(void)iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,bad_weights,bad_residual,raw,current,
+					1.,rank==0 && fault==3 ? 1. : 0.,fault==4 ? std::numeric_limits<double>::max() : .5);
+			},PETSC_COMM_WORLD);
+		}
+		Require(!evaluate(0.,.5).converged,"failed convergence check corrupted retry");
+		const double large=std::numeric_limits<double>::max()/4.;
+		const auto extreme=iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,local({large,large}),
+			local({large,-large}),local({large,large}),local({0.,0.}),1.,0.,1.);
+		Require(extreme.area_weighted_rms_residual_m==large && extreme.converged,"scaled global RMS overflow");
+		const auto zero=iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,weights,local({0.,0.}),
+			local({0.,0.}),local({0.,0.}),1.,0.,0.);
+		Require(zero.area_weighted_rms_residual_m==0. && zero.max_residual_m==0. && zero.converged,"zero residual rejected");
+	}
+	RejectCollectively([&] {
+		(void)iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,{},{},{},{},1.,0.,0.);
+	},PETSC_COMM_WORLD);
+	if(rank==0)std::cout << "distributed_fsi_convergence=passed partitions=2 rejection_cases=11\n";
+}
+
 void CheckSurfaceOwnership(int rank)
 {
 	iga::SurfaceInterfaceRef reference{"fluid", "flow", "wall"};
@@ -619,6 +662,7 @@ int main(int argc, char** argv)
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
 		CheckDistributedAitken(rank);
+		CheckDistributedConvergence(rank);
 		CheckScalarContributions(rank);
 		CheckSurfaceForces(rank);
 		CheckOwnedPointValues(rank);

@@ -735,3 +735,71 @@ proposal 拒絕且控制狀態保持，再以錯誤 proposal relaxation 測試 a
 證據為 `outputs/hpc07/distributed-aitken-v1/audit.json`，重現沿用
 `make -C solvers/cpu parallel-ownership-test`。這完成集體 Aitken 元件，尚未完成
 strong FSI coordinator 的全域 RMS／收斂與流體／結構共同接受，HPC-07C 未勾選。
+
+
+## 全域收斂與膜回饋迭代驗證
+
+`EvaluateDistributedFsiConvergence` 以 owned scalar normal displacement／residual
+及 reference lumped areas 計算全域 weighted RMS、最大殘差與位移尺度。所有
+ranks 先核對共同 reference scale／absolute／relative tolerance，再 MAX 三個
+尺度、SUM 兩個 normalized long-double sums。空 partition 合法，全域空介面
+拒絕。權重與殘差先除以全域最大值，避免直接形成 double 的 area × residual²
+而溢位。容差和尺度合成的 threshold 若超出 finite double 則共同拒絕。
+
+停止規則沿用既有 serial coordinator：RMS <= absolute + relative × scale；
+最大殘差仍是診斷。呼叫方須先驗證唯一 surface ownership 與共同 trial epoch，
+此純 scalar reduction 不自行證明 fields 的來源。三 rank 測試涵蓋兩種 partition、
+11 次共同拒絕、失敗後重試、零殘差與接近 double 上限的大數值。特別使用
+RMS < threshold < max residual 證明沒有暗中更換停止規則。
+
+`test_fluid_surface_traction.cpp` 另將 global convergence、DistributedWeightedAitken
+與實際 SingleOwnerMembraneRuntime 接成製造解回饋迴圈。無 clamp、rho_A=1、
+foundation=1、dt=0.5、零初態，指定 normal traction = 5 × (1 − 3d)，膜的
+解析 trial displacement 為 1 − 3d。這個未鬆弛迭代不收斂；Aitken 的 0.5、
+0.25 係數使三次試算收斂至 scalar d=0.25、v=0.5。第一輪收斂後 abort，
+第二輪重跑的完整 RMS history 完全相同，prepare／commit 後 fields 符合解析值。
+
+1／3／5 ranks 均通過；5 ranks 包含兩個空 publication ranks，數值 owner 本身
+也是空 publication rank。連同三 rank ownership 回歸，共 12 份 rank reports
+exit 0、無 timeout，兩個 targets 編譯無 compiler warnings。證據保存在
+`outputs/hpc07/distributed-convergence-v1/audit.json`。可重現 commands：
+`make -C solvers/cpu parallel-ownership-test`，以及建置 `fluid_surface_traction_test`
+後以 1／3／5 ranks 執行（沿用本報告前述 PETSc 與 rank runner 設定）。
+
+回饋負載是製造解，沒有求解移動 Navier–Stokes；尚未形成正式 distributed
+strong coupling coordinator，也未驗證 fluid／structure 成對 atomic commit。
+HPC-07C 保持未勾選。
+
+
+## 流體／膜成對 commit gate
+
+`DistributedFsiCommitCoordinator::Commit` 要求參與的兩個 runtime 提供 collective
+PrepareCommit、local preflight，以及 local noexcept abort／finalize。先驗證
+communicator／各自 solved trial context 與全域共同 step／start／dt／iteration，
+依序 prepare fluid／structure，再共同檢查兩方 finalize capability。通過最後
+collective gate 後，連續執行兩次 noexcept finalize，中間不再配置、hash 或呼叫
+collective。gate 前任何協調過的失敗會對兩方執行 local noexcept abort。
+
+SingleOwnerMembraneRuntime 已透過 private friend 契約接入；單獨 Commit 也
+共用同一套 preflight／finalize，不改變膜數值方程或 publication 格式。外層
+coordinator 仍負責收斂、fields 來源與全部可能失敗的結果準備；PrepareCommit
+必須本身保證所有 live ranks 共同成功或共同拋錯。本元件不宣稱 process-loss
+容錯，也不能安全包裝未協調 local exceptions 的任意 runtime。
+
+測試使用實際膜與 fluid transaction 替身。第一步已 committed 後，第二步分別
+注入 fluid prepare、fluid finalize gate、caller context，以及遠端 rank 的 membrane
+AfterPrepare 失敗。1／3／5 ranks 都共同拒絕、兩方 committed state 保持、trial
+清除；解除失敗後兩方共同 commit 第二步，膜 committed publication identity
+等於先前捕捉的 trial identity。3／5 ranks 的注入 rank 0 不是膜數值 owner。
+
+測試 macro 版本九份 rank reports 通過；移除 macro 後重建正式 header 路徑，
+1／3 ranks 四份 reports 通過（第四個負例改為 fluid trial context 不符）。共
+13 份 exit 0、無 timeout，兩次 build 無 compiler warnings。證據及 production
+exact compiler argv 在 `outputs/hpc07/paired-commit-v1/audit.json` 與
+`production-build-command.json`。
+
+正式 moving fluid 尚未接入：MovingImmersedTransientFlowRuntime 仍使用
+PETSC_COMM_SELF 與完整 global state；ImmersedTransientDistributedRuntime
+則明確限於固定幾何。必須先完成 HPC-03D 的 active-set 更新與 distributed
+history extension，才能以真正分散式移動流體驗證本 gate 及完整 FSI coordinator。
+目前替身測試不作為 HPC-07C／07D 完成證據。

@@ -519,6 +519,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
 - [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。
+  Extension 的幾何拓樸已與完整場／dense solve 拆開，serial 回歸數值與四個
+  identity 保持。MPI sparse extension 的 1／2／4 rank 移動 active-set 對串行
+  比較、anchor bitwise、錯誤拒絕／retry、零 unknown 與空 source ranks 通過；
+  target history／clock 與移動 runtime 尚待接線，見
+  [移動 extension 進度](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)。
 
 驗收：靜態、暫態、移動案例依序通過 1／2／4 rank 比較、介面守恆及失敗重試；
 案例須有足夠元素供分配。多 rank 只能複製完整求解的實作不算完成。
@@ -742,7 +747,11 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   1／3／5 ranks 共同清理、committed state 保留、重試與最終 commit 通過；
   集體 weighted Aitken 狀態元件已串接 SUM／MAX 與成功後才替換狀態的流程，
   空 rank／分散權重對 serial 係數及錯誤後 pending state 保留驗證通過；
-  正式 coordinator 的全域收斂與跨 domain 共同 rollback 尚待接線。
+  全域 RMS／最大殘差／共同停止規則已實作；1／3／5 ranks 的實際膜製造解
+  回饋迴圈，三次 Aitken 迭代、解析 fields 與 abort／retry history 比較通過。
+  成對 commit gate 已接入膜 runtime；搭配 fluid transaction 替身的
+  1／3／5 rank prepare／finalize gate／context 失敗與雙方狀態保留、重試通過。
+  正式移動流體 coordinator 與跨 domain 共同 rollback 尚待 HPC-03D 接線。
 - [ ] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。
 
