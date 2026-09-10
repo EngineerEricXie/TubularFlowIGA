@@ -8,6 +8,10 @@ namespace iga {
 struct PolyhedralBoxMomentOptions {
 	std::size_t max_triangles=1000000;
 	std::size_t max_quadrature_points=10000000;
+	// Frame in normalized box coordinates. Centering/scaling the polynomial
+	// on the retained support avoids ill-conditioned monomials on small cuts.
+	std::array<double,3> coordinate_origin{{0,0,0}};
+	std::array<double,3> coordinate_scale{{1,1,1}};
 };
 
 namespace polyhedral_box_moment_detail {
@@ -37,7 +41,8 @@ inline Polygon Clip(const Polygon& input,unsigned axis,long double plane,bool gr
 }
 
 // Integral on surface-interior intersected with [lower,upper], in physical
-// volume units, of product ((x-lower)/(upper-lower))^exponent. A clipped
+// volume units, of product ((xi-coordinate_origin)/coordinate_scale)^exponent,
+// where xi=(x-lower)/(upper-lower). The default frame is the unit box. A clipped
 // antiderivative along x avoids constructing and triangulating section caps,
 // including sections with multiple components or holes. Original facets to
 // the RIGHT of the cell must be retained: their saturated antiderivative
@@ -56,7 +61,8 @@ inline long double PolyhedralBoxVolumeMoment(const ClosedTriangulatedSurface& su
 	unsigned degree=0;
 	long double determinant=1;
 	for(unsigned q=0;q<3;++q) {
-		if(!std::isfinite(lower[q])||!std::isfinite(upper[q])||!(upper[q]>lower[q])||exponent[q]>6)
+		if(!std::isfinite(lower[q])||!std::isfinite(upper[q])||!(upper[q]>lower[q])||exponent[q]>6
+			||!std::isfinite(options.coordinate_origin[q])||!std::isfinite(options.coordinate_scale[q])||!(options.coordinate_scale[q]>0))
 			throw std::invalid_argument("invalid polyhedral box moment bounds or exponent");
 		extent[q]=static_cast<long double>(upper[q])-lower[q];
 		determinant*=extent[q];degree+=exponent[q];
@@ -73,11 +79,14 @@ inline long double PolyhedralBoxVolumeMoment(const ClosedTriangulatedSurface& su
 			for(const auto& u:rule) for(const auto& v:rule) {
 				if(points==options.max_quadrature_points) throw std::runtime_error("polyhedral box moment quadrature cap reached");
 				++points;
-				long double value=cross_x*determinant/(exponent[0]+1)*u.second*v.second*(1-u.first);
+				long double value=cross_x*determinant*u.second*v.second*(1-u.first);
 				for(unsigned q=0;q<3;++q) {
-					if(q==0&&saturated) continue;
-					const long double coordinate=a[q]+u.first*(b[q]-a[q])+(1-u.first)*v.first*(c[q]-a[q]);
-					value*=polyhedral_moment_detail::Power(coordinate,exponent[q]+(q==0?1:0));
+					const long double coordinate=q==0&&saturated?1:a[q]+u.first*(b[q]-a[q])+(1-u.first)*v.first*(c[q]-a[q]);
+					const long double normalized=(coordinate-options.coordinate_origin[q])/options.coordinate_scale[q];
+					if(q==0) value*=options.coordinate_scale[0]/(exponent[0]+1.L)
+						*(polyhedral_moment_detail::Power(normalized,exponent[0]+1)
+						-polyhedral_moment_detail::Power(-static_cast<long double>(options.coordinate_origin[0])/options.coordinate_scale[0],exponent[0]+1));
+					else value*=polyhedral_moment_detail::Power(normalized,exponent[q]);
 				}
 				if(!std::isfinite(value)) throw std::overflow_error("polyhedral box moment contribution is not finite");
 				const long double next=sum+value;

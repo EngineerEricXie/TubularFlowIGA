@@ -84,6 +84,12 @@ int main()
 			const long double expected=(IntervalMoment(.25L,1.75L,.25L,1.5L,a)*IntervalMoment(.5L,1,.5L,1,b)
 				+IntervalMoment(.25L,1,.25L,1.5L,a)*IntervalMoment(1,1.5L,.5L,1,b))*.75L/(c+1);
 			const long double actual=iga::PolyhedralBoxVolumeMoment(concave,{{.25,.5,.125}},{{1.75,1.5,.875}},exponent);
+			iga::PolyhedralBoxMomentOptions centered;
+			centered.coordinate_origin={{.5,.5,.5}};centered.coordinate_scale={{.5,.5,.5}};
+			const long double centered_expected=(IntervalMoment(.25L,1.75L,1,.75L,a)*IntervalMoment(.5L,1,1,.5L,b)
+				+IntervalMoment(.25L,1,1,.75L,a)*IntervalMoment(1,1.5L,1,.5L,b))*IntervalMoment(.125L,.875L,.5L,.375L,c);
+			const long double centered_actual=iga::PolyhedralBoxVolumeMoment(concave,{{.25,.5,.125}},{{1.75,1.5,.875}},exponent,centered);
+			Check(std::abs(centered_actual-centered_expected)<2e-14L,"centered clipped moment mismatch");
 			// Analytic simplex x-slab: integrate x^a (1-x)^(b+c+2)
 			// using its binomial expansion; y and z integrals are beta moments.
 			long double slab=0;
@@ -110,8 +116,9 @@ int main()
 		Reject([&]{iga::PolyhedralBoxVolumeMoment(concave,{{0,0,0}},{{0,1,1}},{{0,0,0}});});
 		Reject([&]{iga::PolyhedralBoxVolumeMoment(concave,{{0,0,0}},{{1,1,1}},{{0,0,0}},{1,10000});});
 		Reject([&]{iga::PolyhedralBoxVolumeMoment(concave,{{0,0,0}},{{1,1,1}},{{0,0,0}},{10000,1});});
+		Reject([&]{iga::PolyhedralBoxMomentOptions invalid;invalid.coordinate_scale[1]=0;iga::PolyhedralBoxVolumeMoment(concave,{{0,0,0}},{{1,1,1}},{{0,0,0}},invalid);});
 		std::cout<<"polyhedral_volume_moments_test: PASS 1029 analytic moments; max_relative="<<maximum_relative<<'\n';
-		std::cout<<"polyhedral_box_volume_moments: PASS 686 analytic moments and partition/cap gates; max_relative="<<maximum_box_relative<<'\n';
+		std::cout<<"polyhedral_box_volume_moments: PASS 1029 analytic moments and partition/cap gates; max_relative="<<maximum_box_relative<<'\n';
 	} catch(const std::exception& error) { std::cerr<<error.what()<<'\n';return 1; }
 	return 0;
 }

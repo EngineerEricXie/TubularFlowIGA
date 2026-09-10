@@ -198,6 +198,37 @@ compact／expanded 路徑與 static／moving／distributed 結果。
 誤差保證；runtime 尚未使用它。接入前仍須處理精確裁切／退化幾何、正權重擬合、
 目標矩殘差 gate 與完整失敗傳遞，並重驗原 rigid gate。
 
+### 正權重擬合的實際 rigid cell 實驗
+
+`PolyhedralBoxMomentOptions` 新增 box 正規化座標內的 `coordinate_origin`／
+`coordinate_scale`，預設仍為原 `[0,1]^3` monomials。積分直接使用新 frame 的
+反導函數，避免由舊 moments 做高條件數的事後座標轉換。新增 343 個置中／縮放解析矩
+（含奇次與零矩）與零尺度拒絕；全域 1,029、box 1,029 個解析比較皆通過。
+
+已匯出原 rigid target 的 26 個 cut cells、原 quadrature nodes 與六次 tensor moments：
+
+- 原座標下的最小加權修正有 25 個 cells 產生非正權重，不能使用。
+- 在節點支撐上置中／縮放後，11 個 cells 仍確實不足 343 秩；20 個 cells 有非正權重。
+  不能將問題歸因於 solver tolerance，也不能只修正既有權重。
+- 新 frame 的邊界目標矩與 cube 解析積分相比，最大絕對差 `1.62631e-17`、
+  最大相對 L2 差 `6.97482e-17`。目標矩本身並非上述擬合失敗的來源。
+- cell 23 的 8×8×8 支撐內候選點 NNLS 仍失敗（最大矩殘差 `1.75453e-4`）；
+  擴充至 16×16×16、frame 座標乘 1.25，再排除 cell／物理域之外的點後通過。
+- 相同擴充策略在全部 26 cells 通過；每個保留 343 個正權重點。最大矩絕對殘差
+  `9.43690e-16`、最大相對 L2 殘差 `2.38848e-15`、最小保留權重 `1.17924e-8`。
+
+將這些權重用於原 `EvaluateBasis` 與原 surface rules，直接重測
+`∫ grad(N_a)·w − ∫ N_a(w·n)`：L2 降至 `4.68312e-18`、最大節點缺陷
+`1.26335e-18`，通過 `256*epsilon` 獨立 gate；原值為 `6.20621e-5`。
+這證明此實驗修正了實際 basis 的積分不相容，尚不代表完整 moving regression 通過。
+
+證據為 `outputs/hpc04/rigid-debug/{moment-data-v2,augmented-all,quadrature-corrected-v1}`；
+`positive-fit-audit.json` 保存來源、binary、矩／節點／權重與逐 cell 結果的 hashes。
+所有失敗擬合保留於 `fit-v1.json`、`fit-v2.json`、`augmented-v1.json`。
+NNLS 原型使用 NumPy 1.21.5／SciPy 1.8.0，未新增 runtime Python 依賴。
+候選點的域內判斷在此實驗使用已知 cube 邊界；正式版本須使用既有驗證過的
+surface predicates，並加入 C++ 受限擬合、資源 caps、矩殘差拒絕與完整回歸。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
