@@ -3,6 +3,8 @@
 #include "DistributedFluidSurfaceTraction.hpp"
 #include "SurfaceGhostTraction.hpp"
 #include "SingleOwnerSurfaceLayout.hpp"
+#include "SingleOwnerSurfaceTraction.hpp"
+#include "PretensionedMembrane.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
@@ -389,6 +391,30 @@ int main(int argc, char** argv)
 				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
 				check_transfer();
 			}
+			const auto owner_input=iga::GatherSurfaceTractionAtOwner(PETSC_COMM_WORLD,distributed_layout,publication,interface.id,
+				publication.stamp,publication.projection_identity_sha256,ranks-1);
+			assert(owner_input.has_value()==(rank==ranks-1));
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"single owner membrane trial verification",[&] {
+				if(!owner_input)return;
+				const auto& input=*owner_input;
+				assert(input.traction.stamp.producer_state_identity_sha256!=publication.stamp.producer_state_identity_sha256);
+				assert(input.traction.projection_identity_sha256!=publication.projection_identity_sha256);
+				// Unclamped numerical membrane fixture: rho_A=1, k_A=1,
+				// zero initial state. v=normal_traction/(1/dt+dt), d=dt*v.
+				iga::PretensionedMembraneMaterial properties;properties.areal_mass_kg_per_m2=1.;properties.foundation_n_per_m3=1.;
+				iga::PretensionedMembrane membrane(input.layout,patch_map.Interface(),interface.id,properties,{});
+				iga::PretensionedMembraneTrialContext context;context.step=1;context.start_time_s=0.;context.dt_s=.5;context.coupling_iteration=2;
+				context.expected_traction_stamp=input.traction.stamp;
+				auto trial=membrane.SolveTrial(context,input.traction);
+				const double speed=all_state==&pressure_state?8.:-3.2;
+				for(std::size_t node=0;node<trial.state.displacement_m.size();++node) {
+					assert(Near(trial.state.velocity_m_per_s[node],speed,1.e-12));
+					assert(Near(trial.state.displacement_m[node],.5*speed,1.e-12));
+				}
+				membrane.AbortTrial();trial=membrane.SolveTrial(context,input.traction);
+				const auto prepared=membrane.PrepareTrial(trial);membrane.FinalizeTrial(prepared);
+				for(double value:membrane.CommittedState().displacement_m)assert(Near(value,.5*speed,1.e-12));
+			});
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];

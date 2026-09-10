@@ -596,3 +596,30 @@ node cap 與缺少 owned node 三種情境共同拒絕並健康重試；完整 t
 保持通過。九份 reports exit 0、無 timeout；來源與 logs hashes 在
 `outputs/hpc07/single-owner-layout-v1/audit.json`，重現沿用 traction test 的
 1／3／5 rank 指令。膜 runtime 的集中求解與共同 trial 生命週期仍待完成。
+
+
+## 已驗證 traction 到單 owner 膜 trial
+
+`GatherSurfaceTractionAtOwner` 串接 layout／area 收集與 stamped traction transfer，
+只在指定 owner 回傳完整數值 layout 和新的內部 `SurfaceTraction`。原分區
+publication 全部先完成 stamp／projection 驗證，然後收集每個原 publication
+的完整 identity；新的 producer 與 projection hashes 使用獨立 bridge domain，
+綁定來源 identities、新 layout、owner 與完整場值。這不是略過驗證後重貼原
+stamp。額外 contributor metadata 僅在指定 owner 保存 64×rank_count bytes。
+
+1／3／5 ranks 的真實壓力／黏性 traction 經 bridge 後，只有最後一個 rank
+建立 `PretensionedMembrane` 並求解。數值 fixture 不設 clamps，採零初始狀態、
+areal mass=1、foundation=1、damping=pretension=0、dt=0.5；因此均勻 normal
+traction `t` 的標量速度為 `t/(1/dt+dt)`，位移為 `dt*v`。壓力案例速度 8、
+位移 4；黏性案例速度 -3.2、位移 -1.6，全部 nodes 在 1e-12 尺度容差內相符。
+
+同一 owner 的 abort 後重試、prepare／commit 與 committed displacement 檢查
+也通過，其餘 ranks 僅參與資料交換與集體錯誤協調。這是明確的不設 clamps
+數值測試，不代表原 patch map 的 clamped seam 已完成完整 FSI 運動驗收。
+九份 rank reports exit 0、無 timeout，證據在
+`outputs/hpc07/single-owner-membrane-v1/audit.json`；重現沿用 traction test 的
+1／3／5 rank 指令。
+
+Bridge 已可驅動實際單 owner 膜數值核心，但集中求解目前由測試 driver 接線；
+正式 distributed runtime 的持久 trial 狀態、共同 prepare／commit／abort、
+kinematics 分送與強耦合仍待完成，HPC-07B/C 尚未勾選。
