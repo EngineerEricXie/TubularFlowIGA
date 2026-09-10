@@ -173,6 +173,10 @@ public:
 	const PretensionedMembraneState& CommittedState() const noexcept { return committed_state_; }
 	const std::string& ModelIdentitySha256() const noexcept { return model_identity_sha256_; }
 	const std::string& CommittedStateIdentitySha256() const noexcept { return committed_state_identity_sha256_; }
+	// Validate a restore candidate against this model's shape and clamps,
+	// without changing its accepted state or trial capabilities.
+	std::string CheckpointStateIdentitySha256(const PretensionedMembraneState& state) const
+	{ return BuildStateIdentity(state); }
 
 	PretensionedMembraneTrial SolveTrial(const PretensionedMembraneTrialContext& context,
 		const SurfaceTraction& traction) const

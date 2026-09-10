@@ -4,6 +4,8 @@
 #include "ImmersedDistributedNewtonRuntime.hpp"
 #include "ImmersedMovingTransientDistributedOperator.hpp"
 #include "DistributedFluidSurfaceTraction.hpp"
+#include "OwnedCheckpointVector.hpp"
+#include "MovingConservationCheckpoint.hpp"
 
 namespace iga {
 
@@ -13,17 +15,17 @@ struct ImmersedMovingDistributedClock {
 	bool trial_active=false;
 };
 
-struct ImmersedMovingDistributedConservation {
-	ImmersedTransientFlowConservationDiagnostics endpoint;
-	std::string source_geometry_identity_sha256,target_geometry_identity_sha256;
-	std::string source_publication_identity_sha256,target_publication_identity_sha256;
-	double source_time_s=0,target_time_s=0,dt_s=0;
-	std::uint64_t source_index=0,target_index=0;
-	double source_audited_volume_m3=0,target_audited_volume_m3=0;
-	double backward_euler_volume_rate_m3_s=0,reynolds_defect_m3_s=0,moving_mass_defect_m3_s=0;
-	double normalization_scale_m3_s=1;
-	double normalized_divergence_theorem_defect=0,normalized_reynolds_defect=0;
-	double normalized_moving_mass_defect=0,normalized_wall_relative_leakage=0;
+// In-memory restore candidate. The outer bundle authenticates configuration,
+// geometry and file payloads before supplying this state. Fields remain owned.
+struct ImmersedMovingAcceptedCheckpoint {
+	OwnedCheckpointVector field;
+	std::map<std::string,double> port_control_values;
+	std::string geometry_identity_sha256,publication_identity_sha256,layout_identity_sha256;
+	std::string material_identity_sha256;
+	std::uint64_t step=0;
+	double time_s=0;
+	ImmersedMovingDistributedConservation conservation;
+	std::optional<MaterialSurfaceKinematics> previous_material,current_material;
 };
 
 // Owns accepted and candidate geometry epochs. Numerical fields remain in
@@ -155,6 +157,67 @@ public:
 	{
 		RequireLocalTrial();return trial_->flow->FlowOperator().Inputs().History();
 	}
+	ImmersedMovingAcceptedCheckpoint CaptureAcceptedCheckpoint() const
+	{
+		RequireIdle();ImmersedMovingAcceptedCheckpoint result;
+		CollectiveLocalStage(comm_,"moving accepted checkpoint capture",[&] {
+			if(!committed_conservation_||!committed_previous_material_||clock_.index==0)
+				throw std::logic_error("moving checkpoint requires an accepted transition");
+			result.field=CaptureOwnedCheckpointVector(committed_->flow->CommittedState());
+			for(const auto& port:options_.ports)result.port_control_values.emplace(port.id,port.value);
+			result.geometry_identity_sha256=committed_->geometry->GeometryIdentitySha256();
+			result.publication_identity_sha256=committed_->geometry->PublicationIdentitySha256();
+			result.layout_identity_sha256=committed_->Layout().HashSha256();
+			result.material_identity_sha256=committed_->geometry->Evaluation().ContentIdentitySha256();
+			result.step=clock_.index;result.time_s=clock_.time_s;result.conservation=*committed_conservation_;
+			result.previous_material.emplace(*committed_previous_material_);result.current_material.emplace(committed_->geometry->Evaluation());
+		});
+		return result;
+	}
+	// Fresh target geometry and initial_index must already represent the saved
+	// accepted epoch. Shard redistribution belongs to the outer checkpoint reader.
+	void RestoreAcceptedCheckpoint(const ImmersedMovingAcceptedCheckpoint& state)
+	{
+		RequireIdle();std::unique_ptr<ImmersedMovingDistributedConservation> conservation;
+		std::unique_ptr<MaterialSurfaceKinematics> previous_material;
+		std::vector<PetscScalar> values;std::string conservation_identity;
+		CollectiveLocalStage(comm_,"moving accepted checkpoint restore preflight",[&] {
+			if(has_accepted_transition_||committed_conservation_||clock_.index==0||!state.previous_material||!state.current_material
+				||state.step!=clock_.index||state.time_s!=clock_.time_s
+				||state.geometry_identity_sha256!=committed_->geometry->GeometryIdentitySha256()
+				||state.publication_identity_sha256!=committed_->geometry->PublicationIdentitySha256()
+				||state.layout_identity_sha256!=committed_->Layout().HashSha256()
+				||state.material_identity_sha256!=committed_->geometry->Evaluation().ContentIdentitySha256()
+				||state.conservation.target_index!=state.step||state.conservation.target_time_s!=state.time_s
+				||state.conservation.target_geometry_identity_sha256!=state.geometry_identity_sha256
+				||state.conservation.target_publication_identity_sha256!=state.publication_identity_sha256)
+				throw std::invalid_argument("moving checkpoint target epoch or identity differs");
+			if(state.port_control_values.size()!=options_.ports.size())throw std::invalid_argument("moving checkpoint port catalog differs");
+			for(const auto& port:options_.ports) {
+				const auto found=state.port_control_values.find(port.id);
+				if(found==state.port_control_values.end()||!std::isfinite(found->second)||found->second!=port.value)
+					throw std::invalid_argument("moving checkpoint port control differs from fresh target");
+			}
+			state.previous_material->Validate();state.current_material->Validate();
+			if(state.current_material->ContentIdentitySha256()!=state.material_identity_sha256
+				||state.previous_material->ContentIdentitySha256()!=committed_->geometry->PreviousMaterialIdentitySha256()
+				||state.previous_material->EvaluatedTimeS()!=state.conservation.source_time_s)
+				throw std::invalid_argument("moving checkpoint material history differs");
+			previous_material=std::make_unique<MaterialSurfaceKinematics>(*state.previous_material);
+			const auto metadata=SerializeMovingConservationCheckpoint(state.conservation);
+			checkpoint_metadata::Writer controls;controls.Reals(state.port_control_values);
+			Sha256 hash;distributed_surface_detail::AppendString(hash,metadata);
+			distributed_surface_detail::AppendString(hash,controls.Bytes());conservation_identity=hash.Hex();
+			ValidateOwnedCheckpointVector(committed_->flow->CommittedState(),state.field);
+			conservation=std::make_unique<ImmersedMovingDistributedConservation>(state.conservation);
+			values.assign(state.field.values.begin(),state.field.values.end());
+		});
+		RequireCollectiveSameText(comm_,"moving restore metadata agreement",conservation_identity);
+		// The numerical setter stages owned values and completes fallible PETSc
+		// copies before swapping its accepted vector. Metadata publication follows.
+		committed_->flow->SetCommittedOwnedState(values);
+		committed_conservation_.swap(conservation);committed_previous_material_.swap(previous_material);has_accepted_transition_=true;
+	}
 	void SetCommittedOwnedState(const std::vector<PetscScalar>& values)
 	{
 		RequireIdle();committed_->flow->SetCommittedOwnedState(values);committed_conservation_.reset();
@@ -267,10 +330,12 @@ public:
 		RequireTrial();
 		auto value=BuildConservation();
 		std::unique_ptr<ImmersedMovingDistributedConservation> candidate;
+		std::unique_ptr<MaterialSurfaceKinematics> previous_material;
 		CollectiveLocalStage(comm_,"moving conservation preparation",[&] {
 			candidate=std::make_unique<ImmersedMovingDistributedConservation>(std::move(value));
+			previous_material=std::make_unique<MaterialSurfaceKinematics>(committed_->geometry->Evaluation());
 		});
-		trial_->flow->PrepareCommit();trial_conservation_.swap(candidate);
+		trial_->flow->PrepareCommit();trial_conservation_.swap(candidate);trial_previous_material_.swap(previous_material);
 	}
 	void FinalizeCommit() noexcept
 	{
@@ -278,8 +343,9 @@ public:
 		trial_->flow->FinalizeCommit();trial_->flow->FlowOperator().ReleaseTrial();
 		retired_.swap(committed_);committed_.swap(trial_);
 		committed_conservation_.swap(trial_conservation_);
+		committed_previous_material_.swap(trial_previous_material_);trial_previous_material_.reset();
 		clock_.time_s=clock_.target_time_s;clock_.index=clock_.target_index;
-		clock_.trial_active=false;clock_.dt_s=0;
+		clock_.trial_active=false;clock_.dt_s=0;has_accepted_transition_=true;
 	}
 	void Commit()
 	{
@@ -287,7 +353,7 @@ public:
 	}
 	void AbortPrepared() noexcept
 	{
-		if (trial_) { trial_->flow->AbortPrepared();trial_conservation_.reset(); }
+		if (trial_) { trial_->flow->AbortPrepared();trial_conservation_.reset();trial_previous_material_.reset(); }
 	}
 	// A failed Newton attempt rolls back to the mapped seed and retains frozen
 	// history for retry. AbortTrial instead discards the entire candidate epoch.
@@ -304,7 +370,7 @@ public:
 		// BeginTrial clears retired_ before installing a trial, and successful
 		// FinalizeCommit removes trial_; both pointers cannot be populated here.
 		retired_.swap(trial_);
-		trial_conservation_.reset();
+		trial_conservation_.reset();trial_previous_material_.reset();
 		clock_.trial_active=false;clock_.dt_s=0;
 		clock_.target_time_s=clock_.time_s;clock_.target_index=clock_.index;
 	}
@@ -313,7 +379,7 @@ public:
 	{
 		CollectiveLocalStage(comm_,"moving abort guard",[&] { RequireLocalOpen(); });
 		if (!trial_) return;
-		auto discarded=std::move(trial_);trial_conservation_.reset();
+		auto discarded=std::move(trial_);trial_conservation_.reset();trial_previous_material_.reset();
 		clock_.trial_active=false;clock_.dt_s=0;clock_.target_time_s=clock_.time_s;clock_.target_index=clock_.index;
 		discarded->Close();
 	}
@@ -328,7 +394,7 @@ public:
 	void Close()
 	{
 		closed_=true;clock_.trial_active=false;clock_.dt_s=0;
-		trial_conservation_.reset();committed_conservation_.reset();
+		trial_conservation_.reset();trial_previous_material_.reset();committed_conservation_.reset();committed_previous_material_.reset();
 		std::exception_ptr error;
 		for (auto* epoch:{&trial_,&retired_,&committed_}) if (*epoch) {
 			try { (*epoch)->Close(); } catch (...) { if (!error) error=std::current_exception(); }
@@ -403,8 +469,9 @@ private:
 	std::unique_ptr<PetscSolverOptions> options_snapshot_;
 	std::unique_ptr<Epoch> committed_,trial_,retired_;
 	std::unique_ptr<ImmersedMovingDistributedConservation> committed_conservation_,trial_conservation_;
+	std::unique_ptr<MaterialSurfaceKinematics> committed_previous_material_,trial_previous_material_;
 	ImmersedStaticFlowDiagnostics closed_diagnostics_;
-	bool closed_=false;
+	bool closed_=false,has_accepted_transition_=false;
 };
 
 } // namespace iga

@@ -89,6 +89,7 @@ public:
 	const std::string& GeometryIdentitySha256() const noexcept { return diagnostics_.geometry_identity_sha256; }
 	const std::string& PublicationIdentitySha256() const noexcept { return diagnostics_.publication_identity_sha256; }
 	const std::string& IdentitySha256() const noexcept { return GeometryIdentitySha256(); }
+	const std::string& PreviousMaterialIdentitySha256() const noexcept { return previous_material_identity_sha256_; }
 
 private:
 	MovingCutGeometry(CubicCartesianGridSpec grid, MaterialSurfaceKinematics kinematics,
@@ -98,6 +99,7 @@ private:
 			options.volume_fitting?&*options.volume_fitting:nullptr),
 		  surface_(domain_, options.surface), ghost_(domain_, volume_, options.ghost), options_(std::move(options))
 	{
+		if(previous)previous_material_identity_sha256_=previous->Evaluation().ContentIdentitySha256();
 		kinematics_.Validate();
 		ValidateCatalogs();
 		diagnostics_.time_s = kinematics_.EvaluatedTimeS();
@@ -312,6 +314,7 @@ private:
 	CutCellGhostPenaltyCatalog ghost_;
 	MovingCutGeometryOptions options_;
 	MovingCutGeometryDiagnostics diagnostics_;
+	std::string previous_material_identity_sha256_;
 };
 
 } // namespace iga

@@ -285,4 +285,5 @@ int main()
 {
 	ZeroLoadAndClamps(); LinearityAndRetry(); SpatialRefinement(); TemporalRefinement(); ContractRejections();
 	std::cout << "pretensioned membrane tests passed\n";
+	return 0;
 }

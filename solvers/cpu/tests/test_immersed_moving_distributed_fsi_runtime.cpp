@@ -154,6 +154,45 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 				<<" iterations="<<result.history.size()<<" rms="<<last.displacement.area_weighted_rms_residual_m
 				<<" velocity_residual_times_dt="<<last.maximum_velocity_residual_times_dt_m
 				<<" threshold="<<last.displacement.convergence_threshold_m<<" passed"<<std::endl;
+			if(deforming) {
+				const auto conservation=runtime.ConservationDiagnostics();
+				iga::CollectiveLocalStage(comm,"strong FSI owned validation output",[&] {
+					const auto& active=runtime.CommittedLayout();const auto values=Owned(runtime.CommittedState());
+					std::cout<<"strong_layout "<<context.step<<' '<<active.NodeFieldRows()<<' '<<active.Rows()<<' '<<layout.global_node_count<<'\n';
+					for(std::size_t local=0;local<values.size();++local) {
+						const auto row=runtime.CommittedRowBegin()+static_cast<PetscInt>(local);
+						const bool node=static_cast<std::size_t>(row)<active.NodeFieldRows();
+						std::cout<<"strong_field "<<context.step<<' '<<row<<' '
+							<<(node?active.NodeIds()[row/4]:UINT64_MAX)<<' '<<(node?row%4:4)<<' '<<values[local]<<'\n';
+					}
+					const auto& traction=fluid.CommittedTraction();const auto& kinematics=structure.CommittedKinematics();
+					for(std::size_t local=0;local<layout.owned_global_node_ids.size();++local) {
+						std::cout<<"strong_surface "<<context.step<<' '<<layout.owned_global_node_ids[local];
+						for(const auto* value:{&kinematics.displacement_m[local],&kinematics.velocity_m_per_s[local],
+							&traction.traction_on_structure_pa[local],&traction.consistent_nodal_force_n[local]})
+							for(double component:*value)std::cout<<' '<<component;
+						std::cout<<'\n';
+					}
+					for(std::size_t iteration=0;iteration<result.history.size();++iteration) {
+						const auto& value=result.history[iteration];const auto& displacement=value.displacement;
+						std::cout<<"strong_iteration "<<context.step<<' '<<iteration<<' '
+							<<displacement.area_weighted_rms_residual_m<<' '<<displacement.max_residual_m<<' '
+							<<displacement.displacement_scale_m<<' '<<displacement.convergence_threshold_m<<' '
+							<<value.maximum_velocity_residual_times_dt_m<<' '<<value.relaxation<<'\n';
+					}
+					for(const auto& port:runtime.Diagnostics().ports)
+						std::cout<<"strong_port "<<context.step<<' '<<port.id<<' '<<port.measurement.area_m2<<' '
+							<<port.measurement.outward_flow_m3_s<<' '<<port.measurement.mean_pressure_pa<<' '
+							<<port.measurement.mean_normal_traction_pa<<'\n';
+					std::cout<<"strong_conservation "<<context.step;
+					for(double value:{conservation.normalized_divergence_theorem_defect,conservation.normalized_reynolds_defect,
+						conservation.normalized_moving_mass_defect,conservation.normalized_wall_relative_leakage,
+						conservation.endpoint.normalized_discrete_moving_wall_continuity_defect,
+						policy.divergence_theorem,policy.reynolds,policy.moving_mass,policy.wall_relative_leakage,policy.discrete_continuity})
+						std::cout<<' '<<value;
+					std::cout<<std::endl;
+				});
+			}
 		}
 		runtime.Close();return;
 	}

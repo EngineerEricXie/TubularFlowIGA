@@ -754,7 +754,8 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   1／3／5 ranks 解析向量場、空分區與拒絕／重試；正式 runtime 的持久
   trial 已新增 single-owner runtime，1／3／5 ranks 的兩步解析膜解、
   abort／prepare／commit、phase 拒絕與 committed state 保留通過；strong
-  coupling coordinator、clamped moving trial 與 checkpoint 接線仍待完成。
+  coupling coordinator 與 clamped moving trial 已完成下述接線；完整 FSI
+  checkpoint 仍待完成。
   Moving runtime 的 owned patch state capture 與 stamped traction publication
   已接線；兩步 active-layout 改變的 1／2／4-rank oracle 比較通過；同一
   trial 擷取保持 exact，重新數值求解沿用既有逐場 scaled L2 門檻，見
@@ -776,10 +777,16 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   場值 1／2／4-rank 比較通過。正式強耦合入口已接上
   全域 Aitken、位移／速度收斂與 paired commit；4-rank communicator
   拒絕、提交前故障與健康重試通過。非零 fixed-point 兩步已通過 4 ranks，
-  其他 rank 數與迭代耗盡重試仍在驗收，尚不勾選，見
+  1／2／4-rank 完整 fields／history／ports／守恆比較與 1-rank 迭代耗盡
+  rollback／retry 亦已通過。跨節點驗收仍待完成，保持未勾選，見
   [強耦合接線與驗證進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
 - [ ] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。
+  單機 1／2／4-rank 非零強耦合矩陣已通過；膜 checkpoint 的跨 rank 數
+  續算、moving-fluid 實際 MPI 檔案 bundle 與 4-rank changing-layout
+  續算亦已驗證。流體跨 rank 數檔案續跑仍在驗收；完整 FSI paired
+  restart、可變 port controls 的 numerical restart 及跨節點驗收尚待完成，
+  見 [checkpoint 與強耦合進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
 
 驗收：同一 FSI 問題確實分散計算，單機多 rank 與跨節點結果通過數值門檻；
 清楚區分「流體已平行、膜集中求解」與「流體／結構皆分散」的完成範圍。

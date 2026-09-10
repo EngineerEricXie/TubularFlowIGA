@@ -6,9 +6,11 @@ traction publication 已通過 1／2／4 ranks。Same-trial capture 與 accepted
 local abort 入口另已通過 4 ranks 驗收。Moving-fluid FSI adapter 已接上真實
 膜 runtime 與 paired commit：全 clamped 交易通過 1／2／4 ranks，非零
 變形交易與十進位跨步各通過 4 ranks。非零案例的 owned 場值矩陣已通過
-1／2／4 ranks；非零強耦合兩步已通過 4 ranks，其他 rank 數、完整故障
-重試與 checkpoint 尚待驗收，
-HPC-07A／HPC-03D 不據此勾選。
+1／2／4 ranks；非零強耦合兩步及完整 field／history／port／守恆比較也已
+通過 1／2／4 ranks，提交前故障與迭代耗盡 rollback／retry 已分別驗證。
+膜 checkpoint 支援跨 rank 數還原；moving fluid 的材料／owned field／
+守恆紀錄已接到實際 MPI 檔案 bundle，4-rank changing-layout 續算通過。
+完整 FSI paired restart 與跨節點驗收尚待完成，HPC-07A／HPC-03D 不據此勾選。
 
 每批凍結 source／binary 的精確對應另核對於
 `outputs/hpc03/moving-graph-v1/batch-source-resolution-audit.json`。
@@ -418,3 +420,277 @@ atomic bundle、restore candidate 或完整續跑，因此 HPC-05D／HPC-07D
 每步欄位與 logs hashes 核對於 `strong-fsi-flow-scale-4-audit.json`。
 這完成單工作站 4-rank 非零兩步強耦合；尚未完成其他 rank 數的收斂歷程／
 fields 比較、正在執行的 exhaustion retry，以及完整 checkpoint。
+
+下一批 `strong` test revision 在每個 accepted step 輸出完整 owned field
+與穩定 node ID／component mapping、表面十二分量、端口 area／flow／pressure／
+normal traction、五項守恆值及其門檻，另保存每次 Aitken 的 RMS／max／
+scale／threshold／velocity residual／relaxation。這些是 regression 輸出，
+用於後續 1／2／4 ranks 的逐步場值與歷程對照；尚未據此宣稱矩陣通過。
+
+`scripts/hpc_check_strong_fsi.py` 讀取上述兩步輸出，要求每個 rank 正常
+退出、log hashes 一致、owned rows／surface IDs 唯一完整、node/component
+映射一致、兩個 ports 與守恆紀錄完整，以及各 rank 的 shared history 完全
+一致。逐步場值沿用分量 scaled L2 <1e-8；迭代、端口與守恆數值沿用
+`1e-12 + 1e-6*abs(reference)`，physical limits 必須完全相同。最後一輪
+須同時通過位移／速度門檻，先前輪次須未收斂並有合法 relaxation。
+
+正常合成輸出與 15 種損壞注入已通過，包含缺少紀錄／rank、failed rank、
+digest 損壞、rank history 分歧、錯誤 mapping、NaN、假收斂、超大 iteration
+count 與數值／policy 差異，見 `strong-fsi-checker-negative-audit.json`。
+這是檢查器協定驗證；實際 1／2／4-rank numerical matrix 仍待完成。
+
+```bash
+python3 scripts/hpc_check_strong_fsi.py \
+  --reference-run outputs/hpc03/moving-graph-v1/strong-fsi-history-1 \
+  --run outputs/hpc03/moving-graph-v1/strong-fsi-history-1 \
+  --run outputs/hpc03/moving-graph-v1/strong-fsi-history-2 \
+  --run outputs/hpc03/moving-graph-v1/strong-fsi-history-4
+```
+
+膜數值 payload 元件 `MembraneCheckpoint.hpp` 已加入。保存 model／state
+identity、authority 提供的 accepted step／time、穩定 node IDs 與 scalar
+位移／速度；讀回須符合外部預期的 model、state identity 與 clock，並經
+模型自身的 shape／finite／clamp 驗證。只回傳 restore candidate，不直接
+替換已接受狀態。預設 4096 nodes，受既有 metadata byte cap 約束；時鐘由
+outer runtime／bundle 提供，core 本身不具 accepted-clock authority。
+
+`make -C solvers/cpu membrane_checkpoint_test pretensioned_membrane_test` 已
+無警告建置，兩個 executable 皆 exit 0。非零膜狀態逐 byte 往返一致，
+更換 dt 與載荷後的下一步位移／速度／committed state identity 與不中斷
+運行精確相同；錯誤 model／state／clock、截斷、trailing bytes、超限與
+payload 損壞均拒絕且不改動模型。證據綁定於
+`membrane-checkpoint-source-manifest.json`。這只驗證 numerical core 的
+續算；single-owner wrapper clocks／publications、分散 fluid shards 與
+atomic paired restore 尚未接線，不能視為完整 FSI checkpoint。
+
+追加 stable node ID 損壞、clamped node 非零位移與正無限大 payload
+拒絕案例，重新建置無警告、測試 exit 0；來源、binary 與 logs 綁定於
+`membrane-checkpoint-guards-source-manifest.json`，前版來源與證據保留。
+
+`SingleOwnerMembraneRuntime` 現提供 collective `CaptureCheckpoint` 與
+fresh-runtime-only `RestoreCheckpoint`。僅 numerical owner 持有 payload；
+外部 bundle 的 metadata SHA-256 綁定 configuration、numerical bytes、
+accepted context 與原 publication producer。還原先驗證並建構 numerical
+candidate，再依目標 partition 分送 kinematics，全部成功後才以 noexcept
+swap 接受。獨立保存 committed context，避免 abort 後誤用 trial clock。
+
+`fluid_surface_traction_test` 的 pressure／viscous 非零案例已在 1／2／4
+ranks 通過，7 份 rank reports 均 exit 0、無 timeout，來源及 log hashes
+已核對於 `wrapper-checkpoint-matrix-audit.json`。涵蓋 metadata／numerical
+損壞及截斷的 collective 拒絕、健康 retry、publication identity 與 payload
+精確往返、下一步 trial identity 與不中斷運行精確一致、active-trial capture
+與重複 restore 拒絕，以及 abort 後保存最後 accepted clock。每次讀寫使用
+相同 rank 數；跨 rank 數重分配、fluid shards 與 paired bundle 原子還原
+仍待驗證／整合，本結果不代表完整 FSI restart 已完成。
+
+後續跨作業驗證已完成 1→2、1→4、4→1 ranks：獨立 MPI processes
+寫入／讀取 pressure 與 viscous 非零案例的膜 checkpoint，來源 numerical
+owner 為最後一個 rank，讀取端改為 rank 0。5 次作業、12 份 rank reports
+均通過；metadata、numerical payload 重新保存後逐 byte 相同，accepted
+位移／速度及下一步結果與目標 rank 數的不中斷 runtime 比較滿足
+`abs(a-b) <= 1e-12 * max(1,abs(a),abs(b))`。
+`wrapper-repartition-matrix-audit.json` 綁定來源、checkpoint 檔案及全部
+rank logs，`wrapper-repartition-matrix-runs.json` 保留完整執行命令。
+測試使用 `-membrane_checkpoint_write DIR`／`-membrane_checkpoint_read DIR`
+且 DIR 由 driver 預先建立；這些 fixture 檔案讀寫不是 production bundle
+的原子發布協定。膜 wrapper 的跨 rank 數續算已驗證，fluid shards 與
+paired bundle restore 仍待完成。
+
+再於 restore candidate 已完整分送、尚未 swap 接受前注入 rank 0 失敗。
+1／2／4 ranks 均 collective 拒絕，所有 rank 仍無 committed publication、
+也不能 capture checkpoint；移除故障後可健康重試，publication 與下一步
+trial identity 精確一致。相同執行亦讀取前版 1-rank checkpoint 驗證相容
+續算。7 份 reports、來源與 logs 已核對於
+`wrapper-restore-failure-matrix-audit.json`。故障入口僅在測試 macro 下提供。
+
+非零 strong FSI 的 1-rank exhaustion／retry 長測試已完成：先限制為
+1 次迭代並確認明確的未收斂錯誤、accepted state exact rollback，再用
+正常控制完成兩步（6／7 iterations）。step 1 的 RMS／velocity×dt 為
+`1.9011931674423223e-8`／`3.8023863348846446e-8`，threshold
+`6.5417913784292356e-8`；step 2 為 `3.6118189854073674e-9`／
+`4.5247501270868059e-8`，threshold `6.6069268614094811e-8`。
+rank report exit 0、無 timeout，wall 2539.1984 s；此為功能測試時間，
+不是效能基準。`strong-fsi-exhaustion-1-audit.json` 核對了 logs、兩步門檻
+與 frozen binary 的所有來源（含修改前封存版本）。
+
+新增 `MovingConservationCheckpoint.hpp` 保存完整已接受 transition 的
+source／target geometry 與 publication IDs、clock、體積、全部 endpoint
+aggregates／boundary-label maps、roundoff 計數及正規化診斷。解析須符合
+外部 payload SHA-256 與 target geometry／publication／clock，且受既有
+metadata cap 限制。實際 moving runtime 回歸已加入 byte roundtrip、錯誤
+authority／geometry／step、截斷及 trailing bytes 拒絕，建置完成；MPI
+matrix 正在執行，尚未據此宣告完整 fluid checkpoint 或 FSI restart 完成。
+
+首次 conservation matrix 在 1-rank serial oracle KSP 失敗，尚未到達
+checkpoint 檢查；`conservation-checkpoint-oracle-failure-audit.json` 保留
+非零退出與 log hashes。後續使用 `deferred-abort-4` 已驗證的明確 oracle
+MUMPS／GMRES、MUMPS ICNTL(14)=100 設定；數值驗收門檻不變。
+
+`ImmersedMovingTransientDistributedRuntime` 已加入記憶體中的
+`CaptureAcceptedCheckpoint`／`RestoreAcceptedCheckpoint`：owned field、
+geometry／publication／active-layout／material identities、accepted clock
+與完整 conservation record 一起保存。fresh target 必須先重建同一幾何
+publication 與 index；驗證目標與 owned shape、配置候選資料後，經數值
+setter 完成 PETSc staging，再接受守恆紀錄。已接受過 transition 的 target
+不能重新 restore。這是 outer reader 使用的 typed candidate 介面，尚不
+負責檔案認證、configuration binding、跨 rank shard 重分配或 paired commit。
+
+回歸新增重建前後幾何、錯誤 layout／owned range／clock 的 collective
+拒絕及 retry、owned field 精確往返、conservation byte roundtrip，以及
+下一步求解與不中斷運行的 scaled L2 `<1e-8` 比較。`fluid-checkpoint-test`
+及 `fluid-checkpoint-source-manifest.json` 已 frozen，1／2／4-rank matrix
+正在執行，結果尚待核對。
+
+restore preflight 再補強：完整 conservation metadata 先經 codec 驗證，
+再 collective 比對 SHA-256，避免各 rank 接受不同的診斷紀錄；非有限
+owned field／診斷、錯誤 source epoch 及 rank-local 紀錄差異均新增拒絕
+案例。conservation type 移至獨立 header，讓 runtime 共用同一驗證邏輯，
+並在任何數值向量發布前完成。新 build 無 compiler warnings，frozen
+`fluid-restore-guards-test` 的 4-rank 故障／retry 測試正在執行；前版 matrix
+仍使用其原 frozen executable，兩者證據不混用。
+
+1-rank `fluid-checkpoint-test` 已通過：非零 uniform moving flow 的 owned
+field 精確還原，守恆 metadata byte roundtrip，錯誤 layout／range／clock
+拒絕後可 retry；下一步 scaled L2 為 0。`fluid-checkpoint-1-audit.json`
+核對 rank report、logs 及所有 frozen 來源。這是 active layout 未改變的
+記憶體 candidate 案例；2／4 ranks、額外 guards 與完整 bundle 尚待完成。
+
+新增 `MovingAcceptedCheckpointMetadata.hpp`：shared metadata 綁定外部
+configuration、geometry／publication／layout／material IDs、clock、global
+row count 與 conservation SHA-256；解析只驗證目標並回傳 conservation
+authority，不讀取 shards 或發布狀態。`moving_checkpoint_metadata_test`
+已無 compiler warnings 建置並通過，涵蓋各 binding 拒絕、不同 owned
+partition 的 shared bytes 相同、conservation authority，以及逐 byte 餵入
+owned stream、截斷／trailing／錯誤 range／非有限值拒絕。證據綁定於
+`moving-checkpoint-metadata-source-manifest.json`。
+
+原 `BodyFittedAcceptedCheckpoint.hpp` 的三個 owned field stream 函式
+原樣搬至 `OwnedCheckpointFieldStream.hpp`，介面與 wire bytes 不變。
+既有 body-fitted accepted flow／transport checkpoint 回歸已通過三 ranks
+及 split 1／2-rank communicators，含 steady／transient／outlet 與續算；
+`shared-checkpoint-stream-audit.json` 核對全部 reports 與來源。
+
+4-rank `fluid-restore-guards-test` 已通過：非有限 owned field／守恆值、
+錯誤 source epoch 與 rank-local 守恆紀錄差異均在發布前 collective 拒絕；
+healthy retry、owned field 精確還原及下一步續算成功，scaled L2 為
+`2.45511e-15`。`fluid-restore-guards-4-audit.json` 核對四份 reports、logs
+及 frozen 來源。本案例仍為 active layout 未改變的 typed-memory restore。
+
+`OwnedCheckpointRepartitionReader` 可依任意順序串流讀取來源 shards，
+只保留目標 owned rows，並驗證所有來源 global row ranges 的完整覆蓋、
+無重疊及有限值。空 shard／zero-owned target 受支援；來源失敗後整個
+reader 不可再接受結果。記憶體額外成本為 source range map，沒有 global
+field buffer；目前每個目標 reader 仍掃描全部來源 bytes，I/O scalability
+尚待評估，不能視為只讀取本地資料的效能路徑。
+
+協定測試把 3 個非空 shards 加 1 個空 shard，重分配至 1／2／4／9
+partitions，逆序逐 byte 輸入仍精確還原；亦拒絕重複、部分重疊、目標
+owned range 外的缺口與截斷，失敗後 Finish 仍拒絕。build 無 warnings、
+測試 exit 0，`owned-repartition-reader-source-manifest.json` 綁定來源及
+binary/logs。這是 reader 協定驗證，尚不是實際 MPI 檔案 bundle 續跑。
+
+原 `fluid-checkpoint-test` 的 1／2／4-rank matrix 全部完成，7 份 rank
+reports exit 0、無 timeout；下一步 scaled L2 分別為 0、0、
+`2.39334e-15`。`fluid-checkpoint-matrix-audit.json` 綁定每份 report、logs
+及對應 frozen 來源。這仍是同 rank 數、active layout 不變的記憶體續算。
+
+為重建保存時的 geometry publication，runtime 在 PrepareCommit 配置
+上一個已接受材料表面的副本，FinalizeCommit 才接受；abort 清掉 trial
+副本，保留 committed history。Capture 同時保存 previous／current
+material，Restore 驗證材料身分、source clock 與目標幾何的 predecessor
+material identity。多保留一份 replicated material metadata，不複製全域
+fluid vector；既有 geometry／publication hash 算法未更改。
+
+測試改由 material checkpoint bytes 往返後重建兩個幾何，新增 missing／
+wrong predecessor 拒絕，再測下一步 active-layout 改變的續算。材料類別
+不可 assignment，已改用 copy construction／emplace；最終 build 通過，
+`checkpoint-material-history-test` 的 4-rank changing case 正在執行，結果
+尚待核對。
+
+`checkpoint-material-history-test` 的 4-rank changing case 已完成，四份
+rank reports 均通過，owned field 精確還原；下一步 active layout 改變時
+scaled L2 為 `1.85332e-14`，低於 `1e-8`。missing／wrong predecessor、
+rank-local 失敗與 healthy retry 同時通過。完整來源及 logs 核對於
+`checkpoint-material-history-4-audit.json`。
+
+新增 `MovingCheckpointBundle.hpp`，沿用 immutable epoch／SHA-256／
+receipts 協定，提供 domain shard catalog、local writer，以及先載入
+previous／current material、再驗證 target metadata 並重分配 field shards
+的 reader。shared files 包括 configuration／epoch／material binding、
+accepted metadata、conservation 與兩份 material payload；流場各 rank
+分片。這些 local I/O helper 不執行 MPI 或替 caller 發布 live runtime。
+
+實際檔案協定測試已通過：來源 mapping `{2,0,1}`，三個 field shards
+重分配至 1／2／4 partitions（含 zero-owned target）、材料與守恆往返、
+錯誤 configuration／missing catalog／目標 owned range 外的檔案損壞拒絕，
+修復測試檔案後可 retry。初次測試漏了 coordinator 的 receipt sorting，
+被 Publisher 正確拒絕；補齊後以新目錄通過。最終 build 無 warnings，
+來源、binary/logs 綁定於 `moving-bundle-source-manifest.json`。這是單行程
+模擬來源 owners 的實際檔案協定測試，尚非 MPI numerical restart 或完整
+FSI paired bundle；需要再接上 runtime factory 與 collective coordinator。
+
+strong history matrix 的 1-rank 作業已完成，實際輸出通過
+`hpc_check_strong_fsi.py` 的完整步／field／surface／history／port／守恆
+協定檢查，保存於 `strong-fsi-history-1-self-check.json`。自我比較不提供
+跨 rank 數值一致性的證據；2／4-rank 作業仍待完成。
+
+1／2-rank strong history 比較已完成並通過：兩個 nonzero strong steps
+的 17 組 fluid／surface field comparisons 最大 scaled L2 為
+`1.2299955537051401e-12`，完整迭代歷史、ports 與 conservation 比較
+最大 error/tolerance 為 `9.025606610871886e-4`。comparison 與 checker
+hashes、所有 frozen 來源核對於 `strong-fsi-history-1-2-audit.json`；4-rank
+作業仍待完成，不能提前視為全矩陣驗收。
+
+新增 collective `RestoreMovingCheckpointRuntime`：先協議 manifest／
+source mapping／configuration／path，載入材料並重建前後幾何，再配置
+fresh runtime、串流讀取 target-owned field、驗證 predecessor geometry
+與 conservation，最後接受候選。任何 field 階段錯誤都在各 rank 關閉
+候選 runtime 後重拋；caller 仍須等其他 coupled candidates 成功才發布。
+
+實際 MPI 回歸已接上每 rank shard writer、`GatherCheckpointReceipts`、
+完整 catalog 發布、manifest discovery 與 factory 還原。新增 checksum
+失敗（在候選 runtime 已配置後）、rank-local configuration 不一致，以及
+原 accepted runtime 不變與健康重試。最終 build 通過，frozen
+`file-runtime-factory-test` 的 4-rank changing case 正在執行；檔案 factory
+與下一步 numerical continuation 的結果尚待核對。
+
+檔案回歸增加 `-moving_checkpoint_read_only true` 與
+`-moving_checkpoint_source_ranks N`，讀取端依保存時的 catalog／mapping
+發現 manifest，並在新 communicator 上重分配場資料。來源 bundle 保持
+唯讀，與目標 rank 數自行求得的 baseline 比較讀回場及下一步 scaled L2
+`<1e-8`；同次 writer／reader 仍要求 owned field 與 conservation 精確往返。
+checksum／configuration 拒絕與 healthy retry 保留。無 warnings 建置後
+已 frozen `cross-rank-file-test`，4→2、4→1 的獨立 MPI 作業順序執行中；
+來源 4-rank bundle 已完整發布，其原作業仍完成後續 continuation 驗證。
+
+強耦合 1／2／4-rank history matrix 全部完成：7 份 rank reports 均 exit 0、
+無 timeout，完整 field／surface／iteration／port／conservation 比較通過。
+4-rank 對 1-rank 最大 field scaled L2 `1.5223305432149862e-12`，history
+最大 error/tolerance `0.0013218419692356165`；全部來源、comparison、
+checker 與 reports 綁定於 `strong-fsi-history-matrix-audit.json`。
+
+`file-runtime-factory-test` 四份 reports 已通過，實際 shard 發布／discovery、
+checksum 失敗後候選清理、configuration 拒絕與 retry、owned field 及
+conservation 精確還原、changing-layout 下一步 scaled L2
+`2.94854e-14` 均已核對於 `file-runtime-factory-4-audit.json`，包含實際
+bundle 檔案 hashes。這份 frozen fixture 沒有 ports，不能據此宣告可變
+port control 的 numerical restart 已驗證。
+
+補上目前 queued port control values 的 capture／restore binding：metadata
+payload `/2` 保存 bounded map；factory 在建立 fresh runtime 前驗證完整
+port catalog 並套用保存值，immutable labels／control modes 由 case
+configuration 保留。typed restore 要求新 runtime controls 與保存值相同，
+並把 controls 納入 collective metadata agreement。`/1` 僅允許 port-free
+cases 續跑；不能用初始化 control 值猜測舊 checkpoint 遺漏的資料。
+
+新版 metadata／真實檔案 bundle 測試均通過，包含 controls readback、
+套用保存值、錯誤／missing／nonfinite controls 拒絕且不改 candidate
+options，以及 `/1` port-free 相容性與有 ports 時拒絕；證據綁定於
+`port-checkpoint-source-manifest.json`。帶可變 ports 的完整 numerical
+restart、跨 rank 數 file continuation 與 FSI paired restart 仍待驗收。
+
+集中提交前以本階段完整來源重新建置 strong runtime，無 compiler
+warnings；4-rank `strong-zero` 的 communicator／precommit／structure
+prepare／invalid controls 拒絕、exact rollback 與兩步 healthy retry 均
+通過，見 `checkpoint-stage-strong-audit.json`。這項 smoke regression
+不取代前述 nonzero matrix，各 frozen 版本的證據仍分別保留。

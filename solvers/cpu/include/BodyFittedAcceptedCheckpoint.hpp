@@ -4,7 +4,7 @@
 #include "TransientFlowRuntime.hpp"
 #include "TransientTransportRuntime.hpp"
 #include "CheckpointMetadataCodec.hpp"
-#include "CheckpointWordStream.hpp"
+#include "OwnedCheckpointFieldStream.hpp"
 #include "CoupledCheckpointManifest.hpp"
 
 namespace iga {
@@ -108,26 +108,6 @@ inline void ParseBodyFittedTransportMetadata(std::string_view bytes, TransportAc
 	Count(input, candidate.field.global_rows); input.Finish(); candidate.accepted_steps = count;
 }
 
-inline std::uint64_t OwnedCheckpointFieldBytes(const OwnedCheckpointVector& field)
-{
-	return checkpoint_stream::Bytes(checkpoint_stream::Add(3, field.values.size()));
-}
-template<class Sink> void WriteOwnedCheckpointField(const OwnedCheckpointVector& field, Sink sink)
-{
-	checkpoint_stream::Writer<Sink> output(std::move(sink));
-	output.Word(field.global_rows); output.Word(field.row_begin); output.Word(field.row_end);
-	for (double value : field.values) output.Real(value);
-	output.Finish();
-}
-inline auto ReadOwnedCheckpointField(OwnedCheckpointVector& field)
-{
-	return checkpoint_stream::Reader(checkpoint_stream::Add(3, field.values.size()), [&field](std::uint64_t index, std::uint64_t word) {
-		if (index == 0) checkpoint_stream::Require(word == field.global_rows, "global rows differ");
-		else if (index == 1) checkpoint_stream::Require(word == field.row_begin, "owned row begin differs");
-		else if (index == 2) checkpoint_stream::Require(word == field.row_end, "owned row end differs");
-		else field.values.at(static_cast<std::size_t>(index-3)) = checkpoint_stream::Real(word);
-	});
-}
 inline std::uint64_t BodyFittedBoundaryWords(const FlowAcceptedCheckpointState& state)
 {
 	checkpoint_stream::Require(state.boundaries.velocity.size() <= UINT64_MAX/3, "boundary shape overflows");

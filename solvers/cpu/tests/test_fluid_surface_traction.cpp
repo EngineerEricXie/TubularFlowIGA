@@ -18,6 +18,8 @@
 #include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -340,6 +342,9 @@ int main(int argc, char** argv)
 	PetscInitialize(&argc, &argv, nullptr, nullptr);
 	int status = 0;
 	try {
+		char checkpoint_write[4096]={},checkpoint_read[4096]={};
+		PetscOptionsGetString(nullptr,nullptr,"-membrane_checkpoint_write",checkpoint_write,sizeof(checkpoint_write),nullptr);
+		PetscOptionsGetString(nullptr,nullptr,"-membrane_checkpoint_read",checkpoint_read,sizeof(checkpoint_read),nullptr);
 		CheckP1Contribution();
 		const auto material = Material(); const auto patch_map = PatchMap(material);
 		const auto interface = Interface(patch_map); const auto& layout = patch_map.Layout();
@@ -628,6 +633,77 @@ int main(int argc, char** argv)
 			assert(runtime.TrialKinematics().displacement_m==first.displacement_m);
 			runtime.PrepareCommit();runtime.Commit();
 			assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+			const auto checkpoint=runtime.CaptureCheckpoint();
+			std::string checkpoint_identity(64,'0');
+			if(checkpoint) { iga::Sha256 hash;hash.Append(checkpoint->metadata.data(),checkpoint->metadata.size());checkpoint_identity=hash.Hex(); }
+			MPI_Bcast(checkpoint_identity.data(),64,MPI_CHAR,ranks-1,PETSC_COMM_WORLD);
+			iga::SingleOwnerMembraneRuntime restored(PETSC_COMM_WORLD,distributed_layout,ranks-1,patch_map.Interface(),interface,properties,{});
+			for(int corruption=0;corruption<3;++corruption) {
+				auto broken=checkpoint;
+				if(broken) {
+					if(corruption==0)broken->metadata.back()^=1;
+					if(corruption==1)broken->numerical.back()^=1;
+					if(corruption==2)broken->numerical.resize(broken->numerical.size()/2);
+				}
+				reject_runtime([&] { restored.RestoreCheckpoint(broken?&*broken:nullptr,checkpoint_identity); });
+				Reject([&] { (void)restored.CommittedKinematics(); });
+			}
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+			restored.SetFailureForTesting(iga::SingleOwnerMembraneRuntime::FailurePoint::BeforeRestoreFinalize,0);
+			reject_runtime([&] { restored.RestoreCheckpoint(checkpoint?&*checkpoint:nullptr,checkpoint_identity); });
+			Reject([&] { (void)restored.CommittedKinematics(); });
+			reject_runtime([&] { (void)restored.CaptureCheckpoint(); });
+			restored.SetFailureForTesting(iga::SingleOwnerMembraneRuntime::FailurePoint::None,-1);
+#endif
+			restored.RestoreCheckpoint(checkpoint?&*checkpoint:nullptr,checkpoint_identity);
+			assert(iga::BuildSurfaceKinematicsIdentitySha256(restored.CommittedKinematics(),distributed_layout)
+				==iga::BuildSurfaceKinematicsIdentitySha256(runtime.CommittedKinematics(),distributed_layout));
+			const auto recaptured=restored.CaptureCheckpoint();
+			if(checkpoint)assert(recaptured->metadata==checkpoint->metadata&&recaptured->numerical==checkpoint->numerical);
+			reject_runtime([&] { restored.RestoreCheckpoint(checkpoint?&*checkpoint:nullptr,checkpoint_identity); });
+			std::unique_ptr<iga::SingleOwnerMembraneRuntime> repartitioned;
+			const std::string checkpoint_case=all_state==&pressure_state?"pressure":"viscous";
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"checkpoint fixture write",[&] {
+				if(!checkpoint||!checkpoint_write[0])return;
+				const std::string prefix=std::string(checkpoint_write)+"/"+checkpoint_case;
+				for(const auto& entry:std::vector<std::pair<std::string,std::string>>{
+					{".metadata",checkpoint->metadata},{".numerical",checkpoint->numerical},{".sha256",checkpoint_identity}}) {
+					std::ofstream output(prefix+entry.first,std::ios::binary|std::ios::trunc);
+					output.write(entry.second.data(),entry.second.size());output.close();
+					if(!output)throw std::runtime_error("cannot write membrane checkpoint fixture");
+				}
+			});
+			if(checkpoint_read[0]) {
+				// Owner 0 deliberately differs from the ordinary last-rank owner.
+				std::optional<iga::SingleOwnerMembraneCheckpoint> imported;
+				std::string imported_identity(64,'0');
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"checkpoint fixture read",[&] {
+					if(rank!=0)return;
+					const std::string prefix=std::string(checkpoint_read)+"/"+checkpoint_case;
+					const auto read=[&](const std::string& suffix) {
+						std::ifstream input(prefix+suffix,std::ios::binary|std::ios::ate);
+						if(!input||input.tellg()<0||input.tellg()>std::streamoff(iga::checkpoint_metadata::maximum_bytes))
+							throw std::runtime_error("invalid membrane fixture size");
+						const auto size=static_cast<std::size_t>(input.tellg());input.seekg(0);
+						std::string bytes(size,'\0');input.read(bytes.data(),size);
+						if(!input)throw std::runtime_error("cannot read membrane checkpoint fixture");
+						return bytes;
+					};
+					imported=iga::SingleOwnerMembraneCheckpoint{read(".metadata"),read(".numerical")};
+					imported_identity=read(".sha256");
+					if(!iga::IsLowercaseSha256(imported_identity))throw std::runtime_error("invalid fixture authority");
+				});
+				MPI_Bcast(imported_identity.data(),64,MPI_CHAR,0,PETSC_COMM_WORLD);
+				repartitioned=std::make_unique<iga::SingleOwnerMembraneRuntime>(PETSC_COMM_WORLD,distributed_layout,0,
+					patch_map.Interface(),interface,properties,std::vector<std::uint64_t>{});
+				repartitioned->RestoreCheckpoint(imported?&*imported:nullptr,imported_identity);
+				const auto exported=repartitioned->CaptureCheckpoint();
+				if(imported)assert(exported->metadata==imported->metadata&&exported->numerical==imported->numerical);
+				for(std::size_t row=0;row<first.displacement_m.size();++row) {
+					CheckVector(repartitioned->CommittedKinematics().displacement_m[row],first.displacement_m[row],1.e-12);
+					CheckVector(repartitioned->CommittedKinematics().velocity_m_per_s[row],first.velocity_m_per_s[row],1.e-12);
+				}
+			}
 			// Constant numerical load for the next step, with fresh fixture stamps.
 			auto next_load=publication;next_load.stamp.time_s=1.;next_load.stamp.step=2;next_load.stamp.coupling_iteration=0;
 			next_load.stamp.producer_state_identity_sha256=std::string(64,'a');next_load.projection_identity_sha256=std::string(64,'b');
@@ -649,7 +725,25 @@ int main(int argc, char** argv)
 				CheckVector(runtime.TrialKinematics().velocity_m_per_s[row],{{0.,0.,-second_speed}},1.e-12);
 				CheckVector(runtime.TrialKinematics().displacement_m[row],{{0.,0.,-second_displacement}},1.e-12);
 			}
+			restored.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+			assert(iga::BuildSurfaceKinematicsIdentitySha256(restored.TrialKinematics(),distributed_layout)
+				==iga::BuildSurfaceKinematicsIdentitySha256(runtime.TrialKinematics(),distributed_layout));
+			reject_runtime([&] { (void)runtime.CaptureCheckpoint(); });
+			if(repartitioned) {
+				repartitioned->SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+				for(std::size_t row=0;row<runtime.TrialKinematics().displacement_m.size();++row) {
+					CheckVector(repartitioned->TrialKinematics().displacement_m[row],runtime.TrialKinematics().displacement_m[row],1.e-12);
+					CheckVector(repartitioned->TrialKinematics().velocity_m_per_s[row],runtime.TrialKinematics().velocity_m_per_s[row],1.e-12);
+				}
+				repartitioned->PrepareCommit();repartitioned->Commit();
+				std::cout<<"membrane_checkpoint_repartition rank="<<rank<<" ranks="<<ranks
+					<<" case="<<checkpoint_case<<" owner=0 continuation=passed\n";
+			}
+			restored.AbortTrial();
 			runtime.AbortTrial();assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+			const auto after_abort=runtime.CaptureCheckpoint();
+			if(checkpoint)assert(after_abort->metadata==checkpoint->metadata&&after_abort->numerical==checkpoint->numerical);
+
 #ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
 			using Failure=iga::SingleOwnerMembraneRuntime::FailurePoint;
 			for(auto failure:{Failure::AfterSolve,Failure::AfterPrepare}) {
