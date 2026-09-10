@@ -549,3 +549,28 @@ long-double scalars 全域 SUM。每個量使用其 SI 單位的 1e-12 absolute 
 型別錯誤導致 build failure，修正後 final build 與所有測試成功，原 log 保留。
 重現沿用 `fluid_surface_traction_test` 的 1／3／5 rank 指令。正式 FSI adapter、
 膜 trial 更新、共同 rollback 與完整能量／收斂驗收仍待完成。
+
+
+## Traction 收集到指定膜 owner
+
+`FetchSurfaceGhostTraction` 以與 kinematics 交換相同的 owner-to-requester 路由，
+收集 requested nodes 的 traction／consistent nodal force 六分量。每個原始
+publication 先核對 expected interface、完整 stamp 與 partition-local expected
+projection identity，再核對全域 epoch 與 node ownership。Projection identities
+不要求各分區相同；expected 值須由 transaction authority 獨立取得。
+
+回傳為獨立 requested-node tuple 型別，保留 requested 順序，不是重貼另一份
+partition stamp 的 `SurfaceTraction`。指定膜 owner 可查詢整個小型 patch，
+其他 ranks 查詢空集合；仍需在下一層建立明確的單 owner 求解與發布契約。
+沿用 record／wire caps，收集全部 nodes 的 requester 仍需承擔其記憶體成本。
+
+1／3／5 ranks 壓力及黏性測試，最後一個 rank 收集完整 patch，結果與原串行
+force／traction 在 1e-12 容差內相符。五 rank 配置的 requester 沒有任何 owned
+nodes，也正常收到完整資料。錯誤 iteration、projection identity 與 interface
+三種情境均共同拒絕，健康重試及其餘 traction 回歸通過。九份 reports exit 0、
+無 timeout；證據在 `outputs/hpc07/traction-owner-transfer-v1/audit.json`，重現
+沿用 `fluid_surface_traction_test` 的 1／3／5 rank 指令。
+
+這批完成膜 owner 所需的資料收集元件，尚未在 `PretensionedMembraneFsiRuntime`
+接入集中求解、kinematics 分送或共同 prepare／commit／abort。HPC-07B/C 保持
+未完成範圍。

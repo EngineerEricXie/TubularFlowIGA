@@ -1,6 +1,7 @@
 #include "FluidSurfaceTraction.hpp"
 #include "OwnedFluidSurfaceTractionPoints.hpp"
 #include "DistributedFluidSurfaceTraction.hpp"
+#include "SurfaceGhostTraction.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
@@ -338,6 +339,30 @@ int main(int argc, char** argv)
 				catch(const std::runtime_error&) { rejected=1; }
 				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
 				const auto retry=publish();assert(retry.projection_identity_sha256==publication.projection_identity_sha256);
+			}
+			const auto& serial_traction=all_state==&pressure_state?pressure.traction:affine_result.traction;
+			const auto requested=rank==ranks-1?layout.owned_global_node_ids:std::vector<std::uint64_t>{};
+			const auto check_transfer=[&] {
+				const auto fetched=iga::FetchSurfaceGhostTraction(PETSC_COMM_WORLD,distributed_layout,publication,interface.id,publication.stamp,publication.projection_identity_sha256,requested);
+				assert(fetched.requested_node_ids==requested);
+				for(std::size_t row=0;row<requested.size();++row) {
+					CheckVector(fetched.consistent_nodal_force_n[row],serial_traction.consistent_nodal_force_n[row],1.e-12);
+					CheckVector(fetched.traction_on_structure_pa[row],serial_traction.traction_on_structure_pa[row],1.e-12);
+				}
+			};
+			check_transfer();
+			for(int mode=0;mode<3;++mode) {
+				auto incoming=publication;
+				if(rank==ranks-1) {
+					if(mode==0)incoming.stamp.coupling_iteration++;
+					if(mode==1)incoming.projection_identity_sha256=std::string(64,'0');
+					if(mode==2)incoming.interface.subsystem_id="wrong";
+				}
+				int rejected=0,total=0;
+				try { (void)iga::FetchSurfaceGhostTraction(PETSC_COMM_WORLD,distributed_layout,incoming,interface.id,publication.stamp,publication.projection_identity_sha256,requested); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				check_transfer();
 			}
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
