@@ -539,7 +539,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   共用 family fallback 與大小寫優先順序已通過驗證並提交，見
   [family options 進度](progress/HPC_04A_FAMILY_OPTIONS_PROGRESS.md)。
   immersed／moving／FSI 的 prefix 與 snapshot 已接入，小型數值與 sanitizer 驗證通過；
-  完整 FSI 回歸已通過，完整 moving 回歸在 rigid wall trace gate 失敗；已定位積分不相容並驗證正權重原型，待正式接入與重驗，見
+  完整 FSI 回歸已通過，完整 moving 回歸在 rigid wall trace gate 失敗；已定位積分不相容並驗證 C++ 正權重規則建構器，待 catalog 接入與重驗，見
   [immersed 進度](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
   本機 1／2／3／4-rank factor 能力矩陣、block-Jacobi／fieldsplit 子求解器
   viewer、native KSP／SNES viewer 已驗證，見

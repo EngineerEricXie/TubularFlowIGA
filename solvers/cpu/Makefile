@@ -439,6 +439,9 @@ cartesian_background_test: tests/test_cartesian_background.cpp include/Cartesian
 sha256_test: tests/test_sha256.cpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
+fitted_cut_cell_volume_rule_test: tests/test_fitted_cut_cell_volume_rule.cpp tests/test_polyhedral_volume_moments.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
 nonnegative_least_squares_test: tests/test_nonnegative_least_squares.cpp include/NonnegativeLeastSquares.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
@@ -642,6 +645,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) fitted_cut_cell_volume_rule_test
 	$(RM) nonnegative_least_squares_test
 	$(RM) polyhedral_volume_moments_test
 	$(RM) petsc_solver_options_test

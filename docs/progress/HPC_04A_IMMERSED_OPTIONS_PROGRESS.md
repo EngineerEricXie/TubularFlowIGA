@@ -259,6 +259,33 @@ LeakSanitizer 不支援 ptrace 而退出 1，該紀錄保留，未算通過；�
 整合逐 cell moment fitting 與 cap／失敗處理、更新規則 diagnostics／hash 身分，
 再重驗完整 rigid、static、moving 與 distributed 案例。
 
+### C++ 逐 cell 規則建構器
+
+新增 `FittedCutCellVolumeRule.hpp`，串接原 seed 的支撐 frame、Gauss 候選點、
+`SurfaceSpatialIndex::LocatePoint`、邊界體積矩與 C++ NNLS。每個新節點必須明確
+判定為 `Inside`；`Boundary` 不保留，`Ambiguous` 拒絕。候選階數可逐次增加，
+耗盡後拋出失敗，不退回原本不相容的 seed 規則。
+seed 數量、幾何查詢、候選點、矩陣配置、NNLS workspace／iterations 都有上限；
+矩陣依最終候選數一次配置。回傳前以 long double 重算實際 double 節點／權重的矩殘差。
+
+`make -C solvers/cpu fitted_cut_cell_volume_rule_test` 與執行檔通過：
+非凸 L 柱體的全部 343 個解析矩、每個回傳節點的域內判斷與正權重、
+query／seed／candidate caps、無效階數／空 seed，以及候選耗盡的拒絕。
+最大解析矩絕對誤差 `1.44877e-17`。`make mesh-test` 亦通過。
+
+原 rigid target 的 26 個 cut cells 已全部使用此建構器，沒有 Python 權重或
+cube 特例 membership 判斷。總計 47,612 次 surface point queries；所有 cells
+在第一個候選階數通過，各保留 343 個正權重，最大相對矩殘差 `7.36155e-17`。
+以原 `EvaluateBasis`／surface rules 重測的連續方程積分缺陷 L2 為
+`5.38696e-18`、最大節點缺陷 `1.49795e-18`，通過 `256*epsilon` 獨立 gate。
+作業 wall 12.530 秒、peak RSS 53,657,600 bytes，包含原 geometry 建構與 basis audit。
+
+證據在 `rigid-debug/quadrature-builder-v1`；`cpp-rule-builder-audit.json`
+保存來源、binary、build／test／mesh logs hashes 與 run report。
+此建構器尚未修改 catalog；剩餘工作是 expanded／compact 表示、診斷與 hash 身分整合，
+再驗證原 rigid solve 與完整 static／moving／distributed 回歸。
+邊界 moment clipping 仍是 long double 路徑，不宣稱 exact-predicate 積分誤差保證。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
