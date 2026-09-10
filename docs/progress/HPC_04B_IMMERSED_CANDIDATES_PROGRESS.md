@@ -1,6 +1,6 @@
 # HPC-04B immersed 候選驗證
 
-- 狀態：進行中，封閉 gauge 案例 LU 參考通過；其餘候選尚未完成。
+- 狀態：進行中，封閉與 flow 案例的三候選均通過，pressure 案例仍進行中。
 - 日期：2026-09-09（美東），基準 `d3a08e6`。本次只擴充既有 static MPI test
   的 layout 診斷及候選 harness；production solver／operator／資料格式未變。
 
@@ -65,7 +65,11 @@ python3 scripts/hpc_immersed_preconditioners.py --output-dir NEW_OUTPUT
 並記錄所有 rank 的 resource、log hash、diagnostic tail，失敗不會冒充成功。
 LU 參考失敗會停止該次 evaluation；其他候選失敗則保存並繼續，整體返回 1。
 
-目前 `closed-v1` 的 block 候選，以及 `ports-v1` 的 flow／pressure 各三候選仍在執行。
-它們沒有列入上述通過數。還須彙整全部成功／失敗原因與場 gate，再處理更小切割
-元素、其他網格／rank 與排程資源驗收。128-element 方管最後一個 Schur 候選與
-完整 moving regression 也仍在執行；HPC-04 整體保持未完成。
+`closed-v1` 的三候選、`ports-v1` 的 flow 三候選已全部通過（6 作業、12 rank reports）。
+封閉 block-ILU／block-LU-shift 全場相對 L2 分別為 4.62997e-14／4.61774e-14，
+KSP iterations 為 124／114；flow 三候選全場相對 L2 皆約 3.33575e-11，
+KSP iterations 依 LU／block-ILU／block-LU-shift 為 3／138／121。
+這六個作業最大 peak rank RSS=99,385,344 bytes；原序列參考與數值／守恆 gate 保留。
+Pressure LU 也已通過，另外兩候選仍執行中，待完整彙整。還須彙整全部成功／失敗原因與場 gate，再處理更小切割
+元素、其他網格／rank 與排程資源驗收。128-element 方管四候選已通過，見
+[加密方管結果](HPC_04B_REFINED_DUCT_PROGRESS.md)；完整 moving regression 仍在執行；HPC-04 整體保持未完成。

@@ -556,7 +556,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   已新增可加密 C2 方管的原 Phase 9 validator 與候選 harness；16-element、
   2-rank 的 LU／block-Jacobi／Schur-LU／Schur-GAMG 通過物理與場驗收，
   並保留 Schur-LU 高迭代成本的結果，見
-  [方管候選進度](progress/HPC_04B_DUCT_CANDIDATES_PROGRESS.md)。selfp Schur 近似已完成
+  [方管候選進度](progress/HPC_04B_DUCT_CANDIDATES_PROGRESS.md)。128-element、4-rank
+  的原四候選也已通過，見 [加密方管進度](progress/HPC_04B_REFINED_DUCT_PROGRESS.md)。
+  selfp Schur 近似已完成
   小案例評估，保留速度 GAMG／壓力 Jacobi 不收斂的結果，見
   [Schur 近似進度](progress/HPC_04B_SCHUR_APPROXIMATION_PROGRESS.md)。同一方管的
   1／2／4-rank 速度與壓力場亦已比較，見
