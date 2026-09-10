@@ -20,3 +20,4 @@ moving_immersed_rigid_translation_test
 moving_fitted_geometry_identity_test
 
 partitioned_vtk_output_test
+parallel_vtk_output_test

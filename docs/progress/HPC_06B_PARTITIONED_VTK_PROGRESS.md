@@ -42,12 +42,45 @@ pvpython scripts/test_partitioned_vtk_paraview.py NEW_OUTPUT
 本機 MPI 權限的環境通過，原 `paraview.log` 保留，未視為格式失敗或成功驗收。
 來源、binary、fixtures 與 logs hashes 收錄於 `audit.json`。
 
+## MPI piece 協調與索引發布
+
+[ParallelVtkOutput.hpp](../../solvers/cpu/include/ParallelVtkOutput.hpp) 新增
+`WriteParallelVtkSnapshot(comm, directory, piece, time)`：共同預檢局部資料，對
+path／time／point 與 cell schema 做身分協議，root 建立不可覆寫的新 snapshot
+目錄，各 rank 寫入自己的 VTU。所有 stream 正常關閉並共同確認成功後，root
+才寫暫存 PVTU 並 rename 為 `snapshot.pvtu`；索引只需 O(ranks) filenames。
+沒有 gather mesh／field payload。
+
+輸出目錄必須為新路徑。失敗目錄保留 pieces 作診斷，重試使用新目錄；已發布目錄
+整體拒絕覆寫。這是 live-rank 錯誤協調與索引可見性，不包含 process-loss recovery、
+fsync durability、PVD 序列發布或共享檔案系統故障恢復。Global IDs／cell 唯一覆蓋
+仍由 caller 建立與驗證，這層只檢查局部 IDs 與 schema。
+
+`parallel_vtk_output_test` 在 world 3 ranks 與 split 1+2 groups 驗證：schema／time
+不一致、最後 rank 的無效 tuple、真正的 rank-local 1-byte `RLIMIT_FSIZE` 寫入截斷，
+以及已存在 snapshot 的拒絕。單 rank 不測不存在的跨 rank metadata mismatch。
+共 13 個預期拒絕；失敗沒有 final index，換新目錄重試成功，已發布 index 與每份
+piece 在覆寫拒絕前後逐位元相同。故障注入在 MPI 初始化後才設定，測後恢復。
+
+本機 ParaView 5.13 讀回三個 groups 的 13 個成功快照，核對 point／cell ID、
+各 group 獨立的座標及場值、空 rank 與 cell 數，避免混用 world communicator。
+三份 rank report exit 0、無 timeout；reader exit 0。證據與 source hashes：
+`outputs/hpc06/parallel-v2/audit.json`。
+
+```bash
+make -C solvers/cpu parallel_vtk_output_test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 90s \
+  mpiexec -np 3 solvers/cpu/parallel_vtk_output_test NEW_OUTPUT
+pvpython scripts/test_parallel_vtk_paraview.py NEW_OUTPUT
+```
+
 ## 接續工作
 
 Solver 仍走既有序列輸出。下一步須從 owned elements 建立局部可視化幾何、交換所需
 場值與共享點 identity；Bezier 點需沿用 extraction signature，不能以新局部編號
-冒充全域共享身分。也須共同驗證 schema、cell 覆蓋及一致時間；所有 pieces 成功後才
-發布 PVTU／PVD，局部失敗不得讓其他 rank 進入不匹配的 collective。
+冒充全域共享身分。schema／時間協議與 PVTU 發布已有上述元件；尚須整合 cell 覆蓋驗證、PVD
+序列發布及 solver 的局部場交換，不可只因格式層通過就宣稱整個流程完成。
 
 本批是格式元件，不證明大型場已免 root gather、MPI 輸出已完成或 Bezier cell 已驗收。
 需以相同實際 PDE 場與既有輸出比較、測量各 rank RSS、檔案數與 metadata 成本，
