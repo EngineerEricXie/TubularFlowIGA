@@ -469,3 +469,29 @@ settings。Material content identity 包含評估時間、step interval 與 noda
 trial／producer-state authority，才能拒絕「所有 ranks 一起使用過期狀態」。
 Quadrature settings agreement 也不等於逐筆 catalog content hash。正式
 publication 綁定與完整 FSI runtime 驗收仍待完成。
+
+
+## 獨立 expected trial 與 producer-state 綁定
+
+`BuildTrialFluidSurfaceTractionPoints` 接受 transaction authority 提供的 expected
+FSI context、material content identity 與 partition-local fluid producer identity。
+先核對 material content、評估時間與 step start/end，再由實際 IGA state、
+material、patch map、viscosity 及 catalog 推導既有 producer-state/v3 hash，
+與 expected local identity 比較。之後核對全域 expected context（含 step 與
+coupling iteration），再進入材料／共享係數驗證及 owned-cell 擷取。
+
+Expected local fluid hash 可因各 rank 的 retained states 不同而不同；不錯要求
+局部 state hashes 全域相等。Expected identities 必須由 transaction 在接收
+待驗證狀態前獨立保存，若直接複製待驗證輸入，不能宣稱已建立狀態權威。
+目前沿用既有 hash，仍遍歷 replicated catalog，未消除其全域工作成本。
+
+1／3／5 ranks、九份 reports 全部 exit 0、無 timeout。每個壓力／黏性案例均
+以保存的 expected identities，測試所有 ranks 同時更換材料評估時間、一起
+改變 pressure coefficients，以及與材料不符的 expected time interval；三種
+情境共同拒絕，恢復原資料後重試及 force／traction 數值比較通過。此前的
+單 rank 分歧與 shared coefficient 衝突測試亦保持。
+
+證據為 `outputs/hpc07/traction-trial-binding-v1/audit.json`，重現沿用
+`fluid_surface_traction_test` 的 1／3／5 rank 指令。這提供可綁定 transaction
+的擷取入口；正式 runtime 仍需供應可信 expected identities、產生 stamped
+traction publication 並完成守恆與結構 trial 更新。HPC-07B 尚未勾選。

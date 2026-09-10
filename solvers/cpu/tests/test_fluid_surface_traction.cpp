@@ -276,6 +276,21 @@ int main(int argc, char** argv)
 					points=iga::BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
 				});
 			}
+			iga::FsiTrialContext expected_trial;expected_trial.step=1;expected_trial.start_time_s=0.;expected_trial.dt_s=.5;expected_trial.coupling_iteration=2;
+			const auto expected_material=material.ContentIdentitySha256();
+			const auto expected_fluid=iga::BuildFluidSurfaceTractionStateIdentitySha256(domain,catalog,material,patch_map,viscosity,local_state);
+			points=iga::BuildTrialFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state,expected_trial,expected_material,expected_fluid);
+			for(int mode=0;mode<3;++mode) {
+				auto context=expected_trial;auto altered=local_state;
+				const auto trial_material=mode==0?Material(.75):material;
+				if(mode==1)for(auto& item:altered)for(auto& coefficient:item.nodal_state)coefficient[3]+=1.;
+				if(mode==2)context.dt_s=.75;
+				int rejected=0,total=0;
+				try { (void)iga::BuildTrialFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,trial_material,patch_map,viscosity,owned_cells,altered,context,expected_material,expected_fluid); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				points=iga::BuildTrialFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state,expected_trial,expected_material,expected_fluid);
+			}
 			const auto distributed=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,interface.id,distributed_layout,domain.Cells().size(),points,0);
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {

@@ -3,6 +3,7 @@
 
 #include "DistributedSurfaceTractionAssembly.hpp"
 #include "SharedFluidSurfaceCoefficients.hpp"
+#include "FsiDomainRuntime.hpp"
 
 namespace iga {
 // Local extraction only. The MPI caller coordinates exceptions, certifies cell
@@ -111,6 +112,34 @@ inline std::vector<SurfaceCellTractionPoints> BuildDistributedFluidSurfaceTracti
 		result=BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,map,viscosity,owned_cells,state);
 	});
 	return result;
+}
+// Expected identities must be captured independently by the transaction
+// authority before receiving the state under validation. The fluid identity
+// uses the established producer-state/v3 hash with this rank's retained state.
+inline std::vector<SurfaceCellTractionPoints> BuildTrialFluidSurfaceTractionPoints(
+	MPI_Comm comm,const CartesianDomainClassification& domain,const ImmersedSurfaceQuadratureCatalog& catalog,
+	const MaterialSurfaceKinematics& material,const MaterialSurfacePatchMap& map,double viscosity,
+	const std::vector<std::uint64_t>& owned_cells,const std::vector<FluidSurfaceElementState>& state,
+	const FsiTrialContext& expected_context,const std::string& expected_material_identity,
+	const std::string& expected_local_fluid_identity,PointIdentityLimits limits={})
+{
+	std::string context_identity;
+	CollectiveLocalStage(comm,"fluid traction expected trial binding",[&] {
+		ValidateFsiTrialContext(expected_context);material.Validate();
+		if(!IsLowercaseSha256(expected_material_identity)||!IsLowercaseSha256(expected_local_fluid_identity)
+			||material.ContentIdentitySha256()!=expected_material_identity
+			||material.EvaluatedTimeS()!=expected_context.EndTime()
+			||material.StepStartS()!=expected_context.start_time_s||material.StepEndS()!=expected_context.EndTime())
+			throw std::runtime_error("fluid traction material differs from expected trial");
+		const auto actual=BuildFluidSurfaceTractionStateIdentitySha256(domain,catalog,material,map,viscosity,state);
+		if(actual!=expected_local_fluid_identity)throw std::runtime_error("fluid traction state differs from expected producer identity");
+		Sha256 hash;distributed_surface_detail::AppendString(hash,"DistributedFluidSurfaceTraction/trial/v1");
+		hash.AppendLittleEndian64(expected_context.step);hash.AppendNormalizedDouble(expected_context.start_time_s);
+		hash.AppendNormalizedDouble(expected_context.dt_s);hash.AppendLittleEndian64(expected_context.coupling_iteration);
+		distributed_surface_detail::AppendString(hash,expected_material_identity);context_identity=hash.Hex();
+	});
+	RequireCollectiveSameText(comm,"fluid traction expected common trial",context_identity);
+	return BuildDistributedFluidSurfaceTractionPoints(comm,domain,catalog,material,map,viscosity,owned_cells,state,limits);
 }
 } // namespace iga
 #endif
