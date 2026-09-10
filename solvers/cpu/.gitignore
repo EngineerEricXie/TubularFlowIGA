@@ -23,3 +23,4 @@ partitioned_vtk_output_test
 parallel_vtk_output_test
 bezier_point_signature_test
 distributed_point_identity_test
+parallel_bezier_visualization_test

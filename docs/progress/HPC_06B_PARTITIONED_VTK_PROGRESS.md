@@ -150,13 +150,68 @@ identity 拒絕與全部 ID 一致性仍通過。三份 rank reports exit 0、�
 資料、檢查共享座標一致性，再組裝 Bezier piece 與發佈時間序列。沒有宣稱已完成
 實際 PDE 分片輸出或大型 RSS 驗收。
 
+## Owned-element Bezier 分片建構與內插修正
+
+[ParallelBezierVisualization.hpp](../../solvers/cpu/include/ParallelBezierVisualization.hpp) 新增
+`BuildParallelBezierPartition`：caller 提供該 rank 的 owned elements、全域元素數、
+field schema 與只存取本地 owned／ghost 控制值的 callback。每個 occurrence 建立
+完整 signature、座標與 extracted field tuple，選代表並交換後，僅合併該 piece
+內相同代表 ID。輸出有 GlobalPointIds、GlobalCellIds、owner 與 HigherOrderDegrees。
+
+共同驗證 owner／元素範圍、全域元素總數、occurrence 唯一性；三者合併證明全元素
+恰好出現一次。全域僅交換每 rank cell count 及 bounds 等 metadata。共享座標沿用
+序列 tolerance，canonical 座標合併後，每 cell 的 64 Gauss locations 必須有正且
+有限的 Jacobian，並拒絕 collapsed point IDs。此元件沒有重做跨元素 volume overlap
+認證；該認證仍須由上游幾何驗證提供，不能以局部 Jacobian 替代。
+
+在 world 3 ranks 與 split 1+2 groups，各三種 owned-element 分區並反轉本地元素順序，
+九個快照皆與原序列 builder 的座標／速度／scalar 逐位元相同。15 項指定拒絕涵蓋
+缺元素、重複元素、共享座標衝突、缺控制值與負 Jacobian。所有 rank exit 0。
+ParaView 5.13 讀回九個真正的 cubic Bezier 快照，檢查 112 個共享點 IDs、兩個 cell
+IDs、degree (3,3,3)、完整場，以及 cell 內參數點 (0.2,0.4,0.6) 的座標／場內插。
+解析速度對座標的最大差為 2.220446049250313e-16；序列／分片比較仍是逐位元相同。
+
+這個 reader 測試揭露兩項排序問題，已修正：
+
+- 共用 `VtkCubicHexTensorIndices` 原本轉置兩個面的內部點順序。以本機 VTK
+  `PointIndexFromIJK` 核對後修正四個 entries。重建舊排序 VTKHDF 的 unit cube
+  在該參數點實際讀出 (0.2,0.4179712,0.5820288)，最大座標誤差約 0.0179712。
+- 新分片 XML 若宣告 0.1，reader 會採舊版高階 connectivity 相容轉換，額外交換兩條
+  邊的點。以同一 v2 fixture 的獨立副本只改版本為 2.2，九個內插測試即通過。
+  正式 partitioned VTU／PVTU writer 現在輸出 XML 2.2，v3 的原生檔案亦全部通過。
+
+既有低階 `WriteVtu` 介面不變。原 `bezier_visualization_test`、VTKHDF schema／resume
+與基本分片 VTU/PVTU reader 均通過。`vtkhdf-paraview-test` 新增 unit-cube 的元素內插
+驗證；修正後通過。舊排序的 VTKHDF 因 GeometryHash 不同而拒絕續寫，測試已確認；
+需要重新輸出到新檔案，不能把新時間幀接在舊 connectivity 後。數值 checkpoint 格式
+與求解器積分不受此可視化排序修正影響。
+
+失敗證據保留於 v1／v2：最初解析測試錯要求 velocity 與 coordinate 位元相等
+（1+2/3 與 5/3 有 rounding 差），改為明確 1e-14 解析門檻後才進一步抓到真正的
+內插誤差。舊 HDF 的首次 reader 驗證停在單幀檔案無 TimestepValues，因此另用
+vtkHDFReader 直接量測上述內插誤差；未把前者算作幾何失敗證據。
+
+最終證據：`outputs/hpc06/parallel-bezier-v3/audit.json`，前輪分別保留於
+`parallel-bezier-v1`／`parallel-bezier-v2`。重現建構與 reader：
+
+```bash
+make -C solvers/cpu parallel_bezier_visualization_test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 120s \
+  mpiexec -np 3 solvers/cpu/parallel_bezier_visualization_test NEW_OUTPUT
+pvpython scripts/test_parallel_bezier_paraview.py NEW_OUTPUT
+```
+
+尚須由真正 PETSc owned／ghost state 提供 callback，接入 CLI／runtime 輸出頻率與
+PVD 時間序列，再驗收實際 PDE 數值及大型場 RSS；本批不是完整 solver 整合。
+
 ## 接續工作
 
-Solver 仍走既有序列輸出。下一步須從 owned elements 建立局部可視化幾何、交換所需
-場值與共享點 identity；Bezier 點需沿用 extraction signature，不能以新局部編號
-冒充全域共享身分。schema／時間協議與 PVTU 發布已有上述元件；尚須整合 cell 覆蓋驗證、PVD
-序列發布及 solver 的局部場交換，不可只因格式層通過就宣稱整個流程完成。
+Solver 仍走既有序列輸出。局部 Bezier 建構、shared IDs／代表 tuple 交換、cell 覆蓋
+與 PVTU 協調已有上述元件；接下來須接入 PETSc owned／ghost state、CLI 與 PVD
+時間序列。完整幾何 overlap 認證的來源與生命週期也須明確，不能以局部正 Jacobian
+代替跨元素檢查。
 
-本批是格式元件，不證明大型場已免 root gather、MPI 輸出已完成或 Bezier cell 已驗收。
-需以相同實際 PDE 場與既有輸出比較、測量各 rank RSS、檔案數與 metadata 成本，
-再完成 HPC-06B／C。既有輸出預設與檔案介面未改。
+需以相同實際 PDE 場與既有輸出比較，測量各 rank RSS、檔案數與 metadata 成本，
+再完成 HPC-06B／C。尚不證明大型 solver 場已免 root gather。既有預設選項保持，
+但上述可視化排序修正會拒絕沿用舊排序 VTKHDF 的 geometry hash。

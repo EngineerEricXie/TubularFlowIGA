@@ -17,6 +17,8 @@ parser.add_argument("--cells", type=int, default=1)
 parser.add_argument("--times", default="0,0.5,1")
 parser.add_argument("--arrays", default="scalar,velocity")
 parser.add_argument("--value", default="scalar:20")
+parser.add_argument("--unit-cube-interpolation", action="store_true",
+                    help="check the standard unit-cube fixture inside the Bezier cell")
 args = parser.parse_args()
 
 path = Path(args.path)
@@ -38,4 +40,16 @@ if args.value and args.value != "none":
     name, expected = args.value.split(":", 1)
     require(point_data.GetArray(name).GetValue(0) == float(expected),
             "time-dependent point data was not selected")
+if args.unit_cube_interpolation:
+    from vtkmodules.vtkCommonCore import reference
+    cell = data.GetCell(0)
+    location, weights = [0., 0., 0.], [0.] * 64
+    parameter = [.2, .4, .6]
+    cell.EvaluateLocation(reference(0), parameter, location, weights)
+    require(max(abs(a-b) for a, b in zip(location, parameter)) < 1e-13,
+            "Bezier unit-cube interpolation changed")
+    scalar = sum(weights[i] * point_data.GetArray("scalar").GetValue(cell.GetPointId(i))
+                 for i in range(64))
+    require(abs(scalar - (20 + 3*.2 + 12*.4 + 48*.6)) < 1e-12,
+            "Bezier interior scalar interpolation changed")
 print(f"ParaView validated temporal VTKHDF: {path}")

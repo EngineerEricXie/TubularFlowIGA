@@ -131,6 +131,23 @@ int main()
 	const auto values = Read<double>(file, "/VTKHDF/PointData/scalar", H5T_NATIVE_DOUBLE);
 	assert(values[0] == 0.0 && values[64] == 10.0 && values[128] == 20.0);
 	H5Fclose(file);
+	// Older output used the transposed interior ordering on two faces. A
+	// corrected writer must reject resuming that mesh rather than mixing it
+	// with new frames under the old connectivity.
+	auto legacy_mesh=mesh;
+	std::swap(legacy_mesh.connectivity[33],legacy_mesh.connectivity[34]);
+	std::swap(legacy_mesh.connectivity[37],legacy_mesh.connectivity[38]);
+	const auto legacy_path=directory/"legacy-order.vtkhdf";
+	{
+		iga::TemporalVtkHdfWriter legacy_writer(legacy_path,legacy_mesh);
+		legacy_writer.Append(0.,{{"scalar",1,scalar}});legacy_writer.Close();
+	}
+	bool legacy_rejected=false;
+	try { iga::TemporalVtkHdfWriter incompatible(legacy_path,mesh,true); }
+	catch(const std::exception& error) {
+		legacy_rejected=std::string(error.what()).find("geometry does not match")!=std::string::npos;
+	}
+	assert(legacy_rejected);
 	if (std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT"))
 		std::cout << path << '\n';
 	else

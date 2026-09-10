@@ -79,6 +79,13 @@ hash and point-array schema match the current database and configuration.
 Interrupted uncommitted rows are truncated to the recorded step count. Writing
 the same final physical time replaces that timestep rather than duplicating it.
 
+The 2026-09-10 cubic Bezier ordering correction fixes the interior point order
+on two faces. Existing VTKHDF files written with the old order have a different
+geometry hash and cannot be resumed by the corrected writer; regenerate the
+visualization in a new output file. Solver checkpoint state is unchanged.
+The ParaView regression now checks interpolation inside the cell, as well as
+stored arrays. See [partitioned output validation](progress/HPC_06B_PARTITIONED_VTK_PROGRESS.md).
+
 ## Validation
 
 The HDF5 schema regression is part of `make cpu-test`. With ParaView `pvpython`

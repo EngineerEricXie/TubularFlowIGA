@@ -34,7 +34,7 @@ inline void ValidateSchema(const std::vector<VtkArraySchema>& schema)
 	std::set<std::string> names;
 	for(const auto& array:schema) {
 		ValidateName(array.name);
-		if(array.components<1||!names.insert(array.name).second)
+		if(array.components<1||(array.name=="HigherOrderDegrees"&&array.components!=3)||!names.insert(array.name).second)
 			throw std::invalid_argument("invalid partitioned VTU array schema");
 	}
 }
@@ -59,14 +59,18 @@ inline void Array(std::ostream& output,const char* type,const std::string& name,
 }
 inline void Fields(std::ostream& output,const char* tag,const char* id_name,const std::vector<std::int64_t>& ids,const std::vector<VtkPointArray>& arrays)
 {
-	output<<'<'<<tag<<" GlobalIds=\""<<id_name<<"\">\n";
+	output<<'<'<<tag<<" GlobalIds=\""<<id_name<<"\"";
+	for(const auto& array:arrays)if(std::string(id_name)=="GlobalCellIds"&&array.name=="HigherOrderDegrees")output<<" HigherOrderDegrees=\"HigherOrderDegrees\"";
+	output<<">\n";
 	Array(output,"Int64",id_name,1,ids);
 	for(const auto& array:arrays)Array(output,"Float64",array.name,array.components,array.values);
 	output<<"</"<<tag<<">\n";
 }
 inline void ParallelFields(std::ostream& output,const char* tag,const char* id_name,const std::vector<VtkArraySchema>& schema)
 {
-	output<<'<'<<tag<<" GlobalIds=\""<<id_name<<"\">\n<PDataArray type=\"Int64\" Name=\""<<id_name<<"\" NumberOfComponents=\"1\"/>\n";
+	output<<'<'<<tag<<" GlobalIds=\""<<id_name<<"\"";
+	for(const auto& array:schema)if(std::string(id_name)=="GlobalCellIds"&&array.name=="HigherOrderDegrees")output<<" HigherOrderDegrees=\"HigherOrderDegrees\"";
+	output<<">\n<PDataArray type=\"Int64\" Name=\""<<id_name<<"\" NumberOfComponents=\"1\"/>\n";
 	for(const auto& array:schema)output<<"<PDataArray type=\"Float64\" Name=\""<<EscapeVtkXml(array.name)<<"\" NumberOfComponents=\""<<array.components<<"\"/>\n";
 	output<<"</"<<tag<<">\n";
 }
@@ -101,7 +105,7 @@ inline void WriteVtuPartition(const std::filesystem::path& path,const VtkPartiti
 	ValidateVtkPartition(piece,physical_time);
 	if(!path.parent_path().empty())std::filesystem::create_directories(path.parent_path());
 	std::ofstream output(path);if(!output)throw std::runtime_error("cannot create VTU partition: "+path.string());
-	output<<std::setprecision(17)<<"<?xml version=\"1.0\"?>\n<VTKFile type=\"UnstructuredGrid\" version=\"0.1\" byte_order=\"LittleEndian\"><UnstructuredGrid>\n"
+	output<<std::setprecision(17)<<"<?xml version=\"1.0\"?>\n<VTKFile type=\"UnstructuredGrid\" version=\"2.2\" byte_order=\"LittleEndian\"><UnstructuredGrid>\n"
 		<<"<FieldData><DataArray type=\"Float64\" Name=\"TimeValue\" NumberOfTuples=\"1\" format=\"ascii\">"<<physical_time<<"</DataArray></FieldData>\n"
 		<<"<Piece NumberOfPoints=\""<<piece.point_ids.size()<<"\" NumberOfCells=\""<<piece.cell_ids.size()<<"\">\n";
 	partitioned_vtk_detail::Fields(output,"PointData","GlobalPointIds",piece.point_ids,piece.point_arrays);
@@ -129,7 +133,7 @@ inline void WritePvtu(const std::filesystem::path& path,const std::vector<std::f
 	}
 	if(!path.parent_path().empty())std::filesystem::create_directories(path.parent_path());
 	std::ofstream output(path);if(!output)throw std::runtime_error("cannot create PVTU index: "+path.string());
-	output<<"<?xml version=\"1.0\"?>\n<VTKFile type=\"PUnstructuredGrid\" version=\"0.1\" byte_order=\"LittleEndian\"><PUnstructuredGrid GhostLevel=\"0\">\n";
+	output<<"<?xml version=\"1.0\"?>\n<VTKFile type=\"PUnstructuredGrid\" version=\"2.2\" byte_order=\"LittleEndian\"><PUnstructuredGrid GhostLevel=\"0\">\n";
 	partitioned_vtk_detail::ParallelFields(output,"PPointData","GlobalPointIds",point_schema);
 	partitioned_vtk_detail::ParallelFields(output,"PCellData","GlobalCellIds",cell_schema);
 	output<<"<PPoints><PDataArray type=\"Float64\" NumberOfComponents=\"3\"/></PPoints>\n";

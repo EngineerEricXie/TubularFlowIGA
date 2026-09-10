@@ -18,6 +18,10 @@ PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closur
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += parallel_vtk_output_test
 PETSC_TARGETS += distributed_point_identity_test
+PETSC_TARGETS += parallel_bezier_visualization_test
+
+parallel_bezier_visualization_test: tests/test_parallel_bezier_visualization.cpp tests/test_bezier_visualization.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 distributed_point_identity_test: tests/test_distributed_point_identity.cpp tests/test_bezier_visualization.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -595,7 +599,7 @@ vtkhdf-close-failure-test: vtkhdf_close_failure_test
 PVPYTHON ?= pvpython
 vtkhdf-paraview-test: temporal_vtkhdf_test
 	TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./temporal_vtkhdf_test
-	$(PVPYTHON) tests/validate_temporal_vtkhdf.py
+	$(PVPYTHON) tests/validate_temporal_vtkhdf.py --unit-cube-interpolation
 
 flow_checkpoint_test: tests/test_flow_checkpoint.cpp ../../include/FlowCheckpoint.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -667,6 +671,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) parallel_bezier_visualization_test
 	$(RM) distributed_point_identity_test
 	$(RM) bezier_point_signature_test
 	$(RM) parallel_vtk_output_test
