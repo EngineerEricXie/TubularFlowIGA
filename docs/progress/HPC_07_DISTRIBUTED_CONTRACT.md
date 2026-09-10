@@ -623,3 +623,31 @@ traction `t` 的標量速度為 `t/(1/dt+dt)`，位移為 `dt*v`。壓力案例�
 Bridge 已可驅動實際單 owner 膜數值核心，但集中求解目前由測試 driver 接線；
 正式 distributed runtime 的持久 trial 狀態、共同 prepare／commit／abort、
 kinematics 分送與強耦合仍待完成，HPC-07B/C 尚未勾選。
+
+
+## 單 owner 膜 kinematics 分送
+
+`DistributeSingleOwnerSurfaceKinematics` 接受只有 numerical owner 持有的完整
+single-partition output，以及 solver／lifecycle 獨立保存的完整 output identity。
+驗證來源 interface、stamp、場值 identity、expected context 與 reference geometry，
+再核對接收 partitions 的唯一 node ownership，分送 displacement／velocity。
+其他 ranks 不得提供來源 publication；空接收分區仍參與完整協定。
+
+回傳以各 destination layout 建立自己的 reference／layout／partition stamp，
+保留原 numerical producer-state identity。這個 identity 對應完整集中模型狀態，
+因此所有 destination partitions 可以具有相同 producer hash；partition hashes
+仍不同。Reference 幾何比較沿用現有 global layout hash stream，無需把完整
+kinematics 複製到每個 rank。
+
+1／3／5 ranks 的完整資料鏈（實際 fluid traction、單 owner 膜 solve／commit、
+kinematics 分送）通過。各 owned vector fields 符合原解析 scalar membrane 解
+乘以 reference normal，包含空分區，並通過 `ValidateSurfaceKinematics`。只有
+來源 owner 的 iteration 被修改，或保持 stamp 但修改 velocity component 時，
+均共同拒絕，健康重試成功。九份 reports exit 0、無 timeout；證據為
+`outputs/hpc07/membrane-kinematics-distribution-v1/audit.json`，重現沿用 traction
+測試的 1／3／5 rank 指令。
+
+本批沿用前節無 clamps 的數值 fixture，不宣稱完整 clamped FSI evolution。
+Expected source identity 與當前輸出可用性必須由 solver lifecycle 保證，分送
+helper 不持有 commit／rollback authority。正式持久 distributed runtime 與
+strong coupling trial 接線仍待完成。

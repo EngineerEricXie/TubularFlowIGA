@@ -4,6 +4,7 @@
 #include "SurfaceGhostTraction.hpp"
 #include "SingleOwnerSurfaceLayout.hpp"
 #include "SingleOwnerSurfaceTraction.hpp"
+#include "SingleOwnerSurfaceKinematics.hpp"
 #include "PretensionedMembrane.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
@@ -394,6 +395,7 @@ int main(int argc, char** argv)
 			const auto owner_input=iga::GatherSurfaceTractionAtOwner(PETSC_COMM_WORLD,distributed_layout,publication,interface.id,
 				publication.stamp,publication.projection_identity_sha256,ranks-1);
 			assert(owner_input.has_value()==(rank==ranks-1));
+			std::optional<iga::SurfaceKinematics> owner_kinematics;std::string expected_kinematics;
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"single owner membrane trial verification",[&] {
 				if(!owner_input)return;
 				const auto& input=*owner_input;
@@ -413,8 +415,34 @@ int main(int argc, char** argv)
 				}
 				membrane.AbortTrial();trial=membrane.SolveTrial(context,input.traction);
 				const auto prepared=membrane.PrepareTrial(trial);membrane.FinalizeTrial(prepared);
+				owner_kinematics=prepared.kinematics;expected_kinematics=iga::BuildSurfaceKinematicsIdentitySha256(*owner_kinematics,input.layout);
 				for(double value:membrane.CommittedState().displacement_m)assert(Near(value,.5*speed,1.e-12));
 			});
+			const auto* solve_layout=owner_input?&owner_input->layout:nullptr;
+			const auto check_distribution=[&] {
+				const auto output=iga::DistributeSingleOwnerSurfaceKinematics(PETSC_COMM_WORLD,distributed_layout,ranks-1,solve_layout,
+					owner_kinematics?&*owner_kinematics:nullptr,expected_kinematics,patch_map.Interface().id,expected_trial);
+				const double speed=all_state==&pressure_state?8.:-3.2;
+				for(std::size_t row=0;row<output.displacement_m.size();++row) {
+					CheckVector(output.displacement_m[row],{{0.,0.,-.5*speed}},1.e-12);
+					CheckVector(output.velocity_m_per_s[row],{{0.,0.,-speed}},1.e-12);
+				}
+				iga::ValidateSurfaceKinematics(output,distributed_layout);
+			};
+			check_distribution();
+			for(int mode=0;mode<2;++mode) {
+				auto incoming=owner_kinematics;
+				if(incoming) {
+					if(mode==0)incoming->stamp.coupling_iteration++;
+					if(mode==1)incoming->velocity_m_per_s.front()[0]+=1.;
+				}
+				int rejected=0,total=0;
+				try { (void)iga::DistributeSingleOwnerSurfaceKinematics(PETSC_COMM_WORLD,distributed_layout,ranks-1,solve_layout,
+					incoming?&*incoming:nullptr,expected_kinematics,patch_map.Interface().id,expected_trial); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				check_distribution();
+			}
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];
