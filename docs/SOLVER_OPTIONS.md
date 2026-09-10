@@ -190,3 +190,9 @@ mpiexec -np 2 solvers/cpu/iga_transport DATABASE.ntiga CASE_DIR 2 result.txt
 `solver_configuration` 記錄有效 prefix、KSP／PC、backend、iterations／reason。
 範例的較嚴格 tolerance 是候選配置驗收所得，並非普遍效能建議；詳見
 [legacy 驗收](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。
+
+
+多層 GAMG 的 smoother 使用 `..._mg_levels_` 選項，實際 view 的 level prefix
+會含層編號；coarse 使用 `..._mg_coarse_`。更改 coarse KSP type 時須一併檢查
+norm 等繼承配置，例如測試中的 coarse GMRES 明確指定 `ksp_norm_type preconditioned`。
+三／四層的實測範圍與限制見 [multilevel 驗收](progress/HPC_04A_MULTILEVEL_OPTIONS_PROGRESS.md)。

@@ -35,13 +35,24 @@ struct Linear {
 	~Linear() { KSPDestroy(&solver); VecDestroy(&solution); VecDestroy(&rhs); MatDestroy(&matrix); }
 	KSP solver = nullptr; Vec solution = nullptr, rhs = nullptr; Mat matrix = nullptr;
 };
-void Solve(MPI_Comm comm, iga::PetscSolverOptions& options, const char* type, const char* sub_pc, bool split = false, bool schur = false)
+void Solve(MPI_Comm comm, iga::PetscSolverOptions& options, const char* type, const char* sub_pc, bool split = false, bool schur = false, bool multilevel = false)
 {
 	int size = 0; MPI_Comm_size(comm, &size);
 	Linear objects;
-	Check(MatCreateAIJ(comm, 2, 2, 2*size, 2*size, 2, nullptr, 2, nullptr, &objects.matrix));
+	const PetscInt rows = multilevel ? 128 : 2;
+	Check(MatCreateAIJ(comm, rows, rows, rows*size, rows*size, multilevel ? 6 : 2, nullptr, multilevel ? 6 : 2, nullptr, &objects.matrix));
 	PetscInt begin = 0, end = 0; Check(MatGetOwnershipRange(objects.matrix, &begin, &end));
 	for (PetscInt row = begin; row < end; ++row) {
+		if (multilevel) {
+			const PetscInt node = row/2, width = 16, height = 4*size;
+			Check(MatSetValue(objects.matrix, row, row, 6.0, INSERT_VALUES));
+			Check(MatSetValue(objects.matrix, row, row^1, -0.1, INSERT_VALUES));
+			if (node%width) Check(MatSetValue(objects.matrix, row, row-2, -1.0, INSERT_VALUES));
+			if (node%width+1<width) Check(MatSetValue(objects.matrix, row, row+2, -1.0, INSERT_VALUES));
+			if (node>=width) Check(MatSetValue(objects.matrix, row, row-2*width, -1.0, INSERT_VALUES));
+			if (node+width<width*height) Check(MatSetValue(objects.matrix, row, row+2*width, -1.0, INSERT_VALUES));
+			continue;
+		}
 		Check(MatSetValue(objects.matrix, row, row, 4.0, INSERT_VALUES));
 		if (row) Check(MatSetValue(objects.matrix, row, row-1, -1.0, INSERT_VALUES));
 		if (row+1 < 2*size) Check(MatSetValue(objects.matrix, row, row+1, -1.0, INSERT_VALUES));
@@ -78,6 +89,28 @@ void Solve(MPI_Comm comm, iga::PetscSolverOptions& options, const char* type, co
 		const char* child_prefix = nullptr; PetscOptions child_options = nullptr;
 		Check(KSPGetOptionsPrefix(children[0], &child_prefix)); Check(PetscObjectGetOptions(reinterpret_cast<PetscObject>(children[0]), &child_options));
 		throw std::runtime_error(std::string("nested PC prefix inheritance failed: actual=")+actual+" expected="+sub_pc+" prefix="+(child_prefix ? child_prefix : "null")+" database="+(child_options==options.Database() ? "snapshot" : (child_options ? "other" : "global")));
+	}
+	if (multilevel) {
+		PetscInt levels = 0; Check(PCMGGetLevels(child, &levels));
+		Require(levels>1, "GAMG fixture did not build multiple levels");
+		KSP smoother = nullptr; PC smoother_pc = nullptr;
+		for (PetscInt level = 1; level < levels; ++level) {
+			Check(PCMGGetSmootherDown(child, level, &smoother));
+			Check(KSPGetType(smoother, &actual)); Require(std::string(actual)=="richardson", "MG smoother override failed");
+			Check(KSPGetPC(smoother, &smoother_pc)); Check(PCGetType(smoother_pc, &actual));
+			Require(std::string(actual)=="jacobi", "MG smoother PC override failed");
+			const char* prefix = nullptr; Check(KSPGetOptionsPrefix(smoother, &prefix));
+			Require(prefix && std::string(prefix)==options.Prefix()+"fieldsplit_first_mg_levels_"+std::to_string(level)+"_", "MG smoother prefix differs");
+		}
+		Check(PCMGGetCoarseSolve(child, &smoother)); Check(KSPGetType(smoother, &actual));
+		Require(std::string(actual)=="gmres", "MG coarse KSP override failed");
+		KSPNormType coarse_norm; Check(KSPGetNormType(smoother, &coarse_norm));
+		Require(coarse_norm==KSP_NORM_PRECONDITIONED, "MG coarse norm override failed");
+		const char* coarse_prefix = nullptr; Check(KSPGetOptionsPrefix(smoother, &coarse_prefix));
+		Require(coarse_prefix && std::string(coarse_prefix)==options.Prefix()+"fieldsplit_first_mg_coarse_", "MG coarse prefix differs");
+		Check(KSPGetPC(smoother, &smoother_pc)); Check(PCGetType(smoother_pc, &actual));
+		Require(std::string(actual)=="jacobi", "MG coarse PC override failed");
+		std::cout << "multilevel_options ranks=" << size << " levels=" << levels << " smoother=richardson/jacobi coarse=gmres/jacobi\n";
 	}
 	if (split) {
 		Check(KSPGetPC(children[1], &child)); Check(PCGetType(child, &actual));
@@ -213,6 +246,26 @@ void Run(MPI_Comm comm)
 	source.Set("-split_fieldsplit_second_pc_type", "lu"); source.Set("-split_fieldsplit_second_pc_factor_mat_solver_type", "mumps");
 	iga::PetscSolverOptions fields(comm, "split_", source.value); Solve(comm, fields, "gmres", "jacobi", true);
 	Solve(comm, fields, "gmres", "jacobi", true, true);
+	PetscBool multilevel = PETSC_FALSE;
+	Check(PetscOptionsHasName(nullptr, nullptr, "-test_solver_multilevel", &multilevel));
+	if (multilevel) {
+		source.Set("-split_ksp_rtol", "1e-13");
+		source.Set("-fieldsplit_first_pc_type", "gamg");
+		source.Set("-fieldsplit_first_pc_gamg_coarse_eq_limit", "8");
+		source.Set("-fieldsplit_first_mg_levels_ksp_type", "richardson");
+		source.Set("-fieldsplit_first_mg_levels_pc_type", "jacobi");
+		source.Set("-fieldsplit_first_mg_coarse_ksp_type", "gmres");
+		source.Set("-fieldsplit_first_mg_coarse_ksp_rtol", "1e-12");
+		source.Set("-fieldsplit_first_mg_coarse_ksp_norm_type", "preconditioned");
+		source.Set("-fieldsplit_first_mg_coarse_pc_type", "jacobi");
+		iga::PetscSolverOptions hierarchy(comm, "split_", source.value);
+		Solve(comm, hierarchy, "gmres", "gamg", true, false, true);
+		for (const char* key : {"fieldsplit_first_mg_levels_ksp_type", "fieldsplit_first_mg_levels_pc_type",
+			"fieldsplit_first_mg_coarse_ksp_type", "fieldsplit_first_mg_coarse_ksp_norm_type"}) {
+			Check(PetscOptionsUsed(source.value, key, &used)); Require(used, "MG option usage was not propagated");
+		}
+	}
+
 }
 }
 int main(int argc, char** argv)
