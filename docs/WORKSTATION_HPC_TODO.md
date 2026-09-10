@@ -710,7 +710,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   含無介面貢獻的 cell 與五種共同拒絕／重試。共用 P1 force／consistent
   mass 單點核心已接入原 traction consumer，解析積分及原回歸通過。
   單 owner bounded consistent projection 已接入分散 mass entries／owned forces，
-  三 rank 線性製造解及五種共同拒絕／重試通過，尚待正式 runtime 接線。
+  三 rank 線性製造解及五種共同拒絕／重試通過。同源 P1 point records
+  到 owned force／traction 的代數路徑亦已串接，解析 RHS／場值及三種拒絕／
+  重試通過；實際 IGA stress／catalog／trial 與正式 runtime 接線仍待完成。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank

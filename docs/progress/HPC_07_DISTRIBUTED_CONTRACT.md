@@ -366,3 +366,24 @@ mass，rank 1 持有全部 nodal RHS。解析 traction 為 `(1+x,2+y,3+x+y)`，�
 來源、binary 與 logs hashes 在 `outputs/hpc07/surface-projection-v1/audit.json`，
 重現沿用 `make -C solvers/cpu parallel-ownership-test`。正式 fluid quadrature、
 projection stamp、膜更新及 FSI runtime 接線仍待完成，HPC-07B 尚未勾選。
+
+
+## 同源 P1 force／mass 的分散式組裝
+
+`AssembleDistributedSurfaceTraction` 現在由各 owned cell 的 P1 point records 同時
+建立 corner forces 與 consistent mass entries，再核對完整 fluid cell ownership，
+將 force 加總到 node owners，經 bounded projection 回傳 owned traction。每個
+point 的 node IDs、barycentric values、traction 與 weight 同時供兩種積分使用。
+零 interface points 的 cell 仍參與 coverage，mass records 在配置前檢查上限。
+
+三 rank 測試以兩個共享邊 triangles 的 degree-two 積分及線性 traction 製造解
+串接整條代數路徑。Owned RHS 對解析值誤差小於 1e-14，投影 traction 小於
+1e-13；無效 weight、重複 cell 與 mass record cap 三項共同拒絕／健康重試通過，
+其餘 ownership／projection 回歸保持。三份 reports exit 0、無 timeout，來源及
+logs hashes 位於 `outputs/hpc07/traction-assembly-v1/audit.json`，重現沿用
+`make -C solvers/cpu parallel-ownership-test`。
+
+此輸入仍為 caller 提供的 stress／provenance records；下一步必須從實際 IGA
+velocity／pressure、surface quadrature catalog 與 trial authority 建立它們。
+回傳刻意是無 stamp 的 owned values，不能冒充已綁定材料狀態的 SurfaceTraction
+publication。正式 FSI runtime 與 HPC-07B 驗收仍待完成。

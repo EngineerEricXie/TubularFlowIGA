@@ -6,6 +6,7 @@
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceForces.hpp"
 #include "DistributedSurfaceProjection.hpp"
+#include "DistributedSurfaceTractionAssembly.hpp"
 #include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
 #include "SurfaceGhostKinematics.hpp"
@@ -351,6 +352,46 @@ void CheckSurfaceForces(int rank)
 		RejectCollectively([&] {(void)iga::ProjectDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,rhs,entries,owner,cap);},PETSC_COMM_WORLD);
 		check_projection(0);
 	}
+	std::vector<iga::SurfaceCellTractionPoints> point_cells;
+	for(auto triangle:triangles) {
+		iga::SurfaceCellTractionPoints cell;cell.cell_id=triangle;
+		for(int q=0;q<3;++q) {
+			iga::SurfaceP1TractionPoint point;
+			point.node_ids=layout.reference_triangles[triangle];point.barycentric={{1./6.,1./6.,1./6.}};
+			point.barycentric[q]=2./3.;point.weight_m2=1./6.;
+			for(int corner=0;corner<3;++corner) {
+				const auto id=point.node_ids[corner];const auto& x=layout.reference_positions[id==last?3:id].position_m;
+				const Vector value{{1+x[0],2+x[1],3+x[0]+x[1]}};
+				for(int axis=0;axis<3;++axis)point.traction_pa[axis]+=point.barycentric[corner]*value[axis];
+			}
+			cell.points.push_back(point);
+		}
+		point_cells.push_back(cell);
+	}
+	if(rank==1)point_cells.push_back({2,{}});
+	const auto check_assembly=[&] {
+		const auto values=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,3,point_cells,0);
+		Require(values.owned_force_n.size()==rhs.size()&&values.owned_traction_pa.size()==rhs.size(),"wrong assembled surface field size");
+		for(std::size_t row=0;row<rhs.size();++row) {
+			const auto& x=layout.reference_positions[row].position_m;const Vector exact{{1+x[0],2+x[1],3+x[0]+x[1]}};
+			for(int axis=0;axis<3;++axis) {
+				Require(std::abs(values.owned_force_n[row][axis]-rhs[row][axis])<1.e-14,"integrated surface RHS mismatch");
+				Require(std::abs(values.owned_traction_pa[row][axis]-exact[axis])<1.e-13,"integrated surface projection mismatch");
+			}
+		}
+	};
+	check_assembly();
+	for(int mode=0;mode<3;++mode) {
+		auto incoming=point_cells;iga::PointIdentityLimits limits;
+		if(rank==2) {
+			if(mode==0)incoming[0].points[0].weight_m2=std::numeric_limits<double>::infinity();
+			if(mode==1)incoming[0].cell_id=0;
+			if(mode==2)limits.max_local_occurrences=26;
+		}
+		RejectCollectively([&] {(void)iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,3,incoming,0,4096,limits);},PETSC_COMM_WORLD);
+		check_assembly();
+	}
+	if(rank==0)std::cout << "surface_traction_assembly=passed failures=3 retries=3\n";
 	if(rank==0)std::cout << "surface_consistent_projection=passed failures=5 retries=5\n";
 	if(rank==0)std::cout << "surface_corner_forces=passed failures=6 retries=6\n";
 }
