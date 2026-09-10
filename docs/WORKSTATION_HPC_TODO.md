@@ -539,7 +539,8 @@ F05 的原始診斷例外保存與恢復亦通過，見
   共用 family fallback 與大小寫優先順序已通過驗證並提交，見
   [family options 進度](progress/HPC_04A_FAMILY_OPTIONS_PROGRESS.md)。
   immersed／moving／FSI 的 prefix 與 snapshot 已接入，小型數值與 sanitizer 驗證通過；
-  完整 FSI 回歸已通過，完整 moving 回歸在 rigid wall trace gate 失敗；已接入可選的正權重 catalog，focused rigid 的兩種儲存模式通過，完整 moving 待重驗，見
+  完整 FSI 回歸已通過；moving 原 rigid wall trace 失敗由可選正權重 catalog
+  修復，focused 兩種儲存模式及 frozen c4fee00 完整 moving 回歸已通過，見
   [immersed 進度](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
   本機 1／2／3／4-rank factor 能力矩陣、block-Jacobi／fieldsplit 子求解器
   viewer、native KSP／SNES viewer 已驗證，見
@@ -547,8 +548,8 @@ F05 的原始診斷例外保存與恢復亦通過，見
   舊版 `iga_transport` 也已接入，單／雙 rank 相容性、錯誤及清理驗證通過，見
   [legacy 進度](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。多層 GAMG 的 smoother／
   coarse prefix、配置及 view 也已驗證，見
-  [multilevel 進度](progress/HPC_04A_MULTILEVEL_OPTIONS_PROGRESS.md)。完整 moving 回歸及
-  實際 PDE 大小案例驗收尚未完成，因此本項維持未勾選。
+  [multilevel 進度](progress/HPC_04A_MULTILEVEL_OPTIONS_PROGRESS.md)。不同 revision
+  的 family／CLI／backend／完整回歸尚待整體來源與完成範圍稽核，本項暫未勾選。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point

@@ -401,11 +401,39 @@ Fitting identity 綁定 diagnostics，故其新 digest 會反映正確累積計�
 moving 回歸仍是 frozen `c4fee00` 的獨立證據。Logs 與 hashes 見
 `rigid-debug/catalog-work-audit.json`，本次沒有更改 quadrature points 或權重。
 
+## 完整 moving 回歸完成
+
+`moving-regression-fitted-v1` 的 frozen `c4fee00` binary 已完成：exit 0、無 timeout，
+wall 5582.585 s、peak RSS 356077568 bytes，stderr 為空，最終
+`moving_immersed_transient_flow_tests=passed`。這是原完整測試，不是 focused rigid
+替代：包含 contraction／expansion layout、moving conservation、狀態 rollback／
+prepare／abort、stationary／mixed port capture 與 rigid translation 等原斷言。
+
+Rigid wall trace gap=5.52938856178035e-17，原 tolerance=5.68434188608080e-14；
+nonlinear residual=3.97033685409117e-16，Newton／KSP iterations=0。剛體初始場已
+滿足離散方程，不需要以迭代修正。原 volume／wall／Reynolds／divergence theorem
+門檻保持，僅此 fixture 明確選用前述正權重 fitting；其他 fixture 保留原積分選擇。
+完整測試的 contraction rows 2919→1375，expansion 1375→2919。
+
+`outputs/hpc04/immersed/moving-regression-fitted-v1/audit.json` 核對 binary SHA256、
+stdout／stderr hashes、rank report、162 個來源檔案與 `git show c4fee00:PATH`
+逐項相等。這不是目前 HEAD 的全回歸；後續 geometry identity／empty seed／累積
+工作量修補由前節 focused tests 證明。舊 `moving-regression-final-v2` 的 rigid
+失敗與其 frozen `01aa4c8` 證據保留，不改寫成通過。
+
+此工作站 OMP／OpenBLAS=1，沿用 LU/MUMPS root options 與
+`-immersed_transient_ksp_converged_reason`；family options 規則仍由各自測試覆蓋。
+期間另有 duct 等回歸，這個 wall／RSS 不作無干擾效能比較。仍不是分散式 FSI
+或跨節點的驗收證據。
+
 ## 剩餘工作
 
-已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
-另有上述完整 FSI 回歸通過；`moving-regression-final-v2` 的 rigid failure 已由新 fitting 模式在 focused 測試修復；須完成
-`moving-regression-fitted-v1` 全回歸，再補上
-整體驗收與 source/evidence 彙整；不得把正在執行的測試列為通過。
-新增巢狀 viewer 與本機後端能力驗證見 [診斷進度](HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
-舊版 `iga_transport` options 隔離已完成，見 [legacy options 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。HPC-04B／C 的其餘預條件器與大小案例評估仍待完成。
+上述 81 個作業（64 正向、17 預期負向）、131 份成功 rank report，以及完整
+FSI 回歸、修復後完整 moving 回歸均已有通過證據。HPC-04A 的整體完成判定仍須
+合併所有 family／CLI／backend 的來源與範圍稽核，不能把各時期的測試視為同一
+HEAD 完整執行。新增巢狀 viewer 與本機後端能力驗證見
+[診斷進度](HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。舊版 `iga_transport`
+options 隔離見 [legacy options 驗證](HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。
+1024-element duct 的 LU／block-Jacobi 亦已通過原門檻，見
+[較大方管進度](HPC_04B_LARGE_DUCT_PROGRESS.md)；HPC-04B／C 其他條件與
+無干擾 mesh／rank／硬體擴展仍待完成。
