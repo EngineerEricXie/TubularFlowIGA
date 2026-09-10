@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -24,10 +25,14 @@ def main():
     parser.add_argument('--timeout', type=int, default=600)
     parser.add_argument('--candidates', nargs='*', choices=['bjacobi', 'schur-lu', 'schur-gamg', 'selfp-lu', 'selfp-gamg', 'selfp-gamg-lu'],
                         default=['bjacobi', 'schur-lu', 'schur-gamg'], help='LU reference is always evaluated first; an empty list runs only LU')
+    parser.add_argument('--launcher', default='mpiexec', help='MPI launcher and binding arguments; -np is appended')
     parser.add_argument('--solver-view', action='store_true', help='capture nested diagnostics; not a timing configuration')
     args = parser.parse_args()
     if min(args.transverse, args.axial, args.ranks, args.timeout) < 1:
         parser.error('dimensions, ranks and timeout must be positive')
+    launcher = shlex.split(args.launcher)
+    if not launcher:
+        parser.error('launcher must not be empty')
     binary, builder = args.binary.resolve(), args.fixture_builder.resolve()
     root = args.output_dir.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -61,7 +66,7 @@ def main():
             subprocess.run([str(builder), str(case), str(args.transverse), str(args.axial), str(args.ranks)], check=True)
             inputs = {str(p): digest(p) for p in case.rglob('*') if p.is_file()}
             output, bundle = case/'result', case/'bundle'
-            command = ['timeout', '--kill-after=5s', str(args.timeout+15), 'mpiexec', '-np', str(args.ranks),
+            command = ['timeout', '--kill-after=5s', str(args.timeout+15), *launcher, '-np', str(args.ranks),
                        sys.executable, str(repo/'scripts/hpc_rank_run.py'), '--output-dir', str(folder),
                        '--expected-ranks', str(args.ranks), '--timeout', str(args.timeout), '--', str(binary),
                        '--graph-case', str(case), '--output-dir', str(output), '--checkpoint-dir', str(bundle)]

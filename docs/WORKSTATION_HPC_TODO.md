@@ -49,10 +49,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（15 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-04A、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（7 項） | HPC-01C、HPC-01D、HPC-04B、HPC-05C、HPC-06A、HPC-06B、HPC-06C |
-| 其餘待辦（16 項） | HPC-03D、HPC-04C、HPC-05D、HPC-06D、HPC-07A–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（8 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C |
+| 其餘待辦（15 項） | HPC-03D、HPC-05D、HPC-06D、HPC-07A–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 23 項未勾選，其中 7 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 23 項未勾選，其中 8 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -576,6 +576,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [小切割結果](progress/HPC_04B_SMALL_CUT_PROGRESS.md)。
 - [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
+  已建立序列重複的 fixed-mesh rank sweep，保留原 validator 並比較跨 rank
+  checkpoint；最小流程驗證通過，正式 128 元素 1／2／4-rank 數據待完成，見
+  [rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md)。
 
 驗收：相同數值門檻下完成小／中／大案例比較；報告失敗與負收益組合。
 不以 Krylov 迭代較少作為唯一成功條件，也不宣稱 AMG 必然較快。
