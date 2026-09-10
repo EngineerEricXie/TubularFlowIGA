@@ -49,6 +49,12 @@ public:
 		});
 	}
 
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+	enum class FailurePoint { None,AfterSolve,AfterPrepare };
+	void SetFailureForTesting(FailurePoint point,int rank) noexcept
+	{ failure_point_=point;failure_rank_=rank; }
+#endif
+
 	void SolveTrial(const FsiTrialContext& context,const SurfaceTraction& traction,
 		const SurfaceFieldStamp& expected_stamp,const std::string& expected_projection)
 	{
@@ -73,6 +79,9 @@ public:
 				trial_=membrane_->SolveTrial(numerical,input->traction);
 				identity=BuildSurfaceKinematicsIdentitySha256(trial_->kinematics,*layout_);
 			});
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+			InjectFailureForTesting(FailurePoint::AfterSolve);
+#endif
 			auto output=DistributeSingleOwnerSurfaceKinematics(comm_,partition_,owner_,layout_?&*layout_:nullptr,
 				trial_?&trial_->kinematics:nullptr,identity,structure_.id,context,limits_);
 			publication_=std::move(output);context_=context;phase_=Phase::Solved;
@@ -103,6 +112,9 @@ public:
 				prepared_publication_=publication_;
 				if(rank_==owner_)trial_=membrane_->PrepareTrial(*trial_);
 			});
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+			InjectFailureForTesting(FailurePoint::AfterPrepare);
+#endif
 			phase_=Phase::Prepared;
 		} catch(...) { ClearTrial();throw; }
 	}
@@ -119,6 +131,17 @@ public:
 		ClearTrial();
 	}
 private:
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+	void InjectFailureForTesting(FailurePoint point)
+	{
+		CollectiveLocalStage(comm_,"single owner membrane injected failure",[&] {
+			if(failure_point_==point&&rank_==failure_rank_)
+				throw std::runtime_error("injected single owner membrane failure");
+		});
+	}
+	FailurePoint failure_point_=FailurePoint::None;
+	int failure_rank_=-1;
+#endif
 	enum class Phase { Idle,Solved,Prepared };
 	void ClearTrial() noexcept
 	{

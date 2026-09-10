@@ -475,6 +475,31 @@ int main(int argc, char** argv)
 				CheckVector(runtime.TrialKinematics().displacement_m[row],{{0.,0.,-second_displacement}},1.e-12);
 			}
 			runtime.AbortTrial();assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+#ifdef IGA_SINGLE_OWNER_MEMBRANE_TESTING
+			using Failure=iga::SingleOwnerMembraneRuntime::FailurePoint;
+			for(auto failure:{Failure::AfterSolve,Failure::AfterPrepare}) {
+				runtime.SetFailureForTesting(failure,0);
+				if(failure==Failure::AfterSolve)
+					reject_runtime([&] { runtime.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256); });
+				else {
+					runtime.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+					reject_runtime([&] { runtime.PrepareCommit(); });
+				}
+				Reject([&] { (void)runtime.TrialKinematics(); });
+				assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+				runtime.SetFailureForTesting(Failure::None,-1);
+				runtime.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+				for(std::size_t row=0;row<runtime.TrialKinematics().displacement_m.size();++row) {
+					CheckVector(runtime.TrialKinematics().velocity_m_per_s[row],{{0.,0.,-second_speed}},1.e-12);
+					CheckVector(runtime.TrialKinematics().displacement_m[row],{{0.,0.,-second_displacement}},1.e-12);
+				}
+				runtime.AbortTrial();
+			}
+			runtime.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+			runtime.PrepareCommit();runtime.Commit();
+			for(const auto& value:runtime.CommittedKinematics().displacement_m)CheckVector(value,{{0.,0.,-second_displacement}},1.e-12);
+#endif
+
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];

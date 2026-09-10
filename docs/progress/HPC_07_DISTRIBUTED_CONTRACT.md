@@ -684,3 +684,27 @@ prepare／commit、第二步 abort 後第一步 committed state 保留皆通過�
 這是持久集體膜 runtime，尚未接入 strong coupling coordinator、clamped moving
 fluid/material trial 或 checkpoint；也未以本測試宣稱 process-loss／任意配置
 失敗恢復。HPC-07B/C 的完整驗收仍未完成。
+
+
+## 膜 runtime 在 solve／prepare 後的集體失敗驗證
+
+新增僅在 `IGA_SINGLE_OWNER_MEMBRANE_TESTING` 下存在的失敗注入入口，放在
+數值 owner 已 SolveTrial，以及已 PrepareTrial 之後。測試指定 rank 0 失敗；
+3／5 ranks 時它不是數值 owner，避免只測到 owner 自己丟出例外。
+
+1／3／5 ranks 的壓力／黏性 fixture 在第一步 commit 後，逐項注入第二步失敗。
+所有 ranks 共同拒絕，TrialKinematics 不可再取得，第一步 committed fields
+保持。解除注入後重新求解，第二步解析速度／位移仍正確；最後重新 prepare／
+commit 也成功，證明 prepared numerical capability 已被清理而沒有卡住或提前
+改變 committed state。這是 live-rank 例外測試，不宣稱 MPI process loss 或任意
+allocator failure 都可恢复。
+
+故障版本九份 rank reports 通過；另外移除測試 macro 重建正式編譯路徑，以
+1／3 ranks 回歸，四份 reports 亦通過。全部 exit 0、無 timeout，兩個 build
+無 compiler warnings。證據及正式版本 exact build argv 在
+`outputs/hpc07/membrane-collective-failure-v1/audit.json` 與
+`production-build-command.json`。一般 `fluid_surface_traction_test` target 啟用
+此測試開關；正常 runtime 編譯不包含注入方法或額外 collective stages。
+
+這補上單 owner 膜內部的失敗／重試證據。流體與結構兩個 domain 的共同接受、
+rollback 與 atomic commit 仍需 strong coupling coordinator 接線與驗收。
