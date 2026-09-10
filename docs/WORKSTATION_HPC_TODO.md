@@ -654,7 +654,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   PETSc 選定控制點 state、CPU flow 的 `pvtu` CLI 與 PVD 時間序列已接線；
   12 組實際求解／故障測試及 13 個 ParaView 時間幀場值比較通過。此新模式
   免完整解場 root gather，但初始化仍保留 root 完整幾何認證；大型 RSS、其他
-  runtime／transport 路徑與 I/O 規模測試待完成。
+  runtime／transport 路徑與 I/O 規模測試待完成。128 元素／4-rank 的三幀場值
+  比較及同 checkpoint 重輸出亦已通過，並記錄全部 rank RSS 與檔案成本；
+  此中型案例不取代大型規模驗收。
 - [ ] **HPC-06C：I/O 控制。** 分別設定場輸出、純量診斷與 checkpoint 頻率；
   測試 rank 增加時的檔案數、metadata 成本與寫入吞吐。
   依結果決定是否引入有限數量的 I/O aggregator，避免每 rank 每步大量小檔案。

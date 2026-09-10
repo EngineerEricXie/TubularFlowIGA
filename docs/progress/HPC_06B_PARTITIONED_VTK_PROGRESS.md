@@ -280,3 +280,42 @@ pvpython scripts/test_flow_pvtu_paraview.py NEW_OUTPUT
 HPC-06A／B／C。完整幾何認證仍集中 root，資料庫 metadata、幾何與暫存
 extraction 的生命週期需繼續稽核。既有預設格式保留，但上述可視化排序修正
 會拒絕沿用舊排序 VTKHDF 的 geometry hash。
+
+## 多元素 CPU flow 比較
+
+使用既有 C2 duct fixture（4×4×8，共 128 元素、539 控制點、4 ranks），
+移除 graph coupling 設定後，以 CPU flow CLI 求解相同邊界與兩步 dt=0.01。
+HDF／PVTU 各四份 rank reports 均 exit 0、無 timeout。三個 ParaView 時間幀
+座標完全一致、共享 IDs 的 tuple 一致；速度／壓力最大相對 L2 差約
+1.26e-15，最大逐值絕對差 7.64e-14，通過原 1e-6 relative／零 reference 時
+1e-12 absolute L2 門檻。最終控制場 checkpoint 的速度／壓力 relative L2
+分別約 8.01e-15／6.66e-15。
+
+兩次獨立求解的 checkpoint 並非逐位元相同，最初的 exact 比較失敗保留在
+`duct-output-v1/acceptance.json` 與 `paraview.log`。另從同一個完成 checkpoint
+只重新輸出，不執行新步，兩種格式在 t=0.02 的場值完全相等。首輪 harness
+錯誤期待零新步也寫出 checkpoint，修正後 v2 才採計。ParaView 5.13 對單幀
+HDF 回報 time=0，驗證器改從實際 HDF `Steps/Values` 查核時間；PVD 時間仍由
+ParaView 讀回。驗證器需本機 HDF5 serial 與 high-level shared libraries。
+
+| 觀察值 | HDF | PVTU |
+|---|---|---|
+| 各 rank RSS 歷史峰值 bytes | 85516288, 84819968, 105721856, 78049280 | 81813504, 89956352, 103309312, 78544896 |
+| 三幀可視化檔案數 | 1 | 16（12 pieces、3 PVTU、1 PVD） |
+| 可視化 bytes | 460446 | 1799569 |
+
+檔案統計只含 HDF／VTU／PVTU／PVD，不含 text、checkpoint、geometry report 或
+監測 logs。PVTU 為 ASCII 且每幀重寫幾何，HDF 有壓縮及固定幾何，不能只以
+位元組差解讀 I/O 效率。並行長回歸仍在執行；這些 RSS／時間僅為功能驗證
+觀察，128 元素亦不是大型規模證據。不據此宣稱 root RSS 降幅或選定 aggregator。
+
+```bash
+pvpython scripts/test_flow_pvtu_paraview.py outputs/hpc06/duct-output-v1 \
+  --parallel-ranks 4 --relative-tolerance 1e-6 --absolute-tolerance 1e-12
+pvpython scripts/test_flow_pvtu_paraview.py outputs/hpc06/duct-output-v1/same-state-v2 \
+  --parallel-ranks 4
+```
+
+求解命令、輸入與 binary hashes、rank reports、獨立求解 L2、同一 state 精確
+比較及檔案／RSS 統計：`outputs/hpc06/duct-output-v1/audit.json`。原小案例
+13 幀零容差 reader 回歸亦保留於 `original-reader-regression.log`。
