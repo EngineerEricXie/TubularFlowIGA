@@ -216,4 +216,5 @@ int main()
 	}
 
 	fs::remove_all(directory);
+	return 0;
 }

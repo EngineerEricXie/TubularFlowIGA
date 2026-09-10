@@ -75,6 +75,26 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 90s \
 pvpython scripts/test_parallel_vtk_paraview.py NEW_OUTPUT
 ```
 
+## 共用 Bezier 點身分
+
+`BuildBezierPointSignature` 現在抽出既有序列 builder 的 extraction 身分規則：
+忽略恰為零的 coefficients，以原 1e12 quantization 與控制點 ID 建立完整排序 key，
+另保留原 double coefficients 作場抽取。序列 builder 使用同一 helper，其座標一致性
+檢查與共享點合併語義保留。`EncodeBezierPointSignature` 將完整 key 編為明確的
+little-endian count／node／coefficient bytes，不能用單一 hash 的碰撞當成相同點。
+
+`BezierPointOccurrenceId` 以 `64*element_id+tensor_point` 產生受 Int64 overflow
+檢查的 occurrence ID；未來在相同完整 key 中選最小 occurrence，便可不依 MPI
+分區取得一致代表。這是稀疏 ID，並非舊序列 mesh 的緊密 point index。
+本批尚未實作跨 rank election 或代表座標／場值交換。
+
+新 signature test 與原 `bezier_visualization_test` 都 exit 0，final build 無警告。
+兩個相鄰 cubic elements 的 128 個 occurrences 得到 112 keys、16 shared points；
+反轉元素與 extraction row 順序仍得到相同完整 keys／代表 IDs。相同座標但不同
+solution-space ID 保持分開；另驗證 little-endian 正／負整數、Int64 邊界及八項
+錯誤拒絕。重現：`make -C solvers/cpu bezier_point_signature_test bezier_visualization_test`，
+再執行兩個 executable。來源與 logs 見 `outputs/hpc06/signature-v1/audit.json`。
+
 ## 接續工作
 
 Solver 仍走既有序列輸出。下一步須從 owned elements 建立局部可視化幾何、交換所需

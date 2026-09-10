@@ -390,6 +390,60 @@ inline constexpr std::array<int, 64> VtkCubicHexTensorIndices()
 
 } // namespace detail
 
+// The full key is the identity; SignatureHash is only a lookup accelerator.
+// Keep the existing 1e12 coefficient quantization for serial/parallel parity.
+struct BezierPointSignature {
+	detail::QuantizedSignature key;
+	std::vector<std::pair<std::int32_t,double>> coefficients;
+};
+
+inline BezierPointSignature BuildBezierPointSignature(const Element& element,std::size_t point)
+{
+	if(point>=kBezierPointCount||element.connectivity.size()!=element.extraction.size())
+		throw std::invalid_argument("invalid Bezier signature dimensions");
+	BezierPointSignature result;
+	for(std::size_t row=0;row<element.extraction.size();++row) {
+		const auto coefficient=element.extraction[row][point];
+		if(coefficient==0.0)continue;
+		const auto node=element.connectivity[row];
+		result.key.push_back({node,detail::QuantizeCoefficient(coefficient,1e12)});
+		result.coefficients.push_back({node,coefficient});
+	}
+	if(result.key.empty())throw std::runtime_error("Bezier extraction contains an empty column");
+	std::sort(result.key.begin(),result.key.end());
+	std::sort(result.coefficients.begin(),result.coefficients.end(),
+		[](const auto& left,const auto& right) { return left.first<right.first; });
+	return result;
+}
+
+inline std::string EncodeBezierPointSignature(const BezierPointSignature& signature)
+{
+	if(signature.key.empty()||!std::is_sorted(signature.key.begin(),signature.key.end()))
+		throw std::invalid_argument("Bezier signature key is empty or unordered");
+	std::string result;
+	if(signature.key.size()>(result.max_size()-8)/12)throw std::overflow_error("Bezier signature encoding is too large");
+	result.reserve(8+12*signature.key.size());
+	const auto append=[&](std::uint64_t value,unsigned bytes) {
+		for(unsigned byte=0;byte<bytes;++byte)result.push_back(static_cast<char>((value>>(8*byte))&255u));
+	};
+	append(signature.key.size(),8);
+	for(const auto& entry:signature.key) {
+		append(static_cast<std::uint32_t>(entry.first),4);
+		append(static_cast<std::uint64_t>(entry.second),8);
+	}
+	return result;
+}
+
+// A globally unique occurrence id, before matching shared signatures. Taking
+// the minimum occurrence among equal keys is independent of MPI partitioning.
+inline std::int64_t BezierPointOccurrenceId(std::uint64_t element_id,std::size_t point)
+{
+	const auto maximum=static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
+	if(point>=kBezierPointCount||element_id>(maximum-point)/kBezierPointCount)
+		throw std::overflow_error("Bezier point occurrence id exceeds Int64");
+	return static_cast<std::int64_t>(element_id*kBezierPointCount+point);
+}
+
 inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 	Database& database, bool require_valid_geometry = true)
 {
@@ -452,21 +506,9 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 		const auto element = database.Load(index);
 		auto& local_ids = tensor_connectivity[static_cast<std::size_t>(index)];
 		for (std::size_t point = 0; point < kBezierPointCount; ++point) {
-			detail::QuantizedSignature key;
-			std::vector<std::pair<std::int32_t, double>> signature;
-			for (std::size_t row = 0; row < element.extraction.size(); ++row) {
-				const auto coefficient = element.extraction[row][point];
-				if (coefficient == 0.0) continue;
-				const auto node = element.connectivity[row];
-				key.push_back({node, detail::QuantizeCoefficient(
-					coefficient, coefficient_quantization)});
-				signature.push_back({node, coefficient});
-			}
-			if (key.empty())
-				throw std::runtime_error("Bezier extraction contains an empty column");
-			std::sort(key.begin(), key.end());
-			std::sort(signature.begin(), signature.end(),
-				[](const auto& left, const auto& right) { return left.first < right.first; });
+			const auto built_signature=BuildBezierPointSignature(element,point);
+			const auto& key=built_signature.key;
+			const auto& signature=built_signature.coefficients;
 			const auto signature_hash = detail::SignatureHash(key);
 			const auto found = registry.find(signature_hash);
 			std::int64_t matching_point = -1;
