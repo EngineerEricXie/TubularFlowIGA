@@ -165,3 +165,27 @@ validator 的 metadata 成本仍存在。
 重現沿用 `make -C solvers/cpu parallel-ownership-test`。這完成 reference area
 貢獻路由元件；ghost 場交換、fluid traction integration 與正式 FSI runtime 接線
 仍待完成，HPC-07A 尚未勾選。
+
+## Owner-to-ghost tuple 交換元件
+
+`OwnedPointValues.hpp` 新增 `FetchOwnedPointValues`，接受 owned UInt64 IDs、
+interleaved tuples、requested IDs 與共同 component 數。Owner publication 與
+查詢按 ID 路由至 shard，再回傳到 requester；不建立完整全域 owner map 或
+nodal field。允許重複查詢並保留輸入順序，支援空 owner／requester 與全空群組。
+每次呼叫重新發布輸入，沒有隱含快取。
+
+Duplicate owners、無 owner 的 query、非有限 tuple、component 分歧與 cap
+超限共同拒絕。沿用每方向 wire cap 與 local owner＋query record cap；它們不
+代表 RSS 上限，ID skew 仍可能集中 shard。所有 owned tuples 都會發布，即使
+本次沒人查詢；這項成本需納入之後實際 ghost 通訊量測。
+
+三 rank 測試以空 root 查詢 rank 1 的場，rank 2 為空 requester，包含 UInt64
+最大 ID、ID 0、重複且反向排序查詢及 signed zero，tuple bits 保留。全空群組
+與六項共同錯誤／逐項健康重試均通過，原面積／scalar／Aitken／ownership 測試
+保持。三份 rank reports exit 0、無 timeout，證據在
+`outputs/hpc07/owned-point-values-v1/audit.json`。
+
+本元件只處理 ID 與 tuple；expected material catalog 的完整覆蓋、FSI time／
+step／coupling iteration／producer-state stamp 綁定仍由下一層驗證。不能用
+本測試宣稱已拒絕 stale FSI kinematics；正式 ghost publication wrapper 尚待接入。
+重現仍用 `make -C solvers/cpu parallel-ownership-test`。

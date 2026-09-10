@@ -5,6 +5,7 @@
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceAreas.hpp"
+#include "OwnedPointValues.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -194,6 +195,36 @@ void CheckIndependentCatalogs(int rank)
 		<< directory << '\n';
 }
 
+void CheckOwnedPointValues(int rank)
+{
+	const auto id=std::numeric_limits<std::uint64_t>::max();
+	const auto owned=rank==1?std::vector<std::uint64_t>{id,0}:std::vector<std::uint64_t>{};
+	const auto values=rank==1?std::vector<double>{1.,-0.,3.,4.,5.,6.}:std::vector<double>{};
+	const auto queries=rank==2?std::vector<std::uint64_t>{}:std::vector<std::uint64_t>{0,id,0};
+	const auto expected=rank==2?std::vector<double>{}:std::vector<double>{4.,5.,6.,1.,-0.,3.,4.,5.,6.};
+	const auto check=[&] {
+		const auto result=iga::FetchOwnedPointValues(PETSC_COMM_WORLD,owned,values,queries,3);
+		Require(result==expected,"wrong fetched owner tuples");
+		if(!result.empty())Require(std::signbit(result[4]),"point exchange lost signed zero");
+	};
+	check();
+	Require(iga::FetchOwnedPointValues(PETSC_COMM_WORLD,{},{},{},3).empty(),"all-empty point fetch failed");
+	for(int mode=0;mode<6;++mode) {
+		auto ids=owned;auto data=values;auto requested=queries;int components=3;iga::PointIdentityLimits limits;
+		if(rank==2) {
+			if(mode==0){ids.push_back(id);data={7.,8.,9.};}
+			if(mode==1)requested.push_back(17);
+			if(mode==2){ids.push_back(18);data={1.,std::numeric_limits<double>::infinity(),3.};}
+			if(mode==3)components=2;
+			if(mode==4){requested.push_back(id);limits.max_wire_bytes=8;}
+			if(mode==5){requested={id,0};limits.max_local_occurrences=1;}
+		}
+		RejectCollectively([&] {(void)iga::FetchOwnedPointValues(PETSC_COMM_WORLD,ids,data,requested,components,limits);},PETSC_COMM_WORLD);
+		check();
+	}
+	if(rank==0)std::cout << "owned_point_values=passed failures=6 retries=6\n";
+}
+
 void CheckScalarContributions(int rank)
 {
 	const auto id = std::numeric_limits<std::uint64_t>::max()-1;
@@ -351,6 +382,7 @@ int main(int argc, char** argv)
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
 		CheckScalarContributions(rank);
+		CheckOwnedPointValues(rank);
 		std::vector<std::uint64_t> balanced;
 		for (std::uint64_t id = rank; id < 6; id += ranks) balanced.push_back(id);
 		// Replace 1,4 with 2,3: global count AND ID sum remain unchanged.
