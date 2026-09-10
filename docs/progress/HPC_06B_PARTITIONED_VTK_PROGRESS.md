@@ -205,10 +205,38 @@ pvpython scripts/test_parallel_bezier_paraview.py NEW_OUTPUT
 尚須由真正 PETSc owned／ghost state 提供 callback，接入 CLI／runtime 輸出頻率與
 PVD 時間序列，再驗收實際 PDE 數值及大型場 RSS；本批不是完整 solver 整合。
 
+## PETSc 選定控制點接線
+
+[PetscBezierVisualization.hpp](../../solvers/cpu/include/PetscBezierVisualization.hpp) 新增
+`BuildPetscBezierPartition`：從 owned elements 的 connectivity 建立排序去重 node list，
+以 node-interleaved row IDs 建立局部 sequential Vec 與選定 scatter。它不使用
+`VecScatterCreateToAll`／`VecScatterCreateToZero`，也不配置 global_nodes 長度的
+控制場；僅將所需 rows 提供給局部 extraction callback。返回 requested nodes／rows
+與 global rows，方便後續記憶體／工作量觀察。這些計數不等於 process RSS。
+
+source Vec 的 communicator 決定所有操作，包含沒有 owned elements 的 rank。
+索引、scatter、局部 Vec 與 read view 都有正常 cleanup 與共同失敗 unwinding。
+不修改 source state；這仍是 live-rank 例外處理，非 PETSc 部分建立失敗或 MPI
+process-loss 復原承諾。
+
+原 Bezier MPI 測試改以真正的 distributed PETSc Vec 供值，同時保留直接 callback
+及原序列 builder 的 oracle。3／1／2-rank groups 的三種分區共九個快照全部逐位元
+一致，ParaView 內插亦通過。18 筆 rank/layout 計數逐項驗證：全持有兩個元素需
+448 rows、持有一個元素需 256 rows、空 rank 為 0；包含 world rank 0 為空的配置。
+
+新增六個預期拒絕與重試，涵蓋 rank-local state shape 錯誤，以及完成 PETSc scatter
+後才觸發的 identity wire cap。最後以分散式 VecEqual 確認所有成功／失敗操作後
+source Vec 未變。原 15 項 geometry／coverage 拒絕仍通過。三份 rank reports
+exit 0、無 timeout，來源與資料保存在 `outputs/hpc06/petsc-bezier-v1/audit.json`。
+命令沿用前節 `parallel_bezier_visualization_test` 與 ParaView reader。
+
+目前是實際 PETSc state 接線的元件驗收；尚未啟用 CLI 路徑，也未以實際 PDE solve
+結果或大型場量測取代這個解析 fixture。
+
 ## 接續工作
 
 Solver 仍走既有序列輸出。局部 Bezier 建構、shared IDs／代表 tuple 交換、cell 覆蓋
-與 PVTU 協調已有上述元件；接下來須接入 PETSc owned／ghost state、CLI 與 PVD
+與 PVTU 協調已有上述元件；PETSc 選定 state 已接線，接下來須接入 CLI 與 PVD
 時間序列。完整幾何 overlap 認證的來源與生命週期也須明確，不能以局部正 Jacobian
 代替跨元素檢查。
 

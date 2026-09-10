@@ -650,7 +650,8 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   本機 ParaView 5.13 讀回共享 Int64 IDs、空分片與兩個時間點通過；MPI piece
   協調與索引發布亦通過 3／1／2-rank 故障及重試驗收。Owned-element Bezier
   分片、共享身分／tuple 交換與實際內插也已驗證，並修復共用 VTK 面內點排序；
-  尚待 PETSc state、CLI 與時間序列整合，不能宣稱 solver 已移除 root gather。
+  PETSc 選定控制點 state 已接線並驗證空 rank／失敗重試，尚待 CLI 與時間序列
+  整合，不能宣稱 solver 已移除 root gather。
 - [ ] **HPC-06C：I/O 控制。** 分別設定場輸出、純量診斷與 checkpoint 頻率；
   測試 rank 增加時的檔案數、metadata 成本與寫入吞吐。
   依結果決定是否引入有限數量的 I/O aggregator，避免每 rank 每步大量小檔案。

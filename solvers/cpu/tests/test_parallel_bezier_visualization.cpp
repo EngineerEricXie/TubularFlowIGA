@@ -1,4 +1,5 @@
 #include "ParallelBezierVisualization.hpp"
+#include "PetscBezierVisualization.hpp"
 #define main SerialBezierRegressionMain
 #include "test_bezier_visualization.cpp"
 #undef main
@@ -35,6 +36,17 @@ void Run(MPI_Comm comm,const fs::path& root)
 			serial_indices.emplace(iga::EncodeBezierPointSignature(signature),point);
 		}
 	});
+	Vec state=nullptr,saved=nullptr;
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state create",VecCreateMPI(comm,PETSC_DECIDE,448,&state));
+	iga::CollectiveLocalStage(comm,"Bezier test owned state seed",[&] {
+		PetscInt first=0,last=0;
+		RequireParallel(!VecGetOwnershipRange(state,&first,&last),"cannot query test state range");
+		for(PetscInt row=first;row<last;++row)RequireParallel(!VecSetValue(state,row,Control(row/4,row%4),INSERT_VALUES),"cannot seed test state");
+	});
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state assembly begin",VecAssemblyBegin(state));
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state assembly end",VecAssemblyEnd(state));
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state snapshot create",VecDuplicate(state,&saved));
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state snapshot",VecCopy(state,saved));
 	for(int layout=0;layout<3;++layout) {
 		std::vector<iga::Element> local;
 		for(auto element:global) {
@@ -42,7 +54,20 @@ void Run(MPI_Comm comm,const fs::path& root)
 			if(owner==rank) { element.owner=rank;local.push_back(element); }
 		}
 		std::reverse(local.begin(),local.end());
-		const auto piece=iga::BuildParallelBezierPartition(comm,local,2,fields,Control);
+		const auto reference_piece=iga::BuildParallelBezierPartition(comm,local,2,fields,Control);
+		const auto extracted=iga::BuildPetscBezierPartition(state,local,2,112,fields);
+		const auto& piece=extracted.piece;
+		iga::CollectiveLocalStage(comm,"PETSc Bezier subset comparison",[&] {
+			std::set<std::int32_t> requested;
+			for(const auto& element:local)requested.insert(element.connectivity.begin(),element.connectivity.end());
+			RequireParallel(extracted.requested_nodes==requested.size()&&extracted.requested_rows==4*requested.size()
+				&&extracted.global_rows==448,"PETSc subset count is incorrect");
+			RequireParallel(piece.grid.points==reference_piece.grid.points&&piece.grid.connectivity==reference_piece.grid.connectivity
+				&&piece.point_ids==reference_piece.point_ids&&piece.cell_ids==reference_piece.cell_ids,"PETSc Bezier geometry differs");
+			for(std::size_t array=0;array<piece.point_arrays.size();++array)
+				RequireParallel(piece.point_arrays[array].values==reference_piece.point_arrays[array].values,"PETSc selected field differs from local oracle");
+			std::cout<<"petsc_bezier rank="<<rank<<" ranks="<<ranks<<" layout="<<layout<<" selected_rows="<<extracted.requested_rows<<" global_rows=448\n";
+		});
 		iga::CollectiveLocalStage(comm,"parallel serial Bezier comparison",[&] {
 			RequireParallel(piece.cell_ids.size()==local.size(),"local cell count changed");
 			for(std::size_t point=0;point<piece.point_ids.size();++point) {
@@ -76,6 +101,26 @@ void Run(MPI_Comm comm,const fs::path& root)
 			RequireParallel(message.find(expected)!=std::string::npos,"unexpected Bezier rejection stage");
 		});
 	}
+	std::vector<iga::Element> owned;
+	if(rank==0)owned=global;
+	for(const auto& mode:std::vector<std::string>{"shape","late-cap"}) {
+		iga::PointIdentityLimits limits;if(mode=="late-cap")limits.max_wire_bytes=8;
+		bool rejected=false;std::string message;
+		try { iga::BuildPetscBezierPartition(state,owned,2,mode=="shape"&&rank==ranks-1?113:112,fields,limits); }
+		catch(const std::exception& error) { rejected=true;message=error.what(); }
+		iga::CollectiveLocalStage(comm,"PETSc Bezier expected rejection",[&] {
+			RequireParallel(rejected,"invalid PETSc Bezier build accepted");
+			RequireParallel(message.find(mode=="shape"?"state size":"wire cap")!=std::string::npos,"unexpected PETSc Bezier rejection");
+		});
+		const auto retry=iga::BuildPetscBezierPartition(state,owned,2,112,fields);
+		iga::CollectiveLocalStage(comm,"PETSc Bezier retry",[&] { RequireParallel(retry.piece.cell_ids.size()==owned.size(),"PETSc Bezier retry failed"); });
+	}
+	PetscBool equal=PETSC_FALSE;
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state equality",VecEqual(state,saved,&equal));
+	iga::CollectiveLocalStage(comm,"Bezier test immutable source",[&] { RequireParallel(equal==PETSC_TRUE,"Bezier extraction changed source Vec"); });
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test state cleanup",VecDestroy(&state));
+	iga::RequireCollectivePetscSuccess(comm,"Bezier test snapshot cleanup",VecDestroy(&saved));
+	if(rank==0)std::cout<<"petsc_bezier ranks="<<ranks<<" subset_parity=exact rejections=2 retries=passed source_unchanged=true\n";
 	if(rank==0)std::cout<<"parallel_bezier ranks="<<ranks<<" layouts=3 serial_parity=exact rejections=5 passed\n";
 }
 }
