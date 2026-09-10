@@ -385,6 +385,22 @@ query budget 與不足的 record workspace 拒絕；僅面接觸、物理體積�
 `catalog-boundaries-v2-test.log` exit 0，未改動背景域驗證。
 證據 hashes 見 `rigid-debug/catalog-boundaries-audit.json`。
 
+### Fitting 發布的累積工作量
+
+新規則發布時，現在把 fitted points 納入 `attempted_record_attempts`、
+`attempted_logical_output_points`，以及 expanded 模式的 `attempted_output_points`。
+上限涵蓋 compact seed 建構（含 rescue）與新規則發布的合計工作量；不再只檢查
+最後一次 seed 的 records 或單獨的 fitted point count。此變更只影響可選 fitting 模式。
+對累積 logical-point cap，測試設為 seed 與新規則總數減一；即使二者個別都低於上限，
+expanded／compact 仍須拒絕。
+
+更新後 catalog 全測試 exit 0；同一測試用 `10812e0` 的舊 catalog header 編譯，
+exit 1 並明確報告 `fitted publication omitted cumulative records`，證明能抓到原漏計。
+`moving_fitted_geometry_identity_test` 亦通過，舊預設 v5 digest 保持相同。
+Fitting identity 綁定 diagnostics，故其新 digest 會反映正確累積計數；正在執行的完整
+moving 回歸仍是 frozen `c4fee00` 的獨立證據。Logs 與 hashes 見
+`rigid-debug/catalog-work-audit.json`，本次沒有更改 quadrature points 或權重。
+
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。

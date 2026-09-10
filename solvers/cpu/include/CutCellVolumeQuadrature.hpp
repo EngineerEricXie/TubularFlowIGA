@@ -348,13 +348,13 @@ struct CutCellVolumeQuadratureDiagnostics {
 	std::size_t precision_limited_leaves = 0;
 	std::size_t certified_blocks = 0;
 	std::size_t sample_leaves = 0;
-	// Compact-only monotone append count.  This includes records discarded by
+	// Compact seed/fitted-rule monotone append count. This includes records discarded by
 	// uniform-subtree rollback, so max_records cannot be bypassed by collapse.
 	std::size_t record_attempts = 0;
 	// Compact-only number of speculative records discarded by recursive uniform
 	// subtree rollback.  This excludes fixed-point block coalescing.
 	std::size_t rolled_back_records = 0;
-	// Compact-only deterministic compact-record accounting peak during this
+	// Compact-record accounting peak (also used by expanded fitting) during this
 	// cell's construction, including discarded empty-rule rescue attempts.  It
 	// counts the planned 1.5x capacities and both old and replacement plans
 	// while reserve may reallocate.  This is the portable quantity constrained
@@ -546,6 +546,10 @@ private:
 		if(count>options_.max_logical_points||(storage_mode_==CutCellVolumeQuadratureStorageMode::Expanded&&count>options_.max_points))
 			throw std::runtime_error("fitted cut-cell output point cap reached");
 		CheckAdd(result.diagnostics.record_attempts,count,options_.max_records,"fitted cut-cell record cap reached");
+		CheckAdd(result.diagnostics.attempted_record_attempts,count,options_.max_records,"fitted cut-cell cumulative record cap reached");
+		CheckAdd(result.diagnostics.attempted_logical_output_points,count,options_.max_logical_points,"fitted cut-cell cumulative logical point cap reached");
+		if(storage_mode_==CutCellVolumeQuadratureStorageMode::Expanded)
+			CheckAdd(result.diagnostics.attempted_output_points,count,options_.max_points,"fitted cut-cell cumulative output point cap reached");
 		result.diagnostics.retained_bytes=std::max(result.diagnostics.retained_bytes,seed_bytes+point_budget);
 		result.compact_rule=CompactCutCellVolumeRule();
 		result.compact_rule.max_depth=options_.max_depth;

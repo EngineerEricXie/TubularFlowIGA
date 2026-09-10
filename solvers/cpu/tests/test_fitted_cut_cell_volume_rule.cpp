@@ -81,6 +81,7 @@ int main()
 			iga::SurfaceSpatialIndex(iga::ClosedTriangulatedSurface::Build(ConcavePrism())));
 		iga::OctreeCutQuadratureOptions quadrature;quadrature.max_depth=2;
 		iga::FittedCutCellVolumeRuleOptions fitting;fitting.fit.max_columns=32768;
+		const iga::CutCellVolumeQuadratureCatalog seed_catalog(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Compact);
 		const iga::CutCellVolumeQuadratureCatalog expanded(domain,quadrature,iga::CutCellVolumeQuadratureStorageMode::Expanded,&fitting);
 		auto packed_options=quadrature;packed_options.max_points=1;
 		const iga::CutCellVolumeQuadratureCatalog packed(domain,packed_options,iga::CutCellVolumeQuadratureStorageMode::Compact,&fitting);
@@ -102,6 +103,12 @@ int main()
 		// A valid but exhausted query budget must fail during fitting, after
 		// seed construction, without publishing the seed as a fallback rule.
 		for(const auto mode:{iga::CutCellVolumeQuadratureStorageMode::Expanded,iga::CutCellVolumeQuadratureStorageMode::Compact}) {
+			const auto& diagnostics=(mode==iga::CutCellVolumeQuadratureStorageMode::Expanded?expanded:packed).Cell(0).diagnostics;
+			const auto& seed_diagnostics=seed_catalog.Cell(0).diagnostics;
+			Check(diagnostics.attempted_record_attempts==seed_diagnostics.attempted_record_attempts+published.size(),"fitted publication omitted cumulative records");
+			Check(diagnostics.attempted_logical_output_points==seed_diagnostics.attempted_logical_output_points+published.size(),"fitted publication omitted cumulative logical points");
+			Check(diagnostics.attempted_output_points==(mode==iga::CutCellVolumeQuadratureStorageMode::Expanded?published.size():0),"fitted publication expanded work count is incorrect");
+			Reject([&]{auto limited=quadrature;limited.max_logical_points=seed_diagnostics.attempted_logical_output_points+published.size()-1;iga::CutCellVolumeQuadratureCatalog failed(domain,limited,mode,&fitting);});
 			Reject([&]{auto limited=fitting;limited.max_point_queries=1;iga::CutCellVolumeQuadratureCatalog failed(domain,quadrature,mode,&limited);});
 			Reject([&]{auto limited=quadrature;limited.max_retained_bytes=2*343*sizeof(iga::VolumeQuadraturePoint)-1;iga::CutCellVolumeQuadratureCatalog failed(domain,limited,mode,&fitting);});
 			// This cell touches the prism at its x=2 face but has no interior
