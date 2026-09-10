@@ -95,6 +95,38 @@ solution-space ID 保持分開；另驗證 little-endian 正／負整數、Int64
 錯誤拒絕。重現：`make -C solvers/cpu bezier_point_signature_test bezier_visualization_test`，
 再執行兩個 executable。來源與 logs 見 `outputs/hpc06/signature-v1/audit.json`。
 
+## 分散式完整 key 代表選定
+
+[DistributedPointIdentity.hpp](../../solvers/cpu/include/DistributedPointIdentity.hpp) 新增
+`ResolveDistributedPointIdentities`。先按 occurrence ID 分配檢查全域唯一性，再按 key
+hash 分配完整 key，以完整 bytes 比較、選最小 occurrence，回傳該 ID 及其來源 rank。
+Hash 只決定負責配對的 rank，沒有用 hash 相同取代完整 key equality。來源 rank 可隨
+分區改變，代表 occurrence ID 保持相同；回傳順序與 caller 的局部輸入一致。
+
+每個階段的局部配置／解析錯誤共同協調，使用 Alltoall／Alltoallv 而非全目錄 gather。
+每 rank 各次交換的送出／接收 wire payload 均設上限，預設 64 MiB，局部 occurrences
+上限一百萬，並限制 MPI int counts。分配偏斜可觸發接收端 cap，全群拒絕後仍可重試。
+這些是 wire／輸入數量限制，不是 RSS 上限；buckets、flat buffers 與 key map 的
+暫存可能同時存在。沒有 process-loss recovery 或跨節點量測宣稱。
+
+實際 MPI 測試在 3／1／2-rank groups 各跑三種分區（全放 rank 0、交錯、反向交錯），
+並反轉局部輸入順序。131 occurrences 包含兩個 cubic 元素的 128 點與三個 binary-key
+案例，得到 114 個完整 keys；核對每筆最小 ID 及正確 communicator owner。
+另含全空群組、內嵌 NUL、相同前綴不同完整 key、大於 2^53 的 Int64 ID。
+14 項預期拒絕涵蓋重複 occurrence、空 key、局部數量配置、送出 cap 與接收偏斜 cap，
+每項核對指定錯誤階段並成功重試。三份 rank reports exit 0、無 timeout。
+
+```bash
+make -C solvers/cpu distributed_point_identity_test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 90s \
+  mpiexec -np 3 solvers/cpu/distributed_point_identity_test
+```
+
+證據與 source／binary／logs hashes：`outputs/hpc06/identity-v2/audit.json`。
+此元件只交換身分 metadata；代表點座標、實際場值的交換與局部 Bezier piece 建立
+尚未接入，故不能宣稱 solver 分片輸出已完成。
+
 ## 接續工作
 
 Solver 仍走既有序列輸出。下一步須從 owned elements 建立局部可視化幾何、交換所需

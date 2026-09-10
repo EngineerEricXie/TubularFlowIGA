@@ -17,6 +17,10 @@ PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closur
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += parallel_vtk_output_test
+PETSC_TARGETS += distributed_point_identity_test
+
+distributed_point_identity_test: tests/test_distributed_point_identity.cpp tests/test_bezier_visualization.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 parallel_vtk_output_test: tests/test_parallel_vtk_output.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -663,6 +667,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) distributed_point_identity_test
 	$(RM) bezier_point_signature_test
 	$(RM) parallel_vtk_output_test
 	$(RM) partitioned_vtk_output_test
