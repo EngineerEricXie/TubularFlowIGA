@@ -6,6 +6,7 @@
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
+#include "SurfaceGhostKinematics.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -305,6 +306,45 @@ void CheckSurfaceOwnership(int rank)
 	RejectCollectively([&] { iga::ValidateSurfacePublicationOwnership(reference, missing,
 		PETSC_COMM_WORLD); }, PETSC_COMM_WORLD);
 	iga::ValidateSurfacePublicationOwnership(reference, sparse, PETSC_COMM_WORLD);
+
+	iga::SurfaceKinematics publication;
+	publication.interface=reference;
+	publication.stamp.time_s=.25;publication.stamp.step=4;publication.stamp.coupling_iteration=2;
+	publication.stamp.reference_mesh_identity_sha256=sparse.reference_mesh_identity_sha256;
+	publication.stamp.layout_identity_sha256=sparse.layout_identity_sha256;
+	publication.stamp.partition_identity_sha256=iga::BuildDistributedSurfacePartitionIdentitySha256(sparse);
+	publication.stamp.producer_state_identity_sha256=std::string(64,static_cast<char>('a'+rank));
+	for(auto id:sparse.owned_global_node_ids) {
+		publication.displacement_m.push_back({{static_cast<double>(id),0.,0.}});
+		publication.velocity_m_per_s.push_back({{0.,static_cast<double>(id),0.}});
+	}
+	const auto expected_stamp=publication.stamp;
+	const auto requests=rank==0?std::vector<std::uint64_t>{30,10}:
+		(rank==1?std::vector<std::uint64_t>{20}:std::vector<std::uint64_t>{});
+	const auto check_ghosts=[&] {
+		const auto ghosts=iga::FetchSurfaceGhostKinematics(PETSC_COMM_WORLD,sparse,publication,reference,expected_stamp,requests);
+		Require(ghosts.requested_node_ids==requests,"ghost IDs reordered");
+		for(std::size_t row=0;row<requests.size();++row) {
+			Require(ghosts.displacement_m[row]==std::array<double,3>{{static_cast<double>(requests[row]),0.,0.}},"wrong ghost displacement");
+			Require(ghosts.velocity_m_per_s[row]==std::array<double,3>{{0.,static_cast<double>(requests[row]),0.}},"wrong ghost velocity");
+		}
+	};
+	check_ghosts();
+	for(int mode=0;mode<7;++mode) {
+		auto incoming=publication;auto expected=expected_stamp;auto query=requests;
+		if(rank==2) {
+			if(mode==0)incoming.stamp.time_s=.5;
+			if(mode==1)incoming.stamp.producer_state_identity_sha256=std::string(64,'f');
+			if(mode==2)incoming.interface.subsystem_id="wrong";
+			if(mode==3)incoming.stamp.partition_identity_sha256=std::string(64,'f');
+			if(mode==4){incoming.stamp.coupling_iteration=3;expected.coupling_iteration=3;}
+			if(mode==5)query.push_back(999);
+		}
+		if(mode==6&&rank==1)incoming.displacement_m[0][0]=std::numeric_limits<double>::infinity();
+		RejectCollectively([&] {(void)iga::FetchSurfaceGhostKinematics(PETSC_COMM_WORLD,sparse,incoming,reference,expected,query);},PETSC_COMM_WORLD);
+		check_ghosts();
+	}
+	if(rank==0)std::cout << "surface_ghost_kinematics=passed failures=7 retries=7\n";
 
 	// Reference triangle owner need not own any of its material nodes.
 	const std::vector<std::uint64_t> triangles = rank == 2 ? std::vector<std::uint64_t>{0} : std::vector<std::uint64_t>{};

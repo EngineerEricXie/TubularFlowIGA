@@ -189,3 +189,30 @@ Duplicate owners、無 owner 的 query、非有限 tuple、component 分歧與 c
 step／coupling iteration／producer-state stamp 綁定仍由下一層驗證。不能用
 本測試宣稱已拒絕 stale FSI kinematics；正式 ghost publication wrapper 尚待接入。
 重現仍用 `make -C solvers/cpu parallel-ownership-test`。
+
+## FSI kinematics stamp 與 ghost 交換
+
+`SurfaceGhostKinematics.hpp` 的 `FetchSurfaceGhostKinematics` 在 tuple 交換前
+驗證 publication 與 caller 提供的 expected interface／stamp 完全相符，包括
+producer-state 與 partition identity。全群組另核對 interface、reference／layout、
+time、step、coupling iteration；producer-state 可以是 partition-local identity，
+不錯要求每個 owner 的局部 state hash 相同。空 owner／requester 也要通過這些
+檢查。之後驗證 node ownership 完整覆蓋，再交換 displacement／velocity 六個
+component，按 requested IDs 回傳。
+
+Expected stamp 必須由 caller 的 transaction authority 獨立取得，不能從待驗證
+publication 自行複製就宣稱拒絕 stale state。此 wrapper 不從場值推導或證明完整
+producer solver state；它核對的是既有出版契約的身分。回傳為獨立 requested-node
+資料型別，不能直接當成 aligned-owned `SurfaceKinematics` 發布；其使用生命週期
+仍由外層 trial／epoch 管理。
+
+三 rank 測試包含空 root 查詢、local owner 查詢與空 requester；不同 owners 的
+producer-state hashes 合法且不同。七種情境均共同拒絕並健康重試：過期時間、
+錯誤 producer state、錯誤 subsystem、錯誤 partition、單 rank 的 expected 與
+publication 同時改 iteration（由全域 epoch agreement 抓到）、未知 requested
+node，以及非有限 displacement。原 tuple／area／Aitken／ownership 測試通過。
+三份 rank reports exit 0、無 timeout，證據為
+`outputs/hpc07/surface-ghost-v1/audit.json`，重現沿用 parallel-ownership-test。
+
+目前是已驗證的 stamped ghost exchange 元件；尚未移除正式 FSI runtime／patch
+map 的單分區限制，也沒有將 traction 或膜求解分散。HPC-07A–D 保持原未完成範圍。
