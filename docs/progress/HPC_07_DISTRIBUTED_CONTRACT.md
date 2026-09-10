@@ -287,3 +287,28 @@ component 編碼進 ID，因此 UInt64 最大 node ID 仍合法。Vector helper 
 也不以 lumped area 除法替代 consistent traction mass projection。Caller 仍需
 將角點力綁定到正確 trial／材料幾何，並將跨 cut-cell 的積分先送到 triangle
 owner。這些正式接線、投影與結構更新仍待完成，HPC-07B 只記部分進度。
+
+
+## 依 fluid cell authority 直接分送力
+
+`AssembleOwnedSurfaceCellForces` 接受完整 dense background cell catalog 的唯一
+ownership，每個 owned cell 提供已積分的 `(material node ID, force)` 列表；
+沒有 retained interface quadrature 的 cell 也須以空列表參與 coverage。這讓
+同一 material node 或 triangle 跨多個 fluid cells 的所有貢獻直接加總到 node
+owner，不必先集中到 triangle owner，也不會按 triangle ID 去重。
+
+元件核對全域 cell count、唯一 cell coverage、surface node publication ownership
+與 vector contribution 有限性。它不證明 cell 內 quadrature 完整性、catalog
+provenance 或 trial stamp；這些必須由後續 fluid integration caller 綁定。
+Local cell count 與 owned nodes 加 nodal contributions 各受 record cap 限制；
+vector sum 仍走三次 scalar routing。既有 triangle-corner API 保留給已集中於
+triangle owner 的資料，正式 owned-fluid-cell 接線可直接使用新 API。
+
+三 rank fixture 使用兩個有力貢獻的 cells 與一個空 contribution cell；兩個
+cells 的共享 node forces 和既有解析 nodal values 相同，原合力／力矩／功率
+檢查保持通過。重複、遺漏及越界 cell、未知 material node 與非有限第三分量
+五種錯誤共同拒絕並健康重試。其餘 parallel ownership 回歸通過，三份 reports
+exit 0、無 timeout，CPU affinity 14、15；證據在
+`outputs/hpc07/surface-cell-forces-v1/audit.json`。重現沿用
+`make -C solvers/cpu parallel-ownership-test`。HPC-07B 尚未完成正式流體積分、
+consistent projection 與結構更新驗收。

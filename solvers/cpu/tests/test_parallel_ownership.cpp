@@ -270,7 +270,17 @@ void CheckSurfaceForces(int rank)
 	const Corners first{{{{1,2,3}},{{4,5,6}},{{7,8,9}}}},second{{{{-1,2,-3}},{{4,-5,6}},{{-7,8,-9}}}};
 	const std::vector<Corners> forces=rank==0?std::vector<Corners>{first}:(rank==2?std::vector<Corners>{second}:std::vector<Corners>{});
 	const auto expected=rank==1?std::vector<Vector>{{{1,2,3}},{{3,7,3}},{{0,16,0}},{{4,-5,6}}}:std::vector<Vector>{};
+	std::vector<iga::SurfaceCellForces> cells;
+	for(std::size_t row=0;row<triangles.size();++row) {
+		iga::SurfaceCellForces cell;cell.cell_id=triangles[row];
+		for(int corner=0;corner<3;++corner)
+			cell.nodal_contributions_n.emplace_back(layout.reference_triangles[triangles[row]][corner],forces[row][corner]);
+		cells.push_back(cell);
+	}
+	// A cell without retained surface quadrature still participates in coverage.
+	if(rank==1)cells.push_back({2,{}});
 	const auto check=[&] {
+		Require(iga::AssembleOwnedSurfaceCellForces(PETSC_COMM_WORLD,reference,layout,3,cells)==expected,"wrong owned-cell forces");
 		const auto result=iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,triangles,forces);
 		Require(result==expected,"shared-node corner forces not conserved");
 		// Analytic resultant, moment about origin and power for v=(x,y,1).
@@ -300,6 +310,19 @@ void CheckSurfaceForces(int rank)
 		RejectCollectively([&] {(void)iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,ids,data,limits);},PETSC_COMM_WORLD);
 		check();
 	}
+	for(int mode=0;mode<5;++mode) {
+		auto incoming=cells;
+		if(rank==1) {
+			if(mode==0)incoming.push_back({0,{}});
+			if(mode==1)incoming.clear();
+			if(mode==2)incoming[0].cell_id=3;
+			if(mode==3)incoming[0].nodal_contributions_n.push_back({17,{{1,2,3}}});
+			if(mode==4)incoming[0].nodal_contributions_n.push_back({0,{{0,0,std::numeric_limits<double>::infinity()}}});
+		}
+		RejectCollectively([&] {(void)iga::AssembleOwnedSurfaceCellForces(PETSC_COMM_WORLD,reference,layout,3,incoming);},PETSC_COMM_WORLD);
+		check();
+	}
+	if(rank==0)std::cout << "surface_cell_forces=passed failures=5 retries=5\n";
 	if(rank==0)std::cout << "surface_corner_forces=passed failures=6 retries=6\n";
 }
 

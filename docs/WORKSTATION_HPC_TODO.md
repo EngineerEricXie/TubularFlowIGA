@@ -705,7 +705,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   已積分 P1 corner forces 已能由唯一 triangle owner 加總至 node owner，
   三 rank 共享節點的合力／力矩／離散功率及六種拒絕／重試通過，見
   [FSI 接線進度](progress/HPC_07_DISTRIBUTED_CONTRACT.md)。流體積分、
-  consistent traction projection 與正式結構更新仍待接線。
+  consistent traction projection 與正式結構更新仍待接線。另已加入按完整
+  fluid cell ownership 直接分送力的路徑，保留跨 cell 共享節點貢獻，
+  含無介面貢獻的 cell 與五種共同拒絕／重試。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank
