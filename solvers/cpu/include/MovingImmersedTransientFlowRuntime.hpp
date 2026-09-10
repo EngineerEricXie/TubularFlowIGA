@@ -87,8 +87,11 @@ public:
 		: options_(std::move(options))
 	{
 		PhaseScope geometry_phase(ProfilePhase::Geometry);
+		solver_options_.reset(new PetscSolverOptions(PETSC_COMM_SELF,
+			options_.flow.solver_options_prefix.empty() ? "immersed_transient_" : options_.flow.solver_options_prefix,
+			nullptr, {}, {}, "immersed_transient_", false));
 		auto geometry = MovingCutGeometry::Build(options_.grid, std::move(initial), options_.geometry);
-		std::unique_ptr<Epoch> epoch(new Epoch(std::move(geometry), options_.flow));
+		std::unique_ptr<Epoch> epoch(new Epoch(std::move(geometry), options_.flow, solver_options_));
 		committed_.swap(epoch); RefreshCommittedDiagnostics();
 	}
 	~MovingImmersedTransientFlowRuntime() = default;
@@ -103,6 +106,7 @@ public:
 	const std::vector<ImmersedFlowPortDefinition>& ConfiguredPorts() const noexcept { return committed_->runtime->ConfiguredPorts(); }
 	const ImmersedTransientFlowDiagnostics& CommittedDiagnostics() const noexcept { return committed_->runtime->Diagnostics(); }
 	const MovingImmersedTransientFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
+	PetscKspConfiguration SolverConfiguration() const { return (trial_ ? trial_ : committed_)->runtime->SolverConfiguration(); }
 	bool Idle() const noexcept { return !trial_; }
 	bool Prepared() const noexcept { return trial_ && diagnostics_.prepared; }
 	const MovingCutGeometry& TrialGeometry() const { RequireTrial("access trial geometry"); return *trial_->geometry; }
@@ -150,7 +154,7 @@ public:
 		// target PETSc runtime before its referenced target geometry.
 		TestingThrow(FaultStage::Geometry);
 		auto target_geometry = MovingCutGeometry::Build(options_.grid, std::move(target), options_.geometry, committed_->geometry.get());
-		std::unique_ptr<Epoch> candidate(new Epoch(std::move(target_geometry), options_.flow));
+		std::unique_ptr<Epoch> candidate(new Epoch(std::move(target_geometry), options_.flow, solver_options_));
 		// This seam is deliberately after target PETSc creation.  It proves an
 		// unfinished target epoch cannot retain old-layout handles on failure.
 		TestingThrow(FaultStage::InnerRuntime);
@@ -264,8 +268,9 @@ private:
 	struct Epoch {
 		std::unique_ptr<MovingCutGeometry> geometry;
 		std::unique_ptr<ImmersedTransientFlowRuntime> runtime;
-		Epoch(std::unique_ptr<MovingCutGeometry> value, const ImmersedTransientFlowOptions& options)
-			: geometry(std::move(value)), runtime(new ImmersedTransientFlowRuntime(*geometry, options)) {}
+		Epoch(std::unique_ptr<MovingCutGeometry> value, const ImmersedTransientFlowOptions& options,
+			const std::shared_ptr<PetscSolverOptions>& solver_options)
+			: geometry(std::move(value)), runtime(new ImmersedTransientFlowRuntime(*geometry, options, solver_options)) {}
 	};
 	static std::vector<double> CarryControllers(const ImmersedGlobalFlowState& old_state, const ImmersedActiveLayout& target)
 	{
@@ -425,6 +430,7 @@ private:
 	static bool& InjectFiniteConservationDefectForTesting() noexcept { static bool value=false; return value; }
 	static bool& InjectFiniteDiscreteMovingWallContinuityDefectForTesting() noexcept { static bool value=false; return value; }
 #endif
+	std::shared_ptr<PetscSolverOptions> solver_options_;
 	MovingImmersedTransientFlowOptions options_;
 	std::unique_ptr<Epoch> committed_, trial_;
 	std::unique_ptr<MovingImmersedTransientFlowConservationDiagnostics> committed_conservation_, trial_conservation_;

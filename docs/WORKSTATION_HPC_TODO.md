@@ -536,7 +536,12 @@ F05 的原始診斷例外保存與恢復亦通過，見
   SNES 及正式 1D CLI／native graph 也已接入，見
   [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。body-fitted standalone／VCA
   也已接入，見 [standalone 進度](progress/HPC_04A_STANDALONE_OPTIONS_PROGRESS.md)。
-  immersed／moving／FSI 與完整巢狀診斷及後端矩陣仍待完成。
+  共用 family fallback 與大小寫優先順序已通過驗證並提交，見
+  [family options 進度](progress/HPC_04A_FAMILY_OPTIONS_PROGRESS.md)。
+  immersed／moving／FSI 的 prefix 與 snapshot 已接入，小型數值與 sanitizer 驗證通過；
+  完整 moving／FSI 回歸仍執行中，見
+  [immersed 進度](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
+  完整巢狀診斷及後端矩陣仍待完成。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point

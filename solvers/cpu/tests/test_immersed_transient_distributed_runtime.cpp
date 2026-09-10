@@ -45,6 +45,7 @@ std::vector<PetscScalar> Owned(Vec vector)
 void Run(MPI_Comm comm,const std::string& mode,bool weighted)
 {
 	int rank = 0,size = 1; MPI_Comm_rank(comm,&rank); MPI_Comm_size(comm,&size);
+	PetscBool scoped = PETSC_FALSE; PetscOptionsHasName(nullptr,nullptr,"-test_solver_prefix",&scoped);
 	const bool closed = mode == "closed" || mode == "empty-work",empty = mode == "empty-work";
 	std::unique_ptr<iga::MovingCutGeometry> geometry;
 	iga::ImmersedTransientFlowOptions options;
@@ -65,8 +66,11 @@ void Run(MPI_Comm comm,const std::string& mode,bool weighted)
 		};
 	});
 	auto& g = *geometry;
+	if (scoped) options.solver_options_prefix = "domain_test_flow_";
 	iga::ImmersedTransientDistributedRuntime runtime(comm,g.Domain(),g.Volume(),g.Surface(),g.Ghost(),g.GeometryIdentitySha256(),options,
 		weighted ? iga::ImmersedWorkPartition::WeightedContiguous : iga::ImmersedWorkPartition::CellCount);
+	const auto solver = runtime.SolverConfiguration();
+	std::cout << "immersed_solver rank=" << rank << " prefix=" << solver.prefix << " ksp=" << solver.ksp << " pc=" << solver.pc << '\n';
 	std::vector<PetscScalar> previous(runtime.Layout().Rows(),0),local;
 	iga::CollectiveLocalStage(comm,"transient runtime initial data",[&] {
 		if (closed) for (std::size_t row = 0; row < runtime.Layout().NodeFieldRows(); ++row)
@@ -84,7 +88,7 @@ void Run(MPI_Comm comm,const std::string& mode,bool weighted)
 	double maximum_field_error = 0,physical_fraction = 0,history_difference = 0;
 	const auto serial_solve = [&](double time,std::uint64_t index,const std::vector<PetscScalar>& old,bool zero_velocity) {
 		auto target_geometry = Geometry(time,empty);
-		auto settings = options; settings.body_force = force;
+		auto settings = options; settings.body_force = force; settings.solver_options_prefix.clear();
 		if (!closed) {
 			for (auto& p : settings.ports) if (p.control_mode == iga::ImmersedFlowPortControlMode::FlowRate)
 				p.value *= index == 1 ? 1 : .5;

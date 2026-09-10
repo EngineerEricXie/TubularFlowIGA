@@ -1362,21 +1362,22 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				if (rank != 0) return;
 				for (const auto& domain : one_d_solvers)
 					iga::WriteOneDPetscSolverConfiguration(std::cout, *domain.second, step);
+				const auto write = [&](const std::string& id, const char* role, const iga::PetscKspConfiguration& solver) {
+					const auto precision = std::cout.precision();
+					std::cout << std::setprecision(17) << "solver_configuration {\"domain\":\"" << JsonEscape(id)
+						<< "\",\"role\":\"" << role << "\",\"step\":" << step
+						<< ",\"prefix\":\"" << JsonEscape(solver.prefix) << "\",\"ksp\":\"" << JsonEscape(solver.ksp)
+						<< "\",\"pc\":\"" << JsonEscape(solver.pc) << "\",\"factor_backend\":\"" << JsonEscape(solver.factor_backend)
+						<< "\",\"rtol\":" << solver.relative_tolerance << ",\"atol\":" << solver.absolute_tolerance
+						<< ",\"max_iterations\":" << solver.maximum_iterations << ",\"last_iterations\":" << solver.last_iterations
+						<< ",\"last_reason\":" << static_cast<int>(solver.last_reason) << "}\n";
+					std::cout.precision(precision);
+				};
 				for (const auto& domain : three_d) {
-					const auto write = [&](const char* role, const iga::PetscKspConfiguration& solver) {
-						const auto precision = std::cout.precision();
-						std::cout << std::setprecision(17) << "solver_configuration {\"domain\":\"" << JsonEscape(domain.first)
-							<< "\",\"role\":\"" << role << "\",\"step\":" << step
-							<< ",\"prefix\":\"" << JsonEscape(solver.prefix) << "\",\"ksp\":\"" << JsonEscape(solver.ksp)
-							<< "\",\"pc\":\"" << JsonEscape(solver.pc) << "\",\"factor_backend\":\"" << JsonEscape(solver.factor_backend)
-							<< "\",\"rtol\":" << solver.relative_tolerance << ",\"atol\":" << solver.absolute_tolerance
-							<< ",\"max_iterations\":" << solver.maximum_iterations << ",\"last_iterations\":" << solver.last_iterations
-							<< ",\"last_reason\":" << static_cast<int>(solver.last_reason) << "}\n";
-						std::cout.precision(precision);
-					};
-					write("flow", domain.second->runtime->SolverConfiguration());
-					if (domain.second->transport_runtime) write("transport", domain.second->transport_runtime->SolverConfiguration());
+					write(domain.first, "flow", domain.second->runtime->SolverConfiguration());
+					if (domain.second->transport_runtime) write(domain.first, "transport", domain.second->transport_runtime->SolverConfiguration());
 				}
+				for (const auto& domain : immersed_audit) write(domain.first, "flow", domain.second->SolverConfiguration());
 				iga::FlushCheckedText(std::cout);
 			});
 

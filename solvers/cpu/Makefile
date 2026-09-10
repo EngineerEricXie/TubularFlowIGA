@@ -17,7 +17,7 @@ PETSC_TARGETS := body_fitted_subcommunicator_test petsc petsc-test phase5-closur
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += collective_failure_test
-PETSC_TARGETS += collective_petsc_options_test petsc_solver_options_test
+PETSC_TARGETS += collective_petsc_options_test petsc_solver_options_test moving_immersed_solver_options_test
 PETSC_TARGETS += petsc_gather_test
 PETSC_TARGETS += body_fitted_checkpoint_bundle_test body_fitted_accepted_checkpoint_test
 PETSC_TARGETS += petsc_checkpoint_read_test
@@ -704,3 +704,10 @@ petsc_solver_options_test: tests/test_petsc_solver_options.cpp include/PetscSolv
 iga_navier_stokes: include/PetscSolverOptions.hpp include/CollectivePetscOptions.hpp
 
 iga_solve: include/PetscSolverOptions.hpp include/RuntimeConstruction.hpp
+
+# Immersed solver snapshots are shared by static, transient and moving runtimes.
+$(PETSC_TARGETS): include/PetscSolverOptions.hpp
+
+moving_immersed_solver_options_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
+moving_immersed_solver_options_test: tests/test_moving_immersed_solver_options.cpp tests/test_moving_immersed_transient_flow.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)

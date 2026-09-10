@@ -95,10 +95,12 @@ public:
 		const auto wall_labels = ParseLabels(Required(object, "wall_labels"));
 		if (result->transient_) {
 			result->transient_options_ = ParseRuntime<ImmersedTransientFlowOptions>(Required(object,"runtime"),result->configuration_,wall_labels);
+			result->transient_options_.solver_options_prefix = PetscDomainOptionsPrefix(domain_id, "flow");
 			result->runtime_parameters_ = result->transient_options_.parameters;
 			result->runtime_parameters_.dt = result->configuration_.time.dt;
 		} else {
 			result->runtime_options_ = ParseRuntime<ImmersedStaticFlowOptions>(Required(object,"runtime"),result->configuration_,wall_labels);
+			result->runtime_options_.solver_options_prefix = PetscDomainOptionsPrefix(domain_id, "flow");
 			result->runtime_parameters_ = result->runtime_options_.parameters;
 		}
 		ValidateLabelPartition(result->classification_->SurfaceIndex().Surface(),wall_labels,ports,
@@ -162,6 +164,13 @@ public:
 
 	ImmersedStaticFlowRuntime& Runtime() { if (!runtime_) throw std::logic_error("immersed case has no serial runtime"); return *runtime_; }
 	const ImmersedStaticFlowRuntime& Runtime() const { if (!runtime_) throw std::logic_error("immersed case has no serial runtime"); return *runtime_; }
+	PetscKspConfiguration SolverConfiguration() const
+	{
+		if (transient_runtime_) return transient_runtime_->SolverConfiguration();
+		if (distributed_runtime_) return distributed_runtime_->SolverConfiguration();
+		if (runtime_) return runtime_->SolverConfiguration();
+		throw std::logic_error("immersed case has no solver");
+	}
 	const SimulationConfiguration& Configuration() const noexcept { return configuration_; }
 	const std::string& SurfaceHash() const noexcept { return classification_->SurfaceCanonicalHash(); }
 	const CubicCartesianGridSpec& Grid() const noexcept { return classification_->Background().Spec(); }

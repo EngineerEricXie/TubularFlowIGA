@@ -39,6 +39,7 @@ public:
 			topology_options.parameters = options_.parameters; topology_options.wall_labels = options.wall_labels;
 			topology_options.ports = options.ports; topology_options.wall_gamma0 = options.wall_gamma0;
 			topology_options.body_force = options.body_force;
+			topology_options.solver_options_prefix = options.solver_options_prefix;
 			topology_options.nonlinear_maximum_iterations = options.nonlinear_maximum_iterations;
 			topology_options.ksp_maximum_iterations = options.ksp_maximum_iterations;
 			topology_options.ksp_relative_tolerance = options.ksp_relative_tolerance;

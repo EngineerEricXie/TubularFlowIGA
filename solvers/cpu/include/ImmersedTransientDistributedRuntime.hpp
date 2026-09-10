@@ -35,6 +35,7 @@ public:
 	// Diagnostics describes the numerical Newton phase; Clock owns the broader
 	// frozen-trial lifetime, including a retry after a failed Newton attempt.
 	using Base::Diagnostics;
+	using Base::SolverConfiguration;
 	using Base::RowBegin;
 	using Base::RowEnd;
 	using Base::State;

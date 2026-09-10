@@ -2,7 +2,7 @@
 #define IGA_IMMERSED_DISTRIBUTED_NEWTON_RUNTIME_HPP
 
 #include "ImmersedStaticDistributedOperator.hpp"
-#include "CollectivePetscOptions.hpp"
+#include "PetscSolverOptions.hpp"
 #include "PetscPhaseProfile.hpp"
 
 namespace iga {
@@ -19,10 +19,11 @@ public:
 		op_ = AllocateCollectiveRuntime<Operator>(communicator_,communicator_,std::forward<Arguments>(arguments)...);
 		const auto& options = op_->Options();
 		try {
-			std::string checked_prefix;
+			std::string checked_prefix, inherited_prefix;
 			CollectiveLocalStage(communicator_,"immersed Newton prefix preflight",[&] {
 				if (!prefix || !*prefix) throw std::invalid_argument("immersed Newton options prefix is empty");
-				checked_prefix = prefix;
+				inherited_prefix = prefix;
+				checked_prefix = options.solver_options_prefix.empty() ? inherited_prefix : options.solver_options_prefix;
 			});
 			RequireCollectiveSameText(communicator_,"immersed Newton prefix agreement",checked_prefix);
 			CollectiveLocalStage(communicator_,"distributed static diagnostics storage",[&] { diagnostics_ = op_->Diagnostics(); });
@@ -47,14 +48,18 @@ public:
 				Check("distributed static LU shift type",PCFactorSetShiftType(pc,MAT_SHIFT_NONZERO));
 				Check("distributed static LU shift amount",PCFactorSetShiftAmount(pc,options.lu_pivot_shift));
 			}
-			Check("distributed static KSP prefix",KSPSetOptionsPrefix(solver_,prefix));
-			Check("distributed static KSP options",KSPSetFromOptions(solver_));
+			solver_options_ = AllocateCollectiveRuntime<PetscSolverOptions>(communicator_, communicator_, checked_prefix,
+				nullptr, PetscOptionEntries{}, std::set<std::string>{}, inherited_prefix, false);
+			solver_options_->Attach(solver_);
+			solver_options_->Call("distributed static KSP options", [&] { return KSPSetFromOptions(solver_); });
+			solver_options_->RecordUsed();
 		} catch (...) { Release(); throw; }
 	}
 	~ImmersedDistributedNewtonRuntime() { Release(); }
 	ImmersedDistributedNewtonRuntime(const ImmersedDistributedNewtonRuntime&) = delete;
 	ImmersedDistributedNewtonRuntime& operator=(const ImmersedDistributedNewtonRuntime&) = delete;
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
+	PetscKspConfiguration SolverConfiguration() const { RequireOpen(); return CaptureKspConfiguration(solver_); }
 	MPI_Comm Communicator() const noexcept { return communicator_; }
 	const std::vector<ImmersedFlowPortDefinition>& PortDefinitions() const noexcept { return op_->Options().ports; }
 	void SetPortControlValue(const std::string& id,double value)
@@ -139,7 +144,8 @@ public:
 				Check("distributed static operators",KSPSetOperators(solver_,op_->Assembly().Matrix(),op_->Assembly().Matrix()));
 				RequireKspFactorBackend(solver_,op_->Assembly().Matrix(),communicator_);
 				const auto start = std::chrono::steady_clock::now();
-				Check("distributed static solve",SolveProfiledKsp(solver_,op_->Assembly().Residual(),update_));
+				solver_options_->Call("distributed static solve", [&] { return SolveProfiledKsp(solver_,op_->Assembly().Residual(),update_); });
+				solver_options_->RecordUsed();
 				diagnostics_.last_linear_solve_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
 				diagnostics_.aggregate_linear_solve_seconds += diagnostics_.last_linear_solve_seconds;
 				Check("distributed static KSP reason",KSPGetConvergedReason(solver_,&step.ksp_reason));
@@ -290,6 +296,7 @@ private:
 	MPI_Comm communicator_;
 	std::unique_ptr<Operator> op_;
 	Vec committed_ = nullptr,prepared_ = nullptr,update_ = nullptr,linear_rhs_ = nullptr,linear_action_ = nullptr;
+	std::unique_ptr<PetscSolverOptions> solver_options_;
 	KSP solver_ = nullptr;
 	ImmersedStaticFlowDiagnostics diagnostics_{};
 	bool fail_next_prepare_ = false,fail_next_candidate_ = false,candidate_assembly_ = false;

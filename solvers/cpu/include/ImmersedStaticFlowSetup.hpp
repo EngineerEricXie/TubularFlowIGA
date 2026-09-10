@@ -61,6 +61,7 @@ struct ImmersedStaticFlowOptions {
 	// factorization policy in effect).  The assembled operator and all
 	// reported residual/gauge checks remain exactly unshifted.
 	double lu_pivot_shift = 0.0;
+	std::string solver_options_prefix; // Empty preserves the immersed_static_ family.
 };
 
 struct ImmersedStaticFlowNewtonStep {

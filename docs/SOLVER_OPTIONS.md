@@ -1,4 +1,4 @@
-# 1D 與貼體 graph 的 PETSc 求解器選項
+# PETSc 求解器選項
 
 `iga_multidomain_flow`／`iga_1d_3d_bifurcation` 中，每個貼體 3D domain 的 flow 與
 transport，以及每個 implicit 1D domain，現在都有獨立 options prefix。
@@ -62,6 +62,39 @@ Embedding caller 可在 `TransientFlowRuntime`／`TransientTransportRuntime` 建
 最後提供 `solver_options_prefix`。預設空字串保留舊的未加前綴介面，包括舊 flow
 constructor 的全域 fieldsplit defaults 行為；新的 scoped graph 使用 private defaults。
 `SolverConfiguration()` 是 runtime 開啟時的本地查詢；外層須自行提供群組錯誤協調。
+
+## Immersed static、transient 與 moving／FSI
+
+Immersed graph domain 同樣使用 `domain_<id>_flow_`。相容性優先順序為：
+既有 runtime defaults → `immersed_static_` 或 `immersed_transient_` family 選項 →
+該 domain 的完整 prefix 選項。既有 static／distributed 路徑沒有繼承未加 prefix 的
+`-ksp_type`、`-pc_type`；此行為保留。Serial transient 現在也接受 transient family
+選項。例：
+
+```bash
+mpiexec -np 2 solvers/coupling/iga_multidomain_flow \
+  --graph-case CASE --output-dir NEW_OUTPUT \
+  -immersed_transient_ksp_type gmres \
+  -domain_immersed_flow_ksp_type fgmres
+```
+
+此例的 `immersed` domain 使用 FGMRES；其他 transient immersed domain 繼承 GMRES。
+Static family 仍使用 `immersed_static_`。未指定選項時，serial static 與 distributed
+runtime 保留 GMRES／LU；serial transient／moving 保留 FGMRES／LU。多 rank LU 保留
+既有 MUMPS 選擇；不表示任意 PC 都適合這些 saddle-point 系統。
+
+Embedding caller 可設定 static／transient options 最後的 `solver_options_prefix`；
+空字串使用原 family prefix。Moving options 的 `flow` 成員提供相同設定，FSI wrapper
+在沒有明確 prefix 時依 fluid domain ID 產生。Moving geometry 的所有 committed／trial
+epoch 共用建立時的 immutable snapshot；後續改動全域選項不會改掉同一 runtime 的策略。
+Serial transient 的可選 shared options owner 必須使用同一 communicator、相符 prefix，
+並維持到所有附掛 KSP 銷毀；一般 caller 使用預設 owner 即可。
+
+Transient input hash 現在包含 snapshot 中的 prefixed options：fixed input identity
+版本為 `ImmersedTransientInput/v6`，moving 為 `ImmersedTransientMovingInput/v3`。
+這項身分更新不改場資料格式。不同 solver 選項的 trial 不再沿用同一輸入身分。
+Native graph 會輸出 immersed `solver_configuration`；embedding runtime 也提供本地
+`SolverConfiguration()` 查詢。
 
 ## Body-fitted standalone 與 VCA
 

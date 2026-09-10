@@ -49,13 +49,14 @@ public:
 		  fluid_layout_(std::move(fluid_layout)), structure_layout_(std::move(structure_layout)),
 		  patch_map_(std::move(patch_map)), committed_full_(new MaterialSurfaceKinematics(initial_full)),
 		  moving_options_viscosity_(moving_options.flow.parameters.dynamic_viscosity),
-		  moving_(*committed_full_, std::move(moving_options)), traction_options_(traction_options),
+		  moving_(*committed_full_, ConfigureSolver(domain_id_, std::move(moving_options))), traction_options_(traction_options),
 		  lifecycle_(domain_id_, subsystem_id_, edge_, catalog_.front(), structure_surface_,
 			fluid_layout_, structure_layout_)
 	{
 		ValidateConstruction();
 	}
 
+	PetscKspConfiguration SolverConfiguration() const { return moving_.SolverConfiguration(); }
 	const std::vector<DistributedSurfaceInterface>& SurfaceInterfaces() const noexcept override
 	{ return catalog_; }
 	const FsiTrialLifecycle& Lifecycle() const noexcept { return lifecycle_; }
@@ -331,6 +332,11 @@ public:
 #endif
 
 private:
+	static MovingImmersedTransientFlowOptions ConfigureSolver(const std::string& id, MovingImmersedTransientFlowOptions options)
+	{
+		if (options.flow.solver_options_prefix.empty()) options.flow.solver_options_prefix = PetscDomainOptionsPrefix(id, "flow");
+		return options;
+	}
 	friend class StrongFluidStructureCouplingAccess;
 	void CoordinatorRequireFinalizeAllowed() const
 	{

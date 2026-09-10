@@ -8,6 +8,7 @@
 #include "ImmersedStaticFlowSetup.hpp"
 #include "ImmersedFlowPort.hpp"
 #include "ImmersedNitscheWall.hpp"
+#include "PetscSolverOptions.hpp"
 
 #include <petscksp.h>
 
@@ -74,8 +75,12 @@ public:
 			// Keep the ordinary GMRES/LU defaults above, but let a caller request
 			// PETSc monitoring or a solver/preconditioner variant without colliding
 			// with another KSP in a coupled application.
-			Check(KSPSetOptionsPrefix(ksp_, "immersed_static_"), "KSPSetOptionsPrefix");
-			Check(KSPSetFromOptions(ksp_), "KSPSetFromOptions");
+			solver_options_.reset(new PetscSolverOptions(PETSC_COMM_SELF,
+				options_.solver_options_prefix.empty() ? "immersed_static_" : options_.solver_options_prefix,
+				nullptr, {}, {}, "immersed_static_", false));
+			solver_options_->Attach(ksp_);
+			solver_options_->Call("immersed static solver options", [&] { return KSPSetFromOptions(ksp_); });
+			solver_options_->RecordUsed();
 		} catch (...) { Destroy(); throw; }
 	}
 
@@ -87,6 +92,7 @@ public:
 	ImmersedStaticFlowRuntime& operator=(const ImmersedStaticFlowRuntime&) = delete;
 
 	const std::vector<std::int32_t>& ActiveNodes() const noexcept { return active_nodes_; }
+	PetscKspConfiguration SolverConfiguration() const { return CaptureKspConfiguration(ksp_); }
 	const ImmersedStaticFlowDiagnostics& Diagnostics() const noexcept { return diagnostics_; }
 	const std::vector<ImmersedFlowPortDefinition>& PortDefinitions() const noexcept { return options_.ports; }
 	// Focused transactional tests can prove that an adapter leaves its published
@@ -248,7 +254,8 @@ public:
 				Check(VecCopy(rhs_, action_input_), "VecCopy linear right hand side");
 				Check(KSPSetOperators(ksp_, jacobian_, jacobian_), "KSPSetOperators");
 				const auto linear_solve_start = std::chrono::steady_clock::now();
-				Check(SolveProfiledKsp(ksp_, rhs_, update_), "KSPSolve with explicit setup");
+				solver_options_->Call("immersed static solve", [&] { return SolveProfiledKsp(ksp_, rhs_, update_); });
+				solver_options_->RecordUsed();
 				const double linear_solve_elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_solve_start).count();
 				if (!std::isfinite(linear_solve_elapsed) || linear_solve_elapsed < 0.0) throw std::runtime_error("immersed static-flow linear-solve timing is invalid");
 				diagnostics_.last_linear_solve_seconds = linear_solve_elapsed;
@@ -614,6 +621,7 @@ private:
 	Mat jacobian_ = nullptr; Vec state_ = nullptr, committed_ = nullptr, prepared_ = nullptr, rhs_ = nullptr, update_ = nullptr;
 	mutable Vec action_input_ = nullptr, action_output_ = nullptr;
 	Vec constant_pressure_ = nullptr, pressure_defect_ = nullptr;
+	std::unique_ptr<PetscSolverOptions> solver_options_;
 	KSP ksp_ = nullptr;
 	bool fail_next_prepare_for_testing_ = false;
 };

@@ -1,0 +1,122 @@
+# HPC-04A immersed solver options 開發紀錄
+
+- 狀態：實作與驗收進行中，HPC-04A 尚未完成。
+- 基準 revision：`e332973f5693ef4ae0a19548a950abbbac278443`。
+- 範圍：serial／distributed static、fixed transient、moving epochs、FSI wrapper 與 native graph。
+- 共用 family options 層已獨立提交：`bc5de4f5ae99b63afa565b5a41b1ddb942311e53`，
+  見 [family options 紀錄](HPC_04A_FAMILY_OPTIONS_PROGRESS.md)。
+- 操作介面：[SOLVER_OPTIONS.md](../SOLVER_OPTIONS.md)。
+
+## 實作
+
+Static／transient options 的尾端新增 `solver_options_prefix`，保留既有 aggregate
+成員位置。空 prefix 沿用 `immersed_static_`／`immersed_transient_`；native graph 及
+FSI 依 domain ID 產生 prefix。Domain 選項覆蓋 family 選項；immersed 延續不繼承
+未加 prefix 的 root KSP／PC 設定。Serial transient 新增 family options 支援。
+
+各 runtime 維持 private options snapshot，SetFromOptions／solve 的 options 與
+error-handler scope 返回後恢復。Moving 的 committed／trial epochs 共用 immutable
+owner。KSP 先銷毀，再釋放 options；幾何仍保留到對應 runtime 銷毀。
+`SolverConfiguration()` 為本地查詢；native 每個 accepted step 輸出有效 KSP／PC。
+
+共用 helper 增加可選 family fallback 與 root inheritance policy，並依 PETSc
+不分大小寫的規則處理 key 優先順序；來源 value 與 usage flag 對應仍保留。
+Transient input hash 包含正規化的 scoped options，版本更新為 fixed v6／moving v3。
+沒有修改 mesh、database、場輸出、port 或 checkpoint payload 格式。
+
+## 驗收方式
+
+本機 GCC 11.4、OpenMPI 4.1.2、PETSc 3.15.5 real64／int32／MUMPS。
+CPU tests 使用 C++17／O3／warnings；native graph 沿用 coupling Makefile 的 OpenMP
+建置，執行時 `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`。
+小案例在本機執行；沒有跨節點或大型效能宣告。
+
+```bash
+make -C solvers/cpu -j2 petsc_solver_options_test \
+  immersed_distributed_static_flow_test immersed_transient_distributed_runtime_test \
+  moving_immersed_solver_options_test moving_immersed_transient_flow_test \
+  moving_immersed_transient_flow_fsi_runtime_test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+make -C solvers/coupling -j2 iga_multidomain_flow immersed_case_factory_test \
+  PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
+python3 scripts/hpc_immersed_solver_prefixes.py --suite core --output-dir NEW_CORE
+python3 scripts/hpc_immersed_solver_prefixes.py --suite native --output-dir NEW_NATIVE
+```
+
+Harness 對每個 rank 保存 exit、timeout、RSS 與 stdout／stderr。Core fixture 既有的
+serial／MPI 場、history、conservation、failure／rollback／retry 門檻保留。
+Native accepted ports 使用 `1e-12 + 1e-6 * abs(reference)`；實際 configuration
+必須符合 family/domain override，且最後求解 reason 為正。Moving solver 比較的
+場 relative L2 門檻為 `1e-8`，不因失敗而放寬。
+
+## 中間驗證與失敗紀錄
+
+證據根目錄：`outputs/hpc04/immersed/`。以下屬中間版本，不能代替最後 source 的驗收。
+
+- `core-v4` 的 static default／override 與 transient default／override／split 均通過。
+  Static 場 relative L2 約 `3.34e-11`；transient 約 `1.22e-14`。
+- `native-v2` 的 6 個 static／transient graph 作業通過，10 份 rank report。
+- `negative-v1` 的 8 個無效 KSP／backend 作業均 exit 1、沒有發布結果。
+- `reference-v1` 比較保存的修改前 native binary：static／transient、1／2 ranks 的
+  32 份 accepted output 檔案逐位元相同。保存的 reference binary 位於
+  `outputs/hpc04/one-d/native-v1`。
+- `one-d-regression` 的四種 implicit 方法、override、checkpoint save／resume
+  共 20 個作業、60 份 rank report 通過。
+- 最初 core harness 把 PETSc flags 傳給 fixture 的 positional parser，被正常拒絕；
+  改用 `PETSC_OPTIONS`。沒有更改 production CLI 介面。
+- 最初 native 診斷解參考已移走的 `unique_ptr`，發生 SIGSEGV；已改用既有
+  `immersed_audit` 查詢表，修正後的 native 作業通過。
+- 新 moving 比較最初把 fixture 的 KSP rtol 從原有 `1e-16` 改為 `1e-11`，
+  雖回報收斂，場誤差仍超過門檻。正在以原 tolerance 及明確誤差輸出重測。
+- 單獨建置新 moving target 時，因 PETSC_TARGETS 宣告太晚而缺少 PETSc flags；
+  已移至 Makefile 前段。`build-moving-v2.log` 的建置失敗，其後舊 binary 的結果
+  不計為新 source 驗收。
+
+## 最終來源已完成的驗證
+
+Native source identity：`1ccfb5e9f336fd7e27b2dc699c8e7f08f53630b178f9b3f58ca87192d93707a6`。
+保存的 binary：`outputs/hpc04/immersed/native-v4-binary`。以下通過項目使用最終 runtime
+headers；moving 比較 fixture 的精度調整與其獨立結果另列，不能把先前失敗列作通過。
+
+| 驗證 | 作業 | 結果／證據 |
+|---|---:|---|
+| 共用 options world／split | 1 | `unit-v4`：3 rank reports，42 次 solve，最大 L2 `5.44e-16` |
+| Static／transient default、override、split | 5 | `distributed-final-v2` 的五個案例全部通過 |
+| Native family／domain override | 6 | `native-v4`，1／2 ranks accepted ports 與 solver 設定通過 |
+| 預設相容性及無效 solver／backend | 20 | `compatibility-final-v2`：12 正向、8 負向；32 accepted output 檔案逐位元相同，錯誤後健康 process retry 通過 |
+| 四種 1D 方法／checkpoint | 20 | `one-d-final-v2`：60 份 rank report，default／override／save／resume 通過 |
+| Standalone flow／transport | 27 | `standalone-final`：18 正向、9 負向，場與 checkpoint 比較通過 |
+| Moving solver 比較 | 1 | `moving-final-v2`：兩步與跨 epoch snapshot 通過；最大場 relative L2 `2.68e-12` |
+| ASan／UBSan aligned 模式 | 1 | `asan-final-v2`：兩步通過，最大 relative L2 `7.41e-15`，沒有 sanitizer 診斷 |
+
+已完成作業的 source／binary 與 rank 統計先保存於 `interim-acceptance.json`，
+狀態為 `partial_complete`；兩個完整回歸結束前不生成整體通過紀錄。
+例如最終 static default rank 0 的診斷為 assembly `39.884 s`、linear solve
+`0.306 s`；transient default 為 `1.498 s`／`0.144 s`。一般作業最大單 rank RSS
+`110,948,352 bytes`，ASan 為 `638,824,448 bytes`。部分驗證作業同時執行，這些數字
+只供功能回歸觀測，不作效能或 scaling 比較。CUDA、跨節點通訊與大型 I/O：N/A。
+
+Moving 的原 KSP tolerance 重測揭示非線性停止條件是比較精度的限制：第一步 relative
+L2 `5.03e-10` 通過；第二步為 `4.10e-8`，其中一個求解器的 nonlinear residual
+`3.26e-12` 已符合原 absolute tolerance。Aligned sanitizer fixture 也出現
+`1.03e-8` 場誤差與 `2.53e-12` residual。這些數值失敗不是 sanitizer 記憶體錯誤，
+也不是通過紀錄。最終 solver 比較 fixture 改用 nonlinear absolute `1e-14`、relative
+`1e-11`；保留原 `1e-8` 場門檻，production defaults 不變。另提供
+`-test_solver_aligned`，讓同一測試在較小的 aligned geometry 下驗證 owner 生命週期。
+最終兩步的切割與 aligned 比較均通過，確認停止條件收緊後能達到原場誤差門檻。
+
+ASan 使用 `-O1 -fsanitize=address,undefined -fno-omit-frame-pointer`，執行時
+`ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`。不宣稱已檢查第三方
+MPI／PETSc 的 process-exit leaks。指令向量保存於 `asan-final-command.json`；執行
+`moving-options-final-asan -test_solver_aligned`。早期大切割 sanitizer 作業 `asan-v1`
+達 1200 秒 timeout，未計通過。
+
+完整 FSI 的 `fsi-final-v1` 達 1200 秒 timeout，沒有數值錯誤輸出，未計通過；
+`fsi-final-v2` 使用 3600 秒上限與 `-domain_fluid_flow_ksp_converged_reason` 重跑。
+
+## 剩餘工作
+
+已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
+仍須等待 `fsi-final-v2` 與 `moving-regression-final-v1` 的完整回歸終結結果，再補上
+整體驗收與 source/evidence 彙整；不得把正在執行的測試列為通過。
+HPC-04A 的完整巢狀診斷、後端矩陣，以及 HPC-04B／C 的預條件器與大小案例評估仍待完成。

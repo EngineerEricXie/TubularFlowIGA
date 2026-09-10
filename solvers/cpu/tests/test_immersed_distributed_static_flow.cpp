@@ -42,6 +42,7 @@ void Reject(MPI_Comm comm,Function&& function)
 void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partition)
 {
 	int rank = 0,size = 1; MPI_Comm_rank(comm,&rank); MPI_Comm_size(comm,&size);
+	PetscBool scoped = PETSC_FALSE; PetscOptionsHasName(nullptr,nullptr,"-test_solver_prefix",&scoped);
 	if (mode != "closed" && mode != "flow" && mode != "pressure" && mode != "empty-work") throw std::invalid_argument("unknown static MPI mode");
 	const bool closed = mode == "closed" || mode == "empty-work";
 	int failure_rank = size-1;
@@ -75,7 +76,10 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 		reference_conservation = serial->ConservationDiagnostics();
 	});
 	auto& f = *fixture;
+	if (scoped) options.solver_options_prefix = "domain_test_flow_";
 	iga::ImmersedStaticDistributedRuntime runtime(comm,f.domain,f.volume,f.surface,f.ghost,options,partition);
+	const auto solver = runtime.SolverConfiguration();
+	std::cout << "immersed_solver rank=" << rank << " prefix=" << solver.prefix << " ksp=" << solver.ksp << " pc=" << solver.pc << '\n';
 	std::vector<PetscScalar> zero(static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),0.0);
 	runtime.SetCommittedOwnedState(zero);
 	if (!closed) {
