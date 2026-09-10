@@ -134,3 +134,34 @@ rank 配置逐位元相同。
 通過。原 surface／Aitken／ownership 測試也通過。證據在
 `outputs/hpc07/scalar-contributions-v1/audit.json`；最終三份 rank reports exit 0、
 無 timeout。測試沿用 `make -C solvers/cpu parallel-ownership-test`。
+
+## Reference 三角形面積已分散組裝
+
+`DistributedSurfaceAreas.hpp` 的 `ComputeDistributedSurfaceAreas` 接收已驗證
+reference layout 與本 rank 的 triangle indices。先驗證 node publication 全域
+覆蓋，再驗證 reference triangle array 的每個 index 恰有一個 owner；triangle
+owner 不必擁有任何相關節點。每個 triangle 計算 A/3 的三個 nodal contributions，
+以 sparse owner 加總路由，僅返回本 rank 的 owned lumped areas 與 global area。
+
+舊 layout 中的 area 數值不參與計算，輸入 layout／stamp 不修改。Caller 安裝新
+weights 後須重新取得 partition identity；不得沿用依舊 weights 產生的 stamp。
+目前輸入仍是合法、完整 replicated reference layout，尚未改成 ghost-only 幾何。
+此處的 index coverage 不是 full manifold／self-intersection 認證，其仍由 reference
+mesh 的上游建立流程負責。
+
+每個 owned node 最終 area 必須正且有限；全域 node／triangle 面積以 long-double
+SUM 比較，門檻為 128×double epsilon×global triangle area。只對兩個標量做
+Allreduce，沒有全域 nodal area vector。Record cap 包含 owned nodes 加三倍本地
+triangle 數，wire cap 與既有 sparse sum 相同；上游 replicated-reference ownership
+validator 的 metadata 成本仍存在。
+
+三 rank 測試涵蓋 rank 2 擁有 triangle、rank 0 空、rank 1 擁有全部 nodes；另有
+分散 node ownership。非等面積兩 triangle 的面積分別 0.5／1.0，共享 nodes 的
+權重均為 0.5，全域面積為 1.5。測試刻意給舊 layout 不同權重，確認使用實際
+幾何重算。重複 triangle、漏 triangle 與 record cap 三項共同拒絕／健康重試均
+通過。三份 rank reports exit 0、無 timeout，原 ownership／Aitken／scalar tests
+亦通過；來源與 logs 在 `outputs/hpc07/reference-areas-v1/audit.json`。
+
+重現沿用 `make -C solvers/cpu parallel-ownership-test`。這完成 reference area
+貢獻路由元件；ghost 場交換、fluid traction integration 與正式 FSI runtime 接線
+仍待完成，HPC-07A 尚未勾選。

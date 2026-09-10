@@ -690,7 +690,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   [FSI 分區契約](progress/HPC_07_DISTRIBUTED_CONTRACT.md)。多分區空 publication
   slice 已接線，含空 root 的三 rank 覆蓋／拒絕／重試通過；reference 面積與
   ghost／traction 的實際分散仍待完成。Sparse owner scalar 加總元件已通過
-  三 rank、空 root、UInt64 IDs 與六種故障／重試，尚待 reference 面積組裝接線。
+  三 rank、空 root、UInt64 IDs 與六種故障／重試；reference 三角形面積也已
+  接入唯一 triangle owner 的分送，非等面積共享節點與全域面積一致性驗證通過。
+  Ghost 場交換與正式 FSI runtime 接線仍待完成。
 - [ ] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
   位移與速度；用全域合力、力矩及離散功／能量一致性檢查防止遺漏或重算。
   可先由單一 owner 求解小型膜再分送結果，但須明確記錄其串行成本；

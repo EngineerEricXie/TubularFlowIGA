@@ -4,6 +4,7 @@
 #include "DynamicWeightedAitkenRelaxation.hpp"
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
+#include "DistributedSurfaceAreas.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -274,6 +275,39 @@ void CheckSurfaceOwnership(int rank)
 		PETSC_COMM_WORLD); }, PETSC_COMM_WORLD);
 	iga::ValidateSurfacePublicationOwnership(reference, sparse, PETSC_COMM_WORLD);
 
+	// Reference triangle owner need not own any of its material nodes.
+	const std::vector<std::uint64_t> triangles = rank == 2 ? std::vector<std::uint64_t>{0} : std::vector<std::uint64_t>{};
+	for(const auto& partition : {layout, sparse}) {
+		const auto before=iga::BuildDistributedSurfacePartitionIdentitySha256(partition);
+		const auto areas=iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, partition, triangles);
+		Require(areas.global_area_m2==.5, "wrong reference surface area");
+		Require(areas.owned_lumped_areas_m2==std::vector<double>(partition.owned_global_node_ids.size(),1./6.), "wrong nodal areas");
+		Require(iga::BuildDistributedSurfacePartitionIdentitySha256(partition)==before, "area calculation mutated partition");
+	}
+	for(int mode=0;mode<3;++mode) {
+		auto selected=triangles;iga::PointIdentityLimits limits;
+		if(mode==0&&rank==0)selected.push_back(0);
+		if(mode==1)selected.clear();
+		if(mode==2&&rank==2)limits.max_local_occurrences=2;
+		RejectCollectively([&] { (void)iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, sparse, selected, limits); },PETSC_COMM_WORLD);
+		Require(iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, sparse, triangles).global_area_m2==.5,"surface area retry failed");
+	}
+	auto patch=layout;
+	patch.global_node_count=4;
+	patch.reference_positions.push_back({40,{{2.,1.,0.}}});
+	patch.reference_triangles.push_back({{20,40,30}});
+	patch.owned_global_node_ids=rank==0?std::vector<std::uint64_t>{10}:
+		(rank==1?std::vector<std::uint64_t>{20,30}:std::vector<std::uint64_t>{40});
+	patch.owned_reference_lumped_areas_m2.assign(patch.owned_global_node_ids.size(),1.);
+	patch.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(patch);
+	const auto patch_triangles=rank==0?std::vector<std::uint64_t>{1}:
+		(rank==2?std::vector<std::uint64_t>{0}:std::vector<std::uint64_t>{});
+	const auto patch_areas=iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD,reference,patch,patch_triangles);
+	Require(patch_areas.global_area_m2==1.5,"wrong unequal triangle area total");
+	const auto expected_areas=rank==0?std::vector<double>{1./6.}:
+		(rank==1?std::vector<double>{.5,.5}:std::vector<double>{1./3.});
+	Require(patch_areas.owned_lumped_areas_m2==expected_areas,"shared node triangle areas were not accumulated");
+	if(rank==0)std::cout << "distributed_surface_areas=passed failures=3 retries=3\n";
 	auto duplicate = layout;
 	if (rank == 2) duplicate.owned_global_node_ids = {20};
 	RejectCollectively([&] { iga::ValidateSurfacePublicationOwnership(reference, duplicate,
