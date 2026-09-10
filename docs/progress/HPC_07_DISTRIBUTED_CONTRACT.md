@@ -110,3 +110,27 @@ global total=0、非空 zero weight 仍拒絕。原加權／不等分區與 stal
 證據：`outputs/hpc07/empty-aitken-v1/audit.json`。重現沿用前節兩個 make test
 目標。本次 compile／test 限於 CPU 14／15，背景活動也記錄於正在執行的 rank
 scaling 目錄，不能因 CPU binding 分離就宣稱系統資源完全無干擾。
+
+## Sparse owner 加總元件
+
+`OwnedScalarContributions.hpp` 新增 `SumOwnedScalarContributions`。每 rank 宣告
+owned UInt64 IDs 與 `(node_id, scalar)` contributions，按 ID 分送到 routing shard；
+shard 檢查唯一 owner、累加後只把結果送到 owner，輸出沿輸入 owned ID 順序。
+支援完整 UInt64、空 root、全空 communicator，以及 owned node 無貢獻時的 0。
+
+不建立 global_nodes 長度的場，也不 gather 完整 owner catalog。沿用 bounded
+Alltoallv wire exchange；預設每次每方向 64 MiB 與每 rank owner／contribution
+合計一百萬 records。這是 wire／record cap，不是 RSS cap；ID 分布不均仍可
+集中 shard。局部錯誤以 collective stages 傳播，未提供 MPI process-loss recovery。
+
+Repeated contributions 是正常加總，不能由本元件判定是否重複物理積分。節點
+完整覆蓋仍由 publication ownership validator 證明；三角形 authority／reference
+面積組裝是下一步。加總用 long double，輸出 double 前先檢查範圍；不承諾跨
+rank 配置逐位元相同。
+
+三 rank 測試有空 root、rank 1 為唯一 owner、超過 Int64 的 ID、重複正負貢獻、
+零貢獻 owned node 及全空輸入。六項負向條件（重複 owner、未知節點、非有限
+貢獻、wire cap、record cap、sum 超出 double 範圍）均共同拒絕，逐項健康重試
+通過。原 surface／Aitken／ownership 測試也通過。證據在
+`outputs/hpc07/scalar-contributions-v1/audit.json`；最終三份 rank reports exit 0、
+無 timeout。測試沿用 `make -C solvers/cpu parallel-ownership-test`。

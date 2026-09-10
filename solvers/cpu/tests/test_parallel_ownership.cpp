@@ -3,6 +3,7 @@
 #include "SurfaceOwnershipValidation.hpp"
 #include "DynamicWeightedAitkenRelaxation.hpp"
 #include "CollectiveFailure.hpp"
+#include "OwnedScalarContributions.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -192,6 +193,30 @@ void CheckIndependentCatalogs(int rank)
 		<< directory << '\n';
 }
 
+void CheckScalarContributions(int rank)
+{
+	const auto id = std::numeric_limits<std::uint64_t>::max()-1;
+	const std::vector<std::uint64_t> owned = rank == 1 ? std::vector<std::uint64_t>{id, 0} : std::vector<std::uint64_t>{};
+	const std::vector<std::pair<std::uint64_t,double>> values{{id, static_cast<double>(rank+1)}, {id, -.5}};
+	const auto expected = rank == 1 ? std::vector<double>{4.5, 0.} : std::vector<double>{};
+	Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, owned, values) == expected, "wrong owner scalar sum");
+	Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, {}, {}).empty(), "nonempty all-empty scalar sum");
+	for(int mode=0;mode<6;++mode) {
+		auto ids=owned;auto data=values;iga::PointIdentityLimits limits;
+		if(rank==2) {
+			if(mode==0)ids.push_back(id);
+			if(mode==1)data.push_back({17, 1.});
+			if(mode==2)data.push_back({id, std::numeric_limits<double>::infinity()});
+			if(mode==3)limits.max_wire_bytes=8;
+			if(mode==4)limits.max_local_occurrences=1;
+			if(mode==5) {data.push_back({id, std::numeric_limits<double>::max()});data.push_back({id, std::numeric_limits<double>::max()});}
+		}
+		RejectCollectively([&] { (void)iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, ids, data, limits); }, PETSC_COMM_WORLD);
+		Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, owned, values) == expected, "scalar retry failed");
+	}
+	if(rank==0)std::cout << "owned_scalar_contributions=passed failures=6 retries=6\n";
+}
+
 void CheckEmptyAitken(int rank)
 {
 	const std::string identity(64, static_cast<char>('a'+rank));
@@ -291,6 +316,7 @@ int main(int argc, char** argv)
 		CheckIndependentCatalogs(rank);
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
+		CheckScalarContributions(rank);
 		std::vector<std::uint64_t> balanced;
 		for (std::uint64_t id = rank; id < 6; id += ranks) balanced.push_back(id);
 		// Replace 1,4 with 2,3: global count AND ID sum remain unchanged.
