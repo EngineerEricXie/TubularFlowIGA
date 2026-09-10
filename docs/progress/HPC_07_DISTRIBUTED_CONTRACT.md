@@ -446,3 +446,26 @@ rank，再修改 rank 0 的所有局部副本，使它們彼此一致但與遠�
 `outputs/hpc07/shared-iga-coefficients-v1/audit.json`。重現建置
 `fluid_surface_traction_test` 後以 `mpiexec -np 1`、`-np 3`、`-np 5` 執行。
 HPC-07B 的正式 trial／publication、守恆診斷及結構更新仍待完成。
+
+
+## 集體擷取的材料狀態一致性
+
+`BuildDistributedFluidSurfaceTractionPoints` 在共享係數驗證前，另核對各 rank
+的 material content／material／topology identity、patch reference／label／source
+triangle mapping、domain／catalog surface hash、viscosity 與 quadrature resource
+settings。Material content identity 包含評估時間、step interval 與 nodal velocity，
+因此只有外形相同不再足以讓不同材料狀態混用。Background grid 身分仍由共享
+係數驗證核對；local extractor 仍驗證各自 catalog 與材料／domain binding。
+
+1／3／5 ranks 的完整 traction 測試通過，共九份 reports exit 0、無 timeout。
+兩個多 rank 配置的壓力／黏性案例，各自測試只有 rank 0 使用不同 viscosity，
+以及 surface canonical hash 完全相同但材料評估時間改為 0.75 的情境。兩者
+均共同拒絕，健康重試後 owned force／traction 仍通過原數值比較；共享係數
+衝突與既有失敗測試保持通過。證據為
+`outputs/hpc07/traction-material-binding-v1/audit.json`，重現沿用
+`fluid_surface_traction_test` 的 1／3／5 rank 指令。
+
+這裡驗證的是參與 ranks 彼此一致；仍須由外層 transaction 提供獨立 expected
+trial／producer-state authority，才能拒絕「所有 ranks 一起使用過期狀態」。
+Quadrature settings agreement 也不等於逐筆 catalog content hash。正式
+publication 綁定與完整 FSI runtime 驗收仍待完成。

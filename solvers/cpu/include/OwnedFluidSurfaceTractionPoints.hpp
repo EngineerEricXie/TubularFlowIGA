@@ -88,6 +88,23 @@ inline std::vector<SurfaceCellTractionPoints> BuildDistributedFluidSurfaceTracti
 	const std::vector<std::uint64_t>& owned_cells,const std::vector<FluidSurfaceElementState>& state,
 	PointIdentityLimits limits={})
 {
+	std::string common_identity;
+	CollectiveLocalStage(comm,"fluid traction common material binding",[&] {
+		material.Validate();
+		if(!std::isfinite(viscosity)||!(viscosity>0.))throw std::invalid_argument("invalid fluid traction viscosity");
+		Sha256 hash;distributed_surface_detail::AppendString(hash,"DistributedFluidSurfaceTraction/common/v1");
+		for(const auto* identity:{&material.ContentIdentitySha256(),&material.MaterialIdentitySha256(),
+			&material.TopologyIdentitySha256(),&map.ReferenceIdentitySha256(),&domain.SurfaceCanonicalHash(),&catalog.SurfaceCanonicalHash()})
+			distributed_surface_detail::AppendString(hash,*identity);
+		hash.AppendNormalizedDouble(viscosity);hash.AppendLittleEndian32(map.PatchLabel());
+		hash.AppendLittleEndian64(map.LayoutTriangleToSourceTriangles().size());
+		for(auto triangle:map.LayoutTriangleToSourceTriangles())hash.AppendLittleEndian32(triangle);
+		const auto& options=catalog.Options();
+		hash.AppendLittleEndian64(options.max_candidates);hash.AppendLittleEndian64(options.max_fragments);
+		hash.AppendLittleEndian64(options.max_points);hash.AppendLittleEndian64(options.max_exact_limbs);
+		common_identity=hash.Hex();
+	});
+	RequireCollectiveSameText(comm,"fluid traction material and quadrature settings",common_identity);
 	ValidateSharedFluidSurfaceCoefficients(comm,domain.Background(),state,limits);
 	std::vector<SurfaceCellTractionPoints> result;
 	CollectiveLocalStage(comm,"owned fluid surface traction extraction",[&] {

@@ -68,14 +68,14 @@ void CheckP1Contribution()
 iga::RawSurfaceTriangle Face(int a, int b, int c, std::uint32_t label)
 { iga::RawSurfaceTriangle result; result.indices = {{a,b,c}}; result.boundary_id = label; return result; }
 
-iga::MaterialSurfaceKinematics Material()
+iga::MaterialSurfaceKinematics Material(double time=.5)
 {
 	iga::RawSurfaceSoup soup;
 	soup.vertices = {{{{0,0,0}},{{1,0,0}},{{0,1,0}},{{0,0,1}}}};
 	// A-C-B has outward -z; this is the selected planar material patch.
 	soup.triangles = {Face(0,2,1,7), Face(0,1,3,9), Face(0,3,2,9), Face(1,2,3,9)};
 	iga::PrescribedSurfaceFrame first{0.0,soup}, second{1.0,soup};
-	return iga::PrescribedSurfaceMotion({first,second}).Evaluate(0.5,0.0,0.5);
+	return iga::PrescribedSurfaceMotion({first,second}).Evaluate(time,0.0,time);
 }
 
 iga::DistributedSurfaceInterface StructuralInterface(const std::string& reference_identity)
@@ -249,6 +249,16 @@ int main(int argc, char** argv)
 				catch(const std::runtime_error&) { rejected=1; }
 				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
 				points=iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+				for(int mode=0;mode<2;++mode) {
+					const auto alternate=rank==0&&mode==1?Material(.75):material;
+					assert(alternate.Surface().CanonicalSha256()==material.Surface().CanonicalSha256());
+					const double mu=rank==0&&mode==0?2*viscosity:viscosity;
+					int failure=0,failures=0;
+					try { (void)iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,alternate,patch_map,mu,owned_cells,local_state); }
+					catch(const std::runtime_error&) { failure=1; }
+					MPI_Allreduce(&failure,&failures,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(failures==ranks);
+					points=iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+				}
 			}
 			for(int mode=0;mode<3;++mode) {
 				auto bad=local_state;
