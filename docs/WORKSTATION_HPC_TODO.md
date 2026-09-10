@@ -49,10 +49,10 @@
 | 狀態 | 任務 |
 |---|---|
 | 已勾選完成（14 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（4 項） | HPC-01C、HPC-01D、HPC-04A、HPC-05C |
-| 其餘待辦（20 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-04A／HPC-05C；既有程式能力不等於已通過各項驗收 |
+| 已有部分進度、尚未完成（5 項） | HPC-01C、HPC-01D、HPC-04A、HPC-04B、HPC-05C |
+| 其餘待辦（19 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-04A／B／HPC-05C；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 24 項未勾選，其中 4 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 24 項未勾選，其中 5 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -553,6 +553,11 @@ F05 的原始診斷例外保存與恢復亦通過，見
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point
   系統盲目套用標量 AMG。
+  已新增可加密 C2 方管的原 Phase 9 validator 與候選 harness；16-element、
+  2-rank 的 LU／block-Jacobi／Schur-LU／Schur-GAMG 通過物理與場驗收，
+  並保留 Schur-LU 高迭代成本的結果，見
+  [方管候選進度](progress/HPC_04B_DUCT_CANDIDATES_PROGRESS.md)。其他網格、rank、
+  pressure nullspace 與 immersed 條件仍待評估。
 - [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
 

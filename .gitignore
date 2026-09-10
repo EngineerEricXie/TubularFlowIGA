@@ -216,3 +216,5 @@ solvers/one_d/one_d_filename_failure_test
 /solvers/cpu/phase8_compliant_channel_fsi_paraview
 /solvers/cuda/cuda_stdout_failure_test
 /solvers/cuda/cuda_execution_test
+
+/solvers/coupling/hpc_duct_solver_fixture
