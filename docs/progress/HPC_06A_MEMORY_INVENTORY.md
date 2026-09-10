@@ -53,5 +53,38 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 120s \
 與 output 的重疊峰值。現有 concurrent 大方管作業可提供功能驗收時 RSS 觀察，
 不能作為無干擾 scaling 證據。沒有實測瓶頸證據前，不改小型 1D／metadata 路徑。
 
-HPC-06B 仍需實作分片可視化或 Parallel HDF5，保留 shared point／cell 身分與時間索引，
-並由目標 ParaView 實際讀取。HPC-06A／整份清單保持未勾選。
+CPU flow 已提供 PVTU 分片輸出與時間索引，並通過實際 PDE／ParaView 比較，
+詳見 [HPC-06B 進度](HPC_06B_PARTITIONED_VTK_PROGRESS.md)。大型 RSS 與其他求解
+路徑仍待驗證，HPC-06A／整份清單保持未勾選。
+
+## CPU flow 階段量測接線
+
+CPU `iga_navier_stokes` 新增可選 `--memory-report PATH`，沿用
+`DistributedMemoryRecorder` 的 JSONL schema。各階段記錄全部 ranks 的目前 RSS、
+歷史峰值 RSS、PETSc allocator／process 計數，不只 root。未啟用時不執行量測。
+開檔與收尾共同協調；關閉成功後才印出 solver 成功摘要。各 rank 的 report path
+亦須一致。
+
+量測點包括 database_open、initialized_state、visualization_geometry、
+visualization_ready、flow_trial_solved、output_begin、flow_closed。
+PVTU 另有 parallel_piece_extracted／parallel_piece_published；序列輸出則在
+writer 返回後記錄 serial_output_released。Geometry 量測在 root mesh 釋放前，
+ready 則在 PVTU 模式釋放後；HDF 模式維持原 mesh 生命週期。
+
+這是階段邊界採樣。RSS current 不保證涵蓋階段內瞬時峰值；VmHWM 是到該時點
+為止的程序歷史峰值，不能當作該階段獨立 peak。各 rank 峰值總和也不是同步
+aggregate peak。PVTU published 時 piece 仍存活，writer 返回後會釋放；序列
+released 則已釋放 gather 暫存，兩者生命週期不同，不能直接相減當成收益。
+
+1／2-rank HDF 與 PVTU 共四次實際小案例求解，所有階段有各 rank 有效 RSS，
+每一步 output records 符合既有頻率；與前批無量測求解的 checkpoint.state
+SHA256 完全相等。另以 report path 目錄阻擋驗證兩 rank 共同拒絕、無 timeout
+且沒有成功摘要。這批仍是 one-cell 接線測試，不是大型記憶體效益證據。
+
+```bash
+python3 scripts/hpc_flow_memory_regression.py \
+  --reference-root outputs/hpc06/flow-pvtu-v1/cli \
+  --output-dir NEW_OUTPUT
+```
+
+證據：`outputs/hpc06/flow-memory-v1/regression/acceptance.json` 與 `audit.json`。

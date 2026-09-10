@@ -13,6 +13,7 @@
 #include "PetscCheckpointWrite.hpp"
 #include "PetscGather.hpp"
 #include "PetscBezierVisualization.hpp"
+#include "MemoryReport.hpp"
 #include "TemporalFunction.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -50,6 +51,7 @@ struct FlowOptions {
 	fs::path output;
 	fs::path checkpoint;
 	fs::path restart;
+	fs::path memory_report;
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
@@ -180,7 +182,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
-		"[--visualization-format auto|vtu|vtkhdf|pvtu]");
+		"[--memory-report PATH] [--visualization-format auto|vtu|vtkhdf|pvtu]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -209,6 +211,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		const std::string value(argv[++i]);
 		if (argument == "--max-newton") options.max_newton = ParsePositiveInteger(value, argument);
 		else if (argument == "--output") options.output = value;
+		else if (argument == "--memory-report") options.memory_report = value;
 		else if (argument == "--output-every") options.output_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--checkpoint") options.checkpoint = value;
 		else if (argument == "--checkpoint-every") options.checkpoint_every = ParsePositiveInteger(value, argument);
@@ -378,7 +381,7 @@ int main(int argc, char** argv)
 				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
 				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
 				<< options.mass_relative_tolerance << ' ' << !options.output.empty() << ' '
-				<< !options.checkpoint.empty() << ' ' << !options.restart.empty();
+				<< !options.checkpoint.empty() << ' ' << !options.restart.empty() << ' ' << !options.memory_report.empty();
 			controls = text.str();
 		});
 		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow execution controls", controls);
@@ -390,6 +393,13 @@ int main(int argc, char** argv)
 			iga::ValidatePackedExecution(database_owner->header().ranks, database_owner->header().nodes, 4, ranks);
 		});
 		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow asset database", database_fingerprint);
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow memory report path", options.memory_report.string());
+		std::optional<iga::DistributedMemoryRecorder> memory_owner;
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow memory report setup", [&] {
+			memory_owner.emplace(PETSC_COMM_WORLD, options.memory_report);
+		});
+		auto& memory = *memory_owner;
+		memory.Record("database_open");
 		auto& database = *database_owner;
 		std::unique_ptr<iga::BezierVisualizationMesh> bezier_mesh;
 		std::unique_ptr<iga::TemporalVtkHdfWriter> vtkhdf;
@@ -659,6 +669,7 @@ int main(int argc, char** argv)
 			}
 		}
 		flow.CopyStateToPrevious();
+		memory.Record("initialized_state", start_step);
 		if (!options.output.empty()
 			&& (visualization_format == iga::VisualizationFormat::BezierVtkHdf || options.parallel_output)) {
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow visualization initialization", [&] {
@@ -675,7 +686,7 @@ int main(int argc, char** argv)
 				if (options.parallel_output) {
 					std::cout << "parallel_bezier_geometry_points=" << bezier_mesh->points.size()
 						<< " geometry_report=" << report.string() << '\n';
-					iga::FlushCheckedText(std::cout);bezier_mesh.reset();return;
+					iga::FlushCheckedText(std::cout);return;
 				}
 				vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
 					iga::VtkHdfPath(options.output), *bezier_mesh,
@@ -687,6 +698,10 @@ int main(int argc, char** argv)
 				iga::FlushCheckedText(std::cout);
 			});
 		}
+
+		memory.Record("visualization_geometry", start_step);
+		if (options.parallel_output) bezier_mesh.reset();
+		memory.Record("visualization_ready", start_step);
 
 		const auto start = std::chrono::steady_clock::now();
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
@@ -702,12 +717,14 @@ int main(int argc, char** argv)
 			if (options.parallel_output) {
 				if (last_parallel_output_step == step) return;
 				iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+				memory.Record("output_begin", step);
 				fs::path directory;
 				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"parallel flow output path",[&] {
 					directory=iga::VtuStepPath(options.output,step);directory.replace_extension();
 				});
 				const auto extracted=iga::BuildPetscBezierPartition(flow.State(),flow.OwnedElements(),
 					database.header().elements,database.header().nodes,{{"velocity",3},{"pressure",1}});
+				memory.Record("parallel_piece_extracted", step);
 				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,directory,extracted.piece,physical_time);
 				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"parallel flow output bookkeeping",[&] {
 					vtk_snapshots.push_back({physical_time,directory/"snapshot.pvtu"});
@@ -715,10 +732,13 @@ int main(int argc, char** argv)
 						<<" global_rows="<<extracted.global_rows<<'\n';iga::FlushCheckedText(std::cout);
 				});
 				iga::WriteParallelVtkSeries(PETSC_COMM_WORLD,iga::PvdPath(options.output),vtk_snapshots);
+				memory.Record("parallel_piece_published", step);
 				last_parallel_output_step=step;return;
 			}
+			memory.Record("output_begin", step);
 			WriteFlowOutput(flow.State(), database.header().nodes, text_path,
 				mesh_path, vtk_path, physical_time, rank, visualization_format, vtkhdf.get());
+			memory.Record("serial_output_released", step);
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output bookkeeping", [&] {
 				if (!final_output) {
 					if (visualization_format == iga::VisualizationFormat::Vtu)
@@ -743,6 +763,7 @@ int main(int argc, char** argv)
 				if (configured) flow.SetTrialBoundaryConfiguration(step_configuration);
 			});
 			flow.SolveTrial();
+			memory.Record("flow_trial_solved");
 			flow.CommitStep();
 			if (vca_transport) {
 				const auto velocity = flow.GatherRequiredVelocity();
@@ -880,6 +901,8 @@ int main(int argc, char** argv)
 		});
 		if (vca_transport) vca_transport->Close();
 		flow.Close();
+		memory.Record("flow_closed", run_end_step);
+		memory.Close();
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow completion logging", [&] {
 			if (rank == 0) std::cout << "navier_stokes_v2 seconds=" << solve_seconds
 				<< " total_linear_iterations=" << summary.linear_iterations

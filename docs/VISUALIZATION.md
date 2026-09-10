@@ -62,6 +62,15 @@ snapshot whose index update fails is not automatically recovered. This protocol
 assumes one producer and does not provide crash durability or MPI process-loss
 recovery.
 
+## CPU flow memory measurements
+
+Add `--memory-report report.jsonl` to record every rank's current RSS, cumulative
+RSS high-water mark, and PETSc allocation/process counters at state, geometry,
+solve, and output boundaries. The report is closed before the success summary.
+Boundary samples do not capture every transient allocation; cumulative peaks
+are not isolated phase peaks, and their sum is not a simultaneous global peak.
+See the [memory inventory](progress/HPC_06A_MEMORY_INVENTORY.md) for stage lifetimes.
+
 ## Temporal Bézier VTKHDF
 
 The VTKHDF file contains cubic `VTK_BEZIER_HEXAHEDRON` cells. Points,

@@ -641,8 +641,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   元素總次數為單 rank 的 5.23 倍，詳見 [HPC-00C 進度](progress/HPC_00C_PROGRESS.md)。
   後續需釐清節點分配與重複積分成本，保留外部 ID／輸出與資料庫相容性。
   已完成第一批 [記憶體生命週期盤點](progress/HPC_06A_MEMORY_INVENTORY.md)，並移除
-  flow 輸出組裝陣列時多餘的完整場複製；既有 MPI writer 回歸通過。大型 phase
-  峰值量測與分散式輸出仍待完成。
+  flow 輸出組裝陣列時多餘的完整場複製；既有 MPI writer 回歸通過。CPU flow
+  的 `--memory-report` 已補上所有 rank 的幾何／場抽取／發布階段採樣，量測
+  不改 checkpoint 數值；大型 phase 峰值比較仍待完成。
 - [ ] **HPC-06B：分散式視覺化。** 先選擇與 ParaView 相容的分片輸出或
   Parallel HDF5 路徑，分別驗證格式、shared-point／cell 身分、時間索引與
   collective 規則。保留既有序列輸出作相容路徑。
