@@ -112,11 +112,17 @@ MPI／PETSc 的 process-exit leaks。指令向量保存於 `asan-final-command.j
 達 1200 秒 timeout，未計通過。
 
 完整 FSI 的 `fsi-final-v1` 達 1200 秒 timeout，沒有數值錯誤輸出，未計通過；
-`fsi-final-v2` 使用 3600 秒上限與 `-domain_fluid_flow_ksp_converged_reason` 重跑。
+`fsi-final-v2` 使用 3600 秒上限與 `-domain_fluid_flow_ksp_converged_reason` 重跑，
+已於 1428.025 秒退出 0，`converged=true`，host peak RSS 73,764,864 bytes。
+此為 revision `01aa4c8` 的完整既有 FSI fixture，原驗收條件保留。
+完整 moving 的 `moving-regression-final-v1` 達 1800 秒 timeout，未計通過；
+`moving-regression-final-v2` 保留原 fixture，改用 7200 秒上限與
+`-immersed_transient_ksp_converged_reason`，仍執行中。
 
 ## 剩餘工作
 
 已完成上述 81 個作業（64 正向、17 預期負向）與 131 份成功 rank report。
-仍須等待 `fsi-final-v2` 與 `moving-regression-final-v1` 的完整回歸終結結果，再補上
+另有上述完整 FSI 回歸通過；仍須等待 `moving-regression-final-v2` 終結結果，再補上
 整體驗收與 source/evidence 彙整；不得把正在執行的測試列為通過。
-HPC-04A 的完整巢狀診斷、後端矩陣，以及 HPC-04B／C 的預條件器與大小案例評估仍待完成。
+新增巢狀 viewer 與本機後端能力驗證見 [診斷進度](HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
+舊版 `iga_transport` 的 options 隔離，以及 HPC-04B／C 的預條件器與大小案例評估仍待完成。

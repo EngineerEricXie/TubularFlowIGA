@@ -539,9 +539,13 @@ F05 的原始診斷例外保存與恢復亦通過，見
   共用 family fallback 與大小寫優先順序已通過驗證並提交，見
   [family options 進度](progress/HPC_04A_FAMILY_OPTIONS_PROGRESS.md)。
   immersed／moving／FSI 的 prefix 與 snapshot 已接入，小型數值與 sanitizer 驗證通過；
-  完整 moving／FSI 回歸仍執行中，見
+  完整 FSI 回歸已通過，完整 moving 回歸仍執行中，見
   [immersed 進度](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
-  完整巢狀診斷及後端矩陣仍待完成。
+  本機 1／2／3／4-rank factor 能力矩陣、block-Jacobi／fieldsplit 子求解器
+  viewer、native KSP／SNES viewer 已驗證，見
+  [後端與診斷進度](progress/HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)。
+  舊版 `iga_transport` 的 options 隔離仍待實作；完整 multilevel 診斷與大小案例驗收
+  尚未完成，因此本項維持未勾選。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point

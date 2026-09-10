@@ -22,6 +22,15 @@ struct Options {
 	void Set(const char* name, const char* value_text) { Check(PetscOptionsSetValue(value, name, value_text)); }
 	PetscOptions value = nullptr;
 };
+void EnableView(Options& source, const std::string& family = {})
+{
+	PetscBool enabled = PETSC_FALSE;
+	Check(PetscOptionsHasName(nullptr, nullptr, "-test_solver_view", &enabled));
+	if (!enabled) return;
+	for (const char* option : {"ksp_view", "ksp_converged_reason", "sub_ksp_converged_reason",
+		"fieldsplit_first_ksp_converged_reason", "fieldsplit_second_ksp_converged_reason"})
+		source.Set(("-"+family+option).c_str(), nullptr);
+}
 struct Linear {
 	~Linear() { KSPDestroy(&solver); VecDestroy(&solution); VecDestroy(&rhs); MatDestroy(&matrix); }
 	KSP solver = nullptr; Vec solution = nullptr, rhs = nullptr; Mat matrix = nullptr;
@@ -87,7 +96,7 @@ void Solve(MPI_Comm comm, iga::PetscSolverOptions& options, const char* type, co
 void RunFamily(MPI_Comm comm)
 {
 	int rank = 0, size = 0; MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
-	Options source;
+	Options source; EnableView(source, "immersed_static_");
 	// Immersed families have never inherited the root KSP/PC defaults.
 	source.Set("-ksp_type", "unavailable_solver"); source.Set("-pc_type", "none");
 	source.Set("-IMMERSED_STATIC_ksp_type", "gmres"); source.Set("-immersed_static_ksp_rtol", "1e-12");
@@ -119,7 +128,7 @@ void RunFamily(MPI_Comm comm)
 void Run(MPI_Comm comm)
 {
 	int rank = 0, size = 0; MPI_Comm_rank(comm, &rank); MPI_Comm_size(comm, &size);
-	Options source;
+	Options source; EnableView(source);
 	source.Set("-ksp_type", "gmres"); source.Set("-ksp_rtol", "1e-12"); source.Set("-pc_type", "bjacobi");
 	source.Set("-sub_ksp_type", "preonly"); source.Set("-sub_pc_type", "lu");
 	source.Set("-left_ksp_type", "cg"); source.Set("-right_sub_pc_type", "jacobi");

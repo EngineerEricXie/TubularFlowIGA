@@ -147,7 +147,30 @@ context 建構包含 collective agreement，不得置於僅允許本地工作的
 graph 各 runtime 持有一份 immutable snapshot。省略 context 時保留無前綴介面，
 在當次 advance 建立暫時 snapshot。使用者提供的自訂 callback 簽名不變。
 
-驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。immersed／moving／FSI 路徑，以及完整 nested solver 診斷與後端矩陣仍待完成。
+驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。immersed／moving／FSI 進度見 [immersed 報告](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
 貼體基礎驗收見 [原報告](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。
 既有 `.ntiga`、場輸出與 checkpoint payload 格式不變；新的 source identity 會讓舊建置的
 checkpoint 明確不相容，續跑須保留相同建置與數值選項。
+
+
+## 求解器診斷
+
+`-domain_junction_flow_ksp_view` 顯示該 domain 的實際 KSP、PC 與已建立的子求解器；
+`-domain_source_flow_snes_view` 顯示 implicit nonlinear 1D 的 SNES。
+Immersed 也可使用 family alias，例如 `-immersed_transient_ksp_view`，輸出仍顯示
+實際的 domain prefix。`-domain_junction_flow_sub_ksp_converged_reason` 記錄
+block-Jacobi 子 KSP 的收斂原因；只有實際建立該子求解器時才有輸出。
+Fieldsplit 的子名稱依 runtime 使用的名稱配置，例如 `fieldsplit_0_`／`fieldsplit_1_`。
+
+```bash
+mpiexec -np 3 solvers/coupling/iga_multidomain_flow \
+  --graph-case CASE --output-dir NEW_OUTPUT \
+  -domain_junction_flow_ksp_view \
+  -domain_junction_flow_sub_ksp_converged_reason \
+  -domain_source_flow_snes_view
+```
+
+此範例需要含 `junction` 與 nonlinear implicit `source` 的 graph。
+Viewer 失敗會回傳錯誤，須檢查 process exit status。驗證與本機 factor capability
+矩陣見 [診斷報告](progress/HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)；該矩陣只代表
+目前 PETSc build 對測試 AIJ 矩陣註冊的介面，不代表各 PDE 的效能或適用性。
