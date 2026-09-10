@@ -2,6 +2,7 @@
 #include "OwnedRowAssembler.hpp"
 #include "SurfaceOwnershipValidation.hpp"
 #include "DynamicWeightedAitkenRelaxation.hpp"
+#include "DistributedWeightedAitken.hpp"
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
 #include "DistributedSurfaceForces.hpp"
@@ -425,6 +426,36 @@ void CheckEmptyAitken(int rank)
 	if (rank == 0) std::cout << "empty_aitken_reduction=passed iterations=2 empty_ranks=2\n";
 }
 
+void CheckDistributedAitken(int rank)
+{
+	for(bool split:{false,true}) {
+		const std::string identity(64,static_cast<char>('a'+rank));
+		const std::vector<double> weights=split?(rank==0?std::vector<double>{}:std::vector<double>{rank==1?1.:3.}):
+			(rank==1?std::vector<double>{1.,3.}:std::vector<double>{});
+		iga::DistributedWeightedAitken distributed(PETSC_COMM_WORLD,identity,weights);
+		iga::DynamicWeightedAitkenRelaxation serial(std::string(64,'f'),{1.,3.},4.);
+		Require(distributed.GlobalWeightTotal()==4.,"wrong collective Aitken total");
+		for(const auto& full:{std::vector<double>{2.,-1.},std::vector<double>{1.,2.}}) {
+			const auto residual=split?(rank==0?std::vector<double>{}:std::vector<double>{full[rank-1]}):
+				(rank==1?full:std::vector<double>{});
+			const auto before=distributed.ControlIdentity();auto bad=residual;if(rank==0)bad.push_back(1.);
+			RejectCollectively([&] {(void)distributed.Propose(std::vector<double>(bad.size(),0.),bad,1.);},PETSC_COMM_WORLD);
+			Require(distributed.ControlIdentity()==before,"failed Aitken proposal mutated control");
+			const auto proposal=distributed.Propose(std::vector<double>(residual.size(),0.),residual,1.);
+			const auto reference=serial.Propose({0.,0.},full,1.,std::string(64,'f'));
+			Require(proposal.relaxation_factor==reference.relaxation_factor,"collective Aitken relaxation differs from serial");
+			const auto pending=distributed.ControlIdentity();auto foreign=proposal;if(rank==0)foreign.relaxation_factor+=.1;
+			RejectCollectively([&] {distributed.AcceptApplied(foreign,residual,foreign.relaxation_factor);},PETSC_COMM_WORLD);
+			Require(distributed.ControlIdentity()==pending,"failed Aitken acceptance consumed pending proposal");
+			distributed.AcceptApplied(proposal,residual,proposal.relaxation_factor);
+			serial.AcceptApplied(reference,full,reference.relaxation_factor,std::string(64,'f'));
+			Require(distributed.ControlIdentity()==serial.ControlStateIdentitySha256(),"collective Aitken control differs from serial");
+		}
+		distributed.Reset();serial.Reset();Require(distributed.ControlIdentity()==serial.ControlStateIdentitySha256(),"collective Aitken reset differs");
+	}
+	if(rank==0)std::cout << "distributed_aitken_transaction=passed partitions=2 iterations=2\n";
+}
+
 void CheckSurfaceOwnership(int rank)
 {
 	iga::SurfaceInterfaceRef reference{"fluid", "flow", "wall"};
@@ -587,6 +618,7 @@ int main(int argc, char** argv)
 		CheckIndependentCatalogs(rank);
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
+		CheckDistributedAitken(rank);
 		CheckScalarContributions(rank);
 		CheckSurfaceForces(rank);
 		CheckOwnedPointValues(rank);

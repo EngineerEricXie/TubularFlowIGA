@@ -740,6 +740,8 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   係數／控制身分比較通過，見 [FSI 接線進度](progress/HPC_07_DISTRIBUTED_CONTRACT.md)；
   膜 runtime 已加入 owner solve／prepare 後的遠端 rank 失敗注入驗證，
   1／3／5 ranks 共同清理、committed state 保留、重試與最終 commit 通過；
+  集體 weighted Aitken 狀態元件已串接 SUM／MAX 與成功後才替換狀態的流程，
+  空 rank／分散權重對 serial 係數及錯誤後 pending state 保留驗證通過；
   正式 coordinator 的全域收斂與跨 domain 共同 rollback 尚待接線。
 - [ ] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。

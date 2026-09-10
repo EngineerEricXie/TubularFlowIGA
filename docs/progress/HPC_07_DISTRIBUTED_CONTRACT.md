@@ -708,3 +708,30 @@ allocator failure 都可恢复。
 
 這補上單 owner 膜內部的失敗／重試證據。流體與結構兩個 domain 的共同接受、
 rollback 與 atomic commit 仍需 strong coupling coordinator 接線與驗收。
+
+
+## 集體 transactional weighted Aitken 元件
+
+`DistributedWeightedAitken` 將 MPI reduction 接入可供 coordinator 使用的狀態元件。
+全域 weight total 由各 rank 的 local weights 加總；空 rank 合法。Propose 核對
+共同控制狀態與 reference scale，SUM numerator／denominator、MAX residual
+scale，再呼叫原 `ProposeWithGlobalReduction`。AcceptApplied 與 Reset 同樣
+核對變更後的全域控制身分。
+
+Proposal／acceptance／reset 都先在 local state 副本上完成操作，所有 ranks
+共同驗證成功才以 noexcept unique_ptr swap 更新權威狀態。因此單 rank 的
+無效資料不會讓其他 ranks 提前消耗 pending proposal 或接受殘差。這項副本
+策略有額外 local state／proposal 記憶體成本，後续效能量測須納入；沒有收集
+全域 residual vectors。實際 relaxed fields 的套用與跨 domain commit 仍由
+外層 coordinator 負責。
+
+三 rank 測試包含兩個空 ranks、單 owner 全部權重，以及空 root／兩 owners
+分持 1、3 權重。兩次迭代的 relaxation factor、接受後 control identity 與 Reset
+均與串行 reference 完全相同。每次都先以空 rank 的錯誤 residual size 測試
+proposal 拒絕且控制狀態保持，再以錯誤 proposal relaxation 測試 acceptance
+拒絕且 pending identity 保持；健康接受成功。既有 ownership／traction 元件
+回歸也通過，三份 reports exit 0、無 timeout。
+
+證據為 `outputs/hpc07/distributed-aitken-v1/audit.json`，重現沿用
+`make -C solvers/cpu parallel-ownership-test`。這完成集體 Aitken 元件，尚未完成
+strong FSI coordinator 的全域 RMS／收斂與流體／結構共同接受，HPC-07C 未勾選。
