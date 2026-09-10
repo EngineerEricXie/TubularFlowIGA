@@ -78,6 +78,14 @@ void Run(MPI_Comm comm,const std::string& mode,iga::ImmersedWorkPartition partit
 	auto& f = *fixture;
 	if (scoped) options.solver_options_prefix = "domain_test_flow_";
 	iga::ImmersedStaticDistributedRuntime runtime(comm,f.domain,f.volume,f.surface,f.ghost,options,partition);
+	iga::CollectiveLocalStage(comm,"static candidate pressure reference",[&] {
+		const auto& layout = runtime.Diagnostics();
+		if (layout.gauge_present != (mode != "pressure")) throw std::runtime_error("static fixture pressure reference differs");
+		std::cout << "immersed_candidate_layout rank=" << rank << " mode=" << mode
+			<< " physical_dofs=" << layout.physical_dofs << " total_dofs=" << layout.total_dofs
+			<< " gauge=" << layout.gauge_present << " gauge_row=" << layout.gauge_row
+			<< " ports=" << layout.ports.size() << '\n';
+	});
 	const auto solver = runtime.SolverConfiguration();
 	std::cout << "immersed_solver rank=" << rank << " prefix=" << solver.prefix << " ksp=" << solver.ksp << " pc=" << solver.pc << '\n';
 	std::vector<PetscScalar> zero(static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),0.0);
