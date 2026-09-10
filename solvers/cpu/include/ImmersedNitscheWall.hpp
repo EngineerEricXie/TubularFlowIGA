@@ -52,6 +52,10 @@ struct ImmersedNitscheWallDiagnostics {
 	double fraction_lower = 0.0;
 	double fraction_estimate = 0.0;
 	double fraction_upper = 0.0;
+	// Preserve raw estimates and certified bounds. A fitted rule may differ
+	// from an interval endpoint by its accepted floating-point residual.
+	// Runtime aggregation accumulates this allowance plus summation roundoff.
+	double fraction_ordering_tolerance = 0.0;
 	double minimum_h_n_m = 0.0;
 	double maximum_h_n_m = 0.0;
 	double minimum_eta = 0.0;
@@ -115,6 +119,7 @@ inline double ImmersedNitscheWallFraction(const CutCellVolumeQuadratureCatalog& 
 	const auto finite_fraction = [](double value) { return std::isfinite(value) && value >= 0.0 && value <= 1.0; };
 	const double tolerance = 2.0e-12*std::max({1.0, std::abs(diagnostics.fraction_lower),
 		std::abs(diagnostics.fraction_estimate), std::abs(diagnostics.fraction_upper)});
+	diagnostics.fraction_ordering_tolerance = tolerance;
 	if (!finite_fraction(diagnostics.fraction_lower) || !finite_fraction(diagnostics.fraction_estimate)
 		|| !finite_fraction(diagnostics.fraction_upper)
 		|| diagnostics.fraction_lower > diagnostics.fraction_estimate+tolerance

@@ -17,6 +17,17 @@
 
 namespace iga {
 
+inline double PrescribedClockRoundoffAllowance(std::uint64_t additions)
+{
+	// gamma_n bounds repeated nonnegative clock additions. Epsilon is twice
+	// unit roundoff; the extra margin covers the endpoint comparisons.
+	const long double error=static_cast<long double>(additions)*std::numeric_limits<double>::epsilon();
+	if (!(error<1)) throw std::invalid_argument("prescribed clock accumulation bound is invalid");
+	const double result=static_cast<double>(error/(1-error)+8*std::numeric_limits<double>::epsilon());
+	if (!(result<.25)) throw std::invalid_argument("prescribed clock accumulation allowance is too large");
+	return result;
+}
+
 // Source ordering is deliberately separate from ClosedTriangulatedSurface's
 // canonical ordering.  A moving surface must retain its material vertices and
 // directed source facets; canonicalizing independently at each frame would
@@ -36,6 +47,9 @@ struct PrescribedSurfaceMotionOptions {
 	// fixed-background extension band.  Infinity disables the check.
 	double extension_band_m = std::numeric_limits<double>::infinity();
 	double maximum_extension_band_cfl = 1.0;
+	// Relative allowance for the caller's floating-point clock arithmetic.
+	// Interpolation snapping is also capped by adjacent frame durations.
+	double clock_roundoff_relative_tolerance = 8*std::numeric_limits<double>::epsilon();
 };
 
 class PrescribedSurfaceMotion {
@@ -77,11 +91,16 @@ public:
 		if (!(step_end_s > step_start_s) || time_s < step_start_s || time_s > step_end_s)
 			throw std::invalid_argument("prescribed surface trial time is outside its positive step");
 		(void)PositiveFiniteDifference(step_start_s, step_end_s, "prescribed surface step duration is invalid");
-		const std::size_t interval = StepInterval(step_start_s, step_end_s);
+		double interpolation_start = SnapFrameTime(step_start_s), interpolation_end = SnapFrameTime(step_end_s);
+		// Do not collapse a genuinely short, representable step near a knot.
+		const bool snap = interpolation_start < interpolation_end;
+		if (!snap) { interpolation_start=step_start_s; interpolation_end=step_end_s; }
+		const std::size_t interval = StepInterval(interpolation_start, interpolation_end);
+		const double interpolation_time = snap ? SnapFrameTime(time_s) : time_s;
 		const double left_time = frames_[interval].time_s;
 		const double duration = FrameDuration(interval);
-		const double theta = time_s == left_time ? 0.0 : time_s == frames_[interval+1].time_s ? 1.0
-			: PositiveFiniteDifference(left_time, time_s, "prescribed surface interpolation time is invalid")/duration;
+		const double theta = interpolation_time == left_time ? 0.0 : interpolation_time == frames_[interval+1].time_s ? 1.0
+			: PositiveFiniteDifference(left_time, interpolation_time, "prescribed surface interpolation time is invalid")/duration;
 		if (!std::isfinite(theta) || theta < 0.0 || theta > 1.0)
 			throw std::invalid_argument("prescribed surface interpolation parameter is invalid");
 
@@ -137,6 +156,9 @@ public:
 private:
 	void ValidateOptions() const
 	{
+		if (!std::isfinite(options_.clock_roundoff_relative_tolerance)
+			|| options_.clock_roundoff_relative_tolerance<0 || options_.clock_roundoff_relative_tolerance>=.25)
+			throw std::invalid_argument("prescribed clock roundoff allowance is invalid");
 		if (options_.surface_validation.length_scale_to_m != 1.0 || options_.surface_validation.weld_tolerance_m != 0.0)
 			throw std::invalid_argument("prescribed surface motion requires metre coordinates and zero welding");
 		for (double value : {options_.maximum_displacement_m, options_.maximum_velocity_m_per_s,
@@ -275,6 +297,28 @@ private:
 		if (frame+1 >= frames_.size()) throw std::out_of_range("prescribed surface frame interval is out of range");
 		return PositiveFiniteDifference(frames_[frame].time_s, frames_[frame+1].time_s,
 			"prescribed surface frame duration is invalid");
+	}
+
+	// Only interpolation queries are snapped; published material clocks and
+	// input frame times retain their original bits. The neighbour-duration cap
+	// prevents the tolerance from merging closely spaced physical knots.
+	double SnapFrameTime(double time) const
+	{
+		const auto next=std::lower_bound(frames_.begin(),frames_.end(),time,
+			[](const PrescribedSurfaceFrame& frame,double value) { return frame.time_s<value; });
+		const std::size_t right=static_cast<std::size_t>(next-frames_.begin());
+		double result=time;long double best=std::numeric_limits<long double>::infinity();
+		for (const auto index : {right,right ? right-1 : frames_.size()}) {
+			if (index>=frames_.size()) continue;
+			const double knot=frames_[index].time_s;
+			long double tolerance=options_.clock_roundoff_relative_tolerance
+				*std::max(std::abs(static_cast<long double>(time)),std::abs(static_cast<long double>(knot)));
+			if (index) tolerance=std::min(tolerance,static_cast<long double>(FrameDuration(index-1))/4);
+			if (index+1<frames_.size()) tolerance=std::min(tolerance,static_cast<long double>(FrameDuration(index))/4);
+			const long double difference=std::abs(static_cast<long double>(time)-knot);
+			if (difference<=tolerance && difference<best) { result=knot;best=difference; }
+		}
+		return result;
 	}
 
 	std::size_t StepInterval(double start, double end) const

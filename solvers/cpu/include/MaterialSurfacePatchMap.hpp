@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <map>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -128,6 +129,25 @@ public:
 	{ if (index >= layout_triangle_to_source_triangle_.size()) throw std::out_of_range("patch layout triangle is out of range"); return layout_triangle_to_source_triangle_[index]; }
 	std::uint32_t CanonicalVertexForGlobalNode(std::uint64_t id) const { return CanonicalVertexForSource(SourceVertexForGlobalNode(id)); }
 	std::uint32_t CanonicalTriangleForLayoutTriangle(std::size_t index) const { return CanonicalTriangleForSource(SourceTriangleForLayoutTriangle(index)); }
+
+
+	// Canonical sorting depends on current coordinates; only source triangle IDs
+	// remain stable across material motion.
+	std::vector<std::size_t> LayoutTrianglesByCanonical(const MaterialSurfaceKinematics& current) const
+	{
+		if (current.MaterialIdentitySha256() != full_reference_.MaterialIdentitySha256()
+			|| current.TopologyIdentitySha256() != full_reference_.TopologyIdentitySha256())
+			throw std::invalid_argument("current material does not match patch reference topology");
+		const auto absent = std::numeric_limits<std::size_t>::max();
+		std::vector<std::size_t> layout_for_source(current.SourceTriangles().size(), absent);
+		for (std::size_t i = 0; i < layout_triangle_to_source_triangle_.size(); ++i)
+			layout_for_source.at(layout_triangle_to_source_triangle_[i]) = i;
+		std::vector<std::size_t> result;
+		result.reserve(current.CanonicalTriangleProvenance().size());
+		for (const auto& triangle : current.CanonicalTriangleProvenance())
+			result.push_back(layout_for_source.at(triangle.source_triangle));
+		return result;
+	}
 
 private:
 	MaterialSurfacePatchMap(DistributedSurfaceInterface interface, DistributedSurfaceLayout layout,

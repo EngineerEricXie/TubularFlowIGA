@@ -398,9 +398,10 @@ private:
 		const auto values = moving_.TrialState();
 		if (values.size() < 4*layout.NodeIds().size())
 			throw std::runtime_error("fluid FSI trial vector does not cover active IGA nodes");
-		std::vector<bool> selected(geometry.Kinematics().CanonicalTriangleProvenance().size(), false);
-		for (std::size_t i = 0; i < patch_map_.LayoutTriangleToSourceTriangles().size(); ++i)
-			selected[patch_map_.CanonicalTriangleForLayoutTriangle(i)] = true;
+		const auto current_mapping = patch_map_.LayoutTrianglesByCanonical(geometry.Kinematics());
+		std::vector<bool> selected(current_mapping.size(), false);
+		for (std::size_t i = 0; i < current_mapping.size(); ++i)
+			selected[i] = current_mapping[i] != std::numeric_limits<std::size_t>::max();
 		std::vector<FluidSurfaceElementState> result;
 		for (std::uint64_t cell = 0; cell < domain.Cells().size(); ++cell) {
 			if (domain.Cells()[static_cast<std::size_t>(cell)].classification != CellClassification::Cut) continue;

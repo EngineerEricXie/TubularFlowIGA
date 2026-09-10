@@ -14,11 +14,11 @@ HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-conf
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := immersed_moving_distributed_runtime_test immersed_moving_distributed_operator_test distributed_immersed_extension_test distributed-immersed-extension-test body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+PETSC_TARGETS := material_surface_checkpoint_test immersed_moving_distributed_fsi_runtime_test immersed_fitted_wall_diagnostics_test immersed_moving_distributed_domain_test immersed_moving_distributed_runtime_test immersed_moving_distributed_operator_test distributed_immersed_extension_test distributed-immersed-extension-test body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
 PETSC_TARGETS += parallel_vtk_output_test
-PETSC_TARGETS += distributed_point_identity_test
+PETSC_TARGETS += distributed_point_identity_test distributed_material_surface_patch_test
 PETSC_TARGETS += parallel_bezier_visualization_test
 
 parallel_bezier_visualization_test: tests/test_parallel_bezier_visualization.cpp tests/test_bezier_visualization.cpp $(wildcard include/*.hpp ../../include/*.hpp)
@@ -501,7 +501,7 @@ fluid-surface-traction-test: fluid_surface_traction_test
 	./fluid_surface_traction_test
 
 moving_immersed_transient_flow_fsi_runtime_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
-moving_immersed_transient_flow_fsi_runtime_test: tests/test_moving_immersed_transient_flow_fsi_runtime.cpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
+moving_immersed_transient_flow_fsi_runtime_test: tests/test_moving_immersed_transient_flow_fsi_runtime.cpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving-immersed-transient-flow-fsi-runtime-test: moving_immersed_transient_flow_fsi_runtime_test
@@ -673,7 +673,7 @@ iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/Transport
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
-	$(RM) immersed_moving_distributed_operator_test immersed_moving_distributed_runtime_test
+	$(RM) material_surface_checkpoint_test immersed_moving_distributed_fsi_runtime_test distributed_material_surface_patch_test immersed_moving_distributed_operator_test immersed_moving_distributed_runtime_test immersed_moving_distributed_domain_test immersed_fitted_wall_diagnostics_test
 	$(RM) distributed_immersed_extension_test
 	$(RM) parallel_bezier_visualization_test
 	$(RM) distributed_point_identity_test
@@ -782,4 +782,19 @@ immersed_moving_distributed_operator_test: tests/test_immersed_moving_distribute
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed_moving_distributed_runtime_test: tests/test_immersed_moving_distributed_runtime.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_moving_distributed_domain_test: tests/test_immersed_moving_distributed_domain.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_fitted_wall_diagnostics_test: tests/test_immersed_fitted_wall_diagnostics.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+distributed_material_surface_patch_test: tests/test_distributed_material_surface_patch.cpp tests/test_material_surface_patch_kinematics.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+immersed_moving_distributed_fsi_runtime_test: tests/test_immersed_moving_distributed_fsi_runtime.cpp tests/test_immersed_moving_distributed_runtime.cpp tests/CompliantChannelFsiFixture.hpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+material_surface_checkpoint_test: tests/test_material_surface_checkpoint.cpp tests/CompliantChannelFsiFixture.hpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)

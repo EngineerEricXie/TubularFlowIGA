@@ -28,9 +28,10 @@ inline std::vector<SurfaceCellTractionPoints> BuildOwnedFluidSurfaceTractionPoin
 			if(!std::isfinite(component))throw std::invalid_argument("nonfinite fluid traction coefficient");
 	}
 	std::map<std::size_t,std::size_t> layout_for_canonical;
-	for(std::size_t triangle=0;triangle<map.Layout().reference_triangles.size();++triangle)
-		if(!layout_for_canonical.emplace(map.CanonicalTriangleForLayoutTriangle(triangle),triangle).second)
-			throw std::invalid_argument("ambiguous fluid traction triangle mapping");
+	const auto current_mapping = map.LayoutTrianglesByCanonical(material);
+	for (std::size_t canonical = 0; canonical < current_mapping.size(); ++canonical)
+		if (current_mapping[canonical] != std::numeric_limits<std::size_t>::max())
+			layout_for_canonical.emplace(canonical, current_mapping[canonical]);
 	std::set<std::uint64_t> seen;
 	std::vector<SurfaceCellTractionPoints> result;result.reserve(owned_cells.size());
 	std::size_t used_states=0;

@@ -42,6 +42,26 @@ void FactoryRoundTrip()
 int main()
 {
 	FactoryRoundTrip(); const auto full=Full(); const auto map=Map(full); assert(map.SourceVertexForGlobalNode(14)==4&&map.CanonicalTriangleForLayoutTriangle(1)<full.Surface().Triangles().size());
+	// A rigid rotation preserves material IDs but changes canonical sorting.
+	// This tests the geometry mapping independently of clamped-patch dynamics.
+	{
+		auto positions = Reference();
+		for (auto& point : positions) point = {{2.-point[1], point[0], point[2]}};
+		const auto rotated = iga::MaterialSurfaceKinematics::CreateFromSourceTopology(
+			Reference(), positions, std::vector<std::array<double,3>>(positions.size(), {{0,0,0}}),
+			Topology(), .5, 0., .5);
+		const auto before = map.LayoutTrianglesByCanonical(full);
+		const auto after = map.LayoutTrianglesByCanonical(rotated);
+		assert(before != after);
+		std::size_t mapped = 0;
+		for (std::size_t canonical = 0; canonical < after.size(); ++canonical) {
+			const auto source = rotated.CanonicalTriangleProvenance()[canonical].source_triangle;
+			if (source < 3) { assert(after[canonical] == source); ++mapped; }
+			else assert(after[canonical] == std::numeric_limits<std::size_t>::max());
+		}
+		assert(mapped == 3);
+		Reject([&] { map.LayoutTrianglesByCanonical(FullWithChangedNonpatchLabel()); });
+	}
 	// Public digest construction is a validated API: malformed mapping inputs
 	// must throw before any source vertex or triangle is dereferenced.
 	Reject([&]{auto m=MappingData();m[3].second=99;ReferenceDigest(full,m);});

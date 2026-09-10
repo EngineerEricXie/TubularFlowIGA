@@ -751,7 +751,11 @@ private:
 		const std::array<double,3> local_fractions{{local.fraction_lower,local.fraction_estimate,local.fraction_upper}};
 		for(double value:local_fractions) if(!std::isfinite(value)||value<0.0||value>1.0)
 			throw std::overflow_error("immersed transient local wall reference fraction is invalid");
-		if(local.fraction_lower>local.fraction_estimate||local.fraction_estimate>local.fraction_upper)
+		if(!std::isfinite(local.fraction_ordering_tolerance)||local.fraction_ordering_tolerance<0.0
+			||local.fraction_ordering_tolerance>2.0e-12)
+			throw std::overflow_error("immersed transient local wall fraction tolerance is invalid");
+		if(local.fraction_lower>local.fraction_estimate+local.fraction_ordering_tolerance
+			||local.fraction_estimate>local.fraction_upper+local.fraction_ordering_tolerance)
 			throw std::overflow_error("immersed transient local wall reference fraction ordering is invalid");
 		const auto checked_add=[](double& out,double value,const char* description) {
 			if(!std::isfinite(out)||!std::isfinite(value)||value<0.0||!std::isfinite(out+value))
@@ -773,7 +777,13 @@ private:
 		checked_add(aggregate.fraction_lower,local.fraction_lower,"immersed transient wall reference fraction lower total overflows");
 		checked_add(aggregate.fraction_estimate,local.fraction_estimate,"immersed transient wall reference fraction estimate total overflows");
 		checked_add(aggregate.fraction_upper,local.fraction_upper,"immersed transient wall reference fraction upper total overflows");
-		if(aggregate.fraction_lower>aggregate.fraction_estimate||aggregate.fraction_estimate>aggregate.fraction_upper)
+		checked_add(aggregate.fraction_ordering_tolerance,local.fraction_ordering_tolerance,
+			"immersed transient wall fraction tolerance total overflows");
+		const double roundoff=8.0*std::numeric_limits<double>::epsilon()*std::max({1.0,
+			aggregate.fraction_lower,aggregate.fraction_estimate,aggregate.fraction_upper});
+		checked_add(aggregate.fraction_ordering_tolerance,roundoff,"immersed transient wall fraction roundoff overflows");
+		if(aggregate.fraction_lower>aggregate.fraction_estimate+aggregate.fraction_ordering_tolerance
+			||aggregate.fraction_estimate>aggregate.fraction_upper+aggregate.fraction_ordering_tolerance)
 			throw std::logic_error("immersed transient wall reference fraction totals are unordered");
 		aggregate.ghost_covered_policy=local.ghost_covered_policy;
 		for(const auto& item:local.by_boundary_id) {

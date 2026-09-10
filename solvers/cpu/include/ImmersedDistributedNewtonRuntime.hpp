@@ -192,6 +192,8 @@ public:
 				Check("distributed static true linear residual",VecAXPY(linear_action_,-1.0,linear_rhs_));
 				step.linear_residual_norm = Norm(linear_action_); step.linear_relative_residual = step.linear_residual_norm/residual;
 				bool accepted = false;
+				double best_candidate=std::numeric_limits<double>::infinity(),last_damping=0;
+				std::size_t candidate_count=0;
 				for (double damping = 1.0; damping >= Options().minimum_damping; damping *= 0.5) {
 					Check("distributed static candidate",VecAXPY(State(),damping,update_));
 					const auto candidate_start = std::chrono::steady_clock::now();
@@ -199,6 +201,7 @@ public:
 					diagnostics_.last_line_search_candidate_assembly_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now()-candidate_start).count();
 					diagnostics_.aggregate_line_search_candidate_assembly_seconds += diagnostics_.last_line_search_candidate_assembly_seconds;
 					const double candidate = Norm(op_->Assembly().Residual());
+					best_candidate=std::min(best_candidate,candidate);last_damping=damping;++candidate_count;
 					if (candidate < residual) {
 						accepted = true; step.damping = damping; step.candidate_residual_norm = candidate;
 						diagnostics_.damping = damping; diagnostics_.residual_norm = candidate; ++diagnostics_.nonlinear_iterations;
@@ -208,7 +211,17 @@ public:
 					}
 					Check("distributed static candidate undo",VecAXPY(State(),-damping,update_));
 				}
-				if (!accepted) { RecordStep(step); throw std::runtime_error("static immersed-flow backtracking failed"); }
+				if (!accepted) {
+					step.candidate_residual_norm=best_candidate;RecordStep(step);
+					CollectiveLocalStage(communicator_,"immersed Newton backtracking",[&] {
+						std::ostringstream message;message<<std::setprecision(17)
+							<<"static immersed-flow backtracking failed; iteration="<<iteration<<" initial_residual="<<initial
+							<<" residual="<<residual<<" best_candidate="<<best_candidate<<" candidates="<<candidate_count
+							<<" last_damping="<<last_damping<<" minimum_damping="<<Options().minimum_damping
+							<<" update_norm="<<step.update_norm<<" linear_relative_residual="<<step.linear_relative_residual;
+						throw std::runtime_error(message.str());
+					});
+				}
 			}
 			throw std::runtime_error("static immersed-flow nonlinear iteration cap reached");
 		} catch (...) { Rollback(); throw; }

@@ -84,6 +84,49 @@ public:
 	static ClosedTriangulatedSurface ReadVtpPath(const std::string& path,
 		const SurfaceValidationOptions& options = SurfaceValidationOptions(), const std::string& boundary_array_name = "boundary_id")
 	{
+		return ReadVtpBuffer(ReadVtpBytes(path), options, path, boundary_array_name);
+	}
+
+	// Material frames retain source vertex/facet order and directed connectivity.
+	// Validate the closed surface without publishing its canonical reordering.
+	// Scaling and welding would change the material coordinates or identities.
+	static RawSurfaceSoup ReadMaterialVtpBuffer(const std::vector<std::uint8_t>& bytes,
+		const SurfaceValidationOptions& options = SurfaceValidationOptions(), const std::string& context = "buffer",
+		const std::string& boundary_array_name = "boundary_id")
+	{
+		try {
+			if (boundary_array_name.empty()) throw std::invalid_argument("boundary array name is empty");
+			if (options.max_triangles < 0) throw std::invalid_argument("configured maximum triangle count is negative");
+			if (options.length_scale_to_m != 1.0 || options.weld_tolerance_m != 0.0)
+				throw std::invalid_argument("material VTP requires metre coordinates without welding");
+			auto source = ParseVtp(bytes, options, boundary_array_name);
+			// Canonical construction normally resolves absent labels. Material
+			// consumers need those effective labels on the retained source too.
+			for (auto& triangle : source.triangles)
+				if (triangle.boundary_id < 0) triangle.boundary_id = options.default_boundary_id;
+			(void)ClosedTriangulatedSurface::Build(source, options);
+			return source;
+		} catch (const std::exception& error) {
+			throw std::invalid_argument("VTP " + context + ": " + error.what());
+		}
+	}
+
+	static RawSurfaceSoup ReadMaterialVtpText(const std::string& text,
+		const SurfaceValidationOptions& options = SurfaceValidationOptions(), const std::string& context = "text",
+		const std::string& boundary_array_name = "boundary_id")
+	{
+		return ReadMaterialVtpBuffer(std::vector<std::uint8_t>(text.begin(), text.end()), options, context, boundary_array_name);
+	}
+
+	static RawSurfaceSoup ReadMaterialVtpPath(const std::string& path,
+		const SurfaceValidationOptions& options = SurfaceValidationOptions(), const std::string& boundary_array_name = "boundary_id")
+	{
+		return ReadMaterialVtpBuffer(ReadVtpBytes(path), options, path, boundary_array_name);
+	}
+
+private:
+	static std::vector<std::uint8_t> ReadVtpBytes(const std::string& path)
+	{
 		std::ifstream input(path, std::ios::binary);
 		if (!input) throw std::invalid_argument("VTP " + path + ": cannot open file");
 		input.seekg(0, std::ios::end);
@@ -97,10 +140,9 @@ public:
 		std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
 		if (!bytes.empty()) input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 		if (!input && !bytes.empty()) throw std::invalid_argument("VTP " + path + ": cannot read file");
-		return ReadVtpBuffer(bytes, options, path, boundary_array_name);
+		return bytes;
 	}
 
-private:
 	static constexpr std::size_t kVtpMaximumBytes = 64U*1024U*1024U;
 	static constexpr std::size_t kVtpMaximumTokenBytes = 1024U*1024U;
 	static constexpr std::size_t kVtpMaximumDepth = 32U;

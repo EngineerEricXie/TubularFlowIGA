@@ -44,6 +44,16 @@ int main()
 			const auto scaled=iga::FitNonnegativeLeastSquares({1e-100,0,0,1e100},{scale,2*scale});
 			Check(scaled.within_tolerance&&scaled.relative_residual<1e-13L,"scaled NNLS failed");
 		}
+		// The exact positive solution is (1/2,1/2). After selecting the first
+		// column the second reduced gradient is delta^2/2, while the residual
+		// remains delta/2: an absolute epsilon floor must not claim stationarity.
+		for(double delta:{1e-8,1e-9,1e-10}) {
+			const std::vector<double> a{1,0,1,delta},b{1,delta/2};
+			const auto fit=iga::FitNonnegativeLeastSquares(a,b);
+			Check(fit.within_tolerance&&fit.relative_residual<=1e-13L,"small resolvable NNLS gradient stopped prematurely");
+			Check(std::abs(fit.coefficients[0]-.5)<1e-6&&std::abs(fit.coefficients[1]-.5)<1e-6,"ill-conditioned positive solution differs");
+			Kkt(a,b,fit);
+		}
 		std::mt19937 generator(49217);std::uniform_real_distribution<double> uniform(-1,1);
 		std::size_t maximum_iterations=0,removals=0;
 		for(unsigned trial=0;trial<200;++trial) {

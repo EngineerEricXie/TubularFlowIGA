@@ -30,6 +30,28 @@ public:
 			|| trial_patch.stamp.time_s != context.EndTime() || trial_patch.stamp.step != context.step
 			|| trial_patch.stamp.coupling_iteration != context.coupling_iteration)
 			throw std::runtime_error("patch kinematics does not match its exact FSI trial context");
+		auto target=ComposeCompletePatch(map,committed_full,context,map.Layout().owned_global_node_ids,
+			trial_patch.displacement_m,trial_patch.velocity_m_per_s);
+		Result result{std::move(target), {}};
+		result.composition_identity_sha256=HashComposition(map,committed_full,trial_patch,context,result.target);
+		return result;
+	}
+
+	// Geometry-only core. The caller validates publication stamps/ownership;
+	// this entry point independently requires every mapped source node once.
+	static MaterialSurfaceKinematics ComposeCompletePatch(const MaterialSurfacePatchMap& map,
+		const MaterialSurfaceKinematics& committed_full,const FsiTrialContext& context,
+		const std::vector<std::uint64_t>& node_ids,const std::vector<std::array<double,3>>& displacement,
+		const std::vector<std::array<double,3>>& velocity)
+	{
+		map.FullReference().Validate();committed_full.Validate();ValidateFsiTrialContext(context);
+		if(node_ids.size()!=map.GlobalToSourceVertices().size() || displacement.size()!=node_ids.size()
+			|| velocity.size()!=node_ids.size())throw std::invalid_argument("complete patch fields have missing or extra nodes");
+		for(std::size_t i=0;i<node_ids.size();++i) {
+			if(node_ids[i]!=map.GlobalToSourceVertices()[i].first)throw std::invalid_argument("complete patch node ordering differs from map");
+			for(std::size_t axis=0;axis<3;++axis)if(!std::isfinite(displacement[i][axis]) || !std::isfinite(velocity[i][axis]))
+				throw std::invalid_argument("complete patch field is nonfinite");
+		}
 		if (committed_full.MaterialIdentitySha256() != map.FullReference().MaterialIdentitySha256()
 			|| committed_full.TopologyIdentitySha256() != map.FullReference().TopologyIdentitySha256()
 			|| committed_full.EvaluatedTimeS() != context.start_time_s
@@ -38,17 +60,17 @@ public:
 
 		auto positions = map.FullReference().ReferenceMaterialVerticesM();
 		std::vector<std::array<double, 3>> velocities(positions.size(), {{0.0, 0.0, 0.0}});
-		for (std::size_t local = 0; local < map.Layout().owned_global_node_ids.size(); ++local) {
-			const auto global = map.Layout().owned_global_node_ids[local];
+		for (std::size_t local = 0; local < node_ids.size(); ++local) {
+			const auto global = node_ids[local];
 			const auto source = map.SourceVertexForGlobalNode(global);
 			const bool clamped = std::binary_search(map.ConfiguredClampedGlobalNodeIds().begin(),
 				map.ConfiguredClampedGlobalNodeIds().end(), global);
-			if (clamped && (!ExactlyZero(trial_patch.displacement_m[local]) || !ExactlyZero(trial_patch.velocity_m_per_s[local])))
+			if (clamped && (!ExactlyZero(displacement[local]) || !ExactlyZero(velocity[local])))
 				throw std::runtime_error("clamped material patch seam must publish exact zero displacement and velocity");
 			for (std::size_t axis = 0; axis < 3; ++axis) {
 				positions[source][axis] = map.FullReference().ReferenceMaterialVerticesM()[source][axis]
-					+ trial_patch.displacement_m[local][axis];
-				velocities[source][axis] = trial_patch.velocity_m_per_s[local][axis];
+					+ displacement[local][axis];
+				velocities[source][axis] = velocity[local][axis];
 			}
 		}
 		for (std::size_t source = 0; source < positions.size(); ++source)
@@ -70,9 +92,7 @@ public:
 		if (target.MaterialIdentitySha256() != committed_full.MaterialIdentitySha256()
 			|| target.TopologyIdentitySha256() != committed_full.TopologyIdentitySha256())
 			throw std::runtime_error("patch composition changed immutable full material/topology identity");
-		Result result{std::move(target), {}};
-		result.composition_identity_sha256 = HashComposition(map, committed_full, trial_patch, context, result.target);
-		return result;
+		return target;
 	}
 
 private:

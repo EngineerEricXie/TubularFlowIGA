@@ -354,6 +354,36 @@ int main(int argc, char** argv)
 		CheckVector(pressure.diagnostics.nodal_resultant_n, {{0,0,-10}});
 		assert(pressure.diagnostics.retained_quadrature_points > 0);
 
+		// Keep the reference map while rotating current geometry. Canonical
+		// triangle IDs change, but pressure and material node correspondence do not.
+		{
+			auto positions = material.SourceVerticesM();
+			for (auto& point : positions) point = {{1.-point[1], point[0], point[2]}};
+			const auto rotated = iga::MaterialSurfaceKinematics::CreateFromSourceTopology(
+				material.ReferenceMaterialVerticesM(), positions,
+				std::vector<std::array<double,3>>(positions.size(), {{0,0,0}}),
+				{Face(0,2,1,7), Face(0,1,3,9), Face(0,3,2,9), Face(1,2,3,9)}, .5, 0., .5);
+			assert(patch_map.LayoutTrianglesByCanonical(material) != patch_map.LayoutTrianglesByCanonical(rotated));
+			const auto rotated_domain = Domain(rotated);
+			const iga::ImmersedSurfaceQuadratureCatalog rotated_catalog(rotated_domain);
+			const auto state = State(rotated_domain, rotated_catalog, 20., zero);
+			const auto stamp = Stamp(rotated, rotated_domain, rotated_catalog, layout, patch_map, state, viscosity);
+			const auto result = iga::BuildFluidSurfaceTraction(rotated_domain, rotated_catalog,
+				rotated, interface, layout, patch_map, stamp, viscosity, state);
+			for (const auto& traction : result.traction.traction_on_structure_pa) CheckVector(traction, {{0,0,-20}});
+			CheckVector(result.diagnostics.nodal_resultant_n, {{0,0,-10}});
+			std::vector<std::uint64_t> cells;
+			for (std::uint64_t cell = 0; cell < rotated_domain.Cells().size(); ++cell) cells.push_back(cell);
+			const auto points = iga::BuildOwnedFluidSurfaceTractionPoints(rotated_domain, rotated_catalog,
+				rotated, patch_map, viscosity, cells, state);
+			std::array<double,3> resultant{};
+			for (const auto& cell : points) for (const auto& point : cell.points) {
+				CheckVector(point.traction_pa, {{0,0,-20}});
+				for (int axis = 0; axis < 3; ++axis) resultant[axis] += point.weight_m2*point.traction_pa[axis];
+			}
+			CheckVector(resultant, {{0,0,-10}});
+		}
+
 		const std::array<std::array<double,3>,3> affine{{{{0,0,1}},{{0,0,0}},{{2,0,3}}}};
 		const auto affine_state = State(domain, catalog, 4.0, affine); const auto affine_stamp = Stamp(material, domain, catalog, layout, patch_map, affine_state, viscosity);
 		const auto affine_result = iga::BuildFluidSurfaceTraction(domain, catalog, material, interface, layout, patch_map, affine_stamp, viscosity, affine_state);

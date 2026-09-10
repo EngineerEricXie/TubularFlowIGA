@@ -1,7 +1,7 @@
 #ifndef IGA_IMMERSED_FLOW_CASE_HPP
 #define IGA_IMMERSED_FLOW_CASE_HPP
 
-// Production owner for steady or fixed-geometry transient immersed flow. Keep
+// Production owner for steady, fixed transient, or prescribed moving immersed flow. Keep
 // the catalog dependencies in declaration order: the runtime borrows ghost,
 // surface and volume, ghost borrows classification and volume, and all of
 // them ultimately retain the classified surface.
@@ -12,6 +12,8 @@
 #include "ThreeDImmersedFlowDomain.hpp"
 #include "ThreeDImmersedDistributedFlowDomain.hpp"
 #include "ThreeDImmersedTransientDistributedFlowDomain.hpp"
+#include "ThreeDImmersedMovingDistributedFlowDomain.hpp"
+#include "../solvers/cpu/include/PrescribedSurfaceMotion.hpp"
 #include "Sha256.hpp"
 #include <type_traits>
 #include "../solvers/cpu/include/CartesianDomainClassification.hpp"
@@ -74,13 +76,24 @@ public:
 		const auto& object = config_detail::RequireObject(root, "immersed_geometry.json");
 		config_detail::RequireKnownKeys(object, {"surface", "boundary_array", "grid",
 			"volume_quadrature", "surface_quadrature", "ghost_penalty", "wall_labels",
-			"runtime"}, "immersed_geometry.json");
+			"runtime", "prescribed_motion"}, "immersed_geometry.json");
 		const std::string surface_file = config_detail::RequireString(
 			Required(object, "surface"), "immersed_geometry.json.surface");
 		const std::string boundary_array = OptionalString(object, "boundary_array", "boundary_id");
 		const auto surface_path = Contained(result->case_directory_, surface_file);
 		input_phase.Stop();
 		PhaseScope geometry_phase(ProfilePhase::Geometry);
+		const auto grid = ParseGrid(Required(object,"grid"));
+		if (const auto motion = config_detail::Find(object,"prescribed_motion")) {
+			if (!result->transient_) throw std::invalid_argument("prescribed motion requires backward Euler integration");
+			result->moving_options_.volume = ParseVolume(Required(object,"volume_quadrature"));
+			result->moving_options_.volume_storage = ParseStorage(Required(object,"volume_quadrature"));
+			result->moving_options_.surface = ParseSurface(Required(object,"surface_quadrature"));
+			result->moving_options_.ghost = ParseGhost(Required(object,"ghost_penalty"));
+			result->ParseMotion(*motion,surface_path,boundary_array,grid);
+			result->moving_initial_ = MovingCutGeometry::Build(grid,
+				result->motion_->Evaluate(0,0,result->configuration_.time.dt),result->moving_options_);
+		} else {
 		result->classification_ = std::make_unique<CartesianDomainClassification>(
 			CubicCartesianBackground(ParseGrid(Required(object, "grid"))),
 			SurfaceSpatialIndex(SurfaceReaders::ReadVtpPath(surface_path.string(), {}, boundary_array)));
@@ -92,6 +105,7 @@ public:
 			ParseSurface(Required(object, "surface_quadrature")));
 		result->ghost_ = std::make_unique<CutCellGhostPenaltyCatalog>(*result->classification_,
 			*result->volume_, ParseGhost(Required(object, "ghost_penalty")));
+		}
 		const auto wall_labels = ParseLabels(Required(object, "wall_labels"));
 		if (result->transient_) {
 			result->transient_options_ = ParseRuntime<ImmersedTransientFlowOptions>(Required(object,"runtime"),result->configuration_,wall_labels);
@@ -103,24 +117,42 @@ public:
 			result->runtime_options_.solver_options_prefix = PetscDomainOptionsPrefix(domain_id, "flow");
 			result->runtime_parameters_ = result->runtime_options_.parameters;
 		}
-		ValidateLabelPartition(result->classification_->SurfaceIndex().Surface(),wall_labels,ports,
+		ValidateLabelPartition(result->Classification().SurfaceIndex().Surface(),wall_labels,ports,
 			result->transient_ ? result->transient_options_.ports : result->runtime_options_.ports);
 		result->domain_id_ = domain_id; result->graph_ports_ = ports;
-		result->geometry_identity_ = result->FixedGeometryIdentity();
+		result->geometry_identity_ = result->motion_ ? result->moving_initial_->GeometryIdentitySha256() : result->FixedGeometryIdentity();
 		return result;
 	}
 	void InitializeDistributed(MPI_Comm communicator)
 	{
 		std::string signature;
 		CollectiveLocalStage(communicator,"immersed case distributed initialization",[&] {
-			if (runtime_ || distributed_runtime_ || transient_runtime_ || adapter_ || !classification_ || !volume_ || !surface_ || !ghost_)
+			if (runtime_ || distributed_runtime_ || transient_runtime_ || moving_runtime_ || adapter_
+				|| (motion_ ? !moving_initial_ : (!classification_ || !volume_ || !surface_ || !ghost_)))
 				throw std::logic_error("immersed case is not an uninitialized preflight result");
 			std::ostringstream text; text.exceptions(std::ios::badbit | std::ios::failbit);
-			text << std::setprecision(std::numeric_limits<double>::max_digits10) << transient_;
+			text << std::setprecision(std::numeric_limits<double>::max_digits10) << transient_ << ':' << static_cast<bool>(motion_);
 			if (transient_) text << ':' << configuration_.time.dt << ':' << configuration_.time.steps;
+			if (motion_) text << ':' << motion_identity_;
 			signature = text.str();
 		});
 		RequireCollectiveSameText(communicator,"immersed case time integration agreement",signature);
+		if (motion_) {
+			auto runtime = AllocateCollectiveRuntime<ImmersedMovingTransientDistributedRuntime>(communicator,
+				communicator,std::move(moving_initial_),transient_options_);
+			ImmersedMovingDistributedGraphBackend::GeometryProvider provider;
+			CollectiveLocalStage(communicator,"immersed moving case provider",[&] {
+				provider = [this](const MovingCutGeometry& accepted,const DomainStepContext& step) {
+					return MovingCutGeometry::Build(accepted.Domain().Background().Spec(),
+						motion_->Evaluate(step.EndTime(),step.start_time_s,step.EndTime()),moving_options_,&accepted);
+				};
+			});
+			auto backend = AllocateCollectiveRuntime<ImmersedMovingDistributedGraphBackend>(communicator,
+				*runtime,provider,moving_layers_,moving_limits_);
+			auto adapter = AllocateCollectiveRuntime<ThreeDImmersedMovingDistributedFlowDomain>(communicator,
+				domain_id_,*backend,graph_ports_);
+			moving_runtime_ = std::move(runtime); moving_backend_ = std::move(backend); adapter_ = std::move(adapter); return;
+		}
 		if (transient_) {
 			auto runtime = AllocateCollectiveRuntime<ImmersedTransientDistributedRuntime>(communicator,communicator,
 				*classification_,*volume_,*surface_,*ghost_,geometry_identity_,transient_options_);
@@ -133,9 +165,13 @@ public:
 		distributed_runtime_ = std::move(runtime); adapter_ = std::move(adapter);
 	}
 	bool IsTransient() const noexcept { return transient_; }
-	bool IsDistributed() const noexcept { return distributed_runtime_ || transient_runtime_; }
+	bool IsMoving() const noexcept { return static_cast<bool>(motion_); }
+	bool IsDistributed() const noexcept { return distributed_runtime_ || transient_runtime_ || moving_runtime_; }
 	ImmersedCaseDistribution Distribution() const
 	{
+		if (moving_runtime_) return {moving_runtime_->CommittedLayout().Rows(),
+			static_cast<std::size_t>(moving_runtime_->CommittedRowEnd()-moving_runtime_->CommittedRowBegin()),
+			moving_runtime_->CommittedOwnedStencilCount(),moving_runtime_->CommittedRequiredStateRows()};
 		if (transient_runtime_) return DistributionOf(*transient_runtime_);
 		if (distributed_runtime_) return DistributionOf(*distributed_runtime_);
 		throw std::logic_error("immersed case has no distributed ownership");
@@ -143,8 +179,26 @@ public:
 	// Collective for a distributed case; geometry and audit metadata stay valid.
 	void CloseDistributed() const
 	{
+		if (moving_runtime_ && !moving_closed_) {
+			CollectiveLocalStage(moving_runtime_->Communicator(),"immersed moving audit retention",[&] {
+				closed_surface_hash_ = SurfaceHash(); closed_grid_ = Grid();
+				closed_classification_ = ClassificationDiagnostics(); closed_volume_ = VolumeDiagnostics();
+				closed_surface_ = SurfaceDiagnostics(); closed_ghost_ = GhostDiagnostics();
+			});
+			moving_closed_ = true; moving_runtime_->Close();
+		}
 		if (transient_runtime_) transient_runtime_->Close();
 		if (distributed_runtime_) distributed_runtime_->Close();
+	}
+	ImmersedMovingTransientDistributedRuntime& MovingRuntime()
+	{
+		if (!moving_runtime_) throw std::logic_error("immersed case has no moving runtime");
+		return *moving_runtime_;
+	}
+	const ImmersedMovingTransientDistributedRuntime& MovingRuntime() const
+	{
+		if (!moving_runtime_) throw std::logic_error("immersed case has no moving runtime");
+		return *moving_runtime_;
 	}
 	ImmersedTransientDistributedRuntime& TransientRuntime()
 	{
@@ -166,22 +220,25 @@ public:
 	const ImmersedStaticFlowRuntime& Runtime() const { if (!runtime_) throw std::logic_error("immersed case has no serial runtime"); return *runtime_; }
 	PetscKspConfiguration SolverConfiguration() const
 	{
+		if (moving_runtime_) return moving_runtime_->CommittedSolverConfiguration();
 		if (transient_runtime_) return transient_runtime_->SolverConfiguration();
 		if (distributed_runtime_) return distributed_runtime_->SolverConfiguration();
 		if (runtime_) return runtime_->SolverConfiguration();
 		throw std::logic_error("immersed case has no solver");
 	}
 	const SimulationConfiguration& Configuration() const noexcept { return configuration_; }
-	const std::string& SurfaceHash() const noexcept { return classification_->SurfaceCanonicalHash(); }
-	const CubicCartesianGridSpec& Grid() const noexcept { return classification_->Background().Spec(); }
-	const CartesianDomainDiagnostics& ClassificationDiagnostics() const noexcept
-	{ return classification_->Diagnostics(); }
-	const CutCellVolumeQuadratureDiagnostics& VolumeDiagnostics() const noexcept
-	{ return volume_->Diagnostics(); }
-	const ImmersedSurfaceQuadratureDiagnostics& SurfaceDiagnostics() const noexcept
-	{ return surface_->Diagnostics(); }
-	const CutCellGhostPenaltyDiagnostics& GhostDiagnostics() const noexcept
-	{ return ghost_->Diagnostics(); }
+	const std::string& SurfaceHash() const
+	{ return moving_closed_ ? closed_surface_hash_ : Classification().SurfaceCanonicalHash(); }
+	const CubicCartesianGridSpec& Grid() const
+	{ return moving_closed_ ? closed_grid_ : Classification().Background().Spec(); }
+	const CartesianDomainDiagnostics& ClassificationDiagnostics() const
+	{ return moving_closed_ ? closed_classification_ : Classification().Diagnostics(); }
+	const CutCellVolumeQuadratureDiagnostics& VolumeDiagnostics() const
+	{ return moving_closed_ ? closed_volume_ : (motion_ ? MovingGeometry().Volume().Diagnostics() : volume_->Diagnostics()); }
+	const ImmersedSurfaceQuadratureDiagnostics& SurfaceDiagnostics() const
+	{ return moving_closed_ ? closed_surface_ : (motion_ ? MovingGeometry().Surface().Diagnostics() : surface_->Diagnostics()); }
+	const CutCellGhostPenaltyDiagnostics& GhostDiagnostics() const
+	{ return moving_closed_ ? closed_ghost_ : (motion_ ? MovingGeometry().Ghost().Diagnostics() : ghost_->Diagnostics()); }
 	const NavierStokesParameters& RuntimeParameters() const noexcept
 	{ return runtime_parameters_; }
 
@@ -190,7 +247,7 @@ public:
 	const std::vector<CouplingPort>& Ports() const noexcept override { return graph_ports_; }
 	void BeginStep(const DomainStepContext& step) override
 	{
-		if (transient_runtime_) CollectiveLocalStage(transient_runtime_->Communicator(),"immersed case timestep",[&] {
+		if (transient_runtime_ || moving_runtime_) CollectiveLocalStage(moving_runtime_ ? moving_runtime_->Communicator() : transient_runtime_->Communicator(),"immersed case timestep",[&] {
 			if (step.dt_s != configuration_.time.dt) throw std::invalid_argument("transient immersed timestep differs from case configuration");
 		});
 		Adapter().BeginStep(step);
@@ -205,6 +262,16 @@ public:
 	void FinalizeCommitStep() noexcept override { if (adapter_) adapter_->FinalizeCommitStep(); }
 
 private:
+	const MovingCutGeometry& MovingGeometry() const
+	{
+		if (moving_runtime_) return moving_runtime_->CommittedGeometry();
+		if (!moving_initial_) throw std::logic_error("immersed moving geometry is unavailable");
+		return *moving_initial_;
+	}
+	const CartesianDomainClassification& Classification() const
+	{
+		return motion_ ? MovingGeometry().Domain() : *classification_;
+	}
 	template<class Runtime> static ImmersedCaseDistribution DistributionOf(const Runtime& runtime)
 	{
 		return {runtime.Diagnostics().total_dofs,static_cast<std::size_t>(runtime.RowEnd()-runtime.RowBegin()),
@@ -297,6 +364,82 @@ private:
 	template <class Integer> static Integer Limit(const std::map<std::string, config_detail::JsonValue>& o,
 		const std::string& key, Integer fallback, const std::string& context)
 	{ const auto v = config_detail::Find(o, key); return v ? PositiveInteger<Integer>(*v, context+"."+key) : fallback; }
+	static bool SameMotionTime(double a,double b,double dt)
+	{
+		if (!std::isfinite(a) || !std::isfinite(b)) return false;
+		const long double tolerance=std::min(static_cast<long double>(dt)/4,
+			8*std::numeric_limits<double>::epsilon()*std::max(std::abs(static_cast<long double>(a)),std::abs(static_cast<long double>(b))));
+		return std::abs(static_cast<long double>(a)-b)<=tolerance;
+	}
+	void ParseMotion(const config_detail::JsonValue& value,const std::filesystem::path& reference_path,
+		const std::string& boundary_array,const CubicCartesianGridSpec& grid)
+	{
+		const auto& o = config_detail::RequireObject(value,"prescribed_motion");
+		config_detail::RequireKnownKeys(o,{"frames","extension_layers","conservation_limits","volume_fitting"},"prescribed_motion");
+		moving_layers_ = PositiveInteger<std::uint32_t>(Required(o,"extension_layers"),"prescribed_motion.extension_layers");
+		const auto& limits = config_detail::RequireObject(Required(o,"conservation_limits"),"prescribed_motion.conservation_limits");
+		const std::array<std::string,5> names{{"divergence_theorem","reynolds","moving_mass","wall_relative_leakage","discrete_continuity"}};
+		config_detail::RequireKnownKeys(limits,std::set<std::string>(names.begin(),names.end()),"prescribed_motion.conservation_limits");
+		const std::array<double*,5> values{{&moving_limits_.divergence_theorem,&moving_limits_.reynolds,&moving_limits_.moving_mass,
+			&moving_limits_.wall_relative_leakage,&moving_limits_.discrete_continuity}};
+		for (std::size_t i=0;i<names.size();++i) {
+			*values[i] = config_detail::RequireNumber(Required(limits,names[i]),"prescribed_motion.conservation_limits."+names[i]);
+			if (!std::isfinite(*values[i]) || *values[i]<0) throw std::invalid_argument("moving conservation limits must be finite and nonnegative");
+		}
+		if (const auto fitting = config_detail::Find(o,"volume_fitting")) {
+			const auto& f = config_detail::RequireObject(*fitting,"prescribed_motion.volume_fitting");
+			config_detail::RequireKnownKeys(f,{"support_expansion","candidate_orders","max_columns","max_workspace_bytes","max_point_queries"},"prescribed_motion.volume_fitting");
+			moving_options_.volume_fitting.emplace(); auto& fit = *moving_options_.volume_fitting;
+			if (const auto expansion = config_detail::Find(f,"support_expansion"))
+				fit.support_expansion = config_detail::RequireNumber(*expansion,"prescribed_motion.volume_fitting.support_expansion");
+			fit.fit.max_columns = Limit(f,"max_columns",fit.fit.max_columns,"prescribed_motion.volume_fitting");
+			fit.fit.max_workspace_bytes = Limit(f,"max_workspace_bytes",fit.fit.max_workspace_bytes,"prescribed_motion.volume_fitting");
+			fit.max_point_queries = Limit(f,"max_point_queries",fit.max_point_queries,"prescribed_motion.volume_fitting");
+			if (const auto orders = config_detail::Find(f,"candidate_orders")) {
+				fit.candidate_orders.clear();
+				for (const auto& order : config_detail::RequireArray(*orders,"prescribed_motion.volume_fitting.candidate_orders"))
+					fit.candidate_orders.push_back(PositiveInteger<unsigned>(order,"prescribed_motion.volume_fitting.candidate_orders[]"));
+			}
+			ValidateFittedCutCellVolumeRuleOptions(fit);
+		}
+		const double dt = configuration_.time.dt, end = dt*configuration_.time.steps;
+		if (!std::isfinite(end) || !(end>0)) throw std::invalid_argument("prescribed motion case duration is invalid");
+		const auto& input = config_detail::RequireArray(Required(o,"frames"),"prescribed_motion.frames");
+		if (input.size()<2 || input.size()>4096) throw std::invalid_argument("prescribed motion requires 2 to 4096 frames");
+		std::vector<PrescribedSurfaceFrame> frames; frames.reserve(input.size());
+		for (const auto& frame : input) {
+			const auto& f = config_detail::RequireObject(frame,"prescribed_motion.frames[]");
+			config_detail::RequireKnownKeys(f,{"time_s","surface"},"prescribed_motion.frames[]");
+			const double time = config_detail::RequireNumber(Required(f,"time_s"),"prescribed_motion.frames[].time_s");
+			const auto path = Contained(case_directory_,config_detail::RequireString(Required(f,"surface"),"prescribed_motion.frames[].surface"));
+			if (frames.empty() && (time!=0 || path!=reference_path))
+				throw std::invalid_argument("first motion frame must be time zero and the configured reference surface");
+			if (time>0 && time<end && !SameMotionTime(time,std::round(time/dt)*dt,dt))
+				throw std::invalid_argument("motion frame boundary must coincide with a configured timestep");
+			frames.push_back({time,SurfaceReaders::ReadMaterialVtpPath(path.string(),{},boundary_array)});
+		}
+		if (frames.back().time_s<end && !SameMotionTime(frames.back().time_s,end,dt)) throw std::invalid_argument("motion frames do not cover the configured simulation duration");
+		PrescribedSurfaceMotionOptions options; options.require_containment_in_fixed_bounds=true;
+		options.fixed_bounds_m.minimum=grid.lower_m; options.fixed_bounds_m.maximum=grid.upper_m;
+		// The graph advances its nonnegative clock by one addition per step.
+		options.clock_roundoff_relative_tolerance=PrescribedClockRoundoffAllowance(
+			static_cast<std::uint64_t>(configuration_.time.steps));
+		// Frame intervals may span multiple solver steps. The distributed extension
+		// validates each actual step against moving_layers_, not the whole frame.
+		motion_=std::make_unique<PrescribedSurfaceMotion>(std::move(frames),options);
+		Sha256 hash;
+		immersed_transient_detail::AppendString(hash,"ImmersedPrescribedMotionFrames/v1");
+		for (const auto& frame : motion_->Frames()) {
+			hash.AppendNormalizedDouble(frame.time_s);hash.AppendLittleEndian64(frame.surface.vertices.size());
+			for (const auto& point : frame.surface.vertices) for (double coordinate : point) hash.AppendNormalizedDouble(coordinate);
+			hash.AppendLittleEndian64(frame.surface.triangles.size());
+			for (const auto& triangle : frame.surface.triangles) {
+				for (const auto index : triangle.indices) hash.AppendLittleEndian64(static_cast<std::uint64_t>(index));
+				hash.AppendLittleEndian64(static_cast<std::uint64_t>(triangle.boundary_id));
+			}
+		}
+		motion_identity_=hash.Hex();
+	}
 	static OctreeCutQuadratureOptions ParseVolume(const config_detail::JsonValue& value)
 	{
 		const auto& o = config_detail::RequireObject(value, "immersed_geometry.json.volume_quadrature"); config_detail::RequireKnownKeys(o, {"storage", "max_depth", "max_nodes", "max_leaves", "max_points", "max_records", "max_retained_bytes", "max_logical_points"}, "immersed_geometry.json.volume_quadrature");
@@ -362,6 +505,21 @@ private:
 	std::unique_ptr<ImmersedStaticFlowRuntime> runtime_;
 	std::unique_ptr<ImmersedStaticDistributedRuntime> distributed_runtime_;
 	std::unique_ptr<ImmersedTransientDistributedRuntime> transient_runtime_;
+	std::unique_ptr<PrescribedSurfaceMotion> motion_;
+	std::string motion_identity_;
+	MovingCutGeometryOptions moving_options_;
+	std::uint32_t moving_layers_ = 0;
+	ImmersedMovingConservationLimits moving_limits_{};
+	std::unique_ptr<MovingCutGeometry> moving_initial_;
+	std::unique_ptr<ImmersedMovingTransientDistributedRuntime> moving_runtime_;
+	std::unique_ptr<ImmersedMovingDistributedGraphBackend> moving_backend_;
+	mutable bool moving_closed_ = false;
+	mutable std::string closed_surface_hash_;
+	mutable CubicCartesianGridSpec closed_grid_;
+	mutable CartesianDomainDiagnostics closed_classification_;
+	mutable CutCellVolumeQuadratureDiagnostics closed_volume_;
+	mutable ImmersedSurfaceQuadratureDiagnostics closed_surface_;
+	mutable CutCellGhostPenaltyDiagnostics closed_ghost_;
 	NavierStokesParameters runtime_parameters_;
 	std::unique_ptr<CoupledDomainRuntime> adapter_;
 };

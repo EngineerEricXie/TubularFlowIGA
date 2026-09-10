@@ -31,7 +31,38 @@ double Value(std::int32_t id, int field, double scale)
 {
 	return scale*(0.02+0.003*std::sin(0.31*(id+1)*(field+1)));
 }
-void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
+iga::MaterialSurfacePatchMap BottomPatch(const iga::MaterialSurfaceKinematics& input)
+{
+	std::vector<iga::RawSurfaceTriangle> topology;
+	for (const auto& source : input.SourceTriangles()) {
+		iga::RawSurfaceTriangle triangle;triangle.boundary_id=source.boundary_id;
+		for (int corner=0;corner<3;++corner)triangle.indices[corner]=source.source_vertex_indices[corner];
+		topology.push_back(triangle);
+	}
+	const auto& reference=input.ReferenceMaterialVerticesM();
+	const auto material=iga::MaterialSurfaceKinematics::CreateFromSourceTopology(reference,reference,
+		std::vector<std::array<double,3>>(reference.size(),{{0,0,0}}),topology,0.,-.125,0.);
+	iga::DistributedSurfaceLayout layout;
+	layout.global_node_count=4;layout.partition_count=1;layout.partition_rank=0;
+	layout.owned_global_node_ids={10,11,12,13};
+	std::vector<iga::MaterialSurfacePatchMap::GlobalToSourceVertex> vertices;
+	for (std::uint32_t node=0;node<4;++node) {
+		vertices.emplace_back(10+node,node);
+		layout.reference_positions.push_back({10+node,material.ReferenceMaterialVerticesM()[node]});
+	}
+	layout.reference_triangles={{{10,12,11}},{{10,13,12}}};
+	layout.owned_reference_lumped_areas_m2={1./3.,1./6.,1./3.,1./6.};
+	layout.reference_mesh_identity_sha256=iga::MaterialSurfacePatchMap::BuildReferenceIdentitySha256(
+		material,8,vertices,layout.reference_triangles,{0,1},layout.owned_global_node_ids);
+	layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(layout);
+	iga::DistributedSurfaceInterface interface;interface.id={"structure","membrane","bottom"};interface.subsystem_id="membrane";
+	interface.boundary_labels={8};interface.reference_mesh_identity_sha256=layout.reference_mesh_identity_sha256;
+	interface.provides={iga::SurfaceFieldQuantity::Displacement,iga::SurfaceFieldQuantity::Velocity};
+	interface.requires={iga::SurfaceFieldQuantity::TractionOnStructure};
+	return iga::MaterialSurfacePatchMap::Create(interface,layout,material,8,vertices,{0,1},layout.owned_global_node_ids);
+}
+
+void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned,bool deforming)
 {
 	int rank = 0,size = 1; MPI_Comm_rank(comm,&rank); MPI_Comm_size(comm,&size);
 	std::unique_ptr<iga::MovingCutGeometry> geometry,old_geometry;
@@ -43,7 +74,11 @@ void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
 	iga::CollectiveLocalStage(comm,"transient operator reference",[&] {
 		if (mode != "flow" && mode != "pressure" && mode != "traction" && mode != "closed" && mode != "inertial") throw std::invalid_argument("unknown transient operator mode");
 		auto soup = Cube();for(auto& x:soup.vertices)for(double& coordinate:x)coordinate+=.1;
-		auto moved=soup;for(auto& x:moved.vertices)x[0]+=background ? (aligned ? .4 : .37) : .02;
+		auto moved=soup;
+		for(auto& x:moved.vertices) {
+			const double contraction=deforming?.03*(x[0]-.1):0.;
+			x[0]+=(background ? (aligned ? .4 : .37) : .02)-contraction;
+		}
 		iga::PrescribedSurfaceMotion motion({{0,soup},{.125,moved}});
 		iga::MovingCutGeometryOptions go; go.volume.max_depth = 2; go.volume_storage = iga::CutCellVolumeQuadratureStorageMode::Compact;
 		const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{background ? 2.4 : 1.2,1.2,1.2}},{{background ? 8u : 4u,3,3}}};
@@ -128,7 +163,26 @@ void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
 	Reject(comm,[&] { op.Assemble(); });
 	op.Freeze(extension,old,source_layout,0,0,.125,1,.125);
 	if (!options.ports.empty()) Reject(comm,[&] { op.SetPortControlValue(options.ports[0].id,0); });
-	std::array<double,4> errors{}; double physical_error = 0;
+	const auto patch=BottomPatch(old_geometry->Evaluation());
+	const auto captured=op.CaptureOwnedPatchState(patch);
+	iga::CollectiveLocalStage(comm,"moving patch capture exact state",[&] {
+		std::vector<std::uint64_t> expected;
+		for (auto cell:op.Inputs().OwnedCells()) {
+			if(g.Domain().Cells()[cell].classification!=iga::CellClassification::Cut)continue;
+			const auto& points=g.Surface().UsableRule(g.Domain(),cell).Points();
+			if(std::any_of(points.begin(),points.end(),[](const auto& p){return p.boundary_id==8;}))expected.push_back(cell);
+		}
+		Require(captured.size()==expected.size(),"patch capture cell coverage differs");
+		for(std::size_t i=0;i<captured.size();++i) {
+			Require(captured[i].cell_id==expected[i],"patch capture ownership differs");
+			const auto element=g.Domain().Background().MaterializeElement(expected[i]);
+			Require(captured[i].nodal_state.size()==element.connectivity.size(),"patch capture node count differs");
+			for(std::size_t node=0;node<element.connectivity.size();++node)for(int field=0;field<4;++field)
+				Require(captured[i].nodal_state[node][field]==PetscRealPart(trial[4*op.Layout().LocalNode(element.connectivity[node])+field]),"patch capture coefficient differs");
+		}
+	});
+
+	std::array<double,4> errors{}; double physical_error = 0,geometric_rate_error=0;
 	const auto verify = [&] {
 		op.Assemble(); Vec action = nullptr;
 		iga::RequireCollectivePetscSuccess(comm,"transient action create",VecDuplicate(op.Assembly().State(),&action));
@@ -169,6 +223,57 @@ void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
 		} catch (...) { VecDestroy(&action); throw; }
 		iga::RequireCollectivePetscSuccess(comm,"transient action destroy",VecDestroy(&action));
 		const auto actual = op.ConservationDiagnostics();
+		const auto material=op.MaterialConservationDiagnostics();
+		iga::CollectiveLocalStage(comm,"moving material conservation comparison",[&] {
+			Require(material.surface_flux_term_count==conservation.surface_flux_term_count,"moving flux term count differs");
+			if(deforming) {
+				// Unit cross section, affine contraction by 0.03 m in 0.125 s:
+				// the endpoint material flux and exact volume rate are -0.24 m3/s.
+				const double rate=(g.Diagnostics().closed_surface_physical_volume_m3
+					-old_geometry->Diagnostics().closed_surface_physical_volume_m3)/.125;
+				geometric_rate_error=std::max({geometric_rate_error,std::abs(rate+.24),
+					std::abs(material.total_material_surface_outward_flow_m3_s+.24)});
+				Require(geometric_rate_error<1e-12,"affine contraction violates analytic material volume rate");
+			}
+			const std::array<double iga::ImmersedTransientFlowConservationDiagnostics::*,13> fields{{
+				&iga::ImmersedTransientFlowConservationDiagnostics::absolute_surface_flux_sum_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::endpoint_volume_divergence_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::total_surface_outward_flow_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::total_material_surface_outward_flow_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::total_material_wall_outward_flow_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::open_port_outward_flow_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::wall_outward_flow_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::wall_relative_leakage_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::divergence_theorem_defect_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::discrete_moving_wall_continuity_defect_m3_s,
+				&iga::ImmersedTransientFlowConservationDiagnostics::normalized_open_balance,
+				&iga::ImmersedTransientFlowConservationDiagnostics::normalized_wall_leakage,
+				&iga::ImmersedTransientFlowConservationDiagnostics::normalized_discrete_moving_wall_continuity_defect}};
+			std::size_t diagnostic_index=0;
+			for(auto field:fields) {
+				const double a=material.*field,b=conservation.*field;
+				double tolerance=1e-11*std::max(1.,std::abs(b));
+				if(diagnostic_index>=10) {
+					const double actual_scale=diagnostic_index==12?material.discrete_moving_wall_continuity_normalization_scale_m3_s
+						:std::max(options.flow_controller_reference_flow_m3_s,std::abs(material.open_port_outward_flow_m3_s));
+					const double reference_scale=diagnostic_index==12?conservation.discrete_moving_wall_continuity_normalization_scale_m3_s
+						:std::max(options.flow_controller_reference_flow_m3_s,std::abs(conservation.open_port_outward_flow_m3_s));
+					// Propagate the unchanged raw-flux gate through the quotient;
+					// near-zero denominators amplify reduction-order differences.
+					tolerance=(1e-11+std::abs(b)*std::abs(actual_scale-reference_scale))/actual_scale
+						+8*std::numeric_limits<double>::epsilon()*std::max(1.,std::abs(b));
+				}
+				if(!std::isfinite(a)||std::abs(a-b)>=tolerance) {
+					std::ostringstream detail;detail<<std::setprecision(17)<<"moving material diagnostic "<<diagnostic_index<<" differs: actual="<<a<<" serial="<<b;
+					throw std::runtime_error(detail.str());
+				}
+				++diagnostic_index;
+			}
+			for(const auto& item:conservation.material_surface_outward_flow_by_boundary_label_m3_s)
+				Require(std::abs(material.material_surface_outward_flow_by_boundary_label_m3_s.at(item.first)-item.second)<1e-12,"moving material label flux differs");
+			for(const auto& item:conservation.material_wall_outward_flow_by_boundary_label_m3_s)
+				Require(std::abs(material.material_wall_outward_flow_by_boundary_label_m3_s.at(item.first)-item.second)<1e-12,"moving material wall label flux differs");
+		});
 		iga::CollectiveLocalStage(comm,"transient conservation comparison",[&] {
 			for (double difference : {actual.volume_divergence_integral_m3_s-conservation.endpoint_volume_divergence_m3_s,
 				actual.total_surface_outward_flow_m3_s-conservation.total_surface_outward_flow_m3_s,
@@ -186,6 +291,16 @@ void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
 		expected_residual[op.Layout().ControllerRow(8)] += .0005; expected_residual[op.Layout().ControllerRow(9)] -= .0005;
 		verify();
 	}
+	// A rank-local corrupt trial must reject collectively without closing the
+	// operator; restoring the original owned field permits a healthy retry.
+	iga::CollectiveLocalStage(comm,"moving diagnostic nonfinite state",[&] {
+		if(rank==0) Require(!VecSetValue(op.Assembly().State(),op.Assembly().RowBegin(),
+			std::numeric_limits<double>::quiet_NaN(),INSERT_VALUES),"nonfinite state insertion failed");
+	});
+	iga::RequireCollectivePetscSuccess(comm,"moving nonfinite state begin",VecAssemblyBegin(op.Assembly().State()));
+	iga::RequireCollectivePetscSuccess(comm,"moving nonfinite state end",VecAssemblyEnd(op.Assembly().State()));
+	Reject(comm,[&] { (void)op.MaterialConservationDiagnostics(); });
+	fill(op.Assembly().State(),trial);verify();
 	std::array<double,4> global{}; double global_physical = 0;
 	MPI_Allreduce(errors.data(),global.data(),4,MPI_DOUBLE,MPI_SUM,comm);
 	MPI_Allreduce(&physical_error,&global_physical,1,MPI_DOUBLE,MPI_MAX,comm);
@@ -198,13 +313,14 @@ void Run(MPI_Comm comm,const std::string& mode,bool background,bool aligned)
 	const auto halo = op.Assembly().RequiredRows().size(),work = op.Inputs().OwnedCells().size();
 	op.Close();extension.Close(); op.Close(); Reject(comm,[&] { op.Assemble(); });
 	Reject(comm,[&] { (void)op.ConservationDiagnostics(); });
+	Reject(comm,[&] { (void)op.MaterialConservationDiagnostics(); });
 	iga::CollectiveLocalStage(comm,"transient operator close state",[&] {
 		Require(!op.Inputs().History().Active() && op.Options().parameters.dt == 0,"closed transient input remains active");
 	});
 	std::cout << "immersed_moving_operator_mpi rank=" << rank << " ranks=" << size << " owned_rows=" << rows
 		<< " halo_rows=" << halo << " owned_cells=" << work << " global_rows=" << op.Layout().Rows()
 		<< " residual_relative_l2=" << residual_error << " action_relative_l2=" << action_error
-		<< " mode=" << mode << " fixed_background=" << background << " wall_speed=" << (background ? (aligned ? 3.2 : 2.96) : .16) << " physical_error=" << global_physical << " passed\n";
+		<< " deforming=" << deforming << " geometric_rate_error=" << geometric_rate_error << " mode=" << mode << " fixed_background=" << background << " translation_speed=" << (background ? (aligned ? 3.2 : 2.96) : .16) << " physical_error=" << global_physical << " passed\n";
 	} catch (...) { VecDestroy(&old); throw; }
 	iga::RequireCollectivePetscSuccess(comm,"transient history destroy",VecDestroy(&old));
 }
@@ -217,7 +333,7 @@ int main(int argc,char** argv)
 		const bool split = argc > 2 && std::string(argv[2]) == "split";
 		MPI_Comm_split(PETSC_COMM_WORLD,split && rank ? 1 : 0,rank,&comm);
 		const std::string partition=argc > 3 ? argv[3] : "cell-count";
-		Run(comm,argc > 1 ? argv[1] : "flow",partition == "background" || partition == "aligned",partition == "aligned");
+		Run(comm,argc > 1 ? argv[1] : "flow",partition == "background" || partition == "aligned" || partition == "deforming",partition == "aligned",partition == "deforming");
 	} catch (const std::exception& error) { std::cerr << "rank " << rank << ": " << error.what() << '\n'; status = 1; }
 	if (comm != MPI_COMM_NULL) MPI_Comm_free(&comm);
 	int global = 0; MPI_Allreduce(&status,&global,1,MPI_INT,MPI_MAX,PETSC_COMM_WORLD);

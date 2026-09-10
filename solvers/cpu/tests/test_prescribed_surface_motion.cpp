@@ -199,6 +199,43 @@ int main()
 	const auto next_interval = motion.Evaluate(1.0, 1.0, 1.5);
 	assert(Near(next_interval.SourceVertexVelocitiesMPerS()[0][0], 2.0));
 	RequireRejected([&] { motion.Evaluate(0.75, 0.25, 1.25); });
+	const iga::PrescribedSurfaceMotion decimal_motion({{0,Tetrahedron(0)},
+		{.3,Tetrahedron(.3)},{.6,Tetrahedron(.9)},{1,Tetrahedron(1.3)}});
+	double accepted_time=0;
+	for (int step=1;step<=10;++step) {
+		const double end=accepted_time+.1;
+		const auto evaluation=decimal_motion.Evaluate(end,accepted_time,end);
+		assert(evaluation.StepStartS()==accepted_time && evaluation.StepEndS()==end && evaluation.EvaluatedTimeS()==end);
+		assert(Near(evaluation.SourceVertexVelocitiesMPerS()[0][0],step<=3 ? 1 : step<=6 ? 2 : 1));
+		if (step==3) assert(evaluation.SourceVerticesM()==decimal_motion.Frames()[1].surface.vertices);
+		if (step==10) assert(evaluation.SourceVerticesM()==decimal_motion.Frames().back().surface.vertices);
+		accepted_time=end;
+	}
+	RequireRejected([&] { decimal_motion.Evaluate(.3000000001,.2999999999,.3000000001); });
+	RequireRejected([&] { decimal_motion.Evaluate(1+1e-10,.9,1+1e-10); });
+	// A representable step close to a knot must not collapse after snapping.
+	const double before=std::nextafter(1.,0.);
+	assert(motion.Evaluate(1,before,1).DtS()==1-before);
+	const double knot2=std::nextafter(1.,2.),knot3=std::nextafter(knot2,2.);
+	const iga::PrescribedSurfaceMotion close_knots({{1,Tetrahedron(0)},
+		{knot2,Tetrahedron(.001)},{knot3,Tetrahedron(.003)}});
+	assert(close_knots.Evaluate(knot2,1,knot2).SourceVerticesM()==close_knots.Frames()[1].surface.vertices);
+	RequireRejected([&] { close_knots.Evaluate(knot3,1,knot3); });
+	iga::PrescribedSurfaceMotionOptions accumulated_clock;
+	accumulated_clock.clock_roundoff_relative_tolerance=iga::PrescribedClockRoundoffAllowance(10000);
+	const std::vector<PrescribedSurfaceFrame> long_frames{{0,Tetrahedron(0)},{1000,Tetrahedron(1)}};
+	const iga::PrescribedSurfaceMotion long_motion(long_frames,accumulated_clock),short_allowance(long_frames);
+	double long_start=0,long_end=0;
+	for (int step=0;step<10000;++step) { long_start=long_end;long_end+=.1; }
+	assert(long_end>1000);
+	RequireRejected([&] { short_allowance.Evaluate(long_end,long_start,long_end); });
+	const auto long_endpoint=long_motion.Evaluate(long_end,long_start,long_end);
+	assert(long_endpoint.EvaluatedTimeS()==long_end && long_endpoint.StepStartS()==long_start);
+	assert(long_endpoint.SourceVerticesM()==long_frames.back().surface.vertices);
+	RequireRejected([&] { long_motion.Evaluate(1000.00001,long_start,1000.00001); });
+	RequireRejected([&] { (void)iga::PrescribedClockRoundoffAllowance(std::numeric_limits<std::uint64_t>::max()); });
+	accumulated_clock.clock_roundoff_relative_tolerance=-1;
+	RequireRejected([&] { iga::PrescribedSurfaceMotion invalid(long_frames,accumulated_clock); });
 
 	const auto repeat = motion.Evaluate(0.5, 0.0, 0.5);
 	assert(midpoint.IdentitySha256() == repeat.IdentitySha256());

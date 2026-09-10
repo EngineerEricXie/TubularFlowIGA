@@ -303,3 +303,6 @@ iga_1d_3d_explicit: ../cpu/include/PetscSolverOptions.hpp ../cpu/include/Collect
 
 hpc_duct_solver_fixture: tests/test_hpc_duct_solver_fixture.cpp tests/test_phase9_multiscale_closure.cpp tests/CouplingFixture.hpp ../cpu/include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+# Moving case ownership includes geometry, extension, and transaction headers.
+iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: $(wildcard ../cpu/include/*.hpp ../../include/*.hpp)

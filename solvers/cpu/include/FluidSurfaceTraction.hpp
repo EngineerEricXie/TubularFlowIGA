@@ -300,14 +300,7 @@ inline FluidSurfaceTractionResult BuildFluidSurfaceTraction(
 	std::vector<std::uint32_t> source_for_local(nodes);
 	for (std::size_t local = 0; local < nodes; ++local)
 		source_for_local[local] = patch_map.SourceVertexForGlobalNode(layout.owned_global_node_ids[local]);
-	std::vector<std::size_t> layout_for_canonical(material.CanonicalTriangleProvenance().size(),
-		std::numeric_limits<std::size_t>::max());
-	for (std::size_t triangle = 0; triangle < patch_map.LayoutTriangleToSourceTriangles().size(); ++triangle) {
-		const auto canonical = patch_map.CanonicalTriangleForLayoutTriangle(triangle);
-		if (canonical >= layout_for_canonical.size() || layout_for_canonical[canonical] != std::numeric_limits<std::size_t>::max())
-			throw std::invalid_argument("fluid surface traction patch map canonical membership is ambiguous");
-		layout_for_canonical[canonical] = triangle;
-	}
+	const auto layout_for_canonical = patch_map.LayoutTrianglesByCanonical(material);
 
 	std::vector<std::uint64_t> required_cells;
 	for (std::uint64_t id = 0; id < domain.Cells().size(); ++id) {

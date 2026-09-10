@@ -136,6 +136,47 @@ int main(int argc, char** argv)
 			Reject([&] { transient->InitializeDistributed(PETSC_COMM_SELF); });
 			transient->CloseDistributed();
 		}
+		const std::string moving = ReplaceOnce(Geometry(),"\"surface\":\"surface.vtp\"",
+			R"json("prescribed_motion":{"extension_layers":2,"frames":[{"time_s":0,"surface":"surface.vtp"},{"time_s":1,"surface":"motion.vtp"}],"conservation_limits":{"divergence_theorem":0.01,"reynolds":1e-8,"moving_mass":0.01,"wall_relative_leakage":0.01,"discrete_continuity":1e-8}},"surface":"surface.vtp")json");
+		auto write_moving = [&](const std::string& geometry) {
+			WriteCase(root,geometry);
+			RewriteSimulation(root,"\"time_integration\":\"steady\"","\"time_integration\":\"backward_euler\"");
+			std::ifstream input(root/"surface.vtp");
+			std::string text((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+			Write(root/"motion.vtp",ReplaceOnce(text,
+				".1 .1 .1 .9 .1 .1 .9 .9 .1 .1 .9 .1 .1 .1 .9 .9 .1 .9 .9 .9 .9 .1 .9 .9",
+				".11 .1 .1 .91 .1 .1 .91 .9 .1 .11 .9 .1 .11 .1 .9 .91 .1 .9 .91 .9 .9 .11 .9 .9"));
+		};
+		write_moving(moving);
+		{
+			auto moved = iga::ImmersedFlowCase::Load(root,"immersed",ports,1);
+			assert(moved->IsMoving() && moved->IsTransient() && moved->IsDistributed());
+			assert(moved->MovingRuntime().Clock().index==0);
+			assert(moved->Distribution().global_rows==moved->Distribution().owned_rows);
+			const auto hash=moved->SurfaceHash();const auto cells=moved->ClassificationDiagnostics().cut_count;
+			Reject([&] { moved->BeginStep({0,0,.5}); });
+			moved->BeginStep({0,0,1});moved->AbortStep();
+			assert(!moved->MovingRuntime().Clock().trial_active);
+			Reject([&] { moved->InitializeDistributed(PETSC_COMM_SELF); });
+			moved->CloseDistributed();moved->CloseDistributed();
+			assert(moved->SurfaceHash()==hash && moved->ClassificationDiagnostics().cut_count==cells);
+		}
+		for (const auto& invalid : {
+			ReplaceOnce(moving,"\"extension_layers\":2","\"extension_layers\":0"),
+			ReplaceOnce(moving,"\"time_s\":1","\"time_s\":0.5"),
+			ReplaceOnce(moving,"\"time_s\":0","\"time_s\":0.1"),
+			ReplaceOnce(moving,"\"moving_mass\":0.01","\"moving_mass\":-1"),
+			ReplaceOnce(moving,"\"surface\":\"motion.vtp\"","\"surface\":\"../motion.vtp\"")}) {
+			write_moving(invalid);Reject([&] { (void)iga::ImmersedFlowCase::Preflight(root,"immersed",ports); });
+		}
+		WriteCase(root,moving);
+		Reject([&] { (void)iga::ImmersedFlowCase::Preflight(root,"immersed",ports); });
+		write_moving(ReplaceOnce(moving,"\"time_s\":1","\"time_s\":0.3"));
+		RewriteSimulation(root,"\"dt\":1,\"steps\":1","\"dt\":0.1,\"steps\":3");
+		assert(iga::ImmersedFlowCase::Preflight(root,"immersed",ports)->IsMoving());
+		write_moving(ReplaceOnce(moving,"\"time_s\":1","\"time_s\":0.29999"));
+		RewriteSimulation(root,"\"dt\":1,\"steps\":1","\"dt\":0.1,\"steps\":3");
+		Reject([&] { (void)iga::ImmersedFlowCase::Preflight(root,"immersed",ports); });
 		WriteCase(root, Geometry());
 		RewriteSimulation(root, "{\"name\":\"pressure\",\"kind\":\"pressure\"}",
 			"{\"name\":\"pressure\",\"kind\":\"pressure\"},{\"name\":\"species\",\"kind\":\"scalar\"}");

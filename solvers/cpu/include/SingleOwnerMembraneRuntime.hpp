@@ -88,6 +88,7 @@ public:
 		} catch(...) { ClearTrial();throw; }
 	}
 
+	MPI_Comm Communicator() const noexcept { return comm_; }
 	const SurfaceKinematics& TrialKinematics() const
 	{
 		if(phase_==Phase::Idle)throw std::runtime_error("single owner membrane has no trial publication");

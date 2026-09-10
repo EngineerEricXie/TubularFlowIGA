@@ -110,8 +110,12 @@ inline NonnegativeLeastSquaresResult FitNonnegativeLeastSquares(
 	while(true) {
 		residual=b;
 		for(auto j:passive)for(std::size_t i=0;i<rows;++i)residual[i]-=a[j*rows+i]*x[j];
-		if(Norm(residual)<=options.relative_tolerance+options.absolute_tolerance/rhs_norm)break;
-		std::size_t selected=columns;long double maximum=32*epsilon;
+		const auto residual_norm=Norm(residual);
+		if(residual_norm<=options.relative_tolerance+options.absolute_tolerance/rhs_norm)break;
+		// Columns have unit norm. Scale the reduced-gradient roundoff floor by
+		// the current residual, otherwise a small but resolvable gradient can
+		// stop a feasible ill-conditioned fit well before its residual gate.
+		std::size_t selected=columns;long double maximum=32*epsilon*residual_norm;
 		for(std::size_t j=0;j<columns;++j)if(!active[j]&&!blocked[j]&&norms[j]>0) {
 			long double dual=0;for(std::size_t i=0;i<rows;++i)dual+=a[j*rows+i]*residual[i];
 			if(dual>maximum) { maximum=dual;selected=j; }

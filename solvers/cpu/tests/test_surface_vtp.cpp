@@ -1,4 +1,5 @@
 #include "SurfaceReaders.hpp"
+#include "PrescribedSurfaceMotion.hpp"
 
 #include <array>
 #include <cassert>
@@ -188,6 +189,36 @@ int main()
 	assert(cube_appended.CanonicalSha256() == cube_ascii_binary_equivalent.CanonicalSha256());
 
 	const auto valid = Vtp(kTetraPoints, kTetraFaces);
+	// Material readers must preserve source IDs across canonical-order changes.
+	const std::vector<unsigned> material_labels{2,4,6,8};
+	for (const auto& text : {Vtp(kTetraPoints,kTetraFaces,"Float64","Int32","UInt32",material_labels),
+		EncodedVtp(kTetraPoints,kTetraFaces,"Float64","Int32","UInt32",material_labels,false,false),
+		EncodedVtp(kTetraPoints,kTetraFaces,"Float64","Int64","UInt64",material_labels,true,true)}) {
+		const auto raw = iga::SurfaceReaders::ReadMaterialVtpText(text);
+		assert(raw.vertices == std::vector<Point>(kTetraPoints.begin(),kTetraPoints.end()));
+		assert(raw.triangles.size() == kTetraFaces.size());
+		for (std::size_t f=0;f<raw.triangles.size();++f) {
+			assert(raw.triangles[f].boundary_id == material_labels[f]);
+			for (std::size_t c=0;c<3;++c) assert(raw.triangles[f].indices[c] == kTetraFaces[f][c]);
+		}
+	}
+	auto rotated = kTetraPoints;
+	for (auto& point : rotated) { const double x=point[0];point[0]=2-point[1];point[1]=x; }
+	const auto material_first = iga::SurfaceReaders::ReadMaterialVtpText(valid);
+	for (const auto& triangle : iga::SurfaceReaders::ReadMaterialVtpText(valid,default_label).triangles)
+		assert(triangle.boundary_id == 5);
+	const auto material_last = iga::SurfaceReaders::ReadMaterialVtpText(Vtp(rotated,kTetraFaces));
+	const iga::PrescribedSurfaceMotion loaded_motion({{0,material_first},{2,material_last}});
+	const auto material_mid = loaded_motion.Evaluate(1,0,2);
+	for (std::size_t v=0;v<kTetraPoints.size();++v) for (std::size_t c=0;c<3;++c) {
+		assert(material_mid.SourceVerticesM()[v][c] == (kTetraPoints[v][c]+rotated[v][c])/2);
+		assert(material_mid.SourceVertexVelocitiesMPerS()[v][c] == (rotated[v][c]-kTetraPoints[v][c])/2);
+	}
+	RequireRejected([&] { iga::SurfaceReaders::ReadMaterialVtpText(valid,millimetres); });
+	iga::SurfaceValidationOptions weld;weld.weld_tolerance_m=1e-9;
+	RequireRejected([&] { iga::SurfaceReaders::ReadMaterialVtpText(valid,weld); });
+	RequireRejected([&] { iga::SurfaceReaders::ReadMaterialVtpText(Vtp(kTetraPoints,std::array<Face,3>{{kTetraFaces[0],kTetraFaces[1],kTetraFaces[2]}})); });
+	RequireRejected([&] { iga::SurfaceReaders::ReadMaterialVtpText(Replace(valid,"0 1 2 0 2 3","0 1 9 0 2 3")); });
 	RequireRejected([&] { iga::SurfaceReaders::ReadVtpText(Replace(valid, "type=\"PolyData\"", "type=\"UnstructuredGrid\"")); });
 	RequireRejected([&] { iga::SurfaceReaders::ReadVtpText(Replace(valid, "byte_order=\"LittleEndian\"", "byte_order=\"BigEndian\"")); });
 	RequireRejected([&] { iga::SurfaceReaders::ReadVtpText(Replace(valid, "header_type=\"UInt64\"", "compressor=\"vtkZLibDataCompressor\"")); });
@@ -256,6 +287,7 @@ int main()
 	const std::string path = "/tmp/tubularflowiga_surface_vtp_test.vtp";
 	{ std::ofstream output(path, std::ios::binary); output << valid; }
 	assert(iga::SurfaceReaders::ReadVtpPath(path).CanonicalSha256() == tetra64.CanonicalSha256());
+	assert(iga::SurfaceReaders::ReadMaterialVtpPath(path).vertices == material_first.vertices);
 	assert(std::remove(path.c_str()) == 0);
 	RequireRejected([] { iga::SurfaceReaders::ReadVtpPath("/tmp/tubularflowiga_missing_surface.vtp"); });
 	std::cout << "surface VTP tests passed\n";

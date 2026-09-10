@@ -21,6 +21,66 @@ int main()
 		const iga::VolumeQuadratureRule seed(seed_points);
 		const auto result=iga::BuildFittedCutCellVolumeRule(surface,lower,upper,seed);
 		Check(!result.rule.Points().empty()&&result.relative_moment_residual<1e-13L,"nonconvex fitted rule failed");
+		Check(result.candidates<=iga::FittedCutCellVolumeRuleOptions{}.fit.max_columns,"fitted candidate reservoir exceeded its matrix cap");
+		// One interior sample has no coordinate spread, but this nonconvex
+		// domain still has positive volume and must be fitted, not rejected.
+		const iga::VolumeQuadratureRule point_seed({{{{.25,.25,.5}},.75}});
+		const auto point_result=iga::BuildFittedCutCellVolumeRule(surface,lower,upper,point_seed);
+		Check(point_result.relative_moment_residual<1e-13L,"zero-spread seed moment audit failed");
+		for(unsigned a=0;a<=6;++a)for(unsigned b=0;b<=6;++b)for(unsigned c=0;c<=6;++c) {
+			long double measured=0;
+			for(const auto& point:point_result.rule.Points()) {
+				Check(point.weight>0,"zero-spread fit has nonpositive weight");
+				measured+=point.weight*std::pow(static_cast<long double>(point.parametric[0]),a)
+					*std::pow(static_cast<long double>(point.parametric[1]),b)*std::pow(static_cast<long double>(point.parametric[2]),c);
+			}
+			const long double expected=(1-(1-std::pow(.5L,a+1))*(1-std::pow(.5L,b+1)))/((a+1.L)*(b+1.L)*(c+1.L));
+			Check(std::abs(measured-expected)<2e-13L,"zero-spread fitted moment differs from analytic prism");
+		}
+		Reject([&]{auto limited=iga::FittedCutCellVolumeRuleOptions();limited.max_point_queries=1;
+			iga::BuildFittedCutCellVolumeRule(surface,lower,upper,point_seed,limited);});
+
+		// Reproduce the moving endpoint's partial cell without changing its
+		// clipped volume: the true local box is [0.8,1] x [0.25,1]^2.
+		auto shifted=ConcavePrism();for(auto& point:shifted.vertices) {
+			point[0]+=.84;point[1]+=.1;point[2]+=.1;
+		}
+		iga::SurfaceSpatialIndex corner(iga::ClosedTriangulatedSurface::Build(shifted));
+		const iga::VolumeQuadratureRule corner_seed({
+			{{{.83250236955189294,.26735796105074344,.26735796105074344}},1.},
+			{{{.9826420389492565,.9826420389492565,.9826420389492565}},1.}});
+		iga::FittedCutCellVolumeRuleOptions corner_options;corner_options.support_expansion=3.;
+		const auto corner_rule=iga::BuildFittedCutCellVolumeRule(corner,{{.6,0,0}},{{.9,.4,.4}},corner_seed,corner_options);
+		for(unsigned a=0;a<=6;++a)for(unsigned b=0;b<=6;++b)for(unsigned c=0;c<=6;++c) {
+			long double measured=0;
+			for(const auto& point:corner_rule.rule.Points()) {
+				Check(point.weight>0&&point.parametric[0]>=.8-1e-14&&point.parametric[0]<=1
+					&&point.parametric[1]>=.25-1e-14&&point.parametric[2]>=.25-1e-14,"corner rule point or weight is invalid");
+				measured+=point.weight*std::pow(static_cast<long double>(point.parametric[0]),a)
+					*std::pow(static_cast<long double>(point.parametric[1]),b)*std::pow(static_cast<long double>(point.parametric[2]),c);
+			}
+			const long double expected=(1-std::pow(.8L,a+1))/(a+1)*(1-std::pow(.25L,b+1))/(b+1)*(1-std::pow(.25L,c+1))/(c+1);
+			Check(std::abs(measured-expected)<2e-13L,"clipped corner tensor moment differs from analytic box");
+		}
+		auto thin_soup=ConcavePrism();for(auto& point:thin_soup.vertices) {
+			point[0]+=.285;point[1]+=.1;point[2]+=.1;
+		}
+		iga::SurfaceSpatialIndex thin_surface(iga::ClosedTriangulatedSurface::Build(thin_soup));
+		const iga::VolumeQuadratureRule thin_seed({
+			{{{.9826420389492565,.26735796105074344,.26735796105074344}},1.},
+			{{{.9826420389492565,.9826420389492565,.9826420389492565}},1.}});
+		const auto thin_rule=iga::BuildFittedCutCellVolumeRule(thin_surface,{{0,0,0}},{{.3,.4,.4}},thin_seed,corner_options);
+		for(unsigned a=0;a<=6;++a)for(unsigned b=0;b<=6;++b)for(unsigned c=0;c<=6;++c) {
+			long double measured=0;
+			for(const auto& point:thin_rule.rule.Points()) {
+				Check(point.weight>0&&point.parametric[0]>=.95-1e-14,"thin fitted point or weight is invalid");
+				measured+=point.weight*std::pow(static_cast<long double>(point.parametric[0]),a)
+					*std::pow(static_cast<long double>(point.parametric[1]),b)*std::pow(static_cast<long double>(point.parametric[2]),c);
+			}
+			const long double expected=(1-std::pow(.95L,a+1))/(a+1)*(1-std::pow(.25L,b+1))/(b+1)*(1-std::pow(.25L,c+1))/(c+1);
+			Check(std::abs(measured-expected)<2e-13L,"zero-spread thin cut moment differs from analytic box");
+		}
+
 		iga::CompactCutCellVolumeRule compact;compact.fitted_points=result.rule.Points();
 		iga::ValidateCompactCutCellVolumeRule(compact);
 		Check(iga::CompactCutCellVolumeRecordCount(compact)==compact.fitted_points.size(),"compact fitted records were not counted");

@@ -1333,6 +1333,30 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 				});
 			}
 			for (const auto& entry : immersed_audit) if (entry.second->IsTransient()) {
+				if (entry.second->IsMoving()) {
+					const auto& runtime = entry.second->MovingRuntime();
+					const auto conservation = runtime.ConservationDiagnostics();
+					iga::CollectiveLocalStage(communicator,"immersed accepted moving diagnostics",[&] {
+						const auto& clock=runtime.Clock();const auto& diagnostic=runtime.Diagnostics();
+						if (clock.time_s!=time || clock.index!=static_cast<std::uint64_t>(step) || clock.trial_active
+							|| diagnostic.commit_count!=1 || conservation.target_index!=clock.index)
+							throw std::logic_error("immersed moving graph accepted backend clock differs");
+						const char* profile=std::getenv("IGA_PROFILE");
+						if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0]!='1' || profile[1]!='\0')) return;
+						double minimum_damping=1.;
+						for(const auto& solve_step:diagnostic.newton_steps)if(solve_step.damping>0)minimum_damping=std::min(minimum_damping,solve_step.damping);
+						std::cout<<std::setprecision(17)<<"hpc_immersed_moving_step {\"domain\":\""<<JsonEscape(entry.first)
+							<<"\",\"rank\":"<<rank<<",\"ranks\":"<<mpi_size<<",\"time_s\":"<<clock.time_s<<",\"index\":"<<clock.index
+							<<",\"residual_norm\":"<<diagnostic.residual_norm
+							<<",\"newton_iterations\":"<<diagnostic.nonlinear_iterations<<",\"minimum_accepted_damping\":"<<minimum_damping
+							<<",\"assembly_s\":"<<diagnostic.aggregate_assembly_seconds<<",\"solve_s\":"<<diagnostic.aggregate_linear_solve_seconds
+							<<",\"reynolds\":"<<conservation.normalized_reynolds_defect
+							<<",\"moving_mass\":"<<conservation.normalized_moving_mass_defect
+							<<",\"wall_relative_leakage\":"<<conservation.normalized_wall_relative_leakage<<"}\n";
+						iga::FlushCheckedText(std::cout);
+					});
+					continue;
+				}
 				const auto& runtime = entry.second->TransientRuntime();
 				const auto conservation = runtime.ConservationDiagnostics();
 				iga::CollectiveLocalStage(communicator,"immersed accepted transient diagnostics",[&] {
