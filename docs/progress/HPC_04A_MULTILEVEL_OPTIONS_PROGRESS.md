@@ -1,5 +1,8 @@
 # HPC-04A 多層求解器診斷
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 - 狀態：本機多層 options／view 驗證通過，HPC-04A 整體仍進行中。
 - 日期：2026-09-09（美東）；基準 revision `953e53a`。
 - 只擴充 `petsc_solver_options_test` 的選用測試，沒有更動 production headers、

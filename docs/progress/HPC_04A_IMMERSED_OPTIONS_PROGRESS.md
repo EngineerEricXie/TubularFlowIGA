@@ -1,5 +1,8 @@
 # HPC-04A immersed solver options 開發紀錄
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 - 狀態：實作與驗收進行中，HPC-04A 尚未完成。
 - 基準 revision：`e332973f5693ef4ae0a19548a950abbbac278443`。
 - 範圍：serial／distributed static、fixed transient、moving epochs、FSI wrapper 與 native graph。

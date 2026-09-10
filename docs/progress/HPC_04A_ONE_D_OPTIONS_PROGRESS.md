@@ -1,5 +1,8 @@
 # HPC-04A：1D implicit／SNES 的獨立求解器選項
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 日期：2026-09-09。基準 commit `672cfc87594528524d8770c8604db00643c5932f` 加本批修改。
 **部分完成**：四種 1D implicit 方法、正式 `iga_1d` CLI 及 native graph 已接入；
 body-fitted standalone、immersed／moving／FSI、完整 nested diagnostics 與後端矩陣仍待完成。

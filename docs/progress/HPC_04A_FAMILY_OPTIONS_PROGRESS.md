@@ -1,5 +1,8 @@
 # HPC-04A：PETSc family options 共用層
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 基準 revision：`e332973f5693ef4ae0a19548a950abbbac278443`。
 本紀錄只驗收 `PetscSolverOptions` 共用層；immersed runtime 整合另行驗證，HPC-04A
 尚未完成。測試環境為本機 GCC 11.4、OpenMPI 4.1.2、PETSc 3.15.5 real64／int32。

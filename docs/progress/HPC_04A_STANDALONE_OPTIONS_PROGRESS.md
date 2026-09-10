@@ -1,5 +1,8 @@
 # HPC-04A：Body-fitted standalone／VCA 的 solver prefix
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 日期：2026-09-09。基準 commit `6393c7dcbf11833a497458156920405a2a3f6166` 加本批修改。
 **部分完成**：`iga_navier_stokes`、`iga_solve` 及 VCA transport 已接入獨立配置；
 immersed／moving／FSI、完整巢狀診斷及後端矩陣仍待完成。整份 TODO 仍有 38 項，

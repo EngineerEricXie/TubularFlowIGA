@@ -1,5 +1,8 @@
 # HPC-04A：貼體 graph 的獨立求解器選項
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 日期：2026-09-09。基準 revision `fa89f05b1e9597d98f148e7d2cf65c2ebbcdb3f0`
 加本批修改。**部分完成**：正式 multidomain／bifurcation runner 的貼體 flow、transport
 可獨立配置並記錄實際求解器；1D implicit／SNES、其他 standalone、immersed／moving／FSI

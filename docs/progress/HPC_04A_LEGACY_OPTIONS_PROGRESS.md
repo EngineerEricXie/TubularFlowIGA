@@ -1,5 +1,8 @@
 # HPC-04A legacy transport options
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 - 狀態：legacy CLI 限定範圍通過；HPC-04A 整體仍進行中。
 - 日期：2026-09-09（美東）；基準 `d00e2fa`，改動限於 `iga_transport`、build
   dependencies、驗證 harness 與文件。PETSc 3.15.5／Open MPI 4.1.2／GCC 11.4，

@@ -1,5 +1,8 @@
 # HPC-04A 後端與診斷驗證
 
+本報告保留各開發階段當時的狀態；目前 HPC-04A 已完成，整合來源與驗收範圍見
+[完成稽核](HPC_04A_COMPLETION_AUDIT.md)。HPC-04B／C 仍進行中。
+
 - 狀態：本機限定範圍通過，HPC-04A 整體仍進行中。
 - 日期：2026-09-09（美東）。Runtime 基準 revision `01aa4c8`；本次新增測試、
   harness 與文件，沒有改 production solver、數值預設或資料格式。

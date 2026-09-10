@@ -48,11 +48,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（14 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（5 項） | HPC-01C、HPC-01D、HPC-04A、HPC-04B、HPC-05C |
-| 其餘待辦（19 項） | HPC-03D 至 HPC-09，扣除已完成的 HPC-05A／B 及部分完成的 HPC-04A／B／HPC-05C；既有程式能力不等於已通過各項驗收 |
+| 已勾選完成（15 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-04A、HPC-05A、HPC-05B |
+| 已有部分進度、尚未完成（7 項） | HPC-01C、HPC-01D、HPC-04B、HPC-05C、HPC-06A、HPC-06B、HPC-06C |
+| 其餘待辦（16 項） | HPC-03D、HPC-04C、HPC-05D、HPC-06D、HPC-07A–D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 24 項未勾選，其中 5 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 23 項未勾選，其中 7 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -526,7 +526,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
 
 ## HPC-04：線性求解器擴展性
 
-- [ ] **HPC-04A：可配置求解器。** 為各 runtime 建立獨立 PETSc options prefix，
+- [x] **HPC-04A：可配置求解器。** 為各 runtime 建立獨立 PETSc options prefix，
   保留已驗證預設；記錄有效 KSP/PC 與迭代數。明確檢查多 rank LU 所需後端，
   包含現有 1D 非線性路徑的 MUMPS 需求。
   貼體 graph 的 flow／transport 已接入獨立 prefix、精確 options snapshot、有效
@@ -549,7 +549,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [legacy 進度](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。多層 GAMG 的 smoother／
   coarse prefix、配置及 view 也已驗證，見
   [multilevel 進度](progress/HPC_04A_MULTILEVEL_OPTIONS_PROGRESS.md)。不同 revision
-  的 family／CLI／backend／完整回歸尚待整體來源與完成範圍稽核，本項暫未勾選。
+  的 family／CLI／backend／完整回歸已完成範圍稽核，見
+  [HPC-04A 完成報告](progress/HPC_04A_COMPLETION_AUDIT.md)；不宣稱所有 binary
+  均在目前 HEAD 重跑，跨節點與候選擴展性仍依原子任務驗收。
 - [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point
