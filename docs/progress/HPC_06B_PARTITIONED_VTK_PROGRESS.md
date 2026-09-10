@@ -127,6 +127,29 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 90s \
 此元件只交換身分 metadata；代表點座標、實際場值的交換與局部 Bezier piece 建立
 尚未接入，故不能宣稱 solver 分片輸出已完成。
 
+## 代表點資料交換
+
+[DistributedPointValues.hpp](../../solvers/cpu/include/DistributedPointValues.hpp) 新增
+`ExchangePointRepresentativeValues`：以代表 occurrence／rank 發送局部請求，owner
+查找其局部 row，回傳共同 component 數目的 tuple。座標與多個場可放在同一 tuple。
+資料以 double bits 的 little-endian 編碼交換，回傳順序與局部 occurrence 對應；
+本機代表也經相同請求檢查。來源 values 不修改，未 gather 完整場到 root。
+
+共同預檢 components／形狀、owner、局部 ID、finite values；對缺失代表、錯誤回應
+row／來源與 wire cap 共同拒絕。沿用身分元件的每次送／收 wire caps，不宣稱為
+allocator peak 上限。這層相信 caller 提供已驗證的代表配對；不重新比對 extraction key。
+
+同一 `distributed_point_identity_test` 在 3／1／2-rank 三種分區中檢查每筆交換值的
+代表 ID、owner rank 與 signed zero，並測試全空群組。新增 16 項指定階段拒絕：
+無效 owner、缺失代表、非有限來源、跨 rank component 不一致、接收偏斜 cap，
+以及 owner 的回應建構 cap。每項核對來源 values 位元不變並成功重試；原 14 項
+identity 拒絕與全部 ID 一致性仍通過。三份 rank reports exit 0、無 timeout。
+命令同上一節，證據為 `outputs/hpc06/point-values-v2/audit.json`。
+
+這是 tuple 交換元件的驗收，還須用 solver 的局部 extraction 建立真正的座標與場
+資料、檢查共享座標一致性，再組裝 Bezier piece 與發佈時間序列。沒有宣稱已完成
+實際 PDE 分片輸出或大型 RSS 驗收。
+
 ## 接續工作
 
 Solver 仍走既有序列輸出。下一步須從 owned elements 建立局部可視化幾何、交換所需
