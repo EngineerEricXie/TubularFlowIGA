@@ -420,3 +420,29 @@ owned cells 積分，不能把測試總耗時當成分散式求解效能。
 
 這批接入了實際 IGA stress 與 catalog，但正式 runtime 的 epoch／producer-state
 stamp、共享 coefficient 一致性、守恆診斷與膜更新仍待完成。HPC-07B 未勾選。
+
+
+## 跨 rank 共享 IGA 係數驗證
+
+`ValidateSharedFluidSurfaceCoefficients` 驗證每個 local retained-cell state 的
+connectivity／coefficient 數量及有限性，先核對本地重複 node 的四個係數位元，
+再按 global IGA node ID 路由，檢查不同 ranks 的副本。合法重複副本保留；
+任何 component 的不同位元（包括 signed zero）都會共同拒絕，與原 serial
+shared-node 檢查一致。另以 grid bounds／cell counts hash 核對背景網格身分。
+不建立完整全域係數陣列；wire／record caps 與 shard skew 的限制仍適用。
+
+`BuildDistributedFluidSurfaceTractionPoints` 將此檢查接在 local extractor 前，
+並以 collective local stage 協調擷取錯誤。它提供正式 MPI caller 可用的入口；
+原 local extractor 保留給已自行驗證 state 的 caller。這項檢查不驗證唯一
+cell ownership、material trial epoch 或 producer-state freshness；cell coverage
+仍在下游 assembly，狀態權威綁定仍待接線。
+
+1／3／5 ranks 的壓力、黏性及原 fluid traction 回歸全部通過，共九份 rank
+reports exit 0、無 timeout。多 rank 案例先確認選定 IGA node 出現在不只一個
+rank，再修改 rank 0 的所有局部副本，使它們彼此一致但與遠端不同；集體擷取
+正確拒絕，健康重試及後續數值比較均通過。這避免只測到 local duplicate 檢查。
+
+來源、binary 與 logs hashes 在
+`outputs/hpc07/shared-iga-coefficients-v1/audit.json`。重現建置
+`fluid_surface_traction_test` 後以 `mpiexec -np 1`、`-np 3`、`-np 5` 執行。
+HPC-07B 的正式 trial／publication、守恆診斷及結構更新仍待完成。

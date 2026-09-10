@@ -2,6 +2,7 @@
 #define IGA_OWNED_FLUID_SURFACE_TRACTION_POINTS_HPP
 
 #include "DistributedSurfaceTractionAssembly.hpp"
+#include "SharedFluidSurfaceCoefficients.hpp"
 
 namespace iga {
 // Local extraction only. The MPI caller coordinates exceptions, certifies cell
@@ -77,6 +78,21 @@ inline std::vector<SurfaceCellTractionPoints> BuildOwnedFluidSurfaceTractionPoin
 		result.push_back(std::move(cell));
 	}
 	if(used_states!=states.size())throw std::invalid_argument("extra fluid traction state outside retained owned cells");
+	return result;
+}
+// Collective entry point for distributed callers; local extraction remains
+// available for callers that already hold an independently verified state.
+inline std::vector<SurfaceCellTractionPoints> BuildDistributedFluidSurfaceTractionPoints(
+	MPI_Comm comm,const CartesianDomainClassification& domain,const ImmersedSurfaceQuadratureCatalog& catalog,
+	const MaterialSurfaceKinematics& material,const MaterialSurfacePatchMap& map,double viscosity,
+	const std::vector<std::uint64_t>& owned_cells,const std::vector<FluidSurfaceElementState>& state,
+	PointIdentityLimits limits={})
+{
+	ValidateSharedFluidSurfaceCoefficients(comm,domain.Background(),state,limits);
+	std::vector<SurfaceCellTractionPoints> result;
+	CollectiveLocalStage(comm,"owned fluid surface traction extraction",[&] {
+		result=BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,map,viscosity,owned_cells,state);
+	});
 	return result;
 }
 } // namespace iga

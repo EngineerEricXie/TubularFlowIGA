@@ -716,7 +716,8 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   到 owned force／traction 的代數路徑亦已串接，解析 RHS／場值及三種拒絕／
   重試通過。實際 owned-cell IGA stress／catalog 擷取亦已串接，1／3 ranks
   的壓力與黏性案例對 serial oracle 及共同拒絕／重試通過；trial authority、
-  跨 rank coefficient 一致性與正式 runtime 接線仍待完成。
+  正式 runtime 接線仍待完成。跨 rank coefficient 位元一致性已接入集體擷取，
+  1／3／5 ranks 數值回歸及遠端副本衝突拒絕／重試通過。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank

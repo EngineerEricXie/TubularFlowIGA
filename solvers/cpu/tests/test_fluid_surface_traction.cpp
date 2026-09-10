@@ -231,9 +231,25 @@ int main(int argc, char** argv)
 			std::vector<iga::FluidSurfaceElementState> local_state;
 			for(const auto& item:*all_state)if(static_cast<int>(item.cell_id%ranks)==rank)local_state.push_back(item);
 			std::vector<iga::SurfaceCellTractionPoints> points;
-			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"owned fluid traction test extraction",[&] {
-				points=iga::BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
-			});
+			points=iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+			if(ranks>1) {
+				auto conflicting=local_state;
+				const auto nx=domain.Background().Spec().cells[0]+3,ny=domain.Background().Spec().cells[1]+3;
+				const auto shared=2+2*nx+2*nx*ny;
+				int present=0,total_present=0;
+				for(auto& item:conflicting) {
+					const auto element=domain.Background().MaterializeElement(item.cell_id);
+					for(std::size_t node=0;node<element.connectivity.size();++node)if(static_cast<std::uint64_t>(element.connectivity[node])==shared) {
+						present=1;if(rank==0)item.nodal_state[node][3]+=1.;
+					}
+				}
+				MPI_Allreduce(&present,&total_present,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total_present>1);
+				int rejected=0,total=0;
+				try { (void)iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,conflicting); }
+				catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				points=iga::BuildDistributedFluidSurfaceTractionPoints(PETSC_COMM_WORLD,domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+			}
 			for(int mode=0;mode<3;++mode) {
 				auto bad=local_state;
 				if(rank==static_cast<int>(all_state->front().cell_id%ranks)) {
