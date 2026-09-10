@@ -1,4 +1,5 @@
 #include "FluidSurfaceTraction.hpp"
+#include "OwnedFluidSurfaceTractionPoints.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
 #include <algorithm>
@@ -215,6 +216,50 @@ int main(int argc, char** argv)
 		CheckVector(affine_result.diagnostics.quadrature_resultant_n, {{3,0,4}});
 		CheckVector(affine_result.diagnostics.nodal_resultant_n, {{3,0,4}});
 		CheckVector(affine_result.diagnostics.quadrature_moment_n_m, affine_result.diagnostics.nodal_moment_n_m);
+
+		int rank=0,ranks=1;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
+		auto distributed_layout=layout;distributed_layout.partition_count=ranks;distributed_layout.partition_rank=rank;
+		distributed_layout.owned_global_node_ids.clear();distributed_layout.owned_reference_lumped_areas_m2.clear();
+		for(std::size_t i=0;i<layout.owned_global_node_ids.size();++i)if(static_cast<int>(i%ranks)==rank) {
+			distributed_layout.owned_global_node_ids.push_back(layout.owned_global_node_ids[i]);
+			distributed_layout.owned_reference_lumped_areas_m2.push_back(layout.owned_reference_lumped_areas_m2[i]);
+		}
+		distributed_layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(distributed_layout);
+		std::vector<std::uint64_t> owned_cells;
+		for(std::uint64_t id=0;id<domain.Cells().size();++id)if(static_cast<int>(id%ranks)==rank)owned_cells.push_back(id);
+		for(const auto* all_state:{&pressure_state,&affine_state}) {
+			std::vector<iga::FluidSurfaceElementState> local_state;
+			for(const auto& item:*all_state)if(static_cast<int>(item.cell_id%ranks)==rank)local_state.push_back(item);
+			std::vector<iga::SurfaceCellTractionPoints> points;
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"owned fluid traction test extraction",[&] {
+				points=iga::BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+			});
+			for(int mode=0;mode<3;++mode) {
+				auto bad=local_state;
+				if(rank==static_cast<int>(all_state->front().cell_id%ranks)) {
+					if(mode==0)bad.erase(bad.begin());
+					if(mode==1)bad.front().nodal_state.front()[3]=std::numeric_limits<double>::infinity();
+					if(mode==2)bad.front().nodal_state.pop_back();
+				}
+				int rejected=0,total=0;
+				try { iga::CollectiveLocalStage(PETSC_COMM_WORLD,"invalid owned IGA traction",[&] {
+					(void)iga::BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,patch_map,viscosity,owned_cells,bad);
+				}); } catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"owned IGA traction retry",[&] {
+					points=iga::BuildOwnedFluidSurfaceTractionPoints(domain,catalog,material,patch_map,viscosity,owned_cells,local_state);
+				});
+			}
+			const auto distributed=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,interface.id,distributed_layout,domain.Cells().size(),points,0);
+			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
+			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
+				const auto id=distributed_layout.owned_global_node_ids[row];
+				const auto index=std::lower_bound(layout.owned_global_node_ids.begin(),layout.owned_global_node_ids.end(),id)-layout.owned_global_node_ids.begin();
+				CheckVector(distributed.owned_force_n[row],oracle.traction.consistent_nodal_force_n[index],1.e-12);
+				CheckVector(distributed.owned_traction_pa[row],oracle.traction.traction_on_structure_pa[index],1.e-12);
+			}
+		}
+		if(rank==0)std::cout << "owned_iga_traction=passed pressure_and_viscosity ranks=" << ranks << '\n';
 
 		const auto zero_state = State(domain, catalog, 0.0, zero); const auto zero_stamp = Stamp(material, domain, catalog, layout, patch_map, zero_state, viscosity);
 		const auto zero_result = iga::BuildFluidSurfaceTraction(domain, catalog, material, interface, layout, patch_map, zero_stamp, viscosity, zero_state);

@@ -387,3 +387,36 @@ logs hashes 位於 `outputs/hpc07/traction-assembly-v1/audit.json`，重現沿�
 velocity／pressure、surface quadrature catalog 與 trial authority 建立它們。
 回傳刻意是無 stamp 的 owned values，不能冒充已綁定材料狀態的 SurfaceTraction
 publication。正式 FSI runtime 與 HPC-07B 驗收仍待完成。
+
+
+## 實際 owned-cell IGA stress 與 catalog 擷取
+
+`BuildOwnedFluidSurfaceTractionPoints` 由 owned fluid cells、局部 retained-cell
+IGA coefficients、material／domain／surface catalog 與 patch map 建立 P1 records。
+它在實際 quadrature parametric positions 評估 IGA pressure／velocity gradient，
+呼叫既有 `FluidOnStructureCauchyTraction`，保留 canonical barycentric corner
+順序，按 source vertex provenance 對應 material node IDs。只積分本地選定
+patch 的 points；沒有 retained patch points 的 owned cell 回傳空列表。
+
+驗證 material／topology／domain／catalog identity、viscosity、cell 範圍與重複、
+retained state 完整性、係數大小及有限性、point label／source triangle／node
+mapping；多餘 state 也拒絕。這是 local extractor，MPI caller 必須以 collective
+local stage 協調錯誤，並驗證跨 rank 共享 IGA coefficients 和 trial authority。
+目前仍保留 replicated material／domain／catalog；未宣稱幾何已完整分散。
+
+1／3 ranks 的實際 tetrahedron patch 案例，按 cell ID 分配積分工作與 material
+node 分配發布權，串接 P1 assembly／bounded projection。壓力案例的 traction
+為 `(0,0,-20)` Pa；affine viscous 案例為 `(6,0,8)` Pa。各 owned force／traction
+與既有 serial oracle 在原尺度下 1e-12 容差內相符。兩案例均演練缺少 retained
+cell state、非有限 pressure coefficient、係數數量錯誤，所有 ranks 共同拒絕，
+健康重試後仍通過數值比較。原 fluid traction 全套回歸也通過。
+
+最後四份 rank reports 均 exit 0、無 timeout，來源、binary 與 logs hashes 在
+`outputs/hpc07/owned-iga-traction-v1/audit.json`。首次 launcher 因缺少 report 父
+目錄而未啟動測試程式，補建後的初版與最終版測試均成功，此錯誤列於 audit。
+重現：建置 `fluid_surface_traction_test` 後以 `mpiexec -np 1` 與 `-np 3` 執行。
+測試為建立 oracle 會在每 rank 計算完整 serial reference；新 extractor 僅對
+owned cells 積分，不能把測試總耗時當成分散式求解效能。
+
+這批接入了實際 IGA stress 與 catalog，但正式 runtime 的 epoch／producer-state
+stamp、共享 coefficient 一致性、守恆診斷與膜更新仍待完成。HPC-07B 未勾選。
