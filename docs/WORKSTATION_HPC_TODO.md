@@ -731,7 +731,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   求解已由 driver 串接驗證：1／3／5 ranks 的解析膜位移／速度及
   abort／retry／commit 通過。驗證來源 identity 後的 kinematics 分送也已通過
   1／3／5 ranks 解析向量場、空分區與拒絕／重試；正式 runtime 的持久
-  trial 與 strong coupling 接線仍待完成。
+  trial 已新增 single-owner runtime，1／3／5 ranks 的兩步解析膜解、
+  abort／prepare／commit、phase 拒絕與 committed state 保留通過；strong
+  coupling coordinator、clamped moving trial 與 checkpoint 接線仍待完成。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank

@@ -286,6 +286,7 @@ public:
 
 private:
 	friend class PretensionedMembraneFsiRuntime;
+	friend class SingleOwnerMembraneRuntime;
 	void FinalizePreparedTrialNoexcept(PretensionedMembraneTrial&& trial) noexcept
 	{
 		// RequireFinalizeAllowed() must have succeeded immediately beforehand.

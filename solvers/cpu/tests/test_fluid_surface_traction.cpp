@@ -5,6 +5,7 @@
 #include "SingleOwnerSurfaceLayout.hpp"
 #include "SingleOwnerSurfaceTraction.hpp"
 #include "SingleOwnerSurfaceKinematics.hpp"
+#include "SingleOwnerMembraneRuntime.hpp"
 #include "PretensionedMembrane.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
@@ -443,6 +444,37 @@ int main(int argc, char** argv)
 				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
 				check_distribution();
 			}
+			iga::PretensionedMembraneMaterial properties;properties.areal_mass_kg_per_m2=1.;properties.foundation_n_per_m3=1.;
+			iga::SingleOwnerMembraneRuntime runtime(PETSC_COMM_WORLD,distributed_layout,ranks-1,patch_map.Interface(),interface,properties,{});
+			const auto reject_runtime=[&](auto action) {
+				int rejected=0,total=0;try { action(); } catch(const std::runtime_error&) { rejected=1; }
+				MPI_Allreduce(&rejected,&total,1,MPI_INT,MPI_SUM,PETSC_COMM_WORLD);assert(total==ranks);
+			};
+			reject_runtime([&] { runtime.Commit(); });
+			runtime.SolveTrial(expected_trial,publication,publication.stamp,publication.projection_identity_sha256);
+			const auto first=runtime.TrialKinematics();
+			reject_runtime([&] { runtime.SolveTrial(expected_trial,publication,publication.stamp,publication.projection_identity_sha256); });
+			assert(runtime.TrialKinematics().displacement_m==first.displacement_m);runtime.AbortTrial();
+			runtime.SolveTrial(expected_trial,publication,publication.stamp,publication.projection_identity_sha256);
+			assert(runtime.TrialKinematics().displacement_m==first.displacement_m);
+			runtime.PrepareCommit();runtime.Commit();
+			assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+			// Constant numerical load for the next step, with fresh fixture stamps.
+			auto next_load=publication;next_load.stamp.time_s=1.;next_load.stamp.step=2;next_load.stamp.coupling_iteration=0;
+			next_load.stamp.producer_state_identity_sha256=std::string(64,'a');next_load.projection_identity_sha256=std::string(64,'b');
+			auto next_context=expected_trial;next_context.step=2;next_context.start_time_s=.5;next_context.coupling_iteration=0;
+			{ auto stale=next_load;if(rank==0)stale.stamp.coupling_iteration++;
+				reject_runtime([&] { runtime.SolveTrial(next_context,stale,next_load.stamp,next_load.projection_identity_sha256); });
+				assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
+			}
+			runtime.SolveTrial(next_context,next_load,next_load.stamp,next_load.projection_identity_sha256);
+			const double second_speed=all_state==&pressure_state?12.8:-5.12;
+			const double second_displacement=all_state==&pressure_state?10.4:-4.16;
+			for(std::size_t row=0;row<runtime.TrialKinematics().displacement_m.size();++row) {
+				CheckVector(runtime.TrialKinematics().velocity_m_per_s[row],{{0.,0.,-second_speed}},1.e-12);
+				CheckVector(runtime.TrialKinematics().displacement_m[row],{{0.,0.,-second_displacement}},1.e-12);
+			}
+			runtime.AbortTrial();assert(runtime.CommittedKinematics().displacement_m==first.displacement_m);
 			const auto& oracle=all_state==&pressure_state?pressure:affine_result;
 			for(std::size_t row=0;row<distributed_layout.owned_global_node_ids.size();++row) {
 				const auto id=distributed_layout.owned_global_node_ids[row];

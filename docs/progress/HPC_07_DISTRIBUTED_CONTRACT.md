@@ -651,3 +651,36 @@ kinematics 分送）通過。各 owned vector fields 符合原解析 scalar memb
 Expected source identity 與當前輸出可用性必須由 solver lifecycle 保證，分送
 helper 不持有 commit／rollback authority。正式持久 distributed runtime 與
 strong coupling trial 接線仍待完成。
+
+
+## 持久 single-owner membrane runtime
+
+`SingleOwnerMembraneRuntime` 保存 owner 的唯一 `PretensionedMembrane`、active
+trial、各 rank 的 trial／prepared／committed kinematics，以及共同 committed
+step／time。所有變更方法為 collective，communicator 由 caller 保持有效。
+初始為零 state／time，要求下一個 step 與 committed time 連續；目前 fluid／
+structure 必須使用相同 publication ownership，尚未加入 restart 初始化。
+
+Solve 串接已驗證 traction bridge、owner 數值 trial 與 kinematics 分送；失敗時
+清除本次 active trial。Prepare 先完成 publication 複製與 numerical preparation；
+Commit 共同檢查 phase／trial 後，使用既有 noexcept numerical finalize 與本地
+publication swap，才更新 committed time／step。新增的 friend 權限只讓此
+runtime 使用既有 private finalize，未更改 numerical solve 或 serial runtime。
+Abort 保留先前 committed publication，已存在 trial 時的錯誤 solve preflight
+也不會取代原 trial。Publication swap／cleanup 的 noexcept 性質有 static assert。
+
+1／3／5 ranks、九份 reports 全數 exit 0、無 timeout。第一步使用前節的真實
+流體 traction；第二步以明確的新 fixture stamps 施加相同數值負載，並非重新
+求解第二步流體。壓力負載的第二步標量速度 12.8、位移 10.4；黏性負載對應
+-5.12／-4.16，向量場符合 reference normal 與 1e-12 尺度容差。Abort／retry、
+prepare／commit、第二步 abort 後第一步 committed state 保留皆通過。
+
+未 prepare 即 commit、已有 active trial 再 solve、單 rank 過期 traction 三種
+拒絕通過；前兩者保留既有 phase/state，輸入失敗後可健康重試。原 traction、
+守恆及 transfer 回歸均保持。初版兩項 indentation warnings 已修正，final build
+無 compiler warning；證據在 `outputs/hpc07/persistent-membrane-v1/audit.json`。
+重現沿用 traction test 的 1／3／5 rank 指令。
+
+這是持久集體膜 runtime，尚未接入 strong coupling coordinator、clamped moving
+fluid/material trial 或 checkpoint；也未以本測試宣稱 process-loss／任意配置
+失敗恢復。HPC-07B/C 的完整驗收仍未完成。
