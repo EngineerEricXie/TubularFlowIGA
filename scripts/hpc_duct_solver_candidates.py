@@ -22,8 +22,8 @@ def main():
     parser.add_argument('--axial', type=int, default=4)
     parser.add_argument('--ranks', type=int, default=2)
     parser.add_argument('--timeout', type=int, default=600)
-    parser.add_argument('--candidates', nargs='+', choices=['bjacobi', 'schur-lu', 'schur-gamg', 'selfp-lu', 'selfp-gamg', 'selfp-gamg-lu'],
-                        default=['bjacobi', 'schur-lu', 'schur-gamg'], help='LU reference is always evaluated first')
+    parser.add_argument('--candidates', nargs='*', choices=['bjacobi', 'schur-lu', 'schur-gamg', 'selfp-lu', 'selfp-gamg', 'selfp-gamg-lu'],
+                        default=['bjacobi', 'schur-lu', 'schur-gamg'], help='LU reference is always evaluated first; an empty list runs only LU')
     parser.add_argument('--solver-view', action='store_true', help='capture nested diagnostics; not a timing configuration')
     args = parser.parse_args()
     if min(args.transverse, args.axial, args.ranks, args.timeout) < 1:

@@ -558,7 +558,9 @@ F05 的原始診斷例外保存與恢復亦通過，見
   並保留 Schur-LU 高迭代成本的結果，見
   [方管候選進度](progress/HPC_04B_DUCT_CANDIDATES_PROGRESS.md)。selfp Schur 近似已完成
   小案例評估，保留速度 GAMG／壓力 Jacobi 不收斂的結果，見
-  [Schur 近似進度](progress/HPC_04B_SCHUR_APPROXIMATION_PROGRESS.md)。其他網格、rank、
+  [Schur 近似進度](progress/HPC_04B_SCHUR_APPROXIMATION_PROGRESS.md)。同一方管的
+  1／2／4-rank 速度與壓力場亦已比較，見
+  [rank 一致性進度](progress/HPC_04B_DUCT_RANK_PARITY_PROGRESS.md)。其他網格、rank、
   pressure nullspace 與 immersed 條件仍待評估。
 - [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
