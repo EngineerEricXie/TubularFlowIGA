@@ -263,3 +263,27 @@ record cap 與空 root 的 stale publication 四項共同拒絕及逐項健康�
 `outputs/hpc07/triangle-kinematics-v1/audit.json`。重現沿用
 `make -C solvers/cpu parallel-ownership-test`。正式流體牽引力與 FSI trial 接線
 尚未完成，HPC-07A/B 維持未勾選。
+
+
+## 已積分角點力送回 node owner
+
+`AssembleOwnedSurfaceForces` 接受唯一 triangle owner 已積分的三個 P1 corner
+forces，依 reference triangle node IDs 加總至唯一 node owner。先驗證 node
+ownership 與 triangle coverage，然後使用 `SumOwnedVectorContributions`；不將
+component 編碼進 ID，因此 UInt64 最大 node ID 仍合法。Vector helper 暫用
+三次 scalar routing，wire cap 適用每次交換，不能視為三次總 traffic 或 RSS
+上限。所有輸入保持不變。
+
+測試使用兩個共享邊的 triangles、非均勻三分量 corner forces。Rank 0／2 各
+持有一個 triangle，rank 1 持有全部 nodes，逐點解析值完全相符。MPI 全域
+合力 `(8,20,12)` N、原點力矩 `(6,-9,-2)` N m，以及測試速度場 `v=(x,y,1)`
+下的離散功率 30 W 均精確相符。重複／遺漏 triangle、陣列長度錯誤、非有限
+第三分量、record cap 與第三分量累加超出 double 範圍六項共同拒絕／重試通過。
+既有 ownership、area、ghost、triangle kinematics、Aitken 測試也通過。
+
+三份 rank reports exit 0、無 timeout，綁定 CPU 14、15，證據在
+`outputs/hpc07/surface-forces-v1/audit.json`；重現沿用
+`make -C solvers/cpu parallel-ownership-test`。此元件不從流體場積分 corner force，
+也不以 lumped area 除法替代 consistent traction mass projection。Caller 仍需
+將角點力綁定到正確 trial／材料幾何，並將跨 cut-cell 的積分先送到 triangle
+owner。這些正式接線、投影與結構更新仍待完成，HPC-07B 只記部分進度。

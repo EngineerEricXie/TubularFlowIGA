@@ -4,6 +4,7 @@
 #include "DynamicWeightedAitkenRelaxation.hpp"
 #include "CollectiveFailure.hpp"
 #include "OwnedScalarContributions.hpp"
+#include "DistributedSurfaceForces.hpp"
 #include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
 #include "SurfaceGhostKinematics.hpp"
@@ -251,6 +252,57 @@ void CheckScalarContributions(int rank)
 	if(rank==0)std::cout << "owned_scalar_contributions=passed failures=6 retries=6\n";
 }
 
+void CheckSurfaceForces(int rank)
+{
+	using Vector=std::array<double,3>;
+	using Corners=std::array<Vector,3>;
+	iga::SurfaceInterfaceRef reference{"fluid","flow","wall"};
+	iga::DistributedSurfaceLayout layout;
+	const auto last=std::numeric_limits<std::uint64_t>::max();
+	layout.reference_mesh_identity_sha256=std::string(64,'a');
+	layout.global_node_count=4;layout.partition_count=3;layout.partition_rank=rank;
+	layout.reference_positions={{0,{{0,0,0}}},{1,{{1,0,0}}},{2,{{0,1,0}}},{last,{{1,1,0}}}};
+	layout.reference_triangles={{{0,1,2}},{{1,last,2}}};
+	layout.owned_global_node_ids=rank==1?std::vector<std::uint64_t>{0,1,2,last}:std::vector<std::uint64_t>{};
+	layout.owned_reference_lumped_areas_m2.assign(layout.owned_global_node_ids.size(),1.);
+	layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(layout);
+	const std::vector<std::uint64_t> triangles=rank==0?std::vector<std::uint64_t>{0}:(rank==2?std::vector<std::uint64_t>{1}:std::vector<std::uint64_t>{});
+	const Corners first{{{{1,2,3}},{{4,5,6}},{{7,8,9}}}},second{{{{-1,2,-3}},{{4,-5,6}},{{-7,8,-9}}}};
+	const std::vector<Corners> forces=rank==0?std::vector<Corners>{first}:(rank==2?std::vector<Corners>{second}:std::vector<Corners>{});
+	const auto expected=rank==1?std::vector<Vector>{{{1,2,3}},{{3,7,3}},{{0,16,0}},{{4,-5,6}}}:std::vector<Vector>{};
+	const auto check=[&] {
+		const auto result=iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,triangles,forces);
+		Require(result==expected,"shared-node corner forces not conserved");
+		// Analytic resultant, moment about origin and power for v=(x,y,1).
+		double local[7]{},global[7]{};
+		for(std::size_t row=0;row<result.size();++row) {
+			const auto& x=layout.reference_positions[row].position_m;const auto& f=result[row];
+			for(int axis=0;axis<3;++axis)local[axis]+=f[axis];
+			local[3]+=x[1]*f[2];local[4]-=x[0]*f[2];local[5]+=x[0]*f[1]-x[1]*f[0];
+			local[6]+=x[0]*f[0]+x[1]*f[1]+f[2];
+		}
+		MPI_Allreduce(local,global,7,MPI_DOUBLE,MPI_SUM,PETSC_COMM_WORLD);
+		const double exact[7]{8,20,12,6,-9,-2,30};
+		for(int i=0;i<7;++i)Require(global[i]==exact[i],"surface force resultant/moment/power mismatch");
+	};
+	check();
+	for(int mode=0;mode<6;++mode) {
+		auto ids=triangles;auto data=forces;iga::PointIdentityLimits limits;
+		if(rank==2) {
+			if(mode==0){ids.push_back(0);data.push_back(first);}
+			if(mode==1){ids.clear();data.clear();}
+			if(mode==2)data.clear();
+			if(mode==3)data[0][0][2]=std::numeric_limits<double>::infinity();
+			if(mode==4)limits.max_local_occurrences=2;
+			if(mode==5){data[0][0][2]=std::numeric_limits<double>::max();data[0][2][2]=std::numeric_limits<double>::max();}
+		}
+		if(mode==5&&rank==0)data[0][1][2]=std::numeric_limits<double>::max();
+		RejectCollectively([&] {(void)iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,ids,data,limits);},PETSC_COMM_WORLD);
+		check();
+	}
+	if(rank==0)std::cout << "surface_corner_forces=passed failures=6 retries=6\n";
+}
+
 void CheckEmptyAitken(int rank)
 {
 	const std::string identity(64, static_cast<char>('a'+rank));
@@ -443,6 +495,7 @@ int main(int argc, char** argv)
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
 		CheckScalarContributions(rank);
+		CheckSurfaceForces(rank);
 		CheckOwnedPointValues(rank);
 		std::vector<std::uint64_t> balanced;
 		for (std::uint64_t id = rank; id < 6; id += ranks) balanced.push_back(id);
