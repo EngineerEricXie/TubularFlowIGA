@@ -12,6 +12,7 @@
 #include "PetscCheckpointRead.hpp"
 #include "PetscCheckpointWrite.hpp"
 #include "PetscGather.hpp"
+#include "PetscBezierVisualization.hpp"
 #include "TemporalFunction.hpp"
 #include "ThreeDVcaCoupling.hpp"
 #include "TransientFlowRuntime.hpp"
@@ -52,6 +53,7 @@ struct FlowOptions {
 	int output_every = 0;
 	int checkpoint_every = 0;
 	int stop_after_step = 0;
+	bool parallel_output = false;
 	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 	double nonlinear_relative_tolerance = 1e-5;
 	double nonlinear_absolute_tolerance = 1e-10;
@@ -178,7 +180,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
-		"[--visualization-format auto|vtu|vtkhdf]");
+		"[--visualization-format auto|vtu|vtkhdf|pvtu]");
 	FlowOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -218,12 +220,16 @@ FlowOptions ParseOptions(int argc, char** argv)
 			options.nonlinear_absolute_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else if (argument == "--mass-rtol")
 			options.mass_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
-		else if (argument == "--visualization-format")
-			options.visualization_format = iga::ParseVisualizationFormat(value);
+		else if (argument == "--visualization-format") {
+			options.parallel_output = value == "pvtu";
+			options.visualization_format = options.parallel_output ? iga::VisualizationFormat::Vtu : iga::ParseVisualizationFormat(value);
+		}
 		else throw std::runtime_error("unknown option: "+argument);
 		if (PetscOptionsClearValue(nullptr, argument.c_str()))
 			throw std::runtime_error("cannot consume application option: "+argument);
 	}
+	if (options.parallel_output && options.output.empty())
+		throw std::runtime_error("pvtu requires --output or legacy OUTPUT");
 	if (options.output_every > 0 && options.output.empty())
 		throw std::runtime_error("--output-every requires --output or legacy OUTPUT");
 	if (options.checkpoint_every > 0 && options.checkpoint.empty())
@@ -369,7 +375,7 @@ int main(int argc, char** argv)
 			text << std::setprecision(std::numeric_limits<double>::max_digits10)
 				<< options.max_newton << ' ' << options.output_every << ' '
 				<< options.checkpoint_every << ' ' << options.stop_after_step << ' '
-				<< static_cast<int>(options.visualization_format) << ' '
+				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
 				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
 				<< options.mass_relative_tolerance << ' ' << !options.output.empty() << ' '
 				<< !options.checkpoint.empty() << ' ' << !options.restart.empty();
@@ -654,16 +660,23 @@ int main(int argc, char** argv)
 		}
 		flow.CopyStateToPrevious();
 		if (!options.output.empty()
-			&& visualization_format == iga::VisualizationFormat::BezierVtkHdf) {
+			&& (visualization_format == iga::VisualizationFormat::BezierVtkHdf || options.parallel_output)) {
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow visualization initialization", [&] {
 				if (rank != 0) return;
+				if (options.parallel_output && fs::exists(iga::PvdPath(options.output)))
+					throw std::runtime_error("parallel output requires a new PVD path");
 				bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
 					iga::BuildBezierVisualizationMesh(database, false));
 				const auto report = iga::BezierGeometryReportPath(options.output);
 				RequireRegularOutput(report);
-				RequireRegularOutput(iga::VtkHdfPath(options.output));
+				if (!options.parallel_output) RequireRegularOutput(iga::VtkHdfPath(options.output));
 				iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
 				iga::RequireValidBezierGeometry(bezier_mesh->validation);
+				if (options.parallel_output) {
+					std::cout << "parallel_bezier_geometry_points=" << bezier_mesh->points.size()
+						<< " geometry_report=" << report.string() << '\n';
+					iga::FlushCheckedText(std::cout);bezier_mesh.reset();return;
+				}
 				vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
 					iga::VtkHdfPath(options.output), *bezier_mesh,
 					!options.restart.empty());
@@ -678,6 +691,7 @@ int main(int argc, char** argv)
 		const auto start = std::chrono::steady_clock::now();
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
 		std::vector<iga::VelocitySnapshot> velocity_snapshots;
+		int last_parallel_output_step = -1;
 		auto write_output = [&](int step, double physical_time, bool final_output) {
 			fs::path text_path, vtk_path, mesh_path;
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output preparation", [&] {
@@ -685,6 +699,24 @@ int main(int argc, char** argv)
 				vtk_path = final_output ? iga::VtuFinalPath(options.output) : iga::VtuStepPath(options.output, step);
 				mesh_path = options.case_dir/"controlmesh.vtk";
 			});
+			if (options.parallel_output) {
+				if (last_parallel_output_step == step) return;
+				iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+				fs::path directory;
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"parallel flow output path",[&] {
+					directory=iga::VtuStepPath(options.output,step);directory.replace_extension();
+				});
+				const auto extracted=iga::BuildPetscBezierPartition(flow.State(),flow.OwnedElements(),
+					database.header().elements,database.header().nodes,{{"velocity",3},{"pressure",1}});
+				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,directory,extracted.piece,physical_time);
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"parallel flow output bookkeeping",[&] {
+					vtk_snapshots.push_back({physical_time,directory/"snapshot.pvtu"});
+					std::cout<<"parallel_flow_output rank="<<rank<<" step="<<step<<" selected_rows="<<extracted.requested_rows
+						<<" global_rows="<<extracted.global_rows<<'\n';iga::FlushCheckedText(std::cout);
+				});
+				iga::WriteParallelVtkSeries(PETSC_COMM_WORLD,iga::PvdPath(options.output),vtk_snapshots);
+				last_parallel_output_step=step;return;
+			}
 			WriteFlowOutput(flow.State(), database.header().nodes, text_path,
 				mesh_path, vtk_path, physical_time, rank, visualization_format, vtkhdf.get());
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output bookkeeping", [&] {
@@ -829,7 +861,7 @@ int main(int argc, char** argv)
 		if (!options.output.empty()) {
 			const auto final_time = transient ? run_end_step*parameters.dt : 0.0;
 			write_output(run_end_step, final_time, true);
-			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output index", [&] {
+			if (!options.parallel_output) iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow output index", [&] {
 				if (rank != 0) return;
 				if (visualization_format == iga::VisualizationFormat::Vtu) {
 					if (vtk_snapshots.empty())

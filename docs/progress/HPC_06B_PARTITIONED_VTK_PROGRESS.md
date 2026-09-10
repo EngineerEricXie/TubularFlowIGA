@@ -233,13 +233,50 @@ exit 0、無 timeout，來源與資料保存在 `outputs/hpc06/petsc-bezier-v1/a
 目前是實際 PETSc state 接線的元件驗收；尚未啟用 CLI 路徑，也未以實際 PDE solve
 結果或大型場量測取代這個解析 fixture。
 
+## CPU flow CLI 與時間序列
+
+`iga_navier_stokes --visualization-format pvtu` 已啟用上述 PETSc 選定 rows 路徑，
+每 rank 寫 owned elements 的 cubic Bezier piece；共享點仍使用共同代表值。
+每個 step 有 immutable 目錄，全部 pieces 完成後發布 PVTU，再以 temporary file
+與 rename 更新 PVD。索引寫入失敗保留前版；未完成 pieces 留作診斷。
+初始化仍在 root 建立完整序列 Bezier mesh、完成 overlap／Jacobian 認證並輸出
+geometry report，隨即釋放；不能把解場免 gather 說成完全消除 root 幾何峰值。
+
+`--output-every` 保留原頻率語意，final step 去重；未設定時只有最終場。
+restart 使用新 prefix，不續寫既有 PVD。新模式不輸出 text velocity／pressure
+或 velocity-series CSV，checkpoint 與舊格式維持原介面。此選項僅 CPU flow CLI
+支援，尚未套到 transport、CUDA 或 native graph runtime。
+
+實際 one-cell flow fixture 的 12 組 CLI 執行包括 1／2 ranks 的舊 binary HDF、
+新 binary HDF／PVTU、final-only、每兩步、stop/restart，以及 step 目錄／index
+pending 目錄阻擋。10 組成功、2 組共同預期拒絕，rank reports 均無 timeout。
+相同 rank layout 的舊／新／PVTU checkpoint.state SHA256 相等，續跑與不中斷
+最終 state 亦相等。第二步目錄阻擋後 PVD 仍只指向原本 t=0 完整快照；index
+首次阻擋不留下 PVD。這不提供 MPI process-loss、fsync 或自動 orphan 回復。
+
+ParaView 5.13 實際開啟六個 PVD series，核對 13 個時間幀與 reference VTKHDF：
+座標、velocity、pressure 每個 tuple 完全相等，最大絕對差 0，cell／point IDs
+覆蓋一致。2-rank fixture 只有一個元素，包含 empty piece；此測試驗收真實 PDE
+接線，較多元素 shared-point 情形由前述元件測試驗證，不冒充大型規模測試。
+
+重現命令：
+
+```bash
+python3 scripts/hpc_flow_pvtu_regression.py \
+  --fixture-root outputs/hpc01/flow-output/cli-final \
+  --reference-binary BEFORE_BINARY --output-dir NEW_OUTPUT
+pvpython scripts/test_flow_pvtu_paraview.py NEW_OUTPUT
+```
+
+證據在 `outputs/hpc06/flow-pvtu-v1/cli/acceptance.json`、`paraview.log` 與
+`audit.json`。執行當時 harness 保存為 `harness-at-run.py`；執行後補上 exception
+時寫入 failed status 的監測修正，成功測試邏輯不變。既有三 rank writer 的
+33 項故障／重試亦通過；首次啟動漏建 wrapper 父目錄，未開始測試，修正目錄
+後才採計結果。
+
 ## 接續工作
 
-Solver 仍走既有序列輸出。局部 Bezier 建構、shared IDs／代表 tuple 交換、cell 覆蓋
-與 PVTU 協調已有上述元件；PETSc 選定 state 已接線，接下來須接入 CLI 與 PVD
-時間序列。完整幾何 overlap 認證的來源與生命週期也須明確，不能以局部正 Jacobian
-代替跨元素檢查。
-
-需以相同實際 PDE 場與既有輸出比較，測量各 rank RSS、檔案數與 metadata 成本，
-再完成 HPC-06B／C。尚不證明大型 solver 場已免 root gather。既有預設選項保持，
-但上述可視化排序修正會拒絕沿用舊排序 VTKHDF 的 geometry hash。
+需擴充其他求解路徑並量測大型場各 rank RSS、檔案數與 metadata 成本，再完成
+HPC-06A／B／C。完整幾何認證仍集中 root，資料庫 metadata、幾何與暫存
+extraction 的生命週期需繼續稽核。既有預設格式保留，但上述可視化排序修正
+會拒絕沿用舊排序 VTKHDF 的 geometry hash。

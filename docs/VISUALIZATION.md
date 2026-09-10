@@ -1,7 +1,8 @@
 # Visualization output
 
-CPU and CUDA production solvers use the same visualization formats. Text field
-and checkpoint outputs are independent of this selection.
+CPU and CUDA production solvers share the default visualization formats.
+The CPU flow CLI additionally supports the partitioned mode below. Checkpoint
+outputs are independent of this selection.
 
 ## Moving immersed snapshots
 
@@ -31,6 +32,35 @@ tracked in [HPC-07](WORKSTATION_HPC_TODO.md#hpc-07分散式-fsi).
 Use `--visualization-format vtkhdf` or `--visualization-format vtu` to override
 the automatic choice. `--output-every N` controls transient snapshots. The
 initialized state is timestep zero.
+
+## Partitioned CPU flow output
+
+`iga_navier_stokes ... --output results/flow.txt --visualization-format pvtu`
+writes cubic Bézier cells to `flow.stepNNNNNN/rankR.vtu`, one piece per MPI
+rank, with `snapshot.pvtu` and a top-level `flow.pvd` time index. Open the PVD
+in ParaView. Shared points carry partition-independent Int64 global IDs;
+empty partitions produce valid empty pieces. Geometry is repeated each frame.
+
+This mode extracts only the control rows required by each rank's owned elements
+and exchanges shared point values without gathering the complete solution to
+root. Initialization still builds and validates the complete Bézier geometry
+on root, including overlap checks, then releases that mesh. This remaining
+geometry peak and actual large-case RSS have not yet been eliminated or measured.
+
+`--output-every N` includes the initialized/restarted state and every Nth step;
+the final state is always emitted once. Without that option, only the final
+state is emitted. Checkpoints retain their existing format and frequency.
+PVTU mode produces no text velocity/pressure fields or velocity-series CSV;
+use the existing formats when those transport/pipeline interfaces are needed.
+This option currently applies only to `iga_navier_stokes`.
+
+Use a fresh output prefix, including after `--restart`: an existing PVD or
+snapshot directory is rejected. Each completed snapshot is published before
+an atomic replacement of the PVD index. A failed later snapshot leaves the
+previous index readable; incomplete pieces remain for diagnosis. A completed
+snapshot whose index update fails is not automatically recovered. This protocol
+assumes one producer and does not provide crash durability or MPI process-loss
+recovery.
 
 ## Temporal Bézier VTKHDF
 

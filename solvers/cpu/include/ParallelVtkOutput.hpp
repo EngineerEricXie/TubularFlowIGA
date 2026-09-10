@@ -58,5 +58,42 @@ inline void WriteParallelVtkSnapshot(MPI_Comm communicator,const std::filesystem
 	});
 }
 
+// Publish a time index after its immutable snapshots are complete. A single
+// caller owns the series path. A failed write leaves the previous index intact.
+inline void WriteParallelVtkSeries(MPI_Comm comm,const std::filesystem::path& path,
+	const std::vector<std::pair<double,std::filesystem::path>>& snapshots)
+{
+	int rank=0;MPI_Comm_rank(comm,&rank);std::string text;
+	CollectiveLocalStage(comm,"parallel VTK series preparation",[&] {
+		if(path.empty()||snapshots.empty())throw std::invalid_argument("parallel VTK series is empty");
+		std::ostringstream output;output.exceptions(std::ios::badbit|std::ios::failbit);
+		output<<std::setprecision(17)<<"<?xml version=\"1.0\"?>\n<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\"><Collection>\n";
+		const auto parent=std::filesystem::absolute(path).parent_path().lexically_normal();
+		double previous=-std::numeric_limits<double>::infinity();
+		for(const auto& snapshot:snapshots) {
+			if(!std::isfinite(snapshot.first)||snapshot.first<=previous)throw std::invalid_argument("parallel VTK times must increase");
+			previous=snapshot.first;
+			const auto relative=std::filesystem::absolute(snapshot.second).lexically_normal().lexically_relative(parent);
+			if(relative.empty()||relative.is_absolute())throw std::invalid_argument("invalid parallel VTK series reference");
+			for(const auto& component:relative)if(component=="..")throw std::invalid_argument("parallel VTK snapshot is outside series directory");
+			for(unsigned char c:relative.string())if(c<32||c==127)throw std::invalid_argument("control character in parallel VTK series reference");
+			output<<"<DataSet timestep=\""<<snapshot.first<<"\" group=\"\" part=\"0\" file=\""<<EscapeVtkXml(relative.generic_string())<<"\"/>\n";
+		}
+		output<<"</Collection></VTKFile>\n";text=output.str();
+	});
+	RequireCollectiveSameText(comm,"parallel VTK series path agreement",path.string());
+	RequireCollectiveSameText(comm,"parallel VTK series content agreement",text);
+	CollectiveLocalStage(comm,"parallel VTK series publication",[&] {
+		if(rank!=0)return;
+		const auto temporary=std::filesystem::path(path.string()+".pending");
+		for(const auto& target:{path,temporary})if(std::filesystem::exists(target)&&!std::filesystem::is_regular_file(target))
+			throw std::runtime_error("parallel VTK series target is not a regular file");
+		if(!path.parent_path().empty())std::filesystem::create_directories(path.parent_path());
+		std::ofstream output(temporary);if(!output)throw std::runtime_error("cannot create parallel VTK series");
+		output<<text;output.close();if(!output)throw std::runtime_error("cannot write parallel VTK series");
+		std::filesystem::rename(temporary,path);
+	});
+}
+
 } // namespace iga
 #endif
