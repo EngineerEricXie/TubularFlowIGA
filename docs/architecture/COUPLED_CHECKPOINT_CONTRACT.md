@@ -8,7 +8,9 @@
 作業恢復。最新實作及 1／2／4-rank、split、fault／SIGUSR1 驗收見
 [native graph 進度](../progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md) 與
 [使用說明](../COUPLED_RESTART.md)。大型／跨節點驗收未完成，05C 保持部分完成；
-其他 runtime 與重分區由 05D 接續。不能將下文原始缺口當作目前完成狀態。
+moving／FSI library runtime 與跨 rank 重分區已由
+[05D](../progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md) 完成。正式 moving／FSI
+native graph CLI 及跨節點排程仍待完成。不能將下文原始缺口當作目前完成狀態。
 
 ## 1. 唯一可保存的邊界
 
@@ -244,8 +246,11 @@ counts 與逐 cell old／new classifications。須保存這份有限的 predeces
 及 publication digest。05D 的 verified restore builder 必須檢查 cell ID／分類、完整計數、
 當前 geometry 一致性並重算 digest；不能用一般 constructor 的 genesis publication
 冒充原 publication，也不能提供未驗證的任意 hash override。
-目前 `SetCommittedGlobalState()` 會清空 conservation，沒有完整 publication restore，
-故尚不足以實作上述續跑。
+目前 moving distributed runtime 以 `CaptureAcceptedCheckpoint()` 保存 owned field、
+port controls、前後材料與完整 conservation；`RestoreMovingCheckpointRuntime()` 從已驗證
+bundle 重建前後 geometry，要求保存的 geometry／publication identities 完全相同後才
+發布 accepted candidate。獨立 target publication 與含 predecessor transition 的兩種合法
+建構方式均依保存 identity 選擇，沒有任意 hash override。
 
 ### 4.7 結構與 FSI publication
 
@@ -269,7 +274,13 @@ traction diagnostics、composition identity、patch map 身分與完整 surface 
 trial output 或 active context。整個配對 candidate 驗證後一起 publish，不能只恢復
 membrane displacement 便讓 fluid 的 surface stamp 停在初始狀態。Strong FSI 的下一步
 predictor／Aitken 遵循第 3 節，accepted raw／relaxed／traction identities 留在歷史 prefix。
-目前 membrane／strong coordinator 仍限單 partition；分散式恢復在 HPC-07 與 05D 整合。
+目前 `SingleOwnerMembraneRuntime` 保留 bounded dense membrane 集中求解，但 kinematics／
+traction publications 已按 owned surface nodes 分散；全域 Aitken、收斂與 paired commit
+均為 collective。`MovingFsiCheckpointBundle` 將 moving flow、各 source rank traction slice
+與 owner-only membrane payload 發布於同一 manifest；fresh-pair restore 在全部候選與時鐘
+驗證成功後才回傳。不同 rank 數時依 stable surface node ID 重分配並建立新的 target
+partition provenance，不沿用舊 stamp。單機數值驗收記錄在 HPC-07 進度；native graph CLI
+整合、較大資源與跨節點仍是後續項目。
 
 ## 5. 實作邊界與 restore 順序
 
@@ -280,8 +291,10 @@ predictor／Aitken 遵循第 3 節，accepted raw／relaxed／traction identitie
 
 1. 讀取完成 manifest，驗證版本、所有檔案 checksum／大小／epoch 與配置相容性。
    不先修改 live runtime 或輸出；05B 定義暫存 shard、sync、完成 manifest 最後發布。
-2. 以原 rank 數與 domain membership 建立模型、ownership、geometry、PETSc objects；
-   檢查所有穩定 ID 覆蓋，不允許缺片、重複 owned rows 或以零補洞。
+2. 以相容的 domain membership 建立模型、目標 ownership、geometry、PETSc objects；
+   檢查所有穩定 ID 覆蓋，不允許缺片、重複 owned rows 或以零補洞。仍依賴 `.ntiga`
+   rank-specific partition 的 native graph 先保持原 rank 數；moving field 與 bounded FSI
+   surface 已提供明確 global-ID 重分配路徑。
 3. 在獨立 candidate 中載入全部 domain state、clocks、publications、pressure map、
    donor map 與歷史 prefix。重新計算模型／場／publication identities，驗證有限性、
    正值、clock／counter 關係、donor coverage、FSI 配對與 output prefix 末步。
@@ -289,9 +302,10 @@ predictor／Aitken 遵循第 3 節，accepted raw／relaxed／traction identitie
    candidate，保留原 bundle 與輸出。重新建立 trial scratch／ghost，而非執行一個假 step。
 5. 第一次續跑從 `N+1` 的人類可讀步號開始，輸出 prefix 與新紀錄不重複、不漏步。
 
-05C 先交付既有 0D／1D／貼體 3D graph 的相同 rank 恢復；05D 分批加入浸入式、移動與
-FSI。未支援 runtime／版本／rank 變動要在開始寫 shard 前拒絕。不同 rank 恢復須另做
-global-ID ownership 搬移，尤其 `.ntiga` 分區和 surface partition stamp 不可直接沿用。
+05C 已交付既有 0D／1D／貼體 3D graph 的相同 rank 恢復；05D 已加入 moving flow 與
+bounded FSI pair 的 global-ID ownership 搬移。尚未支援的 runtime／版本／rank 變動須在
+開始寫 shard 前拒絕，尤其 `.ntiga` 分區相依 native graph 仍不可只改啟動參數。surface
+重分配會驗證來源完整覆蓋並產生新 partition stamp，不直接沿用舊 stamp。
 現有 standalone checkpoint 檔案介面保留；不把舊格式重新標記成新原子 bundle。
 CUDA 的 standalone raw-state checkpoint 保留其 backend／format 身分；目前沒有
 CUDA graph provider，不能將其位元組當成 PETSc vector 載入。新增 provider 時仍須遵守

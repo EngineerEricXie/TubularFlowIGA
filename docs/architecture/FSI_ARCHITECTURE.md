@@ -361,6 +361,43 @@ and solve time separately, host peak RSS, CUDA peak allocation, rank/partition
 agreement, and CPU/CUDA field differences. Representative distributed solves
 belong on allocated resources rather than login nodes.
 
+## Distributed moving-FSI runtime and restart
+
+The current CPU path extends the earlier Phase 8 components with owned surface
+partitions and collective execution. `ImmersedMovingDistributedFsiRuntime`
+borrows a distributed moving-flow runtime and material patch map. It composes
+owned kinematics into the bounded replicated cut-surface geometry, solves only
+owned PETSc field rows, publishes traction and consistent nodal force slices,
+and checks five conservation gates before paired commit.
+
+`SingleOwnerMembraneRuntime` deliberately keeps the small dense membrane solve
+on one configured rank. Its input traction is gathered from unique surface
+owners; its committed displacement and velocity are redistributed to owned
+surface slices. This is an implemented distributed fluid/transfer path with a
+bounded centralized structure cost, not a claim of distributed structural
+assembly.
+
+`SolveDistributedStrongFsiStep` computes weighted Aitken reductions, RMS and
+maximum residuals globally. Every iteration either leaves both runtimes at the
+same accepted state or reaches the paired no-throw finalize tail. Rank-local
+errors, convergence failure and exhaustion collectively abort both candidates.
+
+`MovingFsiCheckpointBundle` publishes the accepted moving-flow shards, one
+traction slice per source rank, and owner-only membrane metadata/state under a
+single manifest. Restore constructs fresh flow, adapter and membrane owners;
+failure closes the unpublished flow candidate. For a changed rank count, all
+authenticated source surface records must cover every stable node exactly once.
+The target keeps only its owned records and receives new producer, projection
+and partition identities derived from the source payload set. Same-partition
+restore retains exact saved publication bytes. This bounded surface restore
+reads every source surface shard on each target rank; it does not gather the
+full fluid field and is not intended as a large distributed shell solver.
+
+Local 1/2/4-rank and restart evidence is tracked in
+[the HPC-07 progress report](../progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md).
+Cross-node execution, scaling measurements, nonmatching transfer, contact and
+native graph CLI integration remain outside the currently accepted scope.
+
 ## Explicit exclusions
 
 Phase 8 excludes MPI/collective strong execution, nonmatching transfer,

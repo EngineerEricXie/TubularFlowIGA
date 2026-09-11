@@ -115,14 +115,16 @@ MPI entity ownership; their implementation is HPC-02.
 - Small replicated 0D/1D domains must designate how an aggregate diagnostic is
   contributed once; summing identical replicas would multiply the result by
   communicator size.
-- Immersed and moving runtimes are still serial. HPC-03 must define active
-  cell/DOF ownership, pressure gauges, port multipliers, ghost-face contributions
-  and stable-ID transfer when the active set changes. Removing a size check
-  without these mappings is insufficient.
-- FSI currently uses one surface partition. HPC-07 must validate owned/ghost
-  surface nodes, triangle/area weights, force and moment, discrete work, and
-  a single global acceptance decision. Duplicated ghost-node forces must not
-  be included twice in global sums or Aitken inner products.
+- Immersed and moving CPU runtimes now own PETSc rows across their injected
+  communicator, distribute active cell work, rebuild halo/history state when
+  the active set changes, and retain stable IDs for checkpoint repartitioning.
+  Geometry and bounded surface topology remain replicated where documented;
+  this is distinct from replicating the complete fluid solution.
+- Moving FSI now publishes owned surface slices, fetches ghost values by stable
+  node ID, assigns each triangle/cell contribution once, and uses collective
+  force/moment/work and Aitken acceptance. The current membrane solve is a
+  bounded dense single-owner model whose kinematics are redistributed; it is
+  not a distributed structural matrix solve.
 - CUDA remains one process and one device; its local arrays are not MPI halo
   buffers. Multi-GPU ownership is outside this checklist's required scope.
 

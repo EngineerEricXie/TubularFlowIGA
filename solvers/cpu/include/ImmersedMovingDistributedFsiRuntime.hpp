@@ -61,6 +61,7 @@ public:
 	}
 	MPI_Comm Communicator() const noexcept { return runtime_.Communicator(); }
 	bool UsesFlowRuntime(const ImmersedMovingTransientDistributedRuntime& flow) const noexcept { return &runtime_==&flow; }
+	const std::string& CheckpointConfigurationIdentity() const noexcept { return configuration_identity_; }
 	void SolveTrial(const FsiTrialContext& context,const SurfaceKinematics& kinematics,
 		const SurfaceFieldStamp& expected_stamp,const std::string& expected_committed_material)
 	{
@@ -131,6 +132,16 @@ public:
 	// candidate. Caller publishes the fluid/structure owners only as a pair.
 	void RestoreCheckpoint(std::string_view bytes,const std::string& expected_payload_identity)
 	{
+		MovingFsiPublicationCheckpoint state;
+		CollectiveLocalStage(Communicator(),"moving FSI checkpoint parse",[&] {
+			const auto& geometry=runtime_.CommittedGeometry();
+			state=ParseMovingFsiPublicationCheckpoint(bytes,expected_payload_identity,map_.Layout(),fluid_.id,configuration_identity_,
+				geometry.Evaluation().ContentIdentitySha256(),geometry.GeometryIdentitySha256(),runtime_.Clock().index,runtime_.Clock().time_s,policy_.maximum_patch_nodes);
+		});
+		RestoreCheckpointState(std::move(state));
+	}
+	void RestoreCheckpointState(MovingFsiPublicationCheckpoint state)
+	{
 		std::unique_ptr<Publication> candidate;std::string common;
 		CollectiveLocalStage(Communicator(),"moving FSI restore phase",[&] {
 			if(trial_||prepared_||committed_||runtime_.Clock().trial_active)
@@ -139,9 +150,14 @@ public:
 		const auto conservation=runtime_.ConservationDiagnostics();
 		CollectiveLocalStage(Communicator(),"moving FSI publication restore",[&] {
 			const auto& geometry=runtime_.CommittedGeometry();
-			auto state=ParseMovingFsiPublicationCheckpoint(bytes,expected_payload_identity,map_.Layout(),fluid_.id,configuration_identity_,
-				geometry.Evaluation().ContentIdentitySha256(),geometry.GeometryIdentitySha256(),runtime_.Clock().index,runtime_.Clock().time_s,policy_.maximum_patch_nodes);
-			if(state.context.start_time_s!=conservation.source_time_s||state.context.step!=conservation.target_index)
+			ValidateFsiTrialContext(state.context);ValidateSurfaceTraction(state.traction,map_.Layout());
+			if(!IsLowercaseSha256(state.composition_identity)||!(state.traction.interface==fluid_.id)
+				||state.traction.stamp.step!=state.context.step||state.traction.stamp.time_s!=state.context.EndTime()
+				||state.traction.stamp.coupling_iteration!=state.context.coupling_iteration
+				||state.material_identity!=geometry.Evaluation().ContentIdentitySha256()
+				||state.geometry_identity!=geometry.GeometryIdentitySha256()
+				||state.context.step!=runtime_.Clock().index||state.context.EndTime()!=runtime_.Clock().time_s
+				||state.context.start_time_s!=conservation.source_time_s||state.context.step!=conservation.target_index)
 				throw std::runtime_error("FSI restored context differs from fluid history");
 			Sha256 hash;
 			for(const auto* id:{&state.composition_identity,&state.material_identity,&state.geometry_identity})distributed_surface_detail::AppendString(hash,*id);

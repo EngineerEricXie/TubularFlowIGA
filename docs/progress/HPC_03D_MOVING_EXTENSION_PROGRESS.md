@@ -739,5 +739,15 @@ coverage 檢查通過；雙 rank 最大 port error／tolerance 比值為
 正式 CLI 的 4 ranks 作業亦已完成，七份 rank reports 全部 exit 0、未
 timeout。`half-step-cli-1-2-4-comparison.json` 驗證三種 rank 數的四步
 accepted clocks、graph gates、port coverage 與對單 rank 的端口數值門檻。
-這完成此 prescribed-motion 小案例的本機 MPI matrix；完整 FSI feedback、
-大型記憶體與跨節點要求仍未完成。
+這完成此 prescribed-motion 小案例的本機 MPI matrix。
+
+後續 moving-fluid adapter 已接入分散式 surface capture、material composition、
+traction publication、全域守恆 gate、single-owner bounded membrane、paired commit
+與 checkpoint。非零強耦合通過 1／2／4 ranks；moving flow 4→2／4→1 與完整
+FSI pair 4→2、4→1、1→4-rank 新作業續算也通過 stable-ID ownership 搬移。
+因此 active-set 更新、history extension、提交／回復、正式 moving CLI 與
+restart 已滿足 HPC-03D。現有 profiling 顯示幾何建構主導，但沒有支持執行中
+重新分配固定背景的穩定效益，故保留固定背景 partition。大型記憶體、正式
+moving／FSI native graph CLI 與跨節點要求由 HPC-05C、HPC-06、HPC-07D／09
+追蹤；不影響 HPC-03D 的完成狀態。重分區證據見
+[HPC-05D 完成報告](HPC_05D_MOVING_FSI_RESTART_REPORT.md)。

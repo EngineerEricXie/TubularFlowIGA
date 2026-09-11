@@ -3,8 +3,17 @@
 `iga_multidomain_flow` 與 `iga_1d_3d_bifurcation` 已接入 accepted-step checkpoint。
 目前支援原生 0D／1D／貼體 3D flow graph，以及 1D／貼體 3D species graph；
 恢復使用相同 rank 數與 communicator membership。浸入式、移動、FSI、CUDA graph
-及重分區恢復由 HPC-05D 追蹤。單機驗收見
+及重分區恢復尚未接到這兩個 native CLI。單機驗收見
 [native graph 報告](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)。
+
+這項限制描述上述兩個 native graph CLI。CPU library 端另已提供 moving-flow 與
+bounded moving-FSI pair 的版本化 bundle／fresh-candidate restore，包含 port controls、
+geometry predecessor、conservation、分散式 traction publication 與 owner membrane
+state；moving field 可跨 rank 數串流，FSI surface 依 stable node ID 重分配並建立新
+partition provenance。其正式 native graph CLI 接線與排程操作尚未完成，不能把測試
+fixture 的 `-moving_fsi_checkpoint_*` PETSc options 當成使用者 CLI。驗收範圍見
+[HPC-05D 完成報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)與
+[HPC-07 進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
 
 ## 保存與新的作業續跑
 

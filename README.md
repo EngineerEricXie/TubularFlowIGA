@@ -24,14 +24,15 @@ general-purpose CFD package.
 |---|---|---|
 | Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
 | Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer | Executable graphs require supported acyclic topology. 0D supports one-port compliant sources and terminal RCR models; 0D species and a full closed-loop 0D heart are deferred |
-| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, and ghost stabilization; prescribed moving-anatomy runtime | Steady and fixed-geometry backward-Euler flow-only graphs support MPI. Prescribed motion uses a fixed Eulerian background; moving-geometry MPI and ALE/remeshing remain deferred |
-| Foundational FSI | Two-way immersed flow coupled to a pre-tensioned membrane with strong Dirichlet--Neumann iteration and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark using one partition and `PETSC_COMM_SELF`; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
+| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry | Moving geometry uses a fixed Eulerian background with distributed active-set/history transfer. ALE/remeshing and a native moving-domain graph CLI remain deferred |
+| Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated locally for a small-displacement compliant-channel benchmark at 1/2/4 ranks. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, valve/contact models, and cross-node acceptance are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
 | Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
 
-Immersed transient, moving-flow and FSI runtimes now have optional OpenMP
-volume assembly within one MPI rank. Body-fitted flow also has an optional
-MPI/OpenMP volume assembly CLI. Thread configuration, actual worker evidence
+Immersed transient, moving-flow and FSI runtimes distribute PETSc rows and
+cell work across MPI ranks, and also have optional OpenMP volume assembly
+within each rank. Body-fitted flow has an optional MPI/OpenMP volume assembly
+CLI. Thread configuration, actual worker evidence
 and remaining performance validation are documented in the
 [CPU guide](solvers/cpu/README.md#optional-openmp-volume-assembly),
 [immersed progress](docs/progress/HPC_02_VOLUME_PROGRESS.md) and
@@ -471,13 +472,16 @@ Current scope limits are important when interpreting results:
 
 - standalone body-fitted 3D vessel and neurite walls remain rigid; two-way FSI
   is currently limited to the small-displacement immersed membrane benchmark;
-- immersed flow and FSI do not yet provide distributed ownership within one
-  solve; the validated FSI runtime uses one partition and `PETSC_COMM_SELF`;
+- immersed and moving flow distribute active cell work and PETSc field rows;
+  FSI surface publications use unique owned nodes and global reductions. The
+  bounded membrane solve is still centralized on one selected rank, and the
+  current moving/FSI checkpoint path is a library/test integration rather than
+  a native graph CLI;
 - moving anatomy uses a fixed Eulerian background. ALE/remeshing, nonmatching
   FSI transfer, monolithic FSI, and advanced valves/leaflet contact are deferred;
 - multidomain execution supports validated acyclic pressure/flow graphs and
   staged 1D/body-fitted-3D species transfer. 0D species, a full closed-loop 0D
-  heart, multirate coupled clocks, and graph-wide restart remain deferred;
+  heart, multirate coupled clocks, and moving/FSI native graph restart remain deferred;
 - native 1D and CPU 3D `vca_closed_loop` coupling remain separate from generic
   domain coupling; CUDA VCA and 3D VCA replay/open-loop are unavailable;
 - 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed

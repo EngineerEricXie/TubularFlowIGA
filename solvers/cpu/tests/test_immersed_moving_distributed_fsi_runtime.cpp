@@ -95,7 +95,11 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 		Require(!PetscOptionsGetString(nullptr,nullptr,"-moving_fsi_checkpoint_root",paired_root,sizeof(paired_root),nullptr),"invalid paired checkpoint option");
 		PetscBool paired_read_only=PETSC_FALSE;
 		Require(!PetscOptionsGetBool(nullptr,nullptr,"-moving_fsi_checkpoint_read_only",&paired_read_only,nullptr),"invalid paired checkpoint read mode");
+		PetscInt paired_source_ranks=size;
+		Require(!PetscOptionsGetInt(nullptr,nullptr,"-moving_fsi_checkpoint_source_ranks",&paired_source_ranks,nullptr)
+			&&paired_source_ranks>0,"invalid paired checkpoint source ranks");
 		Require(!paired_read_only||paired_root[0],"paired read-only mode requires checkpoint root");
+		Require(paired_read_only||paired_source_ranks==size,"paired writer source ranks must equal communicator size");
 		std::unique_ptr<iga::RestoredMovingFsiPair> restored_pair;
 		if(exhaustion) {
 			context.coupling_iteration=0;
@@ -206,10 +210,10 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 				const auto hash=[](const std::string& bytes) { return iga::moving_fsi_checkpoint_detail::Hash(bytes); };
 				const auto configuration=hash("paired-strong-checkpoint/v1");
 				const iga::CoupledCheckpointEpoch epoch{hash(paired_root),{},
-					{configuration,configuration,hash(std::to_string(size)),static_cast<std::uint32_t>(size)},context.step,context.EndTime(),context.dt_s};
+					{configuration,configuration,hash(std::to_string(paired_source_ranks)),static_cast<std::uint32_t>(paired_source_ranks)},context.step,context.EndTime(),context.dt_s};
 				iga::MovingCheckpointLayout source;source.domain_id="flow";
-				for(int member=0;member<size;++member)source.world_ranks.push_back(member);
-				const auto catalog=iga::MovingFsiCheckpointCatalog(source,size,size-1);
+				for(PetscInt member=0;member<paired_source_ranks;++member)source.world_ranks.push_back(member);
+				const auto catalog=iga::MovingFsiCheckpointCatalog(source,paired_source_ranks,paired_source_ranks-1);
 				if(!paired_read_only) {
 					iga::CollectiveLocalStage(comm,"paired file fixture create",[&] {
 						if(rank==0) { Require(std::filesystem::create_directory(paired_root),"paired fixture directory exists");iga::CreateCoupledCheckpointEpoch(paired_root,epoch); }
@@ -226,7 +230,7 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 					Require(found.latest.has_value()&&found.rejected.empty(),"paired checkpoint not found");manifest=found.latest;
 				});
 				const auto restore=[&](const iga::CoupledCheckpointManifest& saved) {
-					return iga::RestoreMovingFsiCheckpoint(comm,paired_root,saved,source,size-1,configuration,grid,geometry_options,options,map,interface,
+					return iga::RestoreMovingFsiCheckpoint(comm,paired_root,saved,source,paired_source_ranks-1,configuration,grid,geometry_options,options,map,interface,
 						[&](const iga::MovingCutGeometry&,const iga::MaterialSurfaceKinematics& target) { return iga::MovingCutGeometry::Build(grid,target,geometry_options); },
 						size-1,policy,deforming?iga::compliant_channel_fixture::MembraneMaterial():iga::PretensionedMembraneMaterial{1,.1,1,1});
 				};
@@ -240,8 +244,13 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 				const auto restored_membrane=restored_pair->membrane->CaptureCheckpoint();
 				double local_restore_error[2]={},global_restore_error[2]={};
 				iga::CollectiveLocalStage(comm,"paired file fixture exact restore",[&] {
+					const auto near=[](double expected,double obtained) { Require(std::isfinite(expected)&&std::isfinite(obtained)
+						&&std::abs(expected-obtained)<=1e-12+1e-6*std::abs(expected),"paired accepted surface differs"); };
 					const auto actual=Owned(restored_pair->flow->CommittedState());Require(actual.size()==original_field.size(),"paired restored field shape differs");
-					Require(restored_pair->flow->CommittedLayout().HashSha256()==runtime.CommittedLayout().HashSha256(),"paired restored active layout differs");
+					const auto& restored_layout=restored_pair->flow->CommittedLayout();const auto& baseline_layout=runtime.CommittedLayout();
+					Require(restored_layout.NodeIds()==baseline_layout.NodeIds()&&restored_layout.PortIds()==baseline_layout.PortIds()
+						&&restored_layout.HasGaugeRow()==baseline_layout.HasGaugeRow(),"paired restored active row catalog differs");
+					if(paired_source_ranks==size)Require(restored_layout.HashSha256()==baseline_layout.HashSha256(),"paired restored active layout differs");
 					Require(original_membrane.has_value()==restored_membrane.has_value(),"paired restored membrane owner differs");
 					for(std::size_t row=0;row<actual.size();++row) { const double delta=actual[row]-original_field[row];local_restore_error[0]+=delta*delta;local_restore_error[1]+=original_field[row]*original_field[row]; }
 					if(!paired_read_only) {
@@ -249,8 +258,19 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 						Require(restored_publication==original_publication,"paired restored publication differs");
 						if(original_membrane)Require(original_membrane->metadata==restored_membrane->metadata&&original_membrane->numerical==restored_membrane->numerical,"paired restored membrane differs");
 					}
-					const auto indices=iga::moving_fsi_checkpoint_detail::Indices(*manifest,source,size-1);
-					Require(restored_publication==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("fsi.rank-"+std::to_string(rank))),"paired publication differs from saved file");
+					const auto& expected_traction=fluid.CommittedTraction();const auto& obtained_traction=restored_pair->fluid->CommittedTraction();
+					const auto& expected_kinematics=structure.CommittedKinematics();const auto& obtained_kinematics=restored_pair->membrane->CommittedKinematics();
+					Require(expected_traction.traction_on_structure_pa.size()==obtained_traction.traction_on_structure_pa.size()
+						&&expected_kinematics.displacement_m.size()==obtained_kinematics.displacement_m.size(),"paired accepted surface shape differs");
+					for(std::size_t row=0;row<expected_traction.traction_on_structure_pa.size();++row)for(int axis=0;axis<3;++axis) {
+						near(expected_traction.traction_on_structure_pa[row][axis],obtained_traction.traction_on_structure_pa[row][axis]);
+						near(expected_traction.consistent_nodal_force_n[row][axis],obtained_traction.consistent_nodal_force_n[row][axis]);
+						near(expected_kinematics.displacement_m[row][axis],obtained_kinematics.displacement_m[row][axis]);
+						near(expected_kinematics.velocity_m_per_s[row][axis],obtained_kinematics.velocity_m_per_s[row][axis]);
+					}
+					const auto indices=iga::moving_fsi_checkpoint_detail::Indices(*manifest,source,paired_source_ranks-1);
+					if(paired_source_ranks==size)Require(restored_publication==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,
+						indices.at("fsi.rank-"+std::to_string(source.world_ranks.at(rank)))),"paired publication differs from saved file");
 					if(restored_membrane) {
 						Require(restored_membrane->metadata==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("membrane.metadata")),"paired membrane metadata differs from file");
 						Require(restored_membrane->numerical==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("membrane.numerical")),"paired membrane state differs from file");
@@ -259,7 +279,9 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 				});
 				MPI_Allreduce(local_restore_error,global_restore_error,2,MPI_DOUBLE,MPI_SUM,comm);
 				const double restore_error=std::sqrt(global_restore_error[0])/std::max(1.,std::sqrt(global_restore_error[1]));Require(restore_error<1e-8,"paired restored field differs from independent baseline");
-				std::cout<<"moving_fsi_file_checkpoint rank="<<rank<<" ranks="<<size<<" read_only="<<paired_read_only<<" exact_file_publications=1 accepted_field_scaled_l2="<<restore_error<<" checksum_cleanup_retry=1 passed"<<std::endl;
+				std::cout<<"moving_fsi_file_checkpoint rank="<<rank<<" ranks="<<size<<" source_ranks="<<paired_source_ranks
+					<<" read_only="<<paired_read_only<<" exact_file_publications="<<(paired_source_ranks==size)
+					<<" surface_repartition="<<(paired_source_ranks!=size)<<" accepted_field_scaled_l2="<<restore_error<<" checksum_cleanup_retry=1 passed"<<std::endl;
 			}
 			if(restored_pair&&step==1) {
 				const auto continued=iga::SolveDistributedStrongFsiStep(comm,*restored_pair->fluid,*restored_pair->membrane,map,
@@ -369,6 +391,12 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 		auto corrupt=publication_checkpoint;if(rank==0)corrupt.back()^=1;
 		Reject(comm,[&] { fresh.RestoreCheckpoint(corrupt,publication_hash(publication_checkpoint)); });
 		Reject(comm,[&] { (void)fresh.CommittedTraction(); });
+		auto invalid_state=iga::ParseMovingFsiPublicationCheckpoint(publication_checkpoint,publication_hash(publication_checkpoint),layout,
+			interface.id,fresh.CheckpointConfigurationIdentity(),runtime.CommittedGeometry().Evaluation().ContentIdentitySha256(),
+			runtime.CommittedGeometry().GeometryIdentitySha256(),runtime.Clock().index,runtime.Clock().time_s);
+		invalid_state.composition_identity="invalid";
+		Reject(comm,[&] { fresh.RestoreCheckpointState(invalid_state); });
+		Reject(comm,[&] { (void)fresh.CommittedTraction(); });
 		if(size>1) {
 			// Individually valid payloads can still disagree on the shared epoch.
 			// Change the saved coupling iteration on one rank and authenticate the
@@ -386,7 +414,7 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 		Require(fresh.CaptureCheckpoint()==publication_checkpoint,"FSI restored publication bytes differ");
 		Reject(comm,[&] { fresh.RestoreCheckpoint(publication_checkpoint,publication_hash(publication_checkpoint)); });
 		Require(Owned(runtime.CommittedState())==publication_fluid_values,"FSI publication restore changed fluid");
-		std::cout<<"moving_fsi_publication_checkpoint rank="<<rank<<" exact_roundtrip=1 corrupt_rejected=1 overwrite_rejected=1 passed\n";
+		std::cout<<"moving_fsi_publication_checkpoint rank="<<rank<<" exact_roundtrip=1 corrupt_rejected=1 state_guard=1 overwrite_rejected=1 passed\n";
 	}
 	char checkpoint_root[4096]={};
 	Require(!PetscOptionsGetString(nullptr,nullptr,"-moving_port_checkpoint_root",checkpoint_root,sizeof(checkpoint_root),nullptr),"invalid port checkpoint option");

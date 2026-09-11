@@ -27,6 +27,11 @@ int main()
 		const auto restored=parse(bytes,hash(bytes));
 		assert(iga::SerializeMovingFsiPublicationCheckpoint(restored,layout,configuration)==bytes);
 		assert(iga::BuildSurfaceTractionIdentitySha256(restored.traction,layout)==iga::BuildSurfaceTractionIdentitySha256(value,layout));
+		const auto records=iga::DecodeMovingFsiPublicationRecords(bytes,hash(bytes),FluidInterface(),configuration,
+			state.material_identity,state.geometry_identity,3,state.context.EndTime());
+		assert(records.node_ids==layout.owned_global_node_ids&&records.state.composition_identity==state.composition_identity);
+		assert(records.layout_identity==layout.layout_identity_sha256
+			&&records.partition_identity==iga::BuildDistributedSurfacePartitionIdentitySha256(layout));
 		auto corrupt=bytes;corrupt.back()^=1;Reject([&] { (void)parse(corrupt,hash(bytes)); });
 		for(const auto& malformed:{bytes.substr(0,bytes.size()-1),bytes+"x"})Reject([&] { (void)parse(malformed,hash(malformed)); });
 		for(int mismatch=0;mismatch<5;++mismatch) {

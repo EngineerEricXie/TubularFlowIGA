@@ -10,7 +10,9 @@ local abort 入口另已通過 4 ranks 驗收。Moving-fluid FSI adapter 已接�
 通過 1／2／4 ranks，提交前故障與迭代耗盡 rollback／retry 已分別驗證。
 膜 checkpoint 支援跨 rank 數還原；moving fluid 的材料／owned field／
 守恆紀錄已接到實際 MPI 檔案 bundle，4-rank changing-layout 續算通過。
-完整 FSI paired restart 與跨節點驗收尚待完成，HPC-07A／HPC-03D 不據此勾選。
+完整 FSI paired restart 已通過同 rank、新作業及 4→2、4→1、1→4-rank
+重分區續算；HPC-03D、HPC-05D、HPC-07A／B 已勾選完成。全域強耦合與
+完整 restart 的跨節點驗收仍由 HPC-07C／D、HPC-09 追蹤。
 
 每批凍結 source／binary 的精確對應另核對於
 `outputs/hpc03/moving-graph-v1/batch-source-resolution-audit.json`。
@@ -839,4 +841,86 @@ ports／守恆：2／4-rank 對 1-rank 的最大 field scaled L2 分別為
 checker、comparison、全部 reports／logs 與 bundle hashes 綁定於
 `paired-checkpoint-nonzero-matrix-audit.json`。這仍是同 job 的 fresh pair
 驗收；writer 已終止後的新 2-rank nonzero reader 已啟動，輸出在
-`paired-checkpoint-readonly-nonzero-2`，其結果待核對。
+`paired-checkpoint-readonly-nonzero-2`；結果如下。
+
+上述非零獨立 reader 已完成：兩份 rank reports 正常退出且無 timeout，
+accepted field 與下一步 field scaled L2 均為 `0`，保存的 adapter／membrane
+bytes 精確 recapture，checksum cleanup／retry 及下一步 7-iteration
+surface／history／ports／守恆比較通過。來源 bundle 的 12 個檔案 hashes
+前後完全一致；來源、writer matrix 與 reader reports／logs 綁定於
+`paired-checkpoint-readonly-nonzero-2-audit.json`。因此同 rank 數完整
+nonzero pair 已證明能由 writer 終止後的新 MPI 作業續跑。
+
+完整 pair 的 surface restore 現在可重分區：讀取每個已驗證的來源
+publication shard，檢查共同 reference／來源 layout／composition／context，
+並要求 stable node IDs 全域剛好覆蓋一次。之後只保留目標 rank 擁有的
+traction／nodal force，以目標 partition identity 和全部來源 payload
+identities 建立新的 producer／projection provenance；舊 partition stamp
+不會被套到新 ownership。同 rank 且 owned IDs／layout／partition identity
+完全相同時仍使用原 payload，保留精確 bytes 還原。fresh membrane owner
+可與來源 owner 不同，既有 owner checkpoint restore 會把完整核心狀態
+重新發布至目標 surface partition。
+
+測試 CLI 新增 `-moving_fsi_checkpoint_source_ranks N`，read-only 作業以
+來源 rank 數建立 compatibility／catalog，目標 MPI communicator 則自行
+建立 surface ownership；accepted surface 及下一步的 field、surface、
+history、ports、守恆均與目標 rank 基準比較。已用目前 frozen 4-rank
+nonzero bundle 啟動 4→2-rank 驗證；來源 bundle hashes 已在執行前保存。
+
+目前 repartition 來源另完成 2-rank zero smoke：publication exact／checksum／
+typed-state／overwrite guards、paired prepare／context rollback、三個 decimal
+steps，以及 strong communicator／precommit／structure／invalid-control 失敗後
+兩步 retry 均通過。211 項 runtime 來源身分與四份 rank reports／logs 已核對
+於 `paired-repartition-head-smoke-audit.json`；nonzero 重分區仍依 frozen
+4→2／4→1 與後續 1→4 作業的獨立證據驗收。
+
+首輪 frozen 4→2 作業已完成 checkpoint restore，但測試在續算前誤要求
+來源 4-rank 與目標 2-rank baseline 的 active-layout SHA 逐位元相同而退出。
+該 SHA 包含 geometry identity；不同 rank 的獨立非零求解可有已通過既定
+數值門檻的 roundoff，因此不能拿此 hash 取代 stable active row catalog
+檢查。兩份 failed reports、logs 與精確來源已保存在
+`paired-repartition-layout-hash-failure-audit.json`，不列為重分區通過。
+測試改為跨 rank 精確比較 active node IDs、port IDs 與 gauge presence；
+同 rank restore 仍要求完整 layout SHA 相同。已停止尚未抵達同一錯誤檢查的
+舊 4→1 作業，待修正版 binary 一併重跑；數值門檻未調整。
+
+最新 publication codec guards 另以 ASan／UBSan 建置並通過，來源與
+sanitized binary 綁定於 `paired-repartition-codec-sanitizer-audit.json`。
+受管理環境的 ptrace 使 LeakSanitizer 在測試開始前無法啟動；因此本次
+address／undefined-behavior 檢查明確使用 `detect_leaks=0`，不宣稱 leak
+掃描結果。修正版 4→2、4→1 與反向 1→4 nonzero 作業目前並行執行。
+
+新增 `scripts/hpc_check_paired_fsi_restart.py` 作為重分區驗收器：它會重新
+驗證每份 rank report、stdout／stderr hashes、兩步完整 strong history、
+checkpoint／continuation marker、來源／目標 rank 模式與輸入 bundle 前後
+hashes，並拒絕超過 `1e-8` 的 accepted／next-field scaled L2。使用先前已
+稽核的 nonzero logs 建立暫存相容 fixture，健康案例通過；把單一 accepted
+error 改為 `1` 後確實非零退出，結果見
+`paired-restart-checker-self-test.json`。該 synthetic self-test 只驗證 checker，
+不新增數值證據；正式結論仍取自修正版實際作業。
+
+修正版 nonzero matrix 最終全部通過。4→2、4→1、1→4 的 accepted field
+scaled L2 分別為 `5.370410638499683e-13`、`3.303457280884551e-13`、
+`5.958747452066621e-13`；下一步分別為 `1.431711374254415e-12`、
+`1.679465531835937e-12`、`1.159705383816217e-12`，均低於原定 `1e-8`。
+三組下一步都以 7 次強耦合迭代收斂，accepted surface、下一步 surface、
+完整 history、ports 與五項守恆量全部通過。Checker 另重新驗證每份 rank
+report、timeout、stdout／stderr digest 及來源 bundle 前後 hashes。
+
+第一輪 1→4 暴露來源 layout 驗證錯誤：程式把目標 rank 的局部 ownership
+切片拿來重建單 rank 來源 layout，因此四 rank 一致在 restore payload 階段
+拒絕。該失敗保存於 `paired-repartition-fixed-1-to-4-failure-audit.json`，不作
+數值通過宣稱。修正後由已認證來源 shards 彼此核對共同 layout identity，並
+另用 reference identity 與 stable node ID 精確全域覆蓋綁定目標；不依賴不同
+rank 分割下可能含無害 roundoff 的重建 geometry hash。修正版 1→4 使用
+`paired-repartition-layout-validation-source-manifest.json`；4→2／4→1 使用
+先前 frozen `paired-repartition-fixed-source-manifest.json`，最後修正不改變其
+正常來源覆蓋與 provenance 路徑。
+
+三份正式結果為 `paired-repartition-fixed-4-to-2-audit.json`、
+`paired-repartition-fixed-4-to-1-audit.json` 與
+`paired-repartition-layout-validation-1-to-4-audit.json`。完整命令、環境、RSS、
+來源對應與限制整理於
+[HPC-05D 完成報告](HPC_05D_MOVING_FSI_RESTART_REPORT.md)。這些作業與其他
+工作負載並行，只提供功能驗收，不作 scaling 或跨節點結論。最終來源與
+證據索引為 `paired-repartition-completion-audit.json`。

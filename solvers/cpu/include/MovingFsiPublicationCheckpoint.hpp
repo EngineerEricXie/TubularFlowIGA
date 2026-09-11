@@ -12,6 +12,12 @@ struct MovingFsiPublicationCheckpoint {
 	std::string composition_identity,material_identity,geometry_identity;
 };
 
+struct MovingFsiPublicationRecords {
+	MovingFsiPublicationCheckpoint state;
+	std::vector<std::uint64_t> node_ids;
+	std::string reference_identity,layout_identity,partition_identity,producer_identity,projection_identity;
+};
+
 // One owned surface slice. The outer bundle authenticates bytes and binds the
 // physical configuration. Repartitioning must explicitly reconstruct slices;
 // the parser never relabels an old publication with a new partition identity.
@@ -78,6 +84,43 @@ inline MovingFsiPublicationCheckpoint ParseMovingFsiPublicationCheckpoint(std::s
 	in.Finish();
 	Require(SerializeMovingFsiPublicationCheckpoint(result,layout,configuration,maximum_nodes)==bytes,"noncanonical FSI publication checkpoint");
 	return result;
+}
+
+// Decode an authenticated source slice without pretending that its saved
+// partition stamp belongs to the destination layout. Global coverage and the
+// new publication provenance are established by the repartitioning factory.
+inline MovingFsiPublicationRecords DecodeMovingFsiPublicationRecords(std::string_view bytes,
+	const std::string& expected_payload_identity,const SurfaceInterfaceRef& interface,
+	const std::string& configuration,const std::string& material_identity,
+	const std::string& geometry_identity,std::uint64_t step,double time_s,std::size_t maximum_nodes=4096)
+{
+	using checkpoint_metadata::Require;
+	Require(bytes.size()<=checkpoint_metadata::maximum_bytes&&IsLowercaseSha256(expected_payload_identity),"invalid FSI payload authority");
+	Sha256 hash;hash.Append(bytes.data(),bytes.size());Require(hash.Hex()==expected_payload_identity,"FSI checkpoint payload hash differs");
+	checkpoint_metadata::Reader in(bytes);MovingFsiPublicationRecords records;auto& result=records.state;
+	Require(in.Text()=="IGA_MOVING_FSI_PUBLICATION/1","unsupported FSI publication checkpoint");
+	Require(in.Text()==configuration,"FSI configuration differs");
+	result.composition_identity=in.Text();result.material_identity=in.Text();result.geometry_identity=in.Text();
+	Require(IsLowercaseSha256(result.composition_identity)&&result.material_identity==material_identity
+		&&result.geometry_identity==geometry_identity,"FSI checkpoint geometry differs");
+	result.context.step=in.Unsigned();result.context.start_time_s=in.Real();result.context.dt_s=in.Real();
+	result.context.coupling_iteration=in.Unsigned();ValidateFsiTrialContext(result.context);
+	Require(result.context.step==step&&result.context.EndTime()==time_s,"FSI accepted clock differs");
+	auto& value=result.traction;value.interface.domain_id=in.Text();value.interface.subsystem_id=in.Text();value.interface.interface_id=in.Text();
+	Require(value.interface==interface,"FSI checkpoint interface differs");
+	records.reference_identity=in.Text();records.layout_identity=in.Text();records.partition_identity=in.Text();
+	records.producer_identity=in.Text();records.projection_identity=in.Text();
+	for(const auto* identity:{&records.reference_identity,&records.layout_identity,&records.partition_identity,
+		&records.producer_identity,&records.projection_identity})Require(IsLowercaseSha256(*identity),"invalid FSI source publication identity");
+	const auto count=in.Unsigned();Require(count<=maximum_nodes,"FSI owned slice exceeds bound");
+	records.node_ids.resize(count);value.traction_on_structure_pa.resize(count);value.consistent_nodal_force_n.resize(count);
+	for(std::size_t row=0;row<count;++row) {
+		records.node_ids[row]=in.Unsigned();
+		Require(row==0||records.node_ids[row-1]<records.node_ids[row],"FSI source node IDs must be sorted and unique");
+		for(double& component:value.traction_on_structure_pa[row])component=in.Real();
+		for(double& component:value.consistent_nodal_force_n[row])component=in.Real();
+	}
+	in.Finish();return records;
 }
 
 } // namespace iga

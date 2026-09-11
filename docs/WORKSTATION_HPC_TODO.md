@@ -2,9 +2,10 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-10。HPC-05C 已接入完整 native graph／CLI，通過新作業續跑、
-三種中斷、1／2／4 ranks 與獨立子群；大型與跨節點排程驗收仍待完成。
-其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
+最近更新：2026-09-10。HPC-03D、HPC-05D、HPC-07A／B 已完成；moving／FSI
+pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。HPC-05C 的大型排程、
+HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。其他既有完成狀態沿用對應報告，
+未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
 [優先順序](#建議開發順序) · [goal 範本](#可複製的-goal-範本) ·
@@ -48,11 +49,11 @@
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（15 項） | HPC-00A、HPC-00B、HPC-00C、HPC-00D、HPC-01A、HPC-01B、HPC-02A、HPC-02B、HPC-02C、HPC-03A、HPC-03B、HPC-03C、HPC-04A、HPC-05A、HPC-05B |
-| 已有部分進度、尚未完成（12 項） | HPC-01C、HPC-01D、HPC-03D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07A、HPC-07B、HPC-07C |
-| 其餘待辦（11 項） | HPC-05D、HPC-06D、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已勾選完成（19 項） | HPC-00A–D、HPC-01A／B、HPC-02A–C、HPC-03A–D、HPC-04A、HPC-05A／B／D、HPC-07A／B |
+| 已有部分進度、尚未完成（9 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07C |
+| 其餘待辦（10 項） | HPC-06D、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 23 項未勾選，其中 12 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 19 項未勾選，其中 9 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -516,7 +517,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [暫態 runtime 進度](progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)、
   [暫態 graph adapter 進度](progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md)、
   [case／正式 graph 驗收](progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md)。
-- [ ] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
+- [x] **HPC-03D：移動幾何。** 支援 active set 改變後的 ownership／halo 更新，
   保存穩定 ID、history extension 與提交／回復語義。先做固定背景分區，
   再依負載變化的量測決定是否加入動態重新分區及狀態搬移。
   Extension 的幾何拓樸已與完整場／dense solve 拆開，serial 回歸數值與四個
@@ -535,8 +536,12 @@ F05 的原始診斷例外保存與恢復亦通過，見
   包含材料 VTP、配置拒絕與 clock roundoff 回歸。薄切割 seed 支撐修正後，
   正式 CLI 的零場啟動已通過 1／2／4 ranks、dt=.0625 的四步 graph／守恆驗收
   與端口數值比較；原 dt=.125 的第二步不收斂紀錄保留。
-  完整 FSI 接線仍待完成，見
-  [移動 extension 進度](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)。
+  完整 FSI 接線、成對提交與 checkpoint 隨後亦已完成；moving runtime 本身的
+  stable-ID state migration、active-set／history rollback 及正式 CLI 驗收已滿足
+  本項門檻。現有量測未支持加入執行中的動態背景重分區，故保留固定背景分區；
+  跨節點另由 HPC-09 驗收。見
+  [移動 extension 進度](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)與
+  [moving／FSI restart 報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)。
 
 驗收：靜態、暫態、移動案例依序通過 1／2／4 rank 比較、介面守恆及失敗重試；
 案例須有足夠元素供分配。多 rank 只能複製完整求解的實作不算完成。
@@ -646,9 +651,16 @@ F05 的原始診斷例外保存與恢復亦通過，見
   所有輸出與分片 payload 精確一致，I/O／fsync／各 rank RSS 另行記錄。
   依狀態契約的規模驗收要求，大型 graph／實際跨節點與 scheduler 訊號轉送仍待
   compute allocation 驗收，故保持未勾選；操作見 [graph restart](COUPLED_RESTART.md)。
-- [ ] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
+- [x] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。
+  浸入式／moving flow 已保存 stable rows、geometry predecessor、history、ports、
+  controls 與守恆狀態，4→2／4→1 新作業能依目標 ownership 還原及續算。完整
+  moving-FSI pair 另保存分散 traction publications 與 owner membrane state；
+  1／2／4 同 rank、新作業 zero／nonzero，以及 4→2、4→1、1→4-rank 非零續算
+  均通過既定 field、surface、history、ports 與守恆門檻。見
+  [完成報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)。Native graph CLI
+  與跨節點排程分別由 HPC-05C、HPC-07D／09 追蹤。
 
 HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 HPC-07D
 整合驗收。HPC-07 不以整個 HPC-05D 完成為前置，避免循環依賴。
@@ -702,14 +714,14 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 [DistributedSurfaceInterface.hpp](../include/DistributedSurfaceInterface.hpp)、
 [StrongFluidStructureCoupling.hpp](../solvers/cpu/include/StrongFluidStructureCoupling.hpp)。
 
-- [ ] **HPC-07A：分散式表面介面。** 定義 owned／ghost surface nodes、
+- [x] **HPC-07A：分散式表面介面。** 定義 owned／ghost surface nodes、
   參考面積權重與跨分區三角形貢獻；驗證全域覆蓋、唯一歸屬與物理身分。
   保留目前匹配介面，不同時導入非匹配投影。
   已盤點現有 publication ownership 與單分區限制，並訂定 ghost、reference
   area、owned-cell traction 及空 rank 的接線契約，見
   [FSI 分區契約](progress/HPC_07_DISTRIBUTED_CONTRACT.md)。多分區空 publication
   slice 已接線，含空 root 的三 rank 覆蓋／拒絕／重試通過；reference 面積與
-  ghost／traction 的實際分散仍待完成。Sparse owner scalar 加總元件已通過
+  ghost／traction 的實際分散隨後由下列元件完成。Sparse owner scalar 加總元件已通過
   三 rank、空 root、UInt64 IDs 與六種故障／重試；reference 三角形面積也已
   接入唯一 triangle owner 的分送，非等面積共享節點與全域面積一致性驗證通過。
   UInt64 owner-to-ghost tuple 元件亦通過三 rank、空 requester 與六種錯誤／
@@ -719,16 +731,17 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   ghost 交換取得局部變形座標／速度，三 rank 解析值及四種拒絕／重試通過；
   owned patch 到完整材料幾何的合成橋接已通過兩步 1／2／4 ranks、空 owner、
   對串行 identities 與錯誤拒絕／重試，見
-  [材料合成進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)；
-  正式 runtime 的多分區接線仍待完成。
-- [ ] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
+  [材料合成進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。正式 moving
+  runtime 已接入多分區 capture、ghost/material composition、traction publication、
+  paired transaction 與 stable-ID restart；1／2／4 ranks 及空 slice 均已驗證。
+- [x] **HPC-07B：牽引力與結構更新。** 分散式計算／傳遞 nodal force、traction、
   位移與速度；用全域合力、力矩及離散功／能量一致性檢查防止遺漏或重算。
   可先由單一 owner 求解小型膜再分送結果，但須明確記錄其串行成本；
   若膜成為瓶頸，再加入分散式結構矩陣與求解。
   已積分 P1 corner forces 已能由唯一 triangle owner 加總至 node owner，
   三 rank 共享節點的合力／力矩／離散功率及六種拒絕／重試通過，見
   [FSI 接線進度](progress/HPC_07_DISTRIBUTED_CONTRACT.md)。流體積分、
-  consistent traction projection 與正式結構更新仍待接線。另已加入按完整
+  consistent traction projection 與正式結構更新由後續元件接線。另已加入按完整
   fluid cell ownership 直接分送力的路徑，保留跨 cell 共享節點貢獻，
   含無介面貢獻的 cell 與五種共同拒絕／重試。共用 P1 force／consistent
   mass 單點核心已接入原 traction consumer，解析積分及原回歸通過。
@@ -736,15 +749,15 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   三 rank 線性製造解及五種共同拒絕／重試通過。同源 P1 point records
   到 owned force／traction 的代數路徑亦已串接，解析 RHS／場值及三種拒絕／
   重試通過。實際 owned-cell IGA stress／catalog 擷取亦已串接，1／3 ranks
-  的壓力與黏性案例對 serial oracle 及共同拒絕／重試通過；trial authority、
-  正式 runtime 接線仍待完成。跨 rank coefficient 位元一致性已接入集體擷取，
+  的壓力與黏性案例對 serial oracle 及共同拒絕／重試通過；trial authority 與
+  正式 runtime 接線由下列 stamped publication 完成。跨 rank coefficient 位元一致性已接入集體擷取，
   1／3／5 ranks 數值回歸及遠端副本衝突拒絕／重試通過。集體擷取亦核對
   material content／patch／viscosity／quadrature settings，同外形不同材料時間
   與黏度分歧的拒絕／重試通過。Expected trial／material／local producer
   identity 綁定入口已加入，所有 ranks 同時用錯狀態的拒絕／重試通過；
   Stamped traction publication 入口已串接完整驗證／組裝／投影，1／3／5 ranks
-  的 stamp、場值與拒絕後 identity 重試通過；正式 runtime transaction、
-  膜更新接線仍待完成。Publication 前已加入全域合力／力矩／P1 離散功率
+  的 stamp、場值與拒絕後 identity 重試通過；正式 runtime transaction 與
+  膜更新由後續 moving runtime 接線。Publication 前已加入全域合力／力矩／P1 離散功率
   gate，1／3／5 ranks 的三種獨立守恆破壞拒絕與健康重試通過。Stamped
   traction 收集到指定膜 owner 的元件也通過含空 owner 的 1／3／5 rank
   數值比較及三種拒絕／重試。指定 solver owner 的單分區 layout／面積轉換
@@ -755,11 +768,14 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   trial 已新增 single-owner runtime，1／3／5 ranks 的兩步解析膜解、
   abort／prepare／commit、phase 拒絕與 committed state 保留通過；strong
   coupling coordinator 與 clamped moving trial 已完成下述接線；完整 FSI
-  checkpoint 仍待完成。
+  checkpoint 隨後由成對 bundle 完成。
   Moving runtime 的 owned patch state capture 與 stamped traction publication
   已接線；兩步 active-layout 改變的 1／2／4-rank oracle 比較通過；同一
   trial 擷取保持 exact，重新數值求解沿用既有逐場 scaled L2 門檻，見
-  [runtime 接線進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
+  [runtime 接線進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。正式
+  distributed moving-fluid transaction、全域守恆 gate、single-owner bounded
+  membrane update 與 kinematics redistribution 已完成。膜矩陣集中成本明確保留；
+  現有證據未支持改為分散式結構矩陣。
 - [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank
@@ -787,9 +803,10 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   續算亦已驗證。流體 4→2／4→1-rank 獨立程序檔案還原與下一步
   續算已通過；2-rank 可變 port controls 的檔案還原與下一步數值解亦
   已通過。非零 FSI pair 的 1／2／4-rank 同作業檔案還原與續算、
-  零解的獨立作業還原亦已通過；非零獨立作業、pair 重分區及跨節點
-  驗收尚待完成，
-  見 [checkpoint 與強耦合進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
+  零解與非零的獨立作業還原，以及 4→2、4→1、1→4-rank pair 重分區均已
+  通過。現在只剩跨節點驗收，見
+  [checkpoint 與強耦合進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)與
+  [重分區完成報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)。
 
 驗收：同一 FSI 問題確實分散計算，單機多 rank 與跨節點結果通過數值門檻；
 清楚區分「流體已平行、膜集中求解」與「流體／結構皆分散」的完成範圍。

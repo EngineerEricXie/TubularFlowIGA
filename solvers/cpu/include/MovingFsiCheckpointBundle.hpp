@@ -45,6 +45,61 @@ inline std::map<std::string,std::size_t> Indices(const CoupledCheckpointManifest
 	}
 	return result;
 }
+inline MovingFsiPublicationCheckpoint RepartitionPublication(const std::filesystem::path& root,
+	const CoupledCheckpointManifest& manifest,const MovingCheckpointLayout& source_layout,
+	const std::map<std::string,std::size_t>& indices,const DistributedSurfaceLayout& target,
+	const SurfaceInterfaceRef& interface,const std::string& configuration,const std::string& material_identity,
+	const std::string& geometry_identity,std::size_t maximum_nodes)
+{
+	using checkpoint_metadata::Require;
+	ValidateDistributedSurfaceLayout(target);Require(target.global_node_count<=maximum_nodes,"FSI target surface exceeds bound");
+	std::map<std::uint64_t,std::pair<std::array<double,3>,std::array<double,3>>> records;
+	std::vector<std::string> payload_identities;std::set<std::string> partitions;
+	std::optional<MovingFsiPublicationRecords> authority;
+	for(auto source_rank:source_layout.world_ranks) {
+		const auto index=indices.at("fsi.rank-"+std::to_string(source_rank));
+		const auto bytes=moving_checkpoint_bundle_detail::Metadata(root,manifest,index);
+		const auto identity=Hash(bytes);payload_identities.push_back(identity);
+		auto shard=DecodeMovingFsiPublicationRecords(bytes,identity,interface,configuration,material_identity,
+			geometry_identity,manifest.epoch.accepted_steps,manifest.epoch.time_s,maximum_nodes);
+		Require(shard.reference_identity==target.reference_mesh_identity_sha256,"FSI source reference mesh differs");
+		Require(partitions.insert(shard.partition_identity).second,"FSI source partition identity repeats");
+		if(!authority)authority.emplace(shard);
+		else Require(shard.layout_identity==authority->layout_identity
+			&&shard.state.context.step==authority->state.context.step
+			&&shard.state.context.start_time_s==authority->state.context.start_time_s
+			&&shard.state.context.dt_s==authority->state.context.dt_s
+			&&shard.state.context.coupling_iteration==authority->state.context.coupling_iteration
+			&&shard.state.composition_identity==authority->state.composition_identity,"FSI source slice epoch differs");
+		for(std::size_t row=0;row<shard.node_ids.size();++row) {
+			Require(records.emplace(shard.node_ids[row],std::make_pair(shard.state.traction.traction_on_structure_pa[row],
+				shard.state.traction.consistent_nodal_force_n[row])).second,"FSI source surface ownership overlaps");
+			Require(records.size()<=target.global_node_count,"FSI source surface coverage exceeds target");
+		}
+	}
+	Require(authority.has_value()&&records.size()==target.global_node_count,"FSI source surface coverage differs");
+	for(const auto& reference:target.reference_positions)Require(records.count(reference.global_node_id)==1,"FSI source surface node missing");
+	MovingFsiPublicationCheckpoint result;result.context=authority->state.context;
+	result.composition_identity=authority->state.composition_identity;result.material_identity=material_identity;result.geometry_identity=geometry_identity;
+	auto& traction=result.traction;traction.interface=interface;traction.stamp.time_s=result.context.EndTime();
+	traction.stamp.step=result.context.step;traction.stamp.coupling_iteration=result.context.coupling_iteration;
+	traction.stamp.reference_mesh_identity_sha256=target.reference_mesh_identity_sha256;
+	traction.stamp.layout_identity_sha256=target.layout_identity_sha256;
+	traction.stamp.partition_identity_sha256=BuildDistributedSurfacePartitionIdentitySha256(target);
+	Sha256 producer;distributed_surface_detail::AppendString(producer,"MovingFsiCheckpoint/repartitioned-producer/v1");
+	for(const auto& identity:payload_identities)distributed_surface_detail::AppendString(producer,identity);
+	distributed_surface_detail::AppendString(producer,traction.stamp.partition_identity_sha256);
+	traction.stamp.producer_state_identity_sha256=producer.Hex();
+	for(auto id:target.owned_global_node_ids) {
+		traction.traction_on_structure_pa.push_back(records.at(id).first);
+		traction.consistent_nodal_force_n.push_back(records.at(id).second);
+	}
+	Sha256 projection;distributed_surface_detail::AppendString(projection,"MovingFsiCheckpoint/repartitioned-projection/v1");
+	distributed_surface_detail::AppendString(projection,traction.stamp.producer_state_identity_sha256);
+	for(const auto* values:{&traction.traction_on_structure_pa,&traction.consistent_nodal_force_n})
+		for(const auto& tuple:*values)for(double value:tuple)projection.AppendNormalizedDouble(value);
+	traction.projection_identity_sha256=projection.Hex();ValidateSurfaceTraction(traction,target);return result;
+}
 }
 
 // Collective capture and local shard writes; the caller must gather receipts
@@ -117,10 +172,9 @@ inline std::unique_ptr<RestoredMovingFsiPair> RestoreMovingFsiCheckpoint(MPI_Com
 	int rank=0,size=0;MPI_Comm_rank(comm,&rank);MPI_Comm_size(comm,&size);
 	std::map<std::string,std::size_t> indices;std::unique_ptr<RestoredMovingFsiPair> result;std::string agreement;
 	CollectiveLocalStage(comm,"paired checkpoint restore catalog",[&] {
-		// Fluid fields already support repartitioning. Surface publication shards
-		// currently require the saved ownership; never silently relabel them.
-		checkpoint_metadata::Require(source_layout.world_ranks.size()==static_cast<std::size_t>(size)
-			&&target_owner>=0&&target_owner<size,"paired surface restore requires saved rank count and valid owner");
+		// Fluid fields and surface publications are restored independently into
+		// target ownership; saved surface stamps are never silently relabeled.
+		checkpoint_metadata::Require(target_owner>=0&&target_owner<size,"paired surface restore requires valid target owner");
 		indices=moving_fsi_checkpoint_detail::Indices(manifest,source_layout,source_membrane_owner);
 		Sha256 hash;hash.AppendLittleEndian64(source_membrane_owner);hash.AppendLittleEndian64(target_owner);
 		distributed_surface_detail::AppendString(hash,SerializeCoupledCheckpointManifest(manifest));
@@ -136,12 +190,31 @@ inline std::unique_ptr<RestoredMovingFsiPair> RestoreMovingFsiCheckpoint(MPI_Com
 		result->fluid=AllocateCollectiveRuntime<ImmersedMovingDistributedFsiRuntime>(comm,*result->flow,map,fluid_interface,provider,target_owner,policy,limits);
 		std::optional<DistributedSurfaceLayout> partition;
 		std::optional<DistributedSurfaceInterface> structure_interface,membrane_fluid_interface;
-		std::vector<std::uint64_t> clamps;std::string publication,metadata_identity;
+		std::vector<std::uint64_t> clamps;std::string metadata_identity;
+		MovingFsiPublicationCheckpoint publication;
 		std::optional<SingleOwnerMembraneCheckpoint> structure;
 		CollectiveLocalStage(comm,"paired checkpoint restore payloads",[&] {
 			partition.emplace(map.Layout());structure_interface.emplace(map.Interface());membrane_fluid_interface.emplace(fluid_interface);
 			clamps=map.ConfiguredClampedGlobalNodeIds();
-			publication=moving_checkpoint_bundle_detail::Metadata(root,manifest,indices.at("fsi.rank-"+std::to_string(source_layout.world_ranks.at(rank))));
+			const auto& geometry=result->flow->CommittedGeometry();
+			bool direct=false;std::string bytes;
+			if(source_layout.world_ranks.size()==static_cast<std::size_t>(size)) {
+				bytes=moving_checkpoint_bundle_detail::Metadata(root,manifest,
+					indices.at("fsi.rank-"+std::to_string(source_layout.world_ranks.at(rank))));
+				const auto records=DecodeMovingFsiPublicationRecords(bytes,moving_fsi_checkpoint_detail::Hash(bytes),fluid_interface.id,
+					result->fluid->CheckpointConfigurationIdentity(),geometry.Evaluation().ContentIdentitySha256(),geometry.GeometryIdentitySha256(),
+					manifest.epoch.accepted_steps,manifest.epoch.time_s,policy.maximum_patch_nodes);
+				direct=records.layout_identity==map.Layout().layout_identity_sha256
+					&&records.partition_identity==BuildDistributedSurfacePartitionIdentitySha256(map.Layout())
+					&&records.node_ids==map.Layout().owned_global_node_ids;
+			}
+			if(direct) {
+				publication=ParseMovingFsiPublicationCheckpoint(bytes,moving_fsi_checkpoint_detail::Hash(bytes),map.Layout(),fluid_interface.id,
+					result->fluid->CheckpointConfigurationIdentity(),geometry.Evaluation().ContentIdentitySha256(),geometry.GeometryIdentitySha256(),
+					manifest.epoch.accepted_steps,manifest.epoch.time_s,policy.maximum_patch_nodes);
+			} else publication=moving_fsi_checkpoint_detail::RepartitionPublication(root,manifest,source_layout,indices,map.Layout(),fluid_interface.id,
+				result->fluid->CheckpointConfigurationIdentity(),geometry.Evaluation().ContentIdentitySha256(),
+				geometry.GeometryIdentitySha256(),policy.maximum_patch_nodes);
 			const auto metadata=moving_checkpoint_bundle_detail::Metadata(root,manifest,indices.at("membrane.metadata"));
 			metadata_identity=moving_fsi_checkpoint_detail::Hash(metadata);
 			if(rank==target_owner)structure.emplace(SingleOwnerMembraneCheckpoint{metadata,
@@ -149,10 +222,7 @@ inline std::unique_ptr<RestoredMovingFsiPair> RestoreMovingFsiCheckpoint(MPI_Com
 		});
 		result->membrane=AllocateCollectiveRuntime<SingleOwnerMembraneRuntime>(comm,comm,std::move(*partition),target_owner,
 			std::move(*structure_interface),std::move(*membrane_fluid_interface),material,std::move(clamps),membrane_options,limits);
-		// Publication hash is derived only after authenticated shard reading.
-		std::string publication_identity;
-		CollectiveLocalStage(comm,"paired checkpoint publication hash",[&] { publication_identity=moving_fsi_checkpoint_detail::Hash(publication); });
-		result->fluid->RestoreCheckpoint(publication,publication_identity);
+		result->fluid->RestoreCheckpointState(std::move(publication));
 		result->membrane->RestoreCheckpoint(structure?&*structure:nullptr,metadata_identity);
 		CollectiveLocalStage(comm,"paired checkpoint final context gate",[&] {
 			moving_fsi_checkpoint_detail::RequireContext(result->fluid->CommittedContext(),result->membrane->CommittedContext(),manifest.epoch);
