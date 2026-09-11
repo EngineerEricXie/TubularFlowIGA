@@ -19,6 +19,8 @@ checkpoint_root=${IGA_CHECKPOINT_ROOT:?Set IGA_CHECKPOINT_ROOT on the shared fil
 PETSC_ARCH=${PETSC_ARCH:-}
 module load openmpi/4.0.5-gcc10.2.0
 
+attempt=${SLURM_RESTART_COUNT:-0}
+
 if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 || ${SLURM_NTASKS:-0} -lt 2 ]]; then
 	echo "multinode_graph.sbatch requires at least two nodes and two tasks" >&2
 	exit 2
@@ -26,6 +28,15 @@ fi
 if [[ ! -x ${repo_root}/solvers/coupling/iga_multidomain_flow ]]; then
 	echo "build solvers/coupling/iga_multidomain_flow before submission" >&2
 	exit 2
+fi
+if [[ ${IGA_GRAPH_PREPARE:-0} == 1 && ${attempt} == 0 ]]; then
+	fixture=${repo_root}/solvers/coupling/hpc_duct_solver_fixture
+	if [[ ! -x ${fixture} ]]; then
+		echo "build solvers/coupling/hpc_duct_solver_fixture before submission" >&2
+		exit 2
+	fi
+	"${fixture}" "${source_case}" "${IGA_GRAPH_TRANSVERSE:-16}" \
+		"${IGA_GRAPH_AXIAL:-64}" "${SLURM_NTASKS}" "${IGA_GRAPH_STEPS:-8}"
 fi
 if [[ ${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK}} != "${SLURM_CPUS_PER_TASK}" ]]; then
 	echo "OMP_NUM_THREADS must equal SLURM_CPUS_PER_TASK" >&2
@@ -42,11 +53,16 @@ export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export IGA_PROFILE=1
 
-attempt=${SLURM_RESTART_COUNT:-0}
 attempt_root=${shared_output}/attempt-${attempt}
 result=${attempt_root}/scheduler.json
 mkdir -p "${attempt_root}" "${checkpoint_root}"
 test -d "${source_case}"
+srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
+	--ntasks-per-node=1 --cpus-per-task=1 hostname | sort -u >"${attempt_root}/nodes.txt"
+if [[ $(wc -l <"${attempt_root}/nodes.txt") -lt 2 ]]; then
+	echo "graph allocation did not expose two distinct hosts" >&2
+	exit 2
+fi
 
 # Each node receives an identical private input tree. Outputs and checkpoints
 # stay on the shared filesystem so a later allocation can resume them.
@@ -76,18 +92,35 @@ python3 "${repo_root}/scripts/hpc_scheduler_record.py" --output "${result}" \
 
 checkpoint_requested=0
 launcher_pid=
+timer_pid=
 forward_checkpoint()
 {
 	checkpoint_requested=1
 	if [[ -n ${launcher_pid} ]]; then kill -USR1 "${launcher_pid}"; fi
 }
 trap forward_checkpoint USR1
+if [[ ${IGA_CHECKPOINT_TEST_DELAY:-0} != 0 && ${attempt} == 0 ]]; then
+	batch_pid=$$
+	(
+		sleep "${IGA_CHECKPOINT_TEST_DELAY}"
+		kill -USR1 "${batch_pid}"
+	) &
+	timer_pid=$!
+fi
 set +e
 "${command[@]}" >"${attempt_root}/solver.stdout" 2>"${attempt_root}/solver.stderr" &
 launcher_pid=$!
 wait "${launcher_pid}"
 status=$?
+while (( checkpoint_requested && status >= 128 )) && kill -0 "${launcher_pid}" 2>/dev/null; do
+	wait "${launcher_pid}"
+	status=$?
+done
 set -e
+if [[ -n ${timer_pid} ]]; then
+	kill "${timer_pid}" 2>/dev/null || true
+	wait "${timer_pid}" 2>/dev/null || true
+fi
 trap - USR1
 
 record_args=(--output "${result}" --returncode "${status}")

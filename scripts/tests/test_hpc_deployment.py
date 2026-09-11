@@ -24,6 +24,24 @@ build = load("hpc_build_manifest")
 scaling = load("hpc_cross_node_scaling")
 prepare = load("hpc_prepare_scaling_cases")
 tiers = load("hpc_test_tiers")
+finalize = load("hpc_finalize_cross_node")
+
+
+def write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value) + "\n")
+
+
+def build_manifest(revision):
+    return {"kind": "hpc_build_manifest", "dependency_status": "passed",
+            "source": {"commit": {"returncode": 0, "output": revision},
+                       "status_porcelain": {"returncode": 0, "output": ""}},
+            "binaries": [{"exists": True}]}
+
+
+def rank_run(hostname, rank=0, ranks=2):
+    return {"kind": "hpc_rank_run", "status": "process_passed", "returncode": 0,
+            "timed_out": False, "hostname": hostname, "rank": rank, "ranks": ranks}
 
 
 class DeploymentTests(unittest.TestCase):
@@ -92,6 +110,84 @@ class DeploymentTests(unittest.TestCase):
             self.assertNotEqual(subprocess.run([sys.executable,
                 str(SCRIPTS / "hpc_hash_tree.py"), "--root", str(tree),
                 "--output", str(output)], capture_output=True, text=True).returncode, 0)
+
+    def test_cross_node_finalizer_accepts_complete_same_revision_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = "a" * 40
+            graph, fsi, scaling_root = root / "graph", root / "fsi", root / "scaling"
+            for attempt, status in ((0, "checkpointed"), (1, "passed")):
+                location = graph / f"attempt-{attempt}"
+                write_json(location / "scheduler.json", {
+                    "kind": "hpc_scheduler_attempt", "status": status, "returncode": 0,
+                    "checkpoint_requested": attempt == 0,
+                    "command": ["solver"] + (["--restart-dir", "checkpoint"] if attempt else []),
+                    "slurm": {"SLURM_JOB_NUM_NODES": "2", "SLURM_JOB_ID": "91",
+                              "SLURM_RESTART_COUNT": str(attempt)}})
+                write_json(location / "build.json", build_manifest(revision))
+                (location / "nodes.txt").write_text("node-a\nnode-b\n")
+            write_json(graph / "attempt-1/results/graph_binding_manifest.json", {})
+
+            write_json(fsi / "scheduler.json", {"kind": "hpc_scheduler_attempt",
+                "status": "passed", "returncode": 0,
+                "slurm": {"SLURM_JOB_NUM_NODES": "2", "SLURM_JOB_ID": "92"}})
+            write_json(fsi / "build.json", build_manifest(revision))
+            write_json(fsi / "scheduled/result.json", {"kind": "hpc_test_tier",
+                "tier": "scheduled", "status": "passed", "commands": [{}],
+                "source_commit": revision})
+            write_json(fsi / "strong-fsi.json", {"status": "passed"})
+            write_json(fsi / "paired-restart.json", {"status": "passed",
+                "source_ranks": 4, "target_ranks": 2})
+            for run in ("writer-4", "reader-2"):
+                write_json(fsi / run / "rank-0/run.json", rank_run("node-a", 0))
+                write_json(fsi / run / "rank-1/run.json", rank_run("node-b", 1))
+
+            ranks, repetitions = [1, 256], 3
+            inputs, runs, summary = {}, [], {"strong": {}, "weak": {}}
+            for mode in ("strong", "weak"):
+                for count in ranks:
+                    elements = 16384 if mode == "strong" else 256 * count
+                    inputs[f"{mode}-{count}"] = {
+                        "elements": elements, "elements_per_rank": elements / count}
+                    summary[mode][str(count)] = {"elements_per_rank": elements / count,
+                        "max_rank_process_wall_s": {}, "max_rank_peak_rss_bytes": {},
+                        "solver_iterations": [2] * repetitions, "speedup_vs_one_rank": 1,
+                        "parallel_efficiency": 1,
+                        "phases_max_rank_exclusive_s": {"communication": {}}}
+                    for repetition in range(repetitions):
+                        run_dir = scaling_root / f"{mode}-np{count}-repeat{repetition}"
+                        if count == 256:
+                            write_json(run_dir / "rank-0/run.json", rank_run("node-a", 0, count))
+                            write_json(run_dir / "rank-1/run.json", rank_run("node-b", 1, count))
+                        runs.append({"mode": mode, "ranks": count, "repetition": repetition,
+                            "directory": str(run_dir), "status": "passed",
+                            "physical_validation": {"returncode": 0},
+                            "field_comparison": {"velocity": {"passed": True},
+                                "pressure": {"passed": True}} if mode == "strong" else {}})
+            write_json(scaling_root / "summary.json", {"kind": "hpc_cross_node_scaling",
+                "status": "passed", "source_status": [], "source_commit": revision,
+                "allocation": {"SLURM_JOB_NUM_NODES": "2", "SLURM_JOB_ID": "93"},
+                "ranks": ranks, "repetitions": repetitions, "inputs": inputs,
+                "runs": runs, "summary": summary})
+            write_json(root / "scaling.build.json", build_manifest(revision))
+            acceptance = root / "acceptance.json"
+            result = subprocess.run([sys.executable, str(SCRIPTS / "hpc_finalize_cross_node.py"),
+                "--graph-output", str(graph), "--fsi-output", str(fsi),
+                "--scaling-output", str(scaling_root), "--output", str(acceptance)],
+                cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(acceptance.read_text())
+            self.assertEqual(report["status"], "passed")
+            self.assertEqual(len(report["completed_items"]), 7)
+
+    def test_cross_node_finalizer_rejects_dirty_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "build.json"
+            report = build_manifest("b" * 40)
+            report["source"]["status_porcelain"]["output"] = " M solver.cpp"
+            write_json(path, report)
+            with self.assertRaisesRegex(ValueError, "not clean"):
+                finalize.build_revision(path)
 
 
 if __name__ == "__main__":

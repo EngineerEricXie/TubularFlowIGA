@@ -62,11 +62,17 @@ checkpoints remain on a shared filesystem.
 Submit from a login node after building in a compatible compute allocation:
 
 ```bash
+make hpc-cross-node-binaries PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH"
+```
+
+```bash
 export IGA_GRAPH_CASE=/shared/cases/native-graph
 export IGA_OUTPUT_ROOT=/shared/results/graph-${USER}
 export IGA_CHECKPOINT_ROOT=/shared/checkpoints/graph-${USER}
+export IGA_GRAPH_PREPARE=1
+export IGA_CHECKPOINT_TEST_DELAY=60
 sbatch -A "$PROJECT_ACCOUNT" \
-  --export=ALL,IGA_GRAPH_CASE,IGA_OUTPUT_ROOT,IGA_CHECKPOINT_ROOT,PETSC_DIR,PETSC_ARCH \
+  --export=ALL,IGA_GRAPH_CASE,IGA_OUTPUT_ROOT,IGA_CHECKPOINT_ROOT,IGA_GRAPH_PREPARE,IGA_CHECKPOINT_TEST_DELAY,PETSC_DIR,PETSC_ARCH \
   solvers/cpu/slurm/multinode_graph.sbatch
 ```
 
@@ -77,6 +83,15 @@ published checkpoint. The script records `checkpointed` and requeues by
 default. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
 attempt uses `attempt-$SLURM_RESTART_COUNT`; a resumed attempt adds
 `--restart-dir` when a published generation exists.
+
+With `IGA_GRAPH_PREPARE=1`, attempt zero creates a 16,384-element, eight-step
+native graph packed for the allocated rank count. `IGA_CHECKPOINT_TEST_DELAY=60`
+sends a controlled `SIGUSR1` to the batch shell after one minute, exercising the
+same trap used by Slurm's wall-time warning. The first attempt must publish an
+accepted-step checkpoint and requeue; the next attempt discovers that generation
+and completes from it. Use new shared case, output, and checkpoint paths. Set both
+variables to zero when running a separately prepared production graph and relying
+only on the scheduler warning.
 
 This job is for shared-mode native 0D/1D/body-fitted-3D graphs. Grouped graph
 checkpoint/restart and native moving/FSI graph checkpoint are current
@@ -102,6 +117,9 @@ two ranks per node, and a new two-rank read-only process restored from the
 four-rank pair bundle. The existing checkers enforce fields, unique owned rows
 and surface IDs, force/traction, Aitken history, ports, conservation, iteration
 counts, 4-to-2 repartition provenance, and immutable checkpoint bytes.
+It first runs the `scheduled` test tier with one MPI rank on each node, so the
+same job also provides the required small cross-node test result and skip-free
+`result.json`.
 
 ```bash
 export IGA_FSI_OUTPUT=/shared/results/fsi-cross-node-${USER}
@@ -150,6 +168,23 @@ sbatch -A "$PROJECT_ACCOUNT" \
   --export=ALL,IGA_SCALING_CASE_ROOT,IGA_SCALING_OUTPUT,IGA_SCALING_RANKS,IGA_SCALING_PREPARE,PETSC_DIR,PETSC_ARCH \
   solvers/cpu/slurm/cross_node_scaling.sbatch
 ```
+
+After all three jobs pass, consolidate their evidence. The command rejects
+single-node results, dirty or mismatched revisions, a missing graph requeue,
+skipped scheduled tests, FSI runs that do not span two hostnames, incomplete
+repetitions, tiny strong/weak cases, missing numerical checks, and absent wall,
+iteration, RSS, or communication metrics:
+
+```bash
+python3 scripts/hpc_finalize_cross_node.py \
+  --graph-output /shared/results/graph-${USER} \
+  --fsi-output /shared/results/fsi-cross-node-${USER} \
+  --scaling-output /shared/results/scaling-${USER} \
+  --output /shared/results/cross-node-acceptance-${USER}.json
+```
+
+Only a `status: passed` result from this finalizer closes HPC-05C, HPC-07C/D,
+and HPC-09A-D. Preserve the referenced output trees with the acceptance file.
 
 Auto-preparation requires the prebuilt
 `solvers/coupling/hpc_duct_solver_fixture`. Set `IGA_SCALING_PREPARE=0` to use

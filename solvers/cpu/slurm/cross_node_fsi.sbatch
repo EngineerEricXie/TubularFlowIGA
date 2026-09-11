@@ -19,8 +19,9 @@ if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 || ${SLURM_NTASKS:-0} -lt 4 ]]; then
 	exit 2
 fi
 binary=${repo_root}/solvers/cpu/immersed_moving_distributed_fsi_runtime_test
-if [[ ! -x ${binary} ]]; then
-	echo "build immersed_moving_distributed_fsi_runtime_test before submission" >&2
+scheduled_binary=${repo_root}/solvers/cpu/distributed_immersed_extension_test
+if [[ ! -x ${binary} || ! -x ${scheduled_binary} ]]; then
+	echo "build immersed_moving_distributed_fsi_runtime_test and distributed_immersed_extension_test before submission" >&2
 	exit 2
 fi
 mkdir "${output}"
@@ -34,14 +35,18 @@ export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 python3 "${repo_root}/scripts/hpc_build_manifest.py" --component cpu \
 	--dependency-status passed --output "${output}/build.json" --binary "${binary}"
+python3 "${repo_root}/scripts/hpc_test_tiers.py" --tier scheduled --timeout 1800 \
+	--output-dir "${output}/scheduled"
 
 run_fsi()
 {
 	local ranks=$1
 	local destination=$2
+	local ranks_per_node=1
+	if (( ranks >= 4 )); then ranks_per_node=2; fi
 	shift 2
 	mkdir "${destination}"
-	mpiexec --map-by ppr:2:node --bind-to core --report-bindings -np "${ranks}" \
+	mpiexec --map-by "ppr:${ranks_per_node}:node" --bind-to core --report-bindings -np "${ranks}" \
 		python3 "${repo_root}/scripts/hpc_rank_run.py" \
 		--output-dir "${destination}" --expected-ranks "${ranks}" --timeout 7200 -- \
 		"${binary}" strong -immersed_moving_mat_mumps_icntl_14 100 "$@"

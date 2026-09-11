@@ -19,6 +19,9 @@
   每個節點的 NVMe，結果與 checkpoint 保留在 shared filesystem。Slurm 的 batch
   shell 預警會明確轉送至 Open MPI ranks，完成下一個 accepted step checkpoint 後
   才重提交流程。
+  它可在 attempt zero 自動建立 16,384-element、8-step graph，並以可控延遲將
+  SIGUSR1 送至與 Slurm `B:` 預警相同的 shell trap；第一個作業 checkpoint 後
+  requeue，下一個 attempt 自動 discovery／restart。
 - `hpc_cross_node_scaling.py` 與 `cross_node_scaling.sbatch` 提供 exclusive Slurm
   strong／weak scaling。Collector 要求至少三次 repetition、strong 一 rank 數值
   參考、每次 native physical validation，以及 weak elements/rank 容許範圍；輸出
@@ -28,9 +31,15 @@
 - `cross_node_fsi.sbatch` 將 1-rank reference、跨兩節點 4-rank nonzero strong
   FSI writer 與新 2-rank read-only pair restore 串成單一驗收；既有 checkers 驗證
   完整 field／surface／history／ports／守恆、4→2 重分區及 checkpoint bytes 不變。
+  同一作業先以每節點一 rank 執行 scheduled tier，避免只驗大型 fixture 而缺少
+  小型跨節點測試層。
 - 根 README、Bridges-2 guide、文件索引及新的
   [HPC deployment guide](../HPC_DEPLOYMENT.md) 已更新能力、限制與可重現命令。
   Grouped checkpoint／immersed、native moving／FSI graph restart 與跨節點證據均明列。
+- `hpc_finalize_cross_node.py` 統一核對三個作業的 clean、相同 revision、兩節點
+  hostname、graph signal/requeue/restart、scheduled tier、FSI 4→2 restart、完整
+  repetitions、物理解與數值比較，以及 wall／iteration／RSS／communication 指標。
+  只有它產生 `status: passed` 才能關閉尚待 allocation 的七項工作。
 
 ## 本機驗收
 
