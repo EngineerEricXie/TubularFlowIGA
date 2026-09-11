@@ -1,9 +1,12 @@
+#include "MovingCheckpointRestore.hpp"
+#include "CollectiveCheckpointReceipts.hpp"
 #include "ImmersedMovingDistributedFsiRuntime.hpp"
 #include "DistributedStrongFsiStep.hpp"
 #include "CompliantChannelFsiFixture.hpp"
 #include "DistributedFsiCommitCoordinator.hpp"
 #define IGA_SINGLE_OWNER_MEMBRANE_TESTING
 #include "SingleOwnerMembraneRuntime.hpp"
+#include "MovingFsiCheckpointBundle.hpp"
 #define main MovingRuntimeRegressionMain
 #include "test_immersed_moving_distributed_runtime.cpp"
 #undef main
@@ -88,6 +91,12 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 		input.displacement_m[i][2]=.006;input.velocity_m_per_s[i][2]=.006;
 	}
 	if(strong) {
+		char paired_root[4096]={};
+		Require(!PetscOptionsGetString(nullptr,nullptr,"-moving_fsi_checkpoint_root",paired_root,sizeof(paired_root),nullptr),"invalid paired checkpoint option");
+		PetscBool paired_read_only=PETSC_FALSE;
+		Require(!PetscOptionsGetBool(nullptr,nullptr,"-moving_fsi_checkpoint_read_only",&paired_read_only,nullptr),"invalid paired checkpoint read mode");
+		Require(!paired_read_only||paired_root[0],"paired read-only mode requires checkpoint root");
+		std::unique_ptr<iga::RestoredMovingFsiPair> restored_pair;
 		if(exhaustion) {
 			context.coupling_iteration=0;
 			auto controls=iga::compliant_channel_fixture::CouplingOptions();controls.maximum_iterations=1;
@@ -193,7 +202,114 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 					std::cout<<std::endl;
 				});
 			}
+			if(paired_root[0]&&step==0) {
+				const auto hash=[](const std::string& bytes) { return iga::moving_fsi_checkpoint_detail::Hash(bytes); };
+				const auto configuration=hash("paired-strong-checkpoint/v1");
+				const iga::CoupledCheckpointEpoch epoch{hash(paired_root),{},
+					{configuration,configuration,hash(std::to_string(size)),static_cast<std::uint32_t>(size)},context.step,context.EndTime(),context.dt_s};
+				iga::MovingCheckpointLayout source;source.domain_id="flow";
+				for(int member=0;member<size;++member)source.world_ranks.push_back(member);
+				const auto catalog=iga::MovingFsiCheckpointCatalog(source,size,size-1);
+				if(!paired_read_only) {
+					iga::CollectiveLocalStage(comm,"paired file fixture create",[&] {
+						if(rank==0) { Require(std::filesystem::create_directory(paired_root),"paired fixture directory exists");iga::CreateCoupledCheckpointEpoch(paired_root,epoch); }
+					});
+					const auto local=iga::WriteMovingFsiCheckpointShards(comm,paired_root,epoch,source,size-1,configuration,runtime,fluid,structure);
+					const auto receipts=iga::GatherCheckpointReceipts(comm,epoch,local);
+					iga::CollectiveLocalStage(comm,"paired file fixture publish",[&] {
+						if(rank==0)(void)iga::PublishCoupledCheckpoint(paired_root,epoch,catalog,receipts);
+					});
+				}
+				std::optional<iga::CoupledCheckpointManifest> manifest;
+				iga::CollectiveLocalStage(comm,"paired file fixture discover",[&] {
+					const auto found=iga::FindLatestCoupledCheckpoint(paired_root,epoch.compatibility,catalog);
+					Require(found.latest.has_value()&&found.rejected.empty(),"paired checkpoint not found");manifest=found.latest;
+				});
+				const auto restore=[&](const iga::CoupledCheckpointManifest& saved) {
+					return iga::RestoreMovingFsiCheckpoint(comm,paired_root,saved,source,size-1,configuration,grid,geometry_options,options,map,interface,
+						[&](const iga::MovingCutGeometry&,const iga::MaterialSurfaceKinematics& target) { return iga::MovingCutGeometry::Build(grid,target,geometry_options); },
+						size-1,policy,deforming?iga::compliant_channel_fixture::MembraneMaterial():iga::PretensionedMembraneMaterial{1,.1,1,1});
+				};
+				const auto original_field=Owned(runtime.CommittedState());const auto original_publication=fluid.CaptureCheckpoint();
+				const auto original_membrane=structure.CaptureCheckpoint();
+				auto corrupt=*manifest;
+				for(auto& shard:corrupt.shards)if(shard.spec.id=="flow.membrane.numerical")shard.sha256=hash("wrong payload hash");
+				Reject(comm,[&] { auto rejected=restore(corrupt);rejected->Close(); });
+				restored_pair=restore(*manifest);
+				const auto restored_publication=restored_pair->fluid->CaptureCheckpoint();
+				const auto restored_membrane=restored_pair->membrane->CaptureCheckpoint();
+				double local_restore_error[2]={},global_restore_error[2]={};
+				iga::CollectiveLocalStage(comm,"paired file fixture exact restore",[&] {
+					const auto actual=Owned(restored_pair->flow->CommittedState());Require(actual.size()==original_field.size(),"paired restored field shape differs");
+					Require(restored_pair->flow->CommittedLayout().HashSha256()==runtime.CommittedLayout().HashSha256(),"paired restored active layout differs");
+					Require(original_membrane.has_value()==restored_membrane.has_value(),"paired restored membrane owner differs");
+					for(std::size_t row=0;row<actual.size();++row) { const double delta=actual[row]-original_field[row];local_restore_error[0]+=delta*delta;local_restore_error[1]+=original_field[row]*original_field[row]; }
+					if(!paired_read_only) {
+						Require(actual==original_field,"paired restored field differs");
+						Require(restored_publication==original_publication,"paired restored publication differs");
+						if(original_membrane)Require(original_membrane->metadata==restored_membrane->metadata&&original_membrane->numerical==restored_membrane->numerical,"paired restored membrane differs");
+					}
+					const auto indices=iga::moving_fsi_checkpoint_detail::Indices(*manifest,source,size-1);
+					Require(restored_publication==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("fsi.rank-"+std::to_string(rank))),"paired publication differs from saved file");
+					if(restored_membrane) {
+						Require(restored_membrane->metadata==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("membrane.metadata")),"paired membrane metadata differs from file");
+						Require(restored_membrane->numerical==iga::moving_checkpoint_bundle_detail::Metadata(paired_root,*manifest,indices.at("membrane.numerical")),"paired membrane state differs from file");
+					}
+					Require(Owned(runtime.CommittedState())==original_field,"paired failed candidate changed original fluid");
+				});
+				MPI_Allreduce(local_restore_error,global_restore_error,2,MPI_DOUBLE,MPI_SUM,comm);
+				const double restore_error=std::sqrt(global_restore_error[0])/std::max(1.,std::sqrt(global_restore_error[1]));Require(restore_error<1e-8,"paired restored field differs from independent baseline");
+				std::cout<<"moving_fsi_file_checkpoint rank="<<rank<<" ranks="<<size<<" read_only="<<paired_read_only<<" exact_file_publications=1 accepted_field_scaled_l2="<<restore_error<<" checksum_cleanup_retry=1 passed"<<std::endl;
+			}
+			if(restored_pair&&step==1) {
+				const auto continued=iga::SolveDistributedStrongFsiStep(comm,*restored_pair->fluid,*restored_pair->membrane,map,
+					restored_pair->flow->CommittedGeometry().Evaluation(),context,iga::compliant_channel_fixture::CouplingOptions());
+				const auto reference=Owned(runtime.CommittedState()),actual=Owned(restored_pair->flow->CommittedState());
+				const auto reference_conservation=runtime.ConservationDiagnostics(),actual_conservation=restored_pair->flow->ConservationDiagnostics();
+				double local_error[2]={},global_error[2]={};
+				iga::CollectiveLocalStage(comm,"paired continuation comparison",[&] {
+					const auto near=[](double expected,double obtained) {
+						Require(std::isfinite(expected)&&std::isfinite(obtained)&&std::abs(expected-obtained)<=1e-12+1e-6*std::abs(expected),"paired continued diagnostic differs");
+					};
+					Require(actual.size()==reference.size()&&continued.history.size()==result.history.size(),"paired continuation shape or iterations differ");
+					for(std::size_t row=0;row<actual.size();++row) { const double delta=actual[row]-reference[row];local_error[0]+=delta*delta;local_error[1]+=reference[row]*reference[row]; }
+					const auto& expected=structure.CommittedKinematics();const auto& obtained=restored_pair->membrane->CommittedKinematics();
+					const auto& expected_traction=fluid.CommittedTraction();const auto& obtained_traction=restored_pair->fluid->CommittedTraction();
+					Require(expected.displacement_m.size()==obtained.displacement_m.size(),"paired continued surface shape differs");
+					for(std::size_t row=0;row<expected.displacement_m.size();++row)for(int axis=0;axis<3;++axis) {
+						Require(std::abs(expected.displacement_m[row][axis]-obtained.displacement_m[row][axis])<1e-12,"paired continued displacement differs");
+						Require(std::abs(expected.velocity_m_per_s[row][axis]-obtained.velocity_m_per_s[row][axis])<1e-12,"paired continued velocity differs");
+						near(expected_traction.traction_on_structure_pa[row][axis],obtained_traction.traction_on_structure_pa[row][axis]);
+						near(expected_traction.consistent_nodal_force_n[row][axis],obtained_traction.consistent_nodal_force_n[row][axis]);
+					}
+					for(std::size_t iteration=0;iteration<result.history.size();++iteration) {
+						const auto& a=result.history[iteration];const auto& b=continued.history[iteration];
+						near(a.displacement.area_weighted_rms_residual_m,b.displacement.area_weighted_rms_residual_m);
+						near(a.displacement.max_residual_m,b.displacement.max_residual_m);
+						near(a.displacement.displacement_scale_m,b.displacement.displacement_scale_m);
+						near(a.displacement.convergence_threshold_m,b.displacement.convergence_threshold_m);
+						near(a.maximum_velocity_residual_times_dt_m,b.maximum_velocity_residual_times_dt_m);near(a.relaxation,b.relaxation);
+					}
+					const auto& ports=runtime.Diagnostics().ports;const auto& restored_ports=restored_pair->flow->Diagnostics().ports;
+					Require(ports.size()==restored_ports.size(),"paired continued port count differs");
+					for(std::size_t port=0;port<ports.size();++port) {
+						Require(ports[port].id==restored_ports[port].id,"paired continued port ID differs");
+						const auto& a=ports[port].measurement;const auto& b=restored_ports[port].measurement;
+						near(a.area_m2,b.area_m2);near(a.outward_flow_m3_s,b.outward_flow_m3_s);
+						near(a.mean_pressure_pa,b.mean_pressure_pa);near(a.mean_normal_traction_pa,b.mean_normal_traction_pa);
+					}
+					const auto& a=reference_conservation;const auto& b=actual_conservation;
+					near(a.normalized_divergence_theorem_defect,b.normalized_divergence_theorem_defect);
+					near(a.normalized_reynolds_defect,b.normalized_reynolds_defect);near(a.normalized_moving_mass_defect,b.normalized_moving_mass_defect);
+					near(a.normalized_wall_relative_leakage,b.normalized_wall_relative_leakage);
+					near(a.endpoint.normalized_discrete_moving_wall_continuity_defect,b.endpoint.normalized_discrete_moving_wall_continuity_defect);
+				});
+				MPI_Allreduce(local_error,global_error,2,MPI_DOUBLE,MPI_SUM,comm);
+				const double error=std::sqrt(global_error[0])/std::max(1.,std::sqrt(global_error[1]));Require(error<1e-8,"paired continued field differs");
+				std::cout<<"moving_fsi_file_continuation rank="<<rank<<" ranks="<<size<<" field_scaled_l2="<<error<<" iterations="<<continued.history.size()<<" surface_history_ports_conservation=1 passed"<<std::endl;
+			}
 		}
+		if(restored_pair)restored_pair->Close();
 		runtime.Close();return;
 	}
 	const auto solve=[&] {
@@ -242,6 +358,95 @@ void RunPaired(MPI_Comm comm,bool deforming,bool strong,bool exhaustion)
 		Require(iga::BuildSurfaceTractionIdentitySha256(fluid.CommittedTraction(),layout)==expected,"paired fluid publication mismatch");
 		Require(iga::BuildSurfaceKinematicsIdentitySha256(structure.CommittedKinematics(),layout)==expected_structure,"paired structure publication mismatch");
 	});
+	const auto publication_checkpoint=fluid.CaptureCheckpoint();
+	const auto publication_fluid_values=Owned(runtime.CommittedState());
+	const auto publication_hash=[](const std::string& bytes) { iga::Sha256 hash;hash.Append(bytes.data(),bytes.size());return hash.Hex(); };
+	{
+		iga::ImmersedMovingDistributedFsiRuntime fresh(runtime,map,interface,
+			[&](const iga::MovingCutGeometry&,const iga::MaterialSurfaceKinematics& target) {
+				return iga::MovingCutGeometry::Build(grid,target,geometry_options);
+			},size-1,policy);
+		auto corrupt=publication_checkpoint;if(rank==0)corrupt.back()^=1;
+		Reject(comm,[&] { fresh.RestoreCheckpoint(corrupt,publication_hash(publication_checkpoint)); });
+		Reject(comm,[&] { (void)fresh.CommittedTraction(); });
+		if(size>1) {
+			// Individually valid payloads can still disagree on the shared epoch.
+			// Change the saved coupling iteration on one rank and authenticate the
+			// changed bytes to exercise the collective gate after local parsing.
+			auto inconsistent=publication_checkpoint;
+			const std::size_t iteration_offset=8+std::string("IGA_MOVING_FSI_PUBLICATION/1").size()+4*(8+64)+3*8;
+			if(rank==0)inconsistent.at(iteration_offset)^=1;
+			Reject(comm,[&] { fresh.RestoreCheckpoint(inconsistent,publication_hash(inconsistent)); });
+			Reject(comm,[&] { (void)fresh.CommittedTraction(); });
+		}
+		fresh.RestoreCheckpoint(publication_checkpoint,publication_hash(publication_checkpoint));
+		iga::CollectiveLocalStage(comm,"FSI restored publication exact",[&] {
+			Require(iga::BuildSurfaceTractionIdentitySha256(fresh.CommittedTraction(),layout)==expected,"FSI restored traction differs");
+		});
+		Require(fresh.CaptureCheckpoint()==publication_checkpoint,"FSI restored publication bytes differ");
+		Reject(comm,[&] { fresh.RestoreCheckpoint(publication_checkpoint,publication_hash(publication_checkpoint)); });
+		Require(Owned(runtime.CommittedState())==publication_fluid_values,"FSI publication restore changed fluid");
+		std::cout<<"moving_fsi_publication_checkpoint rank="<<rank<<" exact_roundtrip=1 corrupt_rejected=1 overwrite_rejected=1 passed\n";
+	}
+	char checkpoint_root[4096]={};
+	Require(!PetscOptionsGetString(nullptr,nullptr,"-moving_port_checkpoint_root",checkpoint_root,sizeof(checkpoint_root),nullptr),"invalid port checkpoint option");
+	if(checkpoint_root[0]) {
+		Require(deforming,"port checkpoint fixture requires deforming channel");
+		const auto accepted_values=Owned(runtime.CommittedState());
+		const auto original_controls=runtime.CaptureAcceptedCheckpoint().port_control_values;
+		runtime.SetPortControlValue("inlet",.2);
+		const auto saved=runtime.CaptureAcceptedCheckpoint();Require(saved.port_control_values.at("inlet")==.2,"queued control not captured");
+		Require(runtime.CommittedGeometry().PreviousMaterialIdentitySha256().empty(),"fixture must exercise independent target publication");
+		const auto hash=[](const std::string& value) { return iga::coupled_checkpoint_detail::Hash(value); };
+		const std::string configuration=hash("queued-pressure-port-checkpoint/v1");
+		const iga::CoupledCheckpointEpoch epoch{hash(checkpoint_root),{},
+			{configuration,configuration,hash(std::to_string(size)),static_cast<std::uint32_t>(size)},1,1.,1.};
+		iga::MovingCheckpointLayout source;source.domain_id="flow";
+		for(int member=0;member<size;++member)source.world_ranks.push_back(member);
+		iga::CollectiveLocalStage(comm,"port checkpoint create",[&] {
+			if(rank==0) { Require(std::filesystem::create_directory(checkpoint_root),"port checkpoint directory exists");iga::CreateCoupledCheckpointEpoch(checkpoint_root,epoch); }
+		});
+		std::vector<iga::CoupledCheckpointShard> local;
+		iga::CollectiveLocalStage(comm,"port checkpoint write",[&] { local=iga::WriteMovingCheckpointShards(checkpoint_root,epoch,source,rank,saved,configuration); });
+		const auto receipts=iga::GatherCheckpointReceipts(comm,epoch,local);
+		iga::CollectiveLocalStage(comm,"port checkpoint publish",[&] {
+			if(rank==0)(void)iga::PublishCoupledCheckpoint(checkpoint_root,epoch,iga::MovingCheckpointCatalog(source,size),receipts);
+		});
+		std::optional<iga::CoupledCheckpointManifest> manifest;
+		iga::CollectiveLocalStage(comm,"port checkpoint discover",[&] {
+			const auto found=iga::FindLatestCoupledCheckpoint(checkpoint_root,epoch.compatibility,iga::MovingCheckpointCatalog(source,size));
+			Require(found.latest.has_value()&&found.rejected.empty(),"port checkpoint not found");manifest=found.latest;
+		});
+		auto restored=iga::RestoreMovingCheckpointRuntime(comm,checkpoint_root,*manifest,source,configuration,grid,geometry_options,options);
+		Require(restored->CaptureAcceptedCheckpoint().port_control_values==saved.port_control_values,"restored port controls differ");
+		Require(Owned(restored->CommittedState())==accepted_values,"queued control changed saved field");
+		Require(restored->CommittedGeometry().PublicationIdentitySha256()==runtime.CommittedGeometry().PublicationIdentitySha256(),"independent publication restore differs");
+		const auto next=[&](const iga::MovingCutGeometry& previous) {
+			std::unique_ptr<iga::MovingCutGeometry> target;
+			iga::CollectiveLocalStage(comm,"port checkpoint next geometry",[&] {
+				const auto& old=previous.Evaluation();std::vector<iga::RawSurfaceTriangle> triangles;
+				for(const auto& item:old.SourceTriangles()) {
+					iga::RawSurfaceTriangle triangle;triangle.boundary_id=item.boundary_id;
+					for(int axis=0;axis<3;++axis)triangle.indices[axis]=item.source_vertex_indices[axis];
+					triangles.push_back(triangle);
+				}
+				const auto material=iga::MaterialSurfaceKinematics::CreateFromSourceTopology(old.ReferenceMaterialVerticesM(),old.SourceVerticesM(),
+					std::vector<std::array<double,3>>(old.SourceVerticesM().size(),{{0,0,0}}),triangles,2.,1.,2.);
+				target=iga::MovingCutGeometry::Build(grid,material,geometry_options,&previous);
+			});return target;
+		};
+		runtime.BeginTrial(next(runtime.CommittedGeometry()),2,2);Require(runtime.SolveTrial(),"queued-pressure reference step failed");
+		restored->BeginTrial(next(restored->CommittedGeometry()),2,2);Require(restored->SolveTrial(),"queued-pressure restored step failed");
+		const auto reference=Owned(runtime.TrialState()),actual=Owned(restored->TrialState());Require(reference.size()==actual.size(),"port continuation shape differs");
+		double local_error[2]={},global_error[2]={};
+		for(std::size_t row=0;row<actual.size();++row) { const double delta=actual[row]-reference[row];local_error[0]+=delta*delta;local_error[1]+=reference[row]*reference[row]; }
+		MPI_Allreduce(local_error,global_error,2,MPI_DOUBLE,MPI_SUM,comm);
+		const double error=std::sqrt(global_error[0])/std::max(1.,std::sqrt(global_error[1]));Require(std::isfinite(error)&&error<1e-8,"queued-pressure continuation differs");
+		restored->Commit();restored->Close();runtime.AbortTrial();
+		for(const auto& value:original_controls)runtime.SetPortControlValue(value.first,value.second);
+		Require(Owned(runtime.CommittedState())==accepted_values,"port fixture changed original accepted state");
+		std::cout<<"moving_port_checkpoint rank="<<rank<<" ranks="<<size<<" queued_inlet=0.2 independent_publication=1 next_step_scaled_l2="<<error<<" passed\n";
+	}
 	if(!deforming)for(int step=0;step<3;++step) {
 		context.start_time_s=runtime.Clock().time_s;context.dt_s=.1;++context.step;
 		input.stamp.step=context.step;input.stamp.time_s=context.EndTime();

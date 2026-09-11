@@ -174,6 +174,11 @@ public:
 	}
 
 	MPI_Comm Communicator() const noexcept { return comm_; }
+	const FsiTrialContext& CommittedContext() const
+	{
+		if(!has_committed_publication_)throw std::logic_error("membrane committed publication is absent");
+		return committed_context_;
+	}
 	const SurfaceKinematics& TrialKinematics() const
 	{
 		if(phase_==Phase::Idle)throw std::runtime_error("single owner membrane has no trial publication");

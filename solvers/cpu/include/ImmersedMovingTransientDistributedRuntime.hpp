@@ -200,7 +200,8 @@ public:
 			}
 			state.previous_material->Validate();state.current_material->Validate();
 			if(state.current_material->ContentIdentitySha256()!=state.material_identity_sha256
-				||state.previous_material->ContentIdentitySha256()!=committed_->geometry->PreviousMaterialIdentitySha256()
+				||(!committed_->geometry->PreviousMaterialIdentitySha256().empty()
+					&&state.previous_material->ContentIdentitySha256()!=committed_->geometry->PreviousMaterialIdentitySha256())
 				||state.previous_material->EvaluatedTimeS()!=state.conservation.source_time_s)
 				throw std::invalid_argument("moving checkpoint material history differs");
 			previous_material=std::make_unique<MaterialSurfaceKinematics>(*state.previous_material);

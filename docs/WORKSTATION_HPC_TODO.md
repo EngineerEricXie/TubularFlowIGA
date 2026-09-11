@@ -784,8 +784,11 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。
   單機 1／2／4-rank 非零強耦合矩陣已通過；膜 checkpoint 的跨 rank 數
   續算、moving-fluid 實際 MPI 檔案 bundle 與 4-rank changing-layout
-  續算亦已驗證。流體跨 rank 數檔案續跑仍在驗收；完整 FSI paired
-  restart、可變 port controls 的 numerical restart 及跨節點驗收尚待完成，
+  續算亦已驗證。流體 4→2／4→1-rank 獨立程序檔案還原與下一步
+  續算已通過；2-rank 可變 port controls 的檔案還原與下一步數值解亦
+  已通過。非零 FSI pair 的 1／2／4-rank 同作業檔案還原與續算、
+  零解的獨立作業還原亦已通過；非零獨立作業、pair 重分區及跨節點
+  驗收尚待完成，
   見 [checkpoint 與強耦合進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
 
 驗收：同一 FSI 問題確實分散計算，單機多 rank 與跨節點結果通過數值門檻；

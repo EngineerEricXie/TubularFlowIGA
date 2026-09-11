@@ -694,3 +694,149 @@ warnings；4-rank `strong-zero` 的 communicator／precommit／structure
 prepare／invalid controls 拒絕、exact rollback 與兩步 healthy retry 均
 通過，見 `checkpoint-stage-strong-audit.json`。這項 smoke regression
 不取代前述 nonzero matrix，各 frozen 版本的證據仍分別保留。
+
+
+跨 rank 數檔案矩陣已完成並核對：4→2-rank 的 owned restore／next-step
+scaled L2 分別為 `1.33937e-14`／`3.44263e-14`；4→1-rank 分別為
+`2.44193e-14`／`3.4676e-14`，均低於 `1e-8`。三份 rank reports
+均正常退出且無 timeout；207 項來源身分、各 rank log hashes 與來源
+bundle 檔案 hashes 綁定於 `cross-rank-file-matrix-audit.json`。
+`owned_roundtrip_exact=1` 標記屬同次測試前段的 same-rank typed roundtrip，
+跨 rank 的驗收依據是上述 scaled L2，不宣稱逐位元相同。這份 frozen
+fixture 使用 port-free metadata `/1`，也不代表完整 FSI paired restart。
+
+新增可選 `-moving_port_checkpoint_root` 數值回歸：接受非零 channel
+FSI 步後把 inlet pressure control 從 `.1` 改為 `.2`，寫入真實 MPI
+bundle，以原始 `.1` options 建立還原候選，確認保存的 `.2` controls
+與既有 accepted field 均正確，並比較下一步流場。該 fixture 的 geometry
+provider 合法地未附 predecessor；factory 因此先比較保存的 geometry／
+publication identities，必要時重建不附 predecessor 的目標，再要求兩項
+identity 完全一致。未更改既有 hash 定義。2-rank frozen executable 已啟動，
+結果待核對；此測試尚未還原 structural runtime 或發布完整 FSI pair。
+
+
+FSI adapter 新增 accepted publication checkpoint 介面，補足流場 owned
+vector 與膜核心以外的 traction／consistent nodal force、producer／projection
+stamp、composition identity 與 accepted coupling context。每份 payload
+限定一個 owned surface slice，保存 stable node IDs；parser 以外部 payload
+SHA、adapter configuration、材料／幾何身分與流場 accepted clock 驗證，
+不把舊 partition 的 publication 直接換上新 stamp。格式限制全域 patch
+節點數與 payload bytes，空 owned slice 仍有完整 stamp。
+
+`RestoreCheckpoint` 只接受 fresh idle adapter，先驗證 fluid conservation
+history，再解析各 rank 候選、協議共同 composition／材料／幾何／context，
+最後才以 no-throw swap 發布。呼叫端仍必須等完整 fluid／structure pair
+候選成功後一起發布；目前尚未加入 paired bundle 的 shard catalog 與
+跨 rank surface publication 重建，不能視為完整 FSI 檔案續跑。
+
+`moving_fsi_publication_checkpoint_test` 已通過精確 bytes／traction identity
+往返，錯誤 configuration／geometry／material／interface／clock、checksum、
+truncated／trailing bytes、nonfinite 值、節點上限、錯誤 partition 及合法
+空 slice 測試。`fsi-publication-codec-result.json` 與
+`fsi-publication-checkpoint-source-manifest.json` 保存來源／結果。無 compiler
+warnings 建置後，2-rank `zero` adapter 回歸已啟動：測試 rank-local checksum
+拒絕、解析成功後的跨 rank iteration 不一致拒絕、未發布狀態、healthy retry
+與 overwrite 拒絕；數值程序結果仍待核對。
+
+
+可變 port 的 2-rank 真實檔案數值回歸已完成：兩份 reports 正常退出、
+無 timeout，約 519.9 秒。還原端採原始 `.1` inlet options，factory 正確
+套用保存的 `.2` control；accepted owned field 精確保留，未附 predecessor
+的 target publication identity 精確重建。原 runtime 與還原 runtime 的
+下一步 scaled L2 為 `0`，還原端 commit 成功，原端 abort 後 accepted
+field 不變。207 項來源身分、reports／log hashes 與實際 bundle 檔案
+hashes 已核對於 `queued-port-checkpoint-2-audit.json`。這是同 rank 數
+fluid candidate 驗收，未包含 membrane／adapter 的完整 paired restore。
+
+
+2-rank adapter 回歸已完成並核對於
+`fsi-publication-checkpoint-2-audit.json`：兩份 reports 均正常退出、無 timeout。
+publication bytes／traction identity 精確還原，rank-local checksum 失敗與
+已通過各 rank parser 後的 coupling iteration 不一致均拒絕，失敗後沒有
+committed publication；healthy retry、overwrite 拒絕及原 fluid field
+保持不變亦通過。既有 paired rollback／retry 與三個 decimal steps 均
+通過。此測試使用 zero fixture 及相同 fluid owner，不代替 nonzero
+paired file continuation；下一步仍是完整 paired catalog 與 fresh pair
+候選建構、失敗清理及下一步強耦合驗證。
+
+
+新增 `MovingFsiCheckpointBundle.hpp`，把 moving-flow catalog、每個 rank 的
+FSI traction publication，以及單一 owner 的 membrane metadata／numerical
+payload 放入同一 epoch。collective writer 核對 communicator、adapter 的
+實際 fluid owner、來源 mapping 與完整 accepted coupling context；呼叫端
+收齊 receipts 後發布完整 paired catalog。fresh-pair factory 先還原流場，
+再建立 adapter／membrane、載入各 shard 並核對兩者 step／start／dt／
+coupling iteration，全部成功才回傳 pair。後續失敗會 collective Close
+候選流場，原 runtime 不受影響。surface publication 目前仍要求保存時的
+rank count 與 ownership；流場的重分區能力不等同整個 FSI pair 重分區。
+
+新增可選 `-moving_fsi_checkpoint_root` 強耦合回歸，在第一個 accepted
+step 寫入完整 bundle，注入 membrane numerical checksum 錯誤以驗證
+candidate cleanup／retry，再比較恢復的 field、adapter bytes 與 membrane
+metadata／numerical bytes。第二步比較 fluid scaled L2 `<1e-8`、膜位移／
+速度 absolute error `<1e-12`，traction／force、完整 Aitken history、ports
+與五項守恆量使用 `1e-12 + 1e-6*abs(reference)`；迭代次數也必須相同。
+
+第一輪 2-rank zero 回歸在第一個 strong step 成功後，因 writer 合併的
+local receipts 未排序，被 `GatherCheckpointReceipts` 正確拒絕；manifest
+尚未發布，不能算 numerical restart 通過。失敗來源／reports／log hashes
+保存在 `paired-checkpoint-receipt-order-failure-audit.json`。已修正合併後的
+排序，正在重建並準備以新的輸出目錄重跑，未改任何數值門檻。
+
+
+修正排序後，完整 paired file 的 2-rank zero 回歸已通過。流場、adapter
+publication bytes 與膜 metadata／numerical bytes 精確還原；膜 numerical
+checksum 失敗後的候選清理及健康重試通過。下一個 strong step 一次迭代
+收斂，原程序與 fresh pair 的 field scaled L2 為 `0`，surface／history／
+ports／守恆比較全部通過。所有 rank 狀態、來源與 bundle／log hashes
+已綁定於 `paired-checkpoint-sorted-zero-2-audit.json`。同一 frozen binary
+的 2-rank nonzero strong case 已啟動，輸出在
+`paired-checkpoint-nonzero-2`，結果待核對；兩項測試都在同一 MPI job 內
+建立 fresh pair，不等同獨立作業或跨 rank 數的 paired restart。
+
+
+成對 file fixture 增加 `-moving_fsi_checkpoint_read_only true`：新 MPI 作業
+只 discovery／read 已發布的完整 bundle，不重新寫入來源；仍自行計算
+基準軌跡，用於 accepted field 的 scaled L2 `<1e-8` 與下一步完整強耦合
+比較。adapter publication 與 membrane metadata／numerical 的 recapture
+直接對照保存的 shard bytes，要求精確相等。同次 writer／reader 另外
+保留與原 runtime 全部 bytes／field 精確相同的要求，不用跨程序 bitwise
+一致假設取代數值比較。
+
+無 compiler warnings 建置後，`paired-checkpoint-readonly-test` 已凍結。
+2-rank zero 新作業讀取前次已終止的 writer bundle，來源檔案的執行前
+hashes 保存於 `paired-checkpoint-readonly-zero-input-hashes.json`，結果
+待核對；非零 writer／fresh-pair continuation 作業仍在執行。
+
+
+獨立 2-rank zero reader 作業已完成：accepted field 與下一步 field scaled
+L2 均為 `0`，adapter／membrane 保存 bytes 精確 recapture，checksum
+失敗後清理／重試與下一步 surface／完整 history／ports／守恆比較通過。
+來源 bundle 的 12 個檔案集合與 hashes 前後完全一致；來源、writer
+證據與 reader reports／logs 綁定於
+`paired-checkpoint-readonly-zero-2-audit.json`。這證明 writer 終止後的新
+MPI 作業可還原完整 zero pair，非零獨立作業仍待驗證。
+
+非零 paired checkpoint 驗證擴展至 1／2／4 ranks：2-rank 使用
+`paired-checkpoint-sorted-test`，1／4-rank 使用新增 read-only fixture 的
+`paired-checkpoint-readonly-test`（本次兩者皆以 writer 模式執行）；物理
+runtime headers 相同，各自 source manifest 保留。輸出目錄為
+`paired-checkpoint-nonzero-{1,2,4}`，三組都仍執行中。分別配置本機
+CPU 集合 2,3／0,1／4,5,6,7，OMP／OpenBLAS threads 均為 1；此並行
+安排用於功能驗收，不用其 wall time 宣稱 strong scaling。
+
+
+非零 paired file 的 1／2／4-rank 矩陣已全部完成，7 份 rank reports
+正常退出且無 timeout。下一步均為 7 次強耦合迭代，field scaled L2
+分別為 `0`／`0`／`7.6475960009046241e-13`，全部低於 `1e-8`；
+surface、完整 history、ports 與五項守恆比較通過。完整 catalog 發布、
+membrane checksum 失敗後 flow candidate 清理／retry，以及 accepted
+flow／adapter／membrane 精確還原均通過。
+
+原基準軌跡另外用 `hpc_check_strong_fsi.py` 比較跨 rank fields／history／
+ports／守恆：2／4-rank 對 1-rank 的最大 field scaled L2 分別為
+`1.2299955537051401e-12`／`1.7302690543569349e-12`。來源／archives、
+checker、comparison、全部 reports／logs 與 bundle hashes 綁定於
+`paired-checkpoint-nonzero-matrix-audit.json`。這仍是同 job 的 fresh pair
+驗收；writer 已終止後的新 2-rank nonzero reader 已啟動，輸出在
+`paired-checkpoint-readonly-nonzero-2`，其結果待核對。

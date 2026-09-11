@@ -51,6 +51,14 @@ inline std::unique_ptr<ImmersedMovingTransientDistributedRuntime> RestoreMovingC
 		auto previous=MovingCutGeometry::Build(grid,materials->previous,geometry_options);
 		source_geometry=previous->GeometryIdentitySha256();
 		geometry=MovingCutGeometry::Build(grid,materials->current,geometry_options,previous.get());
+		const auto indices=moving_checkpoint_bundle_detail::Indices(manifest,source_layout);
+		const auto saved=DecodeMovingCheckpointMetadata(moving_checkpoint_bundle_detail::Metadata(root,manifest,indices.at("metadata")),configuration_identity);
+		// Providers may publish an independently built target without predecessor
+		// transition metadata. Accept only the exact authenticated saved identity.
+		if(geometry->PublicationIdentitySha256()!=saved.identities[1])
+			geometry=MovingCutGeometry::Build(grid,materials->current,geometry_options);
+		if(geometry->GeometryIdentitySha256()!=saved.identities[0]||geometry->PublicationIdentitySha256()!=saved.identities[1])
+			throw std::runtime_error("moving checkpoint geometry reconstruction differs from saved identity");
 		target_geometry=geometry->GeometryIdentitySha256();
 	});
 	RequireCollectiveSameText(comm,"moving checkpoint source geometry agreement",source_geometry);

@@ -676,6 +676,7 @@ clean:
 	$(RM) moving_checkpoint_bundle_test
 	$(RM) moving_checkpoint_metadata_test
 	$(RM) membrane_checkpoint_test
+	$(RM) moving_fsi_publication_checkpoint_test
 	$(RM) material_surface_checkpoint_test immersed_moving_distributed_fsi_runtime_test distributed_material_surface_patch_test immersed_moving_distributed_operator_test immersed_moving_distributed_runtime_test immersed_moving_distributed_domain_test immersed_fitted_wall_diagnostics_test
 	$(RM) distributed_immersed_extension_test
 	$(RM) parallel_bezier_visualization_test
@@ -803,6 +804,9 @@ material_surface_checkpoint_test: tests/test_material_surface_checkpoint.cpp tes
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 membrane_checkpoint_test: tests/test_membrane_checkpoint.cpp tests/test_pretensioned_membrane.cpp include/MembraneCheckpoint.hpp include/PretensionedMembrane.hpp ../../include/CheckpointMetadataCodec.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@ $(LDLIBS)
+
+moving_fsi_publication_checkpoint_test: tests/test_moving_fsi_publication_checkpoint.cpp tests/test_pretensioned_membrane.cpp include/MovingFsiPublicationCheckpoint.hpp include/PretensionedMembrane.hpp ../../include/CheckpointMetadataCodec.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@ $(LDLIBS)
 
 moving_checkpoint_metadata_test: tests/test_moving_checkpoint_metadata.cpp $(wildcard include/*.hpp ../../include/*.hpp)
