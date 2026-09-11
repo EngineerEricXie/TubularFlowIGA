@@ -1,6 +1,8 @@
 # HPC-06B 分片 VTK 格式元件
 
-狀態：VTU／PVTU 格式元件與本機 ParaView 讀回通過；尚未接入 MPI solver。
+狀態：完成；VTU／PVTU 元件、CPU flow 與 configured transport MPI solver、
+ParaView 5.13、所有 rank RSS 及 I/O 頻率均已驗收。完成摘要見
+[HPC-06A／B／C 報告](HPC_06ABC_COMPLETION_REPORT.md)。
 日期：2026-09-10。
 
 [PartitionedVtkOutput.hpp](../../include/PartitionedVtkOutput.hpp) 新增 `VtkPartition`、
@@ -244,8 +246,9 @@ geometry report，隨即釋放；不能把解場免 gather 說成完全消除 ro
 
 `--output-every` 保留原頻率語意，final step 去重；未設定時只有最終場。
 restart 使用新 prefix，不續寫既有 PVD。新模式不輸出 text velocity／pressure
-或 velocity-series CSV，checkpoint 與舊格式維持原介面。此選項僅 CPU flow CLI
-支援，尚未套到 transport、CUDA 或 native graph runtime。
+或 velocity-series CSV，checkpoint 與舊格式維持原介面。CPU flow 與 configured
+transport CLI 均支援此選項；CUDA、legacy transport 與 native graph runtime
+保留原輸出路徑。
 
 實際 one-cell flow fixture 的 12 組 CLI 執行包括 1／2 ranks 的舊 binary HDF、
 新 binary HDF／PVTU、final-only、每兩步、stop/restart，以及 step 目錄／index
@@ -274,12 +277,12 @@ pvpython scripts/test_flow_pvtu_paraview.py NEW_OUTPUT
 33 項故障／重試亦通過；首次啟動漏建 wrapper 父目錄，未開始測試，修正目錄
 後才採計結果。
 
-## 接續工作
+## 後續大型驗收
 
-需擴充其他求解路徑並量測大型場各 rank RSS、檔案數與 metadata 成本，再完成
-HPC-06A／B／C。完整幾何認證仍集中 root，資料庫 metadata、幾何與暫存
-extraction 的生命週期需繼續稽核。既有預設格式保留，但上述可視化排序修正
-會拒絕沿用舊排序 VTKHDF 的 geometry hash。
+下列 128／1024 元素案例補足各 rank RSS、檔案數與 metadata 成本；文件末尾的
+configured transport 與 I/O 頻率矩陣再完成 HPC-06A／B／C。完整幾何認證仍集中
+root，既有預設格式保留；上述可視化排序修正會拒絕沿用舊排序 VTKHDF 的
+geometry hash。
 
 ## 多元素 CPU flow 比較
 
@@ -340,12 +343,26 @@ Checkpoint 速度／壓力 relative L2 分別 3.77248e-15／5.09984e-15。
 符合 allocator 可保留已釋放配置的情況；不能據此判為 live mesh leak，亦不能
 由釋放語句聲稱 OS RSS 已下降。各 phase 原始數據完整保存。
 
-PVTU 的 ASCII／每幀完整幾何在此案例成本大於壓縮 HDF，需在 HPC-06C 繼續
-評估 encoding、metadata 與必要的 aggregator。1024 元素提高了實際 PDE 輸出
-覆蓋，2299 個控制點仍不足以代表記憶體受限的大型場；其他 runtime／transport
-及跨節點驗證尚未完成。本次期間曾有 moving 回歸，不作無干擾 scaling 宣告。
+PVTU 的 ASCII／每幀完整幾何在此案例成本大於壓縮 HDF。HPC-06C 的頻率矩陣顯示
+以獨立頻率即可降低檔案及 bytes，本機證據未支持新增 aggregator。1024 元素提高了
+實際 PDE 輸出覆蓋，跨節點 metadata 與檔案系統行為仍由 HPC-09 驗收。本次期間曾有
+moving 回歸，不作無干擾 scaling 宣告。
 
 證據：`outputs/hpc06/duct-output-large-v1/audit.json`；`run.py` 保存完整命令，
 `acceptance.json` 保存 frozen binary／input hashes 與 per-rank reports，
 `paraview.log` 保存逐幀場比較。讀回命令沿用上一節，root 改為
 `outputs/hpc06/duct-output-large-v1`。
+
+## Configured transport 與 I/O 頻率完成驗收
+
+`iga_solve --visualization-format pvtu` 使用同一 owned-element PETSc row selection、
+共享代表 tuple、immutable snapshot 與 PVD 發布協議。1／2 ranks 和輸出頻率 1／2
+的實際 transport 求解均通過；2-rank case 的空 piece 只選 0／128 rows，持有元素的
+rank 選 128／128 rows，沒有完整場 root gather。ParaView 5.13 讀回 10 幀，兩個
+species fields 的最大 relative L2 為 `1.6766462693301943e-12`。
+
+Flow／transport 的 `--diagnostic-every`、`--output-every` 與
+`--checkpoint-every` 已獨立驗證，降低頻率時四組 rank/layout 的檔案數及 bytes
+都下降，final checkpoint 保持相同。PVD pending 阻擋會共同失敗且不發布 final
+index，換新路徑重試成功。完整數據、命令與限制見
+[HPC-06A／B／C 完成報告](HPC_06ABC_COMPLETION_REPORT.md)。

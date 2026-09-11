@@ -1,6 +1,7 @@
 # HPC-04B 加密方管候選結果
 
-- 狀態：128-element、4-rank 的四候選驗收通過；HPC-04 整體仍進行中。
+- 狀態：128-element、4-rank 的四候選驗收通過；HPC-04B／C 已於 2026-09-11
+  由 [完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 - 日期：2026-09-09（美東）。Native frozen binary 為 `01aa4c8`，fixture builder 為
   `42d4d39` 的版本；此批執行的是之後擴充候選、但尚未加入 stderr 保存的 interim
   harness。`harness-at-run.py` 已依記錄的 SHA256 精確還原保存，不能歸為目前
@@ -50,8 +51,8 @@ python3 scripts/hpc_duct_solver_candidates.py \
 目前 harness 保留同一四候選預設，並額外保存失敗 diagnostics。上述命令重跑將是
 新 harness 的新證據，不覆寫本批結果。
 
-還須固定網格的無干擾 rank sweep、其他 pressure reference／nullspace、immersed
-切割條件、更大網格與排程資源驗收。不能由這兩種網格的候選結果宣稱 HPC-04B／C 完成。
+後續批次已補齊固定網格 rank sweep、pressure reference／gauge／ports、immersed
+切割與更大網格；排程與跨節點資源驗收由 HPC-09 獨立追蹤。
 
 後續 1024-element、4-rank 的 LU／block-Jacobi 已完成並通過原門檻，見
 [較大方管進度](HPC_04B_LARGE_DUCT_PROGRESS.md)。

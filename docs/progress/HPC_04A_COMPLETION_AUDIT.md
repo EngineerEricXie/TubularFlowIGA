@@ -1,6 +1,7 @@
 # HPC-04A 可配置求解器完成稽核
 
-狀態：HPC-04A 已完成；HPC-04B／C 與整份工作站／HPC 清單仍進行中。
+狀態：HPC-04A 已完成；HPC-04B／C 已於 2026-09-11 由
+[候選與擴展性完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 日期：2026-09-10。稽核 repository revision：`d3bb714`。
 
 本項要求是各 PETSc runtime 的獨立選項、既有預設相容性、有效 solver 診斷與

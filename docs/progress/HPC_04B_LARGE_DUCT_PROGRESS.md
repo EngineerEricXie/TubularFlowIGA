@@ -1,6 +1,7 @@
 # HPC-04B 1024 元素方管候選驗收
 
-狀態：LU／block-Jacobi 兩候選通過，HPC-04 整體仍未完成。
+狀態：LU／block-Jacobi 兩候選通過；HPC-04B／C 已於 2026-09-11 由
+[完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 日期：2026-09-10。Frozen native binary 對應 `01aa4c8`，啟動時 repository
 為 `c920d9e`。此批沒有使用後續 fitted quadrature 或 PVTU 修改。
 
@@ -51,5 +52,5 @@ python3 scripts/hpc_duct_solver_candidates.py \
   --candidates bjacobi --output-dir NEW_OUTPUT
 ```
 
-尚須無干擾 fixed-mesh rank sweep、其他 pressure reference／nullspace 與
-immersed 條件、跨節點配置等原有 HPC-04 驗收，不因這批通過而勾選整項。
+後續完成報告已彙整 fixed-mesh rank sweep、pressure reference／gauge、immersed
+條件與候選負收益。跨節點配置仍由 HPC-09 驗收。

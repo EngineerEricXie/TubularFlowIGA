@@ -1,6 +1,7 @@
 # HPC-04B C2 方管候選預條件器
 
-- 狀態：16-element、2-rank 小案例候選驗證通過，HPC-04B／C 尚未完成。
+- 狀態：16-element、2-rank 小案例候選驗證通過；HPC-04B／C 已於 2026-09-11
+  由 [完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 - 日期：2026-09-09（美東）。Native frozen binary 為 `01aa4c8` 的
   `outputs/hpc04/immersed/native-v4-binary`；fixture／harness 在 `f364a5f` 後新增。
   沒有更動 production solver 或資料格式。本階段不以當前 Makefile 的 source identity

@@ -1,8 +1,8 @@
 # Visualization output
 
 CPU and CUDA production solvers share the default visualization formats.
-The CPU flow CLI additionally supports the partitioned mode below. Checkpoint
-outputs are independent of this selection.
+The CPU flow and configured transport CLIs additionally support the partitioned
+mode below. Checkpoint outputs are independent of this selection.
 
 ## Moving immersed snapshots
 
@@ -33,26 +33,34 @@ Use `--visualization-format vtkhdf` or `--visualization-format vtu` to override
 the automatic choice. `--output-every N` controls transient snapshots. The
 initialized state is timestep zero.
 
-## Partitioned CPU flow output
+## Partitioned CPU flow and transport output
 
 `iga_navier_stokes ... --output results/flow.txt --visualization-format pvtu`
 writes cubic Bézier cells to `flow.stepNNNNNN/rankR.vtu`, one piece per MPI
 rank, with `snapshot.pvtu` and a top-level `flow.pvd` time index. Open the PVD
 in ParaView. Shared points carry partition-independent Int64 global IDs;
 empty partitions produce valid empty pieces. Geometry is repeated each frame.
+Configured transport uses the same layout with
+`iga_solve ... --output results/field.txt --visualization-format pvtu`; its point
+arrays use the configured species field names.
 
 This mode extracts only the control rows required by each rank's owned elements
 and exchanges shared point values without gathering the complete solution to
 root. Initialization still builds and validates the complete Bézier geometry
 on root, including overlap checks, then releases that mesh. This remaining
-geometry peak and actual large-case RSS have not yet been eliminated or measured.
+geometry peak remains, while all-rank RSS has been measured through 1024 flow
+elements on the workstation.
 
 `--output-every N` includes the initialized/restarted state and every Nth step;
 the final state is always emitted once. Without that option, only the final
 state is emitted. Checkpoints retain their existing format and frequency.
-PVTU mode produces no text velocity/pressure fields or velocity-series CSV;
-use the existing formats when those transport/pipeline interfaces are needed.
-This option currently applies only to `iga_navier_stokes`.
+PVTU mode produces no text fields or velocity-series CSV; use the existing formats
+when those text/pipeline interfaces are needed.
+
+`--diagnostic-every N` independently controls scalar solver diagnostics for
+`iga_navier_stokes` and `iga_solve`. The final step is always reported.
+`--checkpoint-every N` controls intermediate checkpoints while the final
+checkpoint is retained when a checkpoint prefix is configured.
 
 Use a fresh output prefix, including after `--restart`: an existing PVD or
 snapshot directory is rejected. Each completed snapshot is published before

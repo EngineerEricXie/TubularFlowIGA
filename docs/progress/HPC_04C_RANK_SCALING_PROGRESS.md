@@ -1,6 +1,7 @@
 # HPC-04C 固定網格 rank 比較
 
-狀態：128 元素、1／2／4 ranks、兩次重複的本機量測與證據核對完成；HPC-04C 仍為部分進度。
+狀態：128 元素、1／2／4 ranks、兩次重複的本機量測與證據核對完成；
+HPC-04C 已於 2026-09-11 由 [完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 
 `scripts/hpc_duct_rank_scaling.py` 序列執行同一 C2 duct 網格的 1／2／4 ranks，
 每個配置預設兩次，候選為 LU／MUMPS 與 block-Jacobi／ILU。底層仍使用原
@@ -91,5 +92,5 @@ FSI 編譯與正確性測試，已逐批記錄在 `background*.json`；它們仍
 頻寬與系統資源。因此這批資料不是獨占 allocation 的效能認證，兩次重複也
 不能提供穩健的信賴區間。沒有把本機 MPI 結果延伸為跨節點或其他硬體結論。
 
-本批完成 fixed-mesh 本機比較與負收益紀錄；HPC-04C 的更廣網格／硬體擴展及
-HPC-09 的正式 scaling 驗收仍未完成。沒有更改任何預設求解策略。
+完成報告另彙整 16／128／1024-element mesh growth 與目前 HEAD 小案例；
+HPC-09 的 scheduler／跨節點正式 scaling 驗收仍未完成。沒有更改任何預設求解策略。

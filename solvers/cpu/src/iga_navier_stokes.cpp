@@ -54,6 +54,7 @@ struct FlowOptions {
 	fs::path memory_report;
 	int output_every = 0;
 	int checkpoint_every = 0;
+	int diagnostic_every = 1;
 	int stop_after_step = 0;
 	bool parallel_output = false;
 	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
@@ -181,6 +182,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
 		"[--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
+		"[--diagnostic-every N] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
 		"[--memory-report PATH] [--visualization-format auto|vtu|vtkhdf|pvtu]");
 	FlowOptions options;
@@ -215,6 +217,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--output-every") options.output_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--checkpoint") options.checkpoint = value;
 		else if (argument == "--checkpoint-every") options.checkpoint_every = ParsePositiveInteger(value, argument);
+		else if (argument == "--diagnostic-every") options.diagnostic_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step") options.stop_after_step = ParsePositiveInteger(value, argument);
 		else if (argument == "--nonlinear-rtol")
@@ -377,7 +380,7 @@ int main(int argc, char** argv)
 			text.exceptions(std::ios::badbit | std::ios::failbit);
 			text << std::setprecision(std::numeric_limits<double>::max_digits10)
 				<< options.max_newton << ' ' << options.output_every << ' '
-				<< options.checkpoint_every << ' ' << options.stop_after_step << ' '
+				<< options.checkpoint_every << ' ' << options.diagnostic_every << ' ' << options.stop_after_step << ' '
 				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
 				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
 				<< options.mass_relative_tolerance << ' ' << !options.output.empty() << ' '
@@ -770,18 +773,21 @@ int main(int argc, char** argv)
 				vca_transport->Advance(step_configuration, flow.RequiredNodes(), velocity);
 				vca_species_state = vca_transport->GatherRequiredState();
 			}
-			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow solver diagnostics", [&] {
-				if (rank != 0) return;
-				const auto write = [&](const iga::PetscKspConfiguration& solver) {
-					std::cout << "solver_configuration prefix=" << solver.prefix << " ksp=" << solver.ksp
-						<< " pc=" << solver.pc << " factor_backend=" << solver.factor_backend
-						<< " step=" << step << " iterations=" << solver.last_iterations
-						<< " reason=" << static_cast<int>(solver.last_reason) << '\n';
-				};
-				write(flow.SolverConfiguration());
-				if (vca_transport) write(vca_transport->SolverConfiguration());
-				iga::FlushCheckedText(std::cout);
-			});
+			const auto completed_step = step+1;
+			if (completed_step%options.diagnostic_every == 0 || completed_step == run_end_step) {
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow solver diagnostics", [&] {
+					if (rank != 0) return;
+					const auto write = [&](const iga::PetscKspConfiguration& solver) {
+						std::cout << "solver_configuration prefix=" << solver.prefix << " ksp=" << solver.ksp
+							<< " pc=" << solver.pc << " factor_backend=" << solver.factor_backend
+							<< " step=" << step << " iterations=" << solver.last_iterations
+							<< " reason=" << static_cast<int>(solver.last_reason) << '\n';
+					};
+					write(flow.SolverConfiguration());
+					if (vca_transport) write(vca_transport->SolverConfiguration());
+					iga::FlushCheckedText(std::cout);
+				});
+			}
 			if (vca_circuit) {
 				const std::vector<std::string> empty_fields;
 				const auto& species_fields = vca_transport ? vca_transport->System().fields : empty_fields;
@@ -820,7 +826,6 @@ int main(int argc, char** argv)
 				AdvanceFlowVcaCircuit(PETSC_COMM_WORLD, *vca_circuit, *vca_history,
 					result, configuration.coupling.flow_epsilon_m3_s);
 			}
-			const auto completed_step = step+1;
 			if (options.output_every > 0 && completed_step%options.output_every == 0)
 				write_output(completed_step, physical_time, false);
 			if (!options.checkpoint.empty() && (completed_step == run_end_step

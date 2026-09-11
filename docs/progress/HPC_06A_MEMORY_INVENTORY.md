@@ -1,6 +1,7 @@
 # HPC-06A 記憶體生命週期盤點
 
-狀態：首次 source inventory 與一項輸出複製移除；尚未完成大型記憶體驗收。
+狀態：完成；source inventory、輸出複製移除、所有 rank phase memory records 與
+1024 元素大型比較均已驗收。完成摘要見 [HPC-06A／B／C 報告](HPC_06ABC_COMPLETION_REPORT.md)。
 日期：2026-09-10。以下由 `c920d9e` 的實作盤點，輸出陣列修正另列於下方。
 
 令 P 為 communicator ranks、N 為控制點數、F 為 transport fields、E 為元素數、
@@ -14,7 +15,7 @@ PETSc scatter／matrix、MPI buffers 或容器 metadata，不能當作 RSS 量�
 | [TransientTransportRuntime::GatherState](../../solvers/cpu/include/TransientTransportRuntime.hpp) | D=N×F；以共用 gather 複製 | 呼叫者要求完整 state 時才發生。assembly 使用 `GatherRequiredState`，integral 使用 fields 大小的 Allreduce。後續須依實際 call graph／profile 分辨測試與 production 使用頻率。 |
 | [OneDGetVectorAll](../../solvers/one_d/include/OneDImplicit.hpp) | 每 rank 完整解向量；gather Vec 與 candidate 至少 16D bytes，舊 `values` 可能仍存在 | 線性求解結果、非線性 residual 與 Jacobian callback 都會呼叫。Residual 另建立 D 長度 values。小型 replicated network 可保留；大型 network 必須量測 callback 頻率與 owner／分散式替代成本。 |
 | [WriteFlowOutput](../../solvers/cpu/src/iga_navier_stokes.cpp) | root gather 4N doubles，再分離 3N velocity 與 N pressure，至少 64N bytes | 每次場輸出；scatter 與 gather Vec 持續到 writer 返回。分離陣列為目前 VTU／VTKHDF API 輸入。下方移除 initializer-list 額外複製；root 完整場仍存在。 |
-| [iga_solve 輸出](../../solvers/cpu/src/iga_solve.cpp)、[iga_transport 輸出](../../solvers/cpu/src/iga_transport.cpp) | `VecScatterCreateToZero`，root 完整場 | 輸出期間存在；不能由 owned-row assembly 推論輸出已分散。HPC-06B 須提供另一條不收集完整場的路徑。 |
+| [iga_solve 輸出](../../solvers/cpu/src/iga_solve.cpp)、[iga_transport 輸出](../../solvers/cpu/src/iga_transport.cpp) | 序列格式以 `VecScatterCreateToZero` 收集 root 完整場；`iga_solve` 的 PVTU 模式只 scatter owned elements 所需 rows | 序列相容路徑在輸出期間保留完整 root 場；configured transport 可選 PVTU 避免此 gather，legacy `iga_transport` 保留原簡單路徑。 |
 | [Database](../../solvers/cpu/include/IgaDatabase.hpp) | 每 rank offsets 8(E+1)、owners 4E、rank_offsets 8(P+1)、rank_elements 8R bytes | Database 生命週期持有完整索引。`LoadRequired` 只載入該 rank 所需元素，非每 rank 完整元素 payload；另短期複製該 rank indices。R 可大於 E，不能漏掉多 rank required 重複。 |
 | [TransientFlowRuntime](../../solvers/cpu/include/TransientFlowRuntime.hpp) | required/owned 元素、局部 PETSc state／ghost，加 replicated boundary/label arrays | trial 期間還保存 committed boundaries、outlets 等，以支持 rollback。checkpoint capture 另複製 boundary 狀態；不可直接刪去 transaction 必需快照。 |
 | [MovingImmersedTransientFlowRuntime](../../solvers/cpu/include/MovingImmersedTransientFlowRuntime.hpp) | committed 與 candidate/trial 各有 geometry、catalog 與 inner runtime；BeginTrial 另建 pressure、extension、seed、map | BeginTrial 建構成功前保留 committed；FinalizeCommit 交換後刪除舊 epoch；AbortTrial 丟棄 trial。雙 epoch 是目前強例外安全與 rollback 契約的一部分。需量測各 phase，而非把雙份狀態直接視為 leak。 |
@@ -53,9 +54,9 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 timeout --kill-after=5s 120s \
 與 output 的重疊峰值。現有 concurrent 大方管作業可提供功能驗收時 RSS 觀察，
 不能作為無干擾 scaling 證據。沒有實測瓶頸證據前，不改小型 1D／metadata 路徑。
 
-CPU flow 已提供 PVTU 分片輸出與時間索引，並通過實際 PDE／ParaView 比較，
-詳見 [HPC-06B 進度](HPC_06B_PARTITIONED_VTK_PROGRESS.md)。大型 RSS 與其他求解
-路徑仍待驗證，HPC-06A／整份清單保持未勾選。
+CPU flow 與 configured transport 均提供 PVTU 分片輸出與時間索引，並通過實際
+PDE／ParaView 比較，詳見 [HPC-06B 進度](HPC_06B_PARTITIONED_VTK_PROGRESS.md)。
+大型 flow 的四 rank RSS 與 transport 的分散輸出也已納入完成驗收。
 
 ## CPU flow 階段量測接線
 
@@ -87,4 +88,6 @@ python3 scripts/hpc_flow_memory_regression.py \
   --output-dir NEW_OUTPUT
 ```
 
-證據：`outputs/hpc06/flow-memory-v1/regression/acceptance.json` 與 `audit.json`。
+當前版小案例證據：`outputs/hpc06/flow-memory-v2/acceptance.json`。1024 元素的
+完整各 rank RSS 及輸出成本見 `outputs/hpc06/duct-output-large-v1/audit.json`，
+彙整驗收見 `outputs/hpc06/completion-abc-v2/acceptance.json`。

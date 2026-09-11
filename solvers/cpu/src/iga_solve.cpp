@@ -9,6 +9,8 @@
 #include "PetscCheckpointRead.hpp"
 #include "PetscCheckpointWrite.hpp"
 #include "PetscGather.hpp"
+#include "PetscBezierVisualization.hpp"
+#include "ParallelVtkOutput.hpp"
 #include "GenericCaseInput.hpp"
 #include "GenericTransportElement.hpp"
 #include "IgaDatabase.hpp"
@@ -141,7 +143,9 @@ struct TransportOptions {
 	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 	int output_every = 0;
 	int checkpoint_every = 0;
+	int diagnostic_every = 1;
 	int stop_after_step = 0;
+	bool parallel_output = false;
 };
 
 struct TransportInput {
@@ -178,8 +182,9 @@ TransportOptions ParseOptions(int argc, char** argv)
 		"usage: iga_solve DATABASE.ntiga CASE_DIR [SYSTEM] [OUTPUT] [VELOCITY] "
 		"[--system NAME] [--output PATH] [--velocity PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
+		"[--diagnostic-every N] "
 		"[--stop-after-step N] [--memory-report PATH] "
-		"[--visualization-format auto|vtu|vtkhdf]");
+		"[--visualization-format auto|vtu|vtkhdf|pvtu]");
 	TransportOptions options;
 	options.database = argv[1];
 	options.case_dir = argv[2];
@@ -215,10 +220,15 @@ TransportOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--checkpoint") options.checkpoint = value;
 		else if (argument == "--checkpoint-every")
 			options.checkpoint_every = ParsePositiveInteger(value, argument);
+		else if (argument == "--diagnostic-every")
+			options.diagnostic_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--memory-report") options.memory_report = value;
-		else if (argument == "--visualization-format")
-			options.visualization_format = iga::ParseVisualizationFormat(value);
+		else if (argument == "--visualization-format") {
+			options.parallel_output = value == "pvtu";
+			options.visualization_format = options.parallel_output
+				? iga::VisualizationFormat::Vtu : iga::ParseVisualizationFormat(value);
+		}
 		else if (argument == "--stop-after-step")
 			options.stop_after_step = ParsePositiveInteger(value, argument);
 		else throw std::runtime_error("unknown option: "+argument);
@@ -227,6 +237,8 @@ TransportOptions ParseOptions(int argc, char** argv)
 	}
 	if (options.output_every > 0 && options.output.empty())
 		throw std::runtime_error("--output-every requires --output");
+	if (options.parallel_output && options.output.empty())
+		throw std::runtime_error("pvtu requires --output");
 	if (options.checkpoint_every > 0 && options.checkpoint.empty())
 		throw std::runtime_error("--checkpoint-every requires --checkpoint");
 	return options;
@@ -365,8 +377,10 @@ int main(int argc, char** argv)
 			std::ostringstream text;
 			text.exceptions(std::ios::badbit | std::ios::failbit);
 			text << options.system.size() << ':' << options.system << ' '
-				<< options.output_every << ' ' << options.checkpoint_every << ' ' << options.stop_after_step << ' '
-				<< static_cast<int>(options.visualization_format) << ' ' << !options.output.empty() << ' '
+				<< options.output_every << ' ' << options.checkpoint_every << ' '
+				<< options.diagnostic_every << ' ' << options.stop_after_step << ' '
+				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
+				<< !options.output.empty() << ' '
 				<< !options.velocity.empty() << ' ' << !options.checkpoint.empty() << ' '
 				<< !options.restart.empty() << ' ' << !options.memory_report.empty();
 			controls = text.str();
@@ -601,16 +615,25 @@ int main(int argc, char** argv)
 			});
 		}
 		if (!options.output.empty()
-			&& visualization_format == iga::VisualizationFormat::BezierVtkHdf) {
+			&& (visualization_format == iga::VisualizationFormat::BezierVtkHdf
+				|| options.parallel_output)) {
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport visualization initialization", [&] {
 				if (rank != 0) return;
+				if (options.parallel_output && fs::exists(iga::PvdPath(options.output)))
+					throw std::runtime_error("parallel output requires a new PVD path");
 				bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
 					iga::BuildBezierVisualizationMesh(database, false));
 				const auto report = iga::BezierGeometryReportPath(options.output);
 				RequireRegularOutput(report);
-				RequireRegularOutput(iga::VtkHdfPath(options.output));
+				if (!options.parallel_output) RequireRegularOutput(iga::VtkHdfPath(options.output));
 				iga::WriteBezierGeometryReport(report, bezier_mesh->validation);
 				iga::RequireValidBezierGeometry(bezier_mesh->validation);
+				if (options.parallel_output) {
+					std::cout << "parallel_bezier_geometry_points=" << bezier_mesh->points.size()
+						<< " geometry_report=" << report.string() << '\n';
+					iga::FlushCheckedText(std::cout);
+					return;
+				}
 				vtkhdf = std::make_unique<iga::TemporalVtkHdfWriter>(
 					iga::VtkHdfPath(options.output), *bezier_mesh,
 					!options.restart.empty());
@@ -621,6 +644,9 @@ int main(int argc, char** argv)
 				iga::FlushCheckedText(std::cout);
 			});
 		}
+		memory.Record("visualization_geometry", start_step);
+		if (options.parallel_output) bezier_mesh.reset();
+		memory.Record("visualization_ready", start_step);
 
 		std::string solver_prefix;
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport solver prefix", [&] {
@@ -649,6 +675,7 @@ int main(int argc, char** argv)
 		const auto solve_start = std::chrono::steady_clock::now();
 		double linear_seconds = 0.0;
 		std::vector<std::pair<double, fs::path>> vtk_snapshots;
+		int last_parallel_output_step = -1;
 		auto write_output = [&](int step, bool final) {
 			fs::path text_path, vtk_path, mesh_path;
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport output paths", [&] {
@@ -656,9 +683,41 @@ int main(int argc, char** argv)
 				vtk_path = final ? iga::VtuFinalPath(options.output) : iga::VtuStepPath(options.output, step);
 				mesh_path = case_dir/"controlmesh.vtk";
 			});
+			if (options.parallel_output) {
+				if (last_parallel_output_step == step) return;
+				iga::PhaseScope output_phase(iga::ProfilePhase::Output);
+				memory.Record("output_begin", step);
+				fs::path directory;
+				std::vector<iga::Element> owned_elements;
+				std::vector<iga::VtkArraySchema> field_schema;
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "parallel transport output preparation", [&] {
+					directory = iga::VtuStepPath(options.output, step);
+					directory.replace_extension();
+					for (const auto& element : assembler.elements())
+						if (element.owner == rank) owned_elements.push_back(element);
+					for (const auto& field : system.fields) field_schema.push_back({field, 1});
+				});
+				const auto extracted = iga::BuildPetscBezierPartition(current, owned_elements,
+					database.header().elements, database.header().nodes, field_schema);
+				memory.Record("parallel_piece_extracted", step);
+				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD, directory, extracted.piece, step*system.dt);
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "parallel transport output bookkeeping", [&] {
+					vtk_snapshots.push_back({step*system.dt, directory/"snapshot.pvtu"});
+					std::cout << "parallel_transport_output rank=" << rank << " step=" << step
+						<< " selected_rows=" << extracted.requested_rows
+						<< " global_rows=" << extracted.global_rows << '\n';
+					iga::FlushCheckedText(std::cout);
+				});
+				iga::WriteParallelVtkSeries(PETSC_COMM_WORLD, iga::PvdPath(options.output), vtk_snapshots);
+				memory.Record("parallel_piece_published", step);
+				last_parallel_output_step = step;
+				return;
+			}
+			memory.Record("output_begin", step);
 			WriteTransportOutput(current, database.header().nodes, system.fields,
 				text_path, mesh_path, vtk_path, step*system.dt,
 				configuration.physiology, rank, visualization_format, vtkhdf.get());
+			memory.Record("serial_output_released", step);
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport output bookkeeping", [&] {
 				if (!final && visualization_format == iga::VisualizationFormat::Vtu)
 					vtk_snapshots.push_back({step*system.dt, vtk_path});
@@ -715,18 +774,20 @@ int main(int argc, char** argv)
 					throw std::runtime_error("cannot query transport KSP status");
 				if (reason <= 0) throw std::runtime_error("KSP did not converge at step " + std::to_string(step));
 			});
-			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport solver diagnostics", [&] {
-				if (rank != 0) return;
-				const auto configured_solver = iga::CaptureKspConfiguration(solver);
-				std::cout << "solver_configuration prefix=" << configured_solver.prefix
-					<< " ksp=" << configured_solver.ksp << " pc=" << configured_solver.pc
-					<< " factor_backend=" << configured_solver.factor_backend
-					<< " step=" << step+1 << " iterations=" << iterations << " reason=" << static_cast<int>(reason) << '\n';
-				iga::FlushCheckedText(std::cout);
-			});
+			const auto completed_step = step+1;
+			if (completed_step%options.diagnostic_every == 0 || completed_step == run_end_step) {
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport solver diagnostics", [&] {
+					if (rank != 0) return;
+					const auto configured_solver = iga::CaptureKspConfiguration(solver);
+					std::cout << "solver_configuration prefix=" << configured_solver.prefix
+						<< " ksp=" << configured_solver.ksp << " pc=" << configured_solver.pc
+						<< " factor_backend=" << configured_solver.factor_backend
+						<< " step=" << step+1 << " iterations=" << iterations << " reason=" << static_cast<int>(reason) << '\n';
+					iga::FlushCheckedText(std::cout);
+				});
+			}
 			total_iterations += iterations;
 			CheckPetsc("transport VecSwap", VecSwap(current, next));
-			const auto completed_step = step+1;
 			if (options.output_every > 0
 				&& completed_step%options.output_every == 0) {
 				write_output(completed_step, false);
@@ -763,7 +824,7 @@ int main(int argc, char** argv)
 			write_output(run_end_step, true);
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport output index", [&] {
 				if (rank == 0) {
-					if (visualization_format == iga::VisualizationFormat::Vtu) {
+					if (!options.parallel_output && visualization_format == iga::VisualizationFormat::Vtu) {
 						if (vtk_snapshots.empty())
 							vtk_snapshots.push_back({run_end_step*system.dt,
 								iga::VtuFinalPath(options.output)});

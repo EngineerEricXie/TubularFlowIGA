@@ -77,4 +77,6 @@ assembly 最大 rank 秒為 27.3637／26.5182／26.0157，linear 為
 0.240324／0.0527229／0.0692620。九個作業最大 peak rank RSS=100,704,256 bytes。
 後續小切割幾何的結果另見 [小切割評估](HPC_04B_SMALL_CUT_PROGRESS.md)。還須彙整全部成功／失敗原因與場 gate，再處理更小切割
 元素、其他網格／rank 與排程資源驗收。128-element 方管四候選已通過，見
-[加密方管結果](HPC_04B_REFINED_DUCT_PROGRESS.md)；完整 moving regression 在 rigid wall trace gate 失敗，尚待修復；HPC-04 整體保持未完成。
+[加密方管結果](HPC_04B_REFINED_DUCT_PROGRESS.md)。先前 moving rigid wall trace
+失敗已由正權重 catalog 修正並完成回歸；完整候選與負收益彙整見
+[HPC-04B／C 完成報告](HPC_04BC_COMPLETION_REPORT.md)。

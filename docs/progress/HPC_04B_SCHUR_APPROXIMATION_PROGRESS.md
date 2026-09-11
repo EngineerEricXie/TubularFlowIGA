@@ -1,6 +1,7 @@
 # HPC-04B Schur 近似評估
 
-- 狀態：16-element 小案例評估完成，包含不收斂候選；HPC-04B 整體仍進行中。
+- 狀態：16-element 小案例評估完成，包含不收斂候選；HPC-04B 已於 2026-09-11
+  由 [完成報告](HPC_04BC_COMPLETION_REPORT.md)簽核。
 - 日期：2026-09-09（美東），基準 `42d4d39`。Native frozen binary 仍為
   `01aa4c8`；未更動 production solver 或物理／資料介面。
 - 環境：工作站回報 Intel Core i9-14900KF，執行環境可見 16 logical CPUs；

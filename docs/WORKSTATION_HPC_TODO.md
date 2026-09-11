@@ -2,10 +2,10 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-05D、HPC-07A／B 已完成；moving／FSI
-pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。HPC-05C 的大型排程、
-HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。其他既有完成狀態沿用對應報告，
-未宣稱本批重新驗收整份清單。
+最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-04B／C、HPC-05D、HPC-06A／B／C、
+HPC-07A／B 已完成；moving／FSI pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。
+HPC-05C 的大型排程、HPC-06D、HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。
+其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
 [優先順序](#建議開發順序) · [goal 範本](#可複製的-goal-範本) ·
@@ -49,11 +49,11 @@ HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。其他既有完成狀態
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（21 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A、HPC-05A／B／D、HPC-07A／B |
-| 已有部分進度、尚未完成（7 項） | HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07C |
+| 已勾選完成（26 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–C、HPC-07A／B |
+| 已有部分進度、尚未完成（2 項） | HPC-05C、HPC-07C |
 | 其餘待辦（10 項） | HPC-06D、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 17 項未勾選，其中 7 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 12 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -93,15 +93,15 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 4. **分散式耦合與部署：HPC-07／08／09。** 完成 FSI、domain 程序群，
    最後取得實際跨節點驗收證據。
 
-已有部分完成紀錄，後續可先指定 `HPC-04B` 的剩餘工作；
+已有部分完成紀錄，後續可先指定 `HPC-05C` 的剩餘工作；
 每次 goal 應以當時程式與測試證據核對清單狀態。
 
 ### 下一次開發的具體入口
 
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
-| HPC-04B／C | 完成代表案例的求解器／預條件器矩陣及大案例效能／記憶體驗收 | [refined duct 進度](progress/HPC_04B_REFINED_DUCT_PROGRESS.md)、[rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md) |
 | HPC-05C | native graph／providers／完整歷史／CLI 的單機驗收完成；接續大型及跨節點 allocation 的 checkpoint／訊號轉送驗收 | [完整 graph 進度](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)、[使用說明](COUPLED_RESTART.md) |
+| HPC-06D | 量測 mesh、spline 與 packer 的大型案例時間、RSS 及輸出規模，再依證據決定是否平行化 | [基準規格](HPC_BENCHMARKS.md)、[HPC-06A／B／C 完成報告](progress/HPC_06ABC_COMPLETION_REPORT.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
 Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
@@ -580,7 +580,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   的 family／CLI／backend／完整回歸已完成範圍稽核，見
   [HPC-04A 完成報告](progress/HPC_04A_COMPLETION_AUDIT.md)；不宣稱所有 binary
   均在目前 HEAD 重跑，跨節點與候選擴展性仍依原子任務驗收。
-- [ ] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
+- [x] **HPC-04B：候選預條件器。** 以現有 LU／block-Jacobi／ILU 作基準，
   評估速度壓力分塊、Schur 與適合子區塊的 AMG；顧及 pressure nullspace、
   port constraints、切割小元素與 ghost stabilization，不對整個 saddle-point
   系統盲目套用標量 AMG。
@@ -596,19 +596,24 @@ F05 的原始診斷例外保存與恢復亦通過，見
   小案例評估，保留速度 GAMG／壓力 Jacobi 不收斂的結果，見
   [Schur 近似進度](progress/HPC_04B_SCHUR_APPROXIMATION_PROGRESS.md)。同一方管的
   1／2／4-rank 速度與壓力場亦已比較，見
-  [rank 一致性進度](progress/HPC_04B_DUCT_RANK_PARITY_PROGRESS.md)。其他網格、rank、
-  pressure nullspace 與 immersed 條件仍待評估。Immersed gauge／port 候選驗證已
+  [rank 一致性進度](progress/HPC_04B_DUCT_RANK_PARITY_PROGRESS.md)。Immersed
+  pressure gauge／reference 與 port 候選驗證已
   完成原切割幾何九候選驗收，見
   [immersed 候選進度](progress/HPC_04B_IMMERSED_CANDIDATES_PROGRESS.md)。小切割
   gauge 案例亦已評估，LU 通過、兩個 block 候選不收斂，見
-  [小切割結果](progress/HPC_04B_SMALL_CUT_PROGRESS.md)。
-- [ ] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
+  [小切割結果](progress/HPC_04B_SMALL_CUT_PROGRESS.md)。small／medium／large duct、
+  selfp、immersed gauge／port／small-cut 的 38 個最終 evaluations 已重新稽核，
+  三個不收斂候選保留為負面結果，見
+  [HPC-04B／C 完成報告](progress/HPC_04BC_COMPLETION_REPORT.md)。
+- [x] **HPC-04C：網格與硬體擴展。** 分別測試建立成本、求解成本、記憶體及
   網格加密／rank 增加後的迭代數。僅在有穩定證據時變更預設求解策略。
   已建立序列重複的 fixed-mesh rank sweep，保留原 validator 並比較跨 rank
   checkpoint；128 元素 1／2／4 ranks、兩次重複、12 次求解已通過並核對證據。
   4 ranks 觀察 speedup 僅 LU 1.037×／block-Jacobi 1.012×，未更改預設；
   含背景活動限制與迭代數負收益，見
-  [rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md)。
+  [rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md)。另以 16／128／
+  1024 elements 核對 mesh growth 的 assembly、setup、solve、RSS 與 iterations；
+  目前 HEAD 的 16-element 四候選亦通過。跨節點硬體結論仍由 HPC-09 驗收。
 
 驗收：相同數值門檻下完成小／中／大案例比較；報告失敗與負收益組合。
 不以 Krylov 迭代較少作為唯一成功條件，也不宣稱 AMG 必然較快。
@@ -680,7 +685,7 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 [iga_navier_stokes.cpp](../solvers/cpu/src/iga_navier_stokes.cpp)、
 [TemporalVtkHdf.hpp](../include/TemporalVtkHdf.hpp)、[VISUALIZATION.md](VISUALIZATION.md)。
 
-- [ ] **HPC-06A：記憶體稽核。** 盤點 gather-to-all、gather-to-root、完整 mesh
+- [x] **HPC-06A：記憶體稽核。** 盤點 gather-to-all、gather-to-root、完整 mesh
   副本與移動幾何雙份狀態的大小、必要性及生命週期；優先移除大型案例熱路徑的
   不必要複製，保留便宜小模型的簡單實作。
   貼體小案例已有 required 元素分布與 RSS 初步證據：8 rank 的 required
@@ -689,8 +694,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   已完成第一批 [記憶體生命週期盤點](progress/HPC_06A_MEMORY_INVENTORY.md)，並移除
   flow 輸出組裝陣列時多餘的完整場複製；既有 MPI writer 回歸通過。CPU flow
   的 `--memory-report` 已補上所有 rank 的幾何／場抽取／發布階段採樣，量測
-  不改 checkpoint 數值；大型 phase 峰值比較仍待完成。
-- [ ] **HPC-06B：分散式視覺化。** 先選擇與 ParaView 相容的分片輸出或
+  不改 checkpoint 數值；1024 元素四 rank 的 HDF／PVTU phase 峰值已完整記錄，
+  見 [HPC-06A／B／C 完成報告](progress/HPC_06ABC_COMPLETION_REPORT.md)。
+- [x] **HPC-06B：分散式視覺化。** 先選擇與 ParaView 相容的分片輸出或
   Parallel HDF5 路徑，分別驗證格式、shared-point／cell 身分、時間索引與
   collective 規則。保留既有序列輸出作相容路徑。
   已完成 [分片 VTU／PVTU 格式元件](progress/HPC_06B_PARTITIONED_VTK_PROGRESS.md)，
@@ -699,14 +705,18 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   分片、共享身分／tuple 交換與實際內插也已驗證，並修復共用 VTK 面內點排序；
   PETSc 選定控制點 state、CPU flow 的 `pvtu` CLI 與 PVD 時間序列已接線；
   12 組實際求解／故障測試及 13 個 ParaView 時間幀場值比較通過。此新模式
-  免完整解場 root gather，但初始化仍保留 root 完整幾何認證；大型 RSS、其他
-  runtime／transport 路徑與 I/O 規模測試待完成。128 元素／4-rank 的三幀場值
+  免完整解場 root gather，但初始化仍保留 root 完整幾何認證。128 元素／4-rank 的三幀場值
   比較及同 checkpoint 重輸出亦已通過，並記錄全部 rank RSS 與檔案成本；
   1024 元素／2299 控制點的四 rank 比較亦通過，已記錄 ASCII 分片的較高
-  檔案量；這些案例不取代記憶體受限的大型場與跨節點驗收。
-- [ ] **HPC-06C：I/O 控制。** 分別設定場輸出、純量診斷與 checkpoint 頻率；
+  檔案量。Configured transport 亦已接入相同 owned-row PVTU 路徑；ParaView
+  讀回、collective 發布失敗及健康重試通過。跨節點行為仍由 HPC-09 驗收。
+- [x] **HPC-06C：I/O 控制。** 分別設定場輸出、純量診斷與 checkpoint 頻率；
   測試 rank 增加時的檔案數、metadata 成本與寫入吞吐。
   依結果決定是否引入有限數量的 I/O aggregator，避免每 rank 每步大量小檔案。
+  Flow／transport 的三種頻率已獨立驗證；1／2 ranks 的檔案數、bytes 與 output
+  phase 時間均已記錄，降低頻率時 final checkpoint 不變。本機證據未支持新增
+  aggregator，決定保留 rank-local pieces，見
+  [完成報告](progress/HPC_06ABC_COMPLETION_REPORT.md)。
 - [ ] **HPC-06D：前處理大型案例。** 量測 mesh、spline、packer 的工作量與
   記憶體上限；優先保留串流／分塊設計。只有已證明為瓶頸時才增加其平行化。
 
