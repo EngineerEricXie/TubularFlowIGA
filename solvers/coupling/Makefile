@@ -211,7 +211,7 @@ pulsatile_straight_vessel_temporal_test: tests/test_pulsatile_straight_vessel_te
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 clean:
-	$(RM) hpc_duct_solver_fixture graph_checkpoint_history_test native_graph_checkpoint_fault_test native_graph_checkpoint_fixture_test native_graph_checkpoint_groups_test
+	$(RM) hpc_duct_solver_fixture hpc_duct_partition_test graph_checkpoint_history_test native_graph_checkpoint_fault_test native_graph_checkpoint_fixture_test native_graph_checkpoint_groups_test
 	$(RM) zero_d_checkpoint_test
 	$(RM) coupled_checkpoint_bundle_test
 	$(RM) graph_cleanup_cli_test bifurcation_cleanup_cli_test sequential_cleanup_cli_test
@@ -308,6 +308,9 @@ native_graph_checkpoint_groups_test: tests/test_native_graph_checkpoint_groups.c
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_native_graph_checkpoint_groups.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
 
 iga_1d_3d_explicit: ../cpu/include/PetscSolverOptions.hpp ../cpu/include/CollectivePetscOptions.hpp
+
+hpc_duct_partition_test: tests/test_hpc_duct_partition.cpp tests/CouplingFixture.hpp ../cpu/include/IgaDatabase.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 hpc_duct_solver_fixture: tests/test_hpc_duct_solver_fixture.cpp tests/test_phase9_multiscale_closure.cpp tests/CouplingFixture.hpp ../cpu/include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@

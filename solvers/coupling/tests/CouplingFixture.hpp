@@ -679,7 +679,8 @@ inline void WriteC0SquareDuctControlMesh(const std::filesystem::path& path, int 
 }
 
 inline void WriteC2SquareDuctDatabase(const std::filesystem::path& path, int transverse_elements,
-	std::uint32_t ranks, int axial_elements = 1, double length_m = 1.0)
+	std::uint32_t ranks, int axial_elements = 1, double length_m = 1.0,
+	bool compact_rank_index = false)
 {
 	if (transverse_elements < 1 || axial_elements < 1 || ranks < 1
 		|| !(length_m > 0.0) || !std::isfinite(length_m))
@@ -690,6 +691,14 @@ inline void WriteC2SquareDuctDatabase(const std::filesystem::path& path, int tra
 	const std::uint64_t elements = static_cast<std::uint64_t>(axial_elements)*transverse_elements*transverse_elements;
 	std::vector<std::ostringstream> records(static_cast<std::size_t>(elements));
 	std::vector<std::int32_t> owners(static_cast<std::size_t>(elements));
+	// Match iga_pack: only elements touching this rank's contiguous owned rows.
+	std::vector<std::vector<std::uint64_t>> required(ranks);
+	const auto node_owner = [nodes, ranks](std::uint64_t node) {
+		const auto q = nodes/ranks, remainder = nodes%ranks;
+		const auto wide_end = (q+1)*remainder;
+		return static_cast<std::uint32_t>(node < wide_end
+			? node/(q+1) : remainder+(node-wide_end)/q);
+	};
 	for (int ex = 0; ex < axial_elements; ++ex)
 		for (int ez = 0; ez < transverse_elements; ++ez)
 			for (int ey = 0; ey < transverse_elements; ++ey) {
@@ -705,12 +714,17 @@ inline void WriteC2SquareDuctDatabase(const std::filesystem::path& path, int tra
 					ex+1 == axial_elements ? 2 : -1, ey+1 == transverse_elements ? 0 : -1,
 					ex == 0 ? 1 : -1, ez+1 == transverse_elements ? 0 : -1}};
 				output.write(reinterpret_cast<const char*>(labels.data()), static_cast<std::streamsize>(sizeof(labels)));
+				std::vector<std::uint32_t> row_owners;
 				for (int c = 0; c < 4; ++c)
 					for (int b = 0; b < 4; ++b)
 						for (int a = 0; a < 4; ++a) {
 							const std::int32_t id = ex+a+bases_x*(ey+b+bases_yz*(ez+c));
 							Write(output, id);
+							if (compact_rank_index) row_owners.push_back(node_owner(id));
 						}
+				std::sort(row_owners.begin(), row_owners.end());
+				row_owners.erase(std::unique(row_owners.begin(), row_owners.end()), row_owners.end());
+				for (auto rank : row_owners) required[rank].push_back(element);
 				for (int c = 0; c < 4; ++c)
 					for (int b = 0; b < 4; ++b)
 						for (int a = 0; a < 4; ++a) {
@@ -765,10 +779,16 @@ inline void WriteC2SquareDuctDatabase(const std::filesystem::path& path, int tra
 	output.write(reinterpret_cast<const char*>(owners.data()), static_cast<std::streamsize>(owners.size()*sizeof(std::int32_t)));
 	for (const auto& record : records) output << record.str();
 	std::vector<std::uint64_t> rank_offsets(static_cast<std::size_t>(ranks)+1, 0);
-	for (std::uint32_t rank = 0; rank < ranks; ++rank) rank_offsets[static_cast<std::size_t>(rank+1)] = rank_offsets[static_cast<std::size_t>(rank)]+elements;
+	for (std::uint32_t rank = 0; rank < ranks; ++rank) rank_offsets[static_cast<std::size_t>(rank+1)] = rank_offsets[static_cast<std::size_t>(rank)]
+		+(compact_rank_index ? required[rank].size() : elements);
 	output.write(reinterpret_cast<const char*>(rank_offsets.data()), static_cast<std::streamsize>(rank_offsets.size()*sizeof(std::uint64_t)));
-	for (std::uint32_t rank = 0; rank < ranks; ++rank)
-		for (std::uint64_t element = 0; element < elements; ++element) Write(output, element);
+	for (std::uint32_t rank = 0; rank < ranks; ++rank) {
+		if (compact_rank_index) {
+			for (auto element : required[rank]) Write(output, element);
+		} else {
+			for (std::uint64_t element = 0; element < elements; ++element) Write(output, element);
+		}
+	}
 	if (!output) throw std::runtime_error("cannot finalize C2 square-duct fixture database");
 }
 

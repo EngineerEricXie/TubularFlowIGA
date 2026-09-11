@@ -28,7 +28,7 @@ int main(int argc, char** argv)
 		const fs::path root = argv[1];
 		Require(fs::create_directories(root), "fixture output already exists");
 		PrepareCase(root, 0.01, steps, ranks, "duct.ntiga");
-		iga::test::WriteC2SquareDuctDatabase(root/"duct.ntiga", transverse, ranks, axial);
+		iga::test::WriteC2SquareDuctDatabase(root/"duct.ntiga", transverse, ranks, axial, 1.0, true);
 		WriteThreeDCase(root/"root3d", transverse, axial, 0.01, steps);
 		std::cout << "duct_fixture transverse=" << transverse << " axial=" << axial
 			<< " elements=" << transverse*transverse*axial

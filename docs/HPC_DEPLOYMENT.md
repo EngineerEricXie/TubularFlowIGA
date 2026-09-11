@@ -85,7 +85,8 @@ Slurm sends `SIGUSR1` five minutes before the time limit. The batch shell trap
 forwards it to `mpiexec`, whose Open MPI 4.0.5
 `--mca ess_base_forward_signals SIGUSR1` setting delivers it to solver ranks. The native graph exits after the next accepted macro-step and a
 published checkpoint. The script records `checkpointed` and requeues by
-default. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
+default. The wrapper explicitly enables the job requeue flag after allocation,
+because Bridges-2 may reset the submission flag. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
 attempt uses `attempt-$SLURM_RESTART_COUNT`; a resumed attempt adds
 `--restart-dir` when a published generation exists.
 
@@ -144,7 +145,8 @@ Prepare a fixed physical case packed for every strong-scaling rank count. Also
 prepare one weak case per rank count, increasing global elements so elements per
 rank remain within the configured tolerance. `hpc_prepare_scaling_cases.py`
 generates C2 duct cases from the repository fixture: the default strong case has
-16,384 elements, while every weak case has exactly 256 elements per rank. Tiny
+16,384 elements, while every weak case has exactly 256 elements per rank. Their required-element indexes follow the production packer's contiguous
+owned-node ranges; they do not replicate every element on every rank. Tiny
 fixtures are rejected as evidence by review even if the collector itself can
 run them.
 
