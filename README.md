@@ -23,7 +23,7 @@ general-purpose CFD package.
 | Application | Available now | Important boundary |
 |---|---|---|
 | Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
-| Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer | Executable graphs require supported acyclic topology. 0D supports one-port compliant sources and terminal RCR models; 0D species and a full closed-loop 0D heart are deferred |
+| Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer; optional disjoint MPI groups for independent domains | Executable graphs require supported acyclic topology. Grouped execution supports 0D, 1D, and body-fitted 3D; grouped checkpoint/restart and immersed domains use shared mode. 0D species and a full closed-loop 0D heart are deferred |
 | Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry | Moving geometry uses a fixed Eulerian background with distributed active-set/history transfer. ALE/remeshing and a native moving-domain graph CLI remain deferred |
 | Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated locally for a small-displacement compliant-channel benchmark at 1/2/4 ranks. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, valve/contact models, and cross-node acceptance are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
@@ -314,6 +314,13 @@ Use the same inputs, build, rank membership, and numerical options. See
 [graph restart](docs/COUPLED_RESTART.md) for save intervals, complete history
 output, and `SIGUSR1` handling at an accepted-step boundary.
 
+An optional schema-v5/v6 `resources` object assigns domains to disjoint MPI
+rank groups. Independent 3D domains can solve concurrently while port exchange,
+rollback, commit, and species donor reversal remain globally coordinated.
+Shared communicator execution remains the default. See
+[multidomain resources](docs/MULTIDOMAIN_RESOURCES.md) for the manifest format,
+mapping reconstruction, measured tradeoffs, and current limitations.
+
 `SimulationGraph` validates topology and port capabilities;
 `DomainRuntimeRegistry` owns the native runtimes. Component executors exchange
 boundary data, converge trial states, and prepare every domain before
@@ -355,6 +362,12 @@ make cpu-test
 make one-d-petsc
 make one-d-test
 make coupling-test
+
+# Machine-readable build compatibility and bounded test tiers
+make hpc-build-manifest HPC_BUILD_MANIFEST=/path/to/cpu-build.json
+make hpc-test-unit HPC_TEST_OUTPUT=/path/to/test-results
+make hpc-test-mpi PETSC_DIR="$PETSC_DIR" HPC_TEST_OUTPUT=/path/to/test-results
+make hpc-test-gpu HPC_TEST_OUTPUT=/path/to/test-results
 
 make cpu-petsc \
   PETSC_DIR=/path/to/petsc \
@@ -442,6 +455,7 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Completed multiscale milestones and phase-specific evidence | [Foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md) |
 | Workstation multicore and HPC development tasks, dependencies, and goal templates | [Workstation and HPC checklist](docs/WORKSTATION_HPC_TODO.md) |
 | Repeat CPU MPI, serial fixture, and single-GPU timing, memory, and field comparisons | [HPC benchmark guide](docs/HPC_BENCHMARKS.md) |
+| Reproducible builds, test tiers, scheduler staging/requeue, and cross-node scaling | [HPC deployment](docs/HPC_DEPLOYMENT.md) |
 | Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
 | Run the large morphology-derived neuron regression | [NMO_06840 transport](examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
@@ -480,8 +494,10 @@ Current scope limits are important when interpreting results:
 - moving anatomy uses a fixed Eulerian background. ALE/remeshing, nonmatching
   FSI transfer, monolithic FSI, and advanced valves/leaflet contact are deferred;
 - multidomain execution supports validated acyclic pressure/flow graphs and
-  staged 1D/body-fitted-3D species transfer. 0D species, a full closed-loop 0D
-  heart, multirate coupled clocks, and moving/FSI native graph restart remain deferred;
+  staged 1D/body-fitted-3D species transfer. Optional domain groups support
+  0D, 1D, and body-fitted 3D, while grouped checkpoint/restart and grouped
+  immersed execution remain deferred. 0D species, a full closed-loop 0D heart,
+  multirate coupled clocks, and moving/FSI native graph restart remain deferred;
 - native 1D and CPU 3D `vca_closed_loop` coupling remain separate from generic
   domain coupling; CUDA VCA and 3D VCA replay/open-loop are unavailable;
 - 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
@@ -496,6 +512,9 @@ Current scope limits are important when interpreting results:
 
 For shared clusters, run simulations on allocated compute resources rather
 than login nodes and follow the local scheduler policy.
+The repository includes cross-node Slurm and scaling workflows, but the current
+workstation revision has no actual multi-node allocation evidence; HPC-05C,
+HPC-07C/D, and HPC-09A-D remain pending that validation.
 
 ## Performance evidence
 

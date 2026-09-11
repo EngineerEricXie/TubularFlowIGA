@@ -151,3 +151,32 @@ for that comparison. Override the tolerance with
 Keep case data, `.ntiga` databases, VTK output, and Slurm logs outside Git.
 Record module versions, node or GPU type, task count, job ID, stage timings,
 peak RSS, and CUDA peak allocation with every benchmark.
+
+## Cross-node CPU jobs
+
+The repository now provides two CPU wrappers with matching task/thread binding,
+node-local input staging, machine-readable metadata, and explicit evidence
+directories:
+
+- `solvers/cpu/slurm/multinode_graph.sbatch` runs a checkpointed native graph,
+  forwards the five-minute `SIGUSR1` warning through Open MPI, and requeues only
+  after the solver publishes an accepted-step checkpoint.
+- `solvers/cpu/slurm/cross_node_scaling.sbatch` runs repeated fixed-problem
+  strong scaling and constant-elements-per-rank weak scaling in an exclusive
+  allocation.
+- `solvers/cpu/slurm/cross_node_fsi.sbatch` compares one-rank and two-node
+  four-rank strong FSI, then restores the four-rank pair checkpoint in a new
+  two-rank process.
+
+The environment variables, preparation contract, submission commands, result
+schema, and interpretation rules are documented in
+[HPC deployment and test tiers](HPC_DEPLOYMENT.md). Adjust partitions, node
+counts, tasks per node, memory, and wall limits to the active Bridges-2 policy;
+the committed values are reviewable examples and still require an actual-site
+validation job.
+
+As of the 2026-09-11 documentation audit, the official
+[Bridges-2 user guide](https://www.psc.edu/resources/bridges-2/user-guide/)
+specifies 128 cores per RM node and restricts RM-shared to one node. Full-node
+RM scaling jobs therefore request 128 tasks per node. Recheck the guide before
+submission because PSC scheduling policies can change.

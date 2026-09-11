@@ -4,8 +4,9 @@
 
 最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-04B／C、HPC-05D、HPC-06A–D、
 HPC-07A／B 已完成；moving／FSI pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。
-HPC-08A–C 的程序群、相依排程與雙 3D 實測已完成；HPC-05C 的大型排程、
-HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。
+HPC-08A–C 的程序群、相依排程與雙 3D 實測已完成；HPC-09 的本機部署工具與
+文件收尾完成，09A–D 等待實際跨節點證據。HPC-05C 的大型排程與 HPC-07C／D
+亦仍待跨節點驗收。
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -50,11 +51,11 @@ HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（30 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–D、HPC-07A／B、HPC-08A–C |
-| 已有部分進度、尚未完成（3 項） | HPC-05C、HPC-07C／D |
-| 其餘待辦（5 項） | HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已勾選完成（31 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–D、HPC-07A／B、HPC-08A–C、HPC-09E |
+| 已有部分進度、尚未完成（7 項） | HPC-05C、HPC-07C／D、HPC-09A–D |
+| 其餘待辦（0 項） | 無；既有程式能力不等於已通過上述跨節點驗收 |
 
-合計尚有 8 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 7 項未勾選，皆已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -859,19 +860,30 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 - [ ] **HPC-09A：可重現建置。** 延伸既有 Makefile／依賴檢查，提供工作站與
   叢集配置；記錄 MPI、PETSc、HDF5 的 ABI／能力及 CUDA 目標架構。
   不把新增另一套 build system 當作必要前提。
+  本機 build manifest、Make target、PETSc／HDF5／MPI／CUDA probe 已通過；尚缺
+  同 revision 的實際叢集 build report。
 - [ ] **HPC-09B：分層測試。** 快速單元測試、小型 1／2／4-rank 數值測試、
   有硬體的 GPU 回歸、排程執行的跨節點與大型測試分開。
   測試有 timeout、非零退出與機器可讀結果；跳過必須有原因。
+  Unit、1／2／4-rank MPI 與本機 GPU tier 已通過；無 Slurm 時 scheduled tier 以
+  明確理由 skip。尚缺實際 two-node scheduled tier 與大型作業。
 - [ ] **HPC-09C：排程與執行配置。** 提供匹配 `ntasks`、`cpus-per-task`、
   OpenMP／BLAS threads、CPU／NUMA 綁定的範例；整合輸入 staging、
   安全時間步 checkpoint 及重提交流程。依實際站點政策驗證。
+  Bridges-2 scripts 已整合 node-local staging、binding、SIGUSR1 accepted-step
+  checkpoint 與 requeue；仍待站點實跑確認。
 - [ ] **HPC-09D：Strong／weak scaling。** 固定問題增加核心測 strong scaling；
   隨核心數增加工作量測 weak scaling。報告速度比、平行效率、每 rank 工作量、
   solver iterations、記憶體及通訊。不要使用只有兩個元素的 Phase 9 fixture
   宣稱四 rank 或大規模擴展性。
-- [ ] **HPC-09E：相容性與文件收尾。** 更新 root README 的能力矩陣、限制與
+  Collector 與 exclusive RM wrapper 已完成；非微型 prepared cases 及真實跨節點
+  repetitions 尚待執行。
+- [x] **HPC-09E：相容性與文件收尾。** 更新 root README 的能力矩陣、限制與
   可重現命令；保留既有案例、cache/text packing 與 CPU/CUDA 數值介面。
   如尚有階段或硬體測試未完成，明確列出，不將本清單整體標為完成。
+  README、Bridges-2、部署與 domain-resource 文件已更新；原案例和資料介面未改，
+  grouped／moving／FSI／跨節點缺口明列。見
+  [本機部署進度](progress/HPC_09_LOCAL_DEPLOYMENT_PROGRESS.md)。
 
 驗收：以相同 source revision 在工作站與實際多節點 allocation 完成宣告範圍的
 案例，保留環境／job ID／數值／效能證據；清楚標示沒有收益的配置。

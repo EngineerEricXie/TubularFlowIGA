@@ -3,6 +3,13 @@
 set -u
 
 component=${1:-all}
+report=
+if [[ ${2:-} == --report ]]; then
+	report=${3:?--report requires an output path}
+elif (( $# > 1 )); then
+	printf 'usage: %s preprocessing|cpu|one-d|cuda|all [--report FILE]\n' "$0" >&2
+	exit 2
+fi
 failures=0
 
 pass() { printf 'ok      %s\n' "$1"; }
@@ -73,7 +80,20 @@ check_hdf5() {
 }
 
 check_cuda() {
-	have_command "${NVCC:-nvcc}"
+	if [[ -n ${NVCC:-} ]] || command -v nvcc >/dev/null 2>&1; then
+		have_command "${NVCC:-nvcc}"
+		return
+	fi
+	for candidate in "$HOME/anaconda3/envs/tubularflow-cuda/bin/nvcc" \
+		"$HOME/miniconda3/envs/tubularflow-cuda/bin/nvcc"; do
+		if [[ -x $candidate ]]; then
+			export NVCC=$candidate
+			pass "nvcc: $candidate (tubularflow-cuda environment)"
+			note "build with NVCC=$candidate or conda run -n tubularflow-cuda make cuda"
+			return
+		fi
+	done
+	fail "nvcc (set NVCC or install the tubularflow-cuda Conda environment)"
 }
 
 check_one_d() {
@@ -131,6 +151,13 @@ case "$component" in
 		;;
 esac
 
+status=passed
+if (( failures > 0 )); then status=failed; fi
+if [[ -n $report ]]; then
+	python3 "$(dirname "$0")/hpc_build_manifest.py" --component "$component" \
+		--dependency-status "$status" --output "$report"
+	note "machine-readable build manifest: $report"
+fi
 if (( failures > 0 )); then
 	note "$failures required item(s) missing for component '$component'"
 	exit 1

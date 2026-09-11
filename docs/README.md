@@ -19,6 +19,7 @@ vascular and neuron workflows. Then choose the document matching the task:
 | Check parallel node, element, halo, and surface ownership contracts | [PARALLEL_OWNERSHIP.md](architecture/PARALLEL_OWNERSHIP.md) |
 | Audit MPI failure boundaries, native tests, and remaining reliability gaps | [MPI_FAILURE_BOUNDARIES.md](architecture/MPI_FAILURE_BOUNDARIES.md) |
 | Record HPC provenance and repeat CPU MPI, serial fixture, and GPU benchmarks | [HPC_BENCHMARKS.md](HPC_BENCHMARKS.md) |
+| Build, tier tests, stage scheduler inputs, requeue checkpoints, and collect cross-node scaling | [HPC_DEPLOYMENT.md](HPC_DEPLOYMENT.md) |
 
 Implementation-specific guides live next to their code:
 
