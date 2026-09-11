@@ -56,10 +56,15 @@ logs with current results.
 `solvers/cpu/slurm/multinode_graph.sbatch` requests two RM nodes, maps ranks by
 node, binds each rank to the `cpus-per-task` core set, makes OpenMP match that
 allocation, forces BLAS libraries to one thread, and records the build and job
-metadata. It copies the graph input to node-local `$SLURM_TMPDIR`; results and
-checkpoints remain on a shared filesystem.
+metadata. It copies the graph input to node-local `$SLURM_TMPDIR` (falling back
+to PSC `$LOCAL`); results and checkpoints remain on a shared filesystem.
 
-Submit from a login node after building in a compatible compute allocation:
+Submit from the repository root after building in a compatible compute allocation.
+The wrappers use `SLURM_SUBMIT_DIR` because Slurm executes a spool copy; set
+`IGA_REPO_ROOT` explicitly when submitting from another directory. They load
+Anaconda Python and the same Open MPI module for every attempt.
+
+Build inside the compute allocation:
 
 ```bash
 make hpc-cross-node-binaries PETSC_DIR="$PETSC_DIR" PETSC_ARCH="$PETSC_ARCH"
@@ -77,8 +82,8 @@ sbatch -A "$PROJECT_ACCOUNT" \
 ```
 
 Slurm sends `SIGUSR1` five minutes before the time limit. The batch shell trap
-forwards it to `mpiexec`, whose `--forward-signals USR1` option delivers it to
-solver ranks. The native graph exits after the next accepted macro-step and a
+forwards it to `mpiexec`, whose Open MPI 4.0.5
+`--mca ess_base_forward_signals SIGUSR1` setting delivers it to solver ranks. The native graph exits after the next accepted macro-step and a
 published checkpoint. The script records `checkpointed` and requeues by
 default. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
 attempt uses `attempt-$SLURM_RESTART_COUNT`; a resumed attempt adds
@@ -195,7 +200,8 @@ The collector uses distributed FGMRES with rank-local block Jacobi/ILU for this
 study, rather than a global direct solve that would obscure MPI scaling.
 
 Choose rank counts and `--ntasks-per-node` for the actual node type. Retain
-negative scaling results. Report maximum-rank critical-path phases separately;
+negative scaling results. Strong efficiency is `T(1)/(p*T(p))`; weak efficiency
+is `T(1)/T(p)` at constant elements per rank. Report maximum-rank critical-path phases separately;
 phase maxima may occur on different ranks and cannot be summed into wall time.
 The sum of individual peak RSS values is also not a simultaneous memory sample.
 

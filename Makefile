@@ -29,7 +29,7 @@ hpc-prepare-scaling:
 	python3 scripts/hpc_prepare_scaling_cases.py --output-dir $(HPC_SCALING_CASES) --ranks $(HPC_SCALING_RANKS)
 
 hpc-cross-node-binaries:
-	$(MAKE) -C solvers/cpu petsc immersed_moving_distributed_fsi_runtime_test distributed_immersed_extension_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
+	$(MAKE) -C solvers/cpu petsc iga_flow_validate immersed_moving_distributed_fsi_runtime_test distributed_immersed_extension_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	$(MAKE) -C solvers/coupling petsc hpc_duct_solver_fixture PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 
 HPC_TEST_OUTPUT ?= $(CURDIR)/hpc-test-results

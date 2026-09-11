@@ -11,7 +11,18 @@
 #SBATCH -o slurm/graph-%j.out
 
 set -euo pipefail
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+# sbatch executes a spool copy; resolve the checkout from the submission directory.
+repo_root=${IGA_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z ${repo_root} ]]; then
+	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+fi
+repo_root=$(cd -- "${repo_root}" && pwd)
+if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
+	exit 2
+fi
+cd "${repo_root}"
+module load anaconda3
 source_case=${IGA_GRAPH_CASE:?Set IGA_GRAPH_CASE to a graph case on the shared filesystem}
 shared_output=${IGA_OUTPUT_ROOT:?Set IGA_OUTPUT_ROOT to a new shared output root}
 checkpoint_root=${IGA_CHECKPOINT_ROOT:?Set IGA_CHECKPOINT_ROOT on the shared filesystem}
@@ -20,6 +31,22 @@ PETSC_ARCH=${PETSC_ARCH:-}
 module load openmpi/4.0.5-gcc10.2.0
 
 attempt=${SLURM_RESTART_COUNT:-0}
+
+attempt_root=${shared_output}/attempt-${attempt}
+result=${attempt_root}/scheduler.json
+command=("$0")
+mkdir -p "${attempt_root}" "${checkpoint_root}"
+record_failure()
+{
+	local status=$?
+	trap - EXIT
+	if (( status != 0 )); then
+		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+			--output "${result}" --status failed --returncode "${status}" -- "${command[@]}" || true
+	fi
+	exit "${status}"
+}
+trap record_failure EXIT
 
 if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 || ${SLURM_NTASKS:-0} -lt 2 ]]; then
 	echo "multinode_graph.sbatch requires at least two nodes and two tasks" >&2
@@ -53,9 +80,6 @@ export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export IGA_PROFILE=1
 
-attempt_root=${shared_output}/attempt-${attempt}
-result=${attempt_root}/scheduler.json
-mkdir -p "${attempt_root}" "${checkpoint_root}"
 test -d "${source_case}"
 srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
 	--ntasks-per-node=1 --cpus-per-task=1 hostname | sort -u >"${attempt_root}/nodes.txt"
@@ -66,6 +90,8 @@ fi
 
 # Each node receives an identical private input tree. Outputs and checkpoints
 # stay on the shared filesystem so a later allocation can resume them.
+# PSC exports LOCAL in job steps; SLURM_TMPDIR is supported at other sites.
+export SLURM_TMPDIR=${SLURM_TMPDIR:-${LOCAL:?node-local storage is unavailable}}
 export IGA_STAGE_SOURCE=$(realpath "${source_case}")
 srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
 	--ntasks-per-node=1 --cpus-per-task=1 \
@@ -80,7 +106,7 @@ restart=()
 if find "${checkpoint_root}" -name manifest -type f -print -quit | grep -q .; then
 	restart=(--restart-dir "${checkpoint_root}")
 fi
-command=(mpiexec --forward-signals USR1 --map-by \
+command=(mpiexec --mca ess_base_forward_signals SIGUSR1 --map-by \
 	"ppr:${SLURM_NTASKS_PER_NODE}:node:PE=${SLURM_CPUS_PER_TASK}" --bind-to core \
 	--report-bindings -np "${SLURM_NTASKS}" \
 	"${repo_root}/solvers/coupling/iga_multidomain_flow" \

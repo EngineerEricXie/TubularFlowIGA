@@ -9,10 +9,34 @@
 #SBATCH -o slurm/fsi-xnode-%j.out
 
 set -euo pipefail
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+# sbatch executes a spool copy; resolve the checkout from the submission directory.
+repo_root=${IGA_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z ${repo_root} ]]; then
+	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+fi
+repo_root=$(cd -- "${repo_root}" && pwd)
+if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
+	exit 2
+fi
+cd "${repo_root}"
+module load anaconda3
 output=${IGA_FSI_OUTPUT:?Set IGA_FSI_OUTPUT to a new shared output directory}
 : "${PETSC_DIR:?Set PETSC_DIR to the PETSc installation used for this build}"
 module load openmpi/4.0.5-gcc10.2.0
+
+# Preserve an attempt record even when preparation or a numerical checker fails.
+record_failure()
+{
+	local status=$?
+	trap - EXIT
+	if (( status != 0 )); then
+		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+			--output "${output}/scheduler.json" --status failed --returncode "${status}" -- "$0" || true
+	fi
+	exit "${status}"
+}
+trap record_failure EXIT
 
 if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 || ${SLURM_NTASKS:-0} -lt 4 ]]; then
 	echo "cross_node_fsi.sbatch requires two nodes and four allocated tasks" >&2

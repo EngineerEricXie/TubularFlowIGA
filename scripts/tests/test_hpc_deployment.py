@@ -94,6 +94,48 @@ class DeploymentTests(unittest.TestCase):
             result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_spooled_wrappers_resolve_submission_checkout(self):
+        for name, boundary in (("multinode_graph", "source_case="),
+                               ("cross_node_fsi", "output="),
+                               ("cross_node_scaling", "source_root=")):
+            script = ROOT / "solvers/cpu/slurm" / (name + ".sbatch")
+            with tempfile.TemporaryDirectory() as directory:
+                spool = Path(directory) / "slurm_script"
+                spool.write_text("module() { :; }\n" +
+                                 script.read_text().split(boundary, 1)[0] +
+                                 'printf "%s" "$repo_root"\n')
+                environment = dict(os.environ, SLURM_SUBMIT_DIR=str(ROOT))
+                environment.pop("IGA_REPO_ROOT", None)
+                result = subprocess.run(["bash", str(spool)], cwd=directory,
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, str(ROOT))
+
+    def test_spooled_wrapper_preflight_failure_preserves_scheduler_record(self):
+        for name in ("multinode_graph", "cross_node_fsi", "cross_node_scaling"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                spool = root / "slurm_script"
+                spool.write_text("module() { :; }\n" +
+                    (ROOT / "solvers/cpu/slurm" / (name + ".sbatch")).read_text())
+                environment = {key: value for key, value in os.environ.items()
+                               if not key.startswith(("SLURM_", "IGA_"))}
+                environment.update(SLURM_SUBMIT_DIR=str(ROOT), PETSC_DIR=str(root),
+                    IGA_GRAPH_CASE=str(root / "case"), IGA_OUTPUT_ROOT=str(root / "graph"),
+                    IGA_CHECKPOINT_ROOT=str(root / "checkpoint"),
+                    IGA_FSI_OUTPUT=str(root / "fsi"),
+                    IGA_SCALING_CASE_ROOT=str(root / "cases"),
+                    IGA_SCALING_OUTPUT=str(root / "scaling"))
+                result = subprocess.run(["bash", str(spool)], cwd=directory,
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                record = {"multinode_graph": root / "graph/attempt-0/scheduler.json",
+                          "cross_node_fsi": root / "fsi/scheduler.json",
+                          "cross_node_scaling": root / "scaling.scheduler.json"}[name]
+                report = json.loads(record.read_text())
+                self.assertEqual(report["status"], "failed")
+                self.assertEqual(report["returncode"], 2)
+
     def test_hash_tree_is_nonempty_and_immutable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -10,7 +10,18 @@
 #SBATCH -o slurm/scaling-%j.out
 
 set -euo pipefail
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+# sbatch executes a spool copy; resolve the checkout from the submission directory.
+repo_root=${IGA_REPO_ROOT:-${SLURM_SUBMIT_DIR:-}}
+if [[ -z ${repo_root} ]]; then
+	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
+fi
+repo_root=$(cd -- "${repo_root}" && pwd)
+if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
+	exit 2
+fi
+cd "${repo_root}"
+module load anaconda3
 source_root=${IGA_SCALING_CASE_ROOT:?Set IGA_SCALING_CASE_ROOT on the shared filesystem}
 output_root=${IGA_SCALING_OUTPUT:?Set IGA_SCALING_OUTPUT to a new shared output directory}
 strong_case=${IGA_STRONG_CASE:-strong-{ranks}/root3d}
@@ -19,6 +30,19 @@ weak_case=${IGA_WEAK_CASE:-weak-{ranks}/root3d}
 weak_database=${IGA_WEAK_DATABASE:-../duct.ntiga}
 : "${PETSC_DIR:?Set PETSC_DIR to the PETSc installation used for this build}"
 module load openmpi/4.0.5-gcc10.2.0
+
+# Preserve an attempt record even when preparation or a numerical checker fails.
+record_failure()
+{
+	local status=$?
+	trap - EXIT
+	if (( status != 0 )); then
+		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+			--output "${output_root}.scheduler.json" --status failed --returncode "${status}" -- "$0" || true
+	fi
+	exit "${status}"
+}
+trap record_failure EXIT
 
 if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 ]]; then
 	echo "cross_node_scaling.sbatch requires at least two nodes" >&2
@@ -44,6 +68,8 @@ if [[ ${IGA_SCALING_PREPARE:-0} == 1 ]]; then
 	python3 "${repo_root}/scripts/hpc_prepare_scaling_cases.py" \
 		--output-dir "${source_root}" --ranks "${ranks[@]}"
 fi
+# PSC exports LOCAL in job steps; SLURM_TMPDIR is supported at other sites.
+export SLURM_TMPDIR=${SLURM_TMPDIR:-${LOCAL:?node-local storage is unavailable}}
 export IGA_STAGE_SOURCE=$(realpath "${source_root}")
 srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
 	--ntasks-per-node=1 --cpus-per-task=1 \

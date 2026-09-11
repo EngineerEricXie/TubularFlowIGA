@@ -242,7 +242,8 @@ def main():
             for count in ranks:
                 item = mode_summary[str(count)]
                 item["speedup_vs_one_rank"] = baseline / item["max_rank_process_wall_s"]["median"]
-                item["parallel_efficiency"] = item["speedup_vs_one_rank"] / count
+                item["parallel_efficiency"] = (item["speedup_vs_one_rank"] / count
+                                               if mode == "strong" else item["speedup_vs_one_rank"])
             report["summary"][mode] = mode_summary
         for item in report["inputs"].values():
             if item["database_sha256"] != digest(Path(item["database"])):
