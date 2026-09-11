@@ -4,6 +4,7 @@
 #include "CheckedText.hpp"
 #include "CaseConfig.hpp"
 #include "FlowDomainPortMetadata.hpp"
+#include "DomainResourcePlan.hpp"
 #include "SimulationGraph.hpp"
 #include "SpeciesCoupling.hpp"
 #include "ZeroDFlowDomain.hpp"
@@ -59,15 +60,17 @@ struct MultidomainConfiguration {
 	GraphTimeDefinition time;
 	std::string start_domain_id;
 	GraphExecutionDefinition execution;
+	DomainResourceDefinition resources;
 	std::vector<GraphDomainDefinition> domains;
 	std::map<std::string, double> initial_pressure_pa;
 	SimulationGraph graph;
 
 	MultidomainConfiguration(int schema, GraphTimeDefinition time_value, std::string start_domain,
-		GraphExecutionDefinition execution_value, std::vector<GraphDomainDefinition> domain_values,
+		GraphExecutionDefinition execution_value, DomainResourceDefinition resource_value,
+		std::vector<GraphDomainDefinition> domain_values,
 		std::map<std::string, double> initial_pressures, SimulationGraph graph_value)
 		: schema_version(schema), time(time_value), start_domain_id(std::move(start_domain)),
-		  execution(execution_value), domains(std::move(domain_values)),
+		  execution(execution_value), resources(std::move(resource_value)), domains(std::move(domain_values)),
 		  initial_pressure_pa(std::move(initial_pressures)), graph(std::move(graph_value)) {}
 };
 
@@ -459,6 +462,37 @@ inline GraphExecutionDefinition ParseExecution(const JsonValue& value, int schem
 	return result;
 }
 
+inline DomainResourceDefinition ParseResources(const JsonValue& value)
+{
+	const auto& object = RequireObject(value, "resources");
+	RequireKnownKeys(object, {"mode", "groups"}, "resources");
+	DomainResourceDefinition result;
+	const auto mode = RequireString(Required(object, "mode", "resources"), "resources.mode");
+	if (mode == "shared") result.mode = DomainResourceMode::Shared;
+	else if (mode == "domain_groups") result.mode = DomainResourceMode::DomainGroups;
+	else throw std::runtime_error("simulation_config.json: unsupported resources mode '"+mode+"'");
+	if (const auto* groups_value = Find(object, "groups")) {
+		const auto& groups = RequireArray(*groups_value, "resources.groups");
+		for (std::size_t i = 0; i < groups.size(); ++i) {
+			const auto context = "resources.groups["+std::to_string(i)+"]";
+			const auto& group = RequireObject(groups[i], context);
+			RequireKnownKeys(group, {"id", "ranks", "domains"}, context);
+			DomainResourceGroupDefinition parsed;
+			parsed.id = RequireString(Required(group, "id", context), context+".id");
+			parsed.ranks = RequireInteger(Required(group, "ranks", context), context+".ranks");
+			const auto& domains = RequireArray(Required(group, "domains", context), context+".domains");
+			for (std::size_t j = 0; j < domains.size(); ++j)
+				parsed.domains.push_back(RequireString(domains[j], context+".domains["+std::to_string(j)+"]"));
+			result.groups.push_back(std::move(parsed));
+		}
+	}
+	if (result.mode == DomainResourceMode::Shared && !result.groups.empty())
+		throw std::runtime_error("simulation_config.json: shared resources cannot declare groups");
+	if (result.mode == DomainResourceMode::DomainGroups && result.groups.empty())
+		throw std::runtime_error("simulation_config.json: domain_groups resources require groups");
+	return result;
+}
+
 } // namespace multidomain_detail
 
 inline ZeroDFlowModelConfiguration ParseZeroDFlowModelConfiguration(const std::string& text)
@@ -535,7 +569,7 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		throw std::runtime_error(
 			"simulation_config.json: multidomain configuration requires schema_version 5 or 6");
 	auto root_keys = std::set<std::string>{"schema_version", "time", "start_domain",
-		"execution", "domains", "couplings"};
+		"execution", "resources", "domains", "couplings"};
 	if (schema_version == 6) root_keys.insert("species");
 	RequireKnownKeys(root, root_keys, "root");
 	std::vector<SpeciesDefinition> species;
@@ -564,6 +598,8 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		"start_domain");
 	const auto execution = ParseExecution(Required(root, "execution", "root"), schema_version,
 		MakeSpeciesRegistry(species));
+	DomainResourceDefinition resources;
+	if (const auto* value = Find(root, "resources")) resources = ParseResources(*value);
 	std::vector<GraphDomainDefinition> domains;
 	std::vector<DomainNode> nodes;
 	const auto& domain_values = RequireArray(Required(root, "domains", "root"), "domains");
@@ -616,7 +652,7 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 				&& !attached_ports.count({domain.first, port.id}))
 				throw std::runtime_error("simulation_config.json: required port '"
 					+domain.first+"."+port.id+"' is not attached to a coupling");
-	return {schema_version, time, start_domain, execution, std::move(domains),
+	return {schema_version, time, start_domain, execution, std::move(resources), std::move(domains),
 		std::move(initial_pressure), std::move(graph)};
 }
 

@@ -93,7 +93,7 @@ simulation_graph_test: tests/test_simulation_graph.cpp ../../include/SimulationG
 simulation-graph-test: simulation_graph_test
 	./simulation_graph_test
 
-pressure_flow_executor_test: tests/test_pressure_flow_executor.cpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
+pressure_flow_executor_test: tests/test_pressure_flow_executor.cpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainResourcePlan.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
 
 species_pressure_flow_executor_test: tests/test_species_pressure_flow_executor.cpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER)
@@ -101,7 +101,7 @@ species_pressure_flow_executor_test: tests/test_species_pressure_flow_executor.c
 
 species_pressure_flow_executor_test: ../../include/PressureFlowCheckpointControls.hpp ../../include/CheckpointMetadataCodec.hpp ../../include/CoupledCheckpointManifest.hpp ../cpu/include/Sha256.hpp
 
-multidomain_config_test: tests/test_multidomain_config.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/ZeroDFlowDomain.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/CaseConfig.hpp ../cpu/include/Sha256.hpp
+multidomain_config_test: tests/test_multidomain_config.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/DomainResourcePlan.hpp ../../include/ZeroDFlowDomain.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/CaseConfig.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test
@@ -127,6 +127,12 @@ multidomain-test: iga_multidomain_flow multidomain_flow_smoke_test
 
 multidomain_subcommunicator_test: tests/test_multidomain_subcommunicator.cpp tests/test_bifurcation_coupling_smoke.cpp tests/test_multidomain_flow_smoke.cpp src/iga_1d_3d_bifurcation.cpp ../../include/MultidomainRunner.hpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_subcommunicator.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
+
+domain_group_runtime_proxy_test: tests/test_domain_group_runtime_proxy.cpp ../cpu/include/DomainGroupRuntimeProxy.hpp ../cpu/include/CollectiveFailure.hpp ../../include/CoupledDomainRuntime.hpp
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+
+multidomain_domain_groups_test: tests/test_multidomain_domain_groups.cpp tests/test_multidomain_flow_smoke.cpp tests/test_bifurcation_coupling_smoke.cpp src/iga_1d_3d_bifurcation.cpp ../../include/MultidomainRunner.hpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
+	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_domain_groups.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
 
 multidomain_failure_test: tests/test_multidomain_failure.cpp tests/test_bifurcation_coupling_smoke.cpp tests/test_multidomain_flow_smoke.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_failure.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
@@ -224,6 +230,8 @@ clean:
 	$(RM) three_d_port_failure_test
 	$(RM) multidomain_failure_test
 	$(RM) multidomain_subcommunicator_test
+	$(RM) domain_group_runtime_proxy_test
+	$(RM) multidomain_domain_groups_test
 	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../one_d/include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp ../cpu/include/RuntimeConstruction.hpp ../cpu/include/RuntimeCleanup.hpp

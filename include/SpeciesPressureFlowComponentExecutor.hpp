@@ -108,6 +108,12 @@ public:
 		if (bool(synchronization_.execution.outcome) != bool(synchronization_.execution.all_converged)
 			|| bool(synchronization_.execution.outcome) != bool(synchronization_.same_schedule))
 			throw std::runtime_error("species synchronization requires outcome, convergence and schedule callbacks");
+		if (synchronization_.execution.hydraulic_batches.empty()
+			!= !bool(synchronization_.execution.solve_hydraulic_batch))
+			throw std::runtime_error("species hydraulic batching requires both batches and callback");
+		if (bool(synchronization_.execution.solve_transport_batch)
+			!= bool(synchronization_.execution.make_batches))
+			throw std::runtime_error("species transport batching requires scheduler and callback");
 		interfaces_ = plan_.interfaces;
 		for (const auto& domain_id : plan_.domain_order) {
 			auto* staged = dynamic_cast<StagedFlowTransportDomainRuntime*>(
@@ -261,8 +267,15 @@ private:
 						interfaces_[i].pressure_receiver.port_id, input);
 				});
 			}
-			for (const auto& domain_id : plan_.domain_order) {
-				Stage("species hydraulic solve", [&] { staged_.at(domain_id)->SolveHydraulicTrial(); });
+			for (const auto& batch : HydraulicBatches()) {
+				if (synchronization_.execution.solve_hydraulic_batch)
+					Stage("species hydraulic solve batch", [&] {
+						synchronization_.execution.solve_hydraulic_batch(batch);
+					});
+				else Stage("species hydraulic solve", [&] {
+					staged_.at(batch.front())->SolveHydraulicTrial();
+				});
+				for (const auto& domain_id : batch)
 				for (const auto& interface : interfaces_) if (interface.flow_provider.domain_id == domain_id) {
 					const auto state = HydraulicState(interface.flow_provider);
 					Stage("species provider validation", [&] {
@@ -437,7 +450,16 @@ private:
 	void SolveTransport(const DomainStepContext& step, const std::vector<Route>& routes,
 		const std::vector<std::string>& order) const
 	{
-		for (const auto& domain_id : order) {
+		std::vector<std::pair<std::string, std::string>> dependencies;
+		for (const auto& route : routes)
+			if (route.donor.domain_id != route.receiver.domain_id)
+				dependencies.emplace_back(route.donor.domain_id, route.receiver.domain_id);
+		std::vector<std::vector<std::string>> batches;
+		if (synchronization_.execution.make_batches)
+			batches = synchronization_.execution.make_batches(order, dependencies);
+		else for (const auto& domain : order) batches.push_back({domain});
+		for (const auto& batch : batches) {
+			for (const auto& domain_id : batch) {
 			std::map<std::string, std::map<std::string, double>> inputs;
 			for (const auto& route : routes) if (route.receiver.domain_id == domain_id) {
 				PortState state;
@@ -461,8 +483,24 @@ private:
 						step.EndTime(), inputs.at(route.receiver.port_id));
 				});
 			}
-			Stage("species transport solve", [&] { staged_.at(domain_id)->SolveTransportTrial(); });
+			}
+			if (synchronization_.execution.solve_transport_batch)
+				Stage("species transport solve batch", [&] {
+					synchronization_.execution.solve_transport_batch(batch);
+				});
+			else Stage("species transport solve", [&] {
+				staged_.at(batch.front())->SolveTransportTrial();
+			});
 		}
+	}
+
+	std::vector<std::vector<std::string>> HydraulicBatches() const
+	{
+		if (!synchronization_.execution.hydraulic_batches.empty())
+			return synchronization_.execution.hydraulic_batches;
+		std::vector<std::vector<std::string>> result;
+		for (const auto& domain : plan_.domain_order) result.push_back({domain});
+		return result;
 	}
 
 	void VerifyAmounts(SpeciesPressureFlowStepResult& result) const

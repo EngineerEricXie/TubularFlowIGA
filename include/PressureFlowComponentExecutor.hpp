@@ -100,6 +100,16 @@ private:
 struct PressureFlowExecutionSynchronization {
 	std::function<void(const char*, std::exception_ptr)> outcome;
 	std::function<bool(bool)> all_converged;
+	// Optional batches contain every graph domain exactly once in dependency
+	// order. The callback lets disjoint communicator groups solve one batch at
+	// the same time; port observations and boundary propagation remain ordered.
+	std::vector<std::vector<std::string>> hydraulic_batches;
+	std::function<void(const std::vector<std::string>&)> solve_trial_batch;
+	std::function<void(const std::vector<std::string>&)> solve_hydraulic_batch;
+	std::function<void(const std::vector<std::string>&)> solve_transport_batch;
+	std::function<std::vector<std::vector<std::string>>(
+		const std::vector<std::string>&,
+		const std::vector<std::pair<std::string, std::string>>&)> make_batches;
 };
 
 class PressureFlowComponentExecutor {
@@ -115,6 +125,8 @@ public:
 		if (bool(synchronization_.outcome) != bool(synchronization_.all_converged))
 			throw std::runtime_error("pressure-flow synchronization requires both callbacks");
 		interfaces_ = plan_.interfaces;
+		ValidateBatches(synchronization_.hydraulic_batches,
+			bool(synchronization_.solve_trial_batch));
 	}
 
 	const PressureFlowComponentPlan& Plan() const noexcept { return plan_; }
@@ -160,10 +172,11 @@ public:
 							.SetPortInput(interfaces_[edge_index].pressure_receiver.port_id, input);
 					});
 				}
-				for (const auto& domain_id : plan_.domain_order) {
-					auto& runtime = registry_.Runtime(domain_id);
-					Stage("pressure-flow solve", [&] { runtime.SolveTrial(); });
-					for (const auto& interface : interfaces_) {
+				for (const auto& batch : SolveBatches()) {
+					if (synchronization_.solve_trial_batch)
+						Stage("pressure-flow solve batch", [&] { synchronization_.solve_trial_batch(batch); });
+					else Stage("pressure-flow solve", [&] { registry_.Runtime(batch.front()).SolveTrial(); });
+					for (const auto& domain_id : batch) for (const auto& interface : interfaces_) {
 						if (interface.flow_provider.domain_id != domain_id) continue;
 						const auto state = PortStateFor(interface.flow_provider);
 						Stage("pressure-flow provider validation", [&] {
@@ -288,6 +301,40 @@ public:
 	}
 
 private:
+	std::vector<std::vector<std::string>> SolveBatches() const
+	{
+		if (!synchronization_.hydraulic_batches.empty())
+			return synchronization_.hydraulic_batches;
+		std::vector<std::vector<std::string>> result;
+		for (const auto& domain : plan_.domain_order) result.push_back({domain});
+		return result;
+	}
+
+	void ValidateBatches(const std::vector<std::vector<std::string>>& batches,
+		bool callback) const
+	{
+		if (batches.empty()) {
+			if (callback) throw std::runtime_error("pressure-flow batch callback requires batches");
+			return;
+		}
+		if (!callback) throw std::runtime_error("pressure-flow batches require a solve callback");
+		std::map<std::string, std::size_t> position;
+		for (std::size_t batch = 0; batch < batches.size(); ++batch) {
+			if (batches[batch].empty()) throw std::runtime_error("pressure-flow solve batch cannot be empty");
+			for (const auto& domain : batches[batch]) {
+				(void)registry_.Graph().Domain(domain);
+				if (!position.emplace(domain, batch).second)
+					throw std::runtime_error("pressure-flow solve batches contain a duplicate domain");
+			}
+		}
+		if (position.size() != plan_.domain_order.size())
+			throw std::runtime_error("pressure-flow solve batches require exact domain coverage");
+		for (const auto& interface : interfaces_)
+			if (position.at(interface.flow_provider.domain_id)
+				>= position.at(interface.flow_receiver.domain_id))
+				throw std::runtime_error("pressure-flow solve batch violates a flow dependency");
+	}
+
 	PortState PortStateFor(const PortRef& reference) const
 	{
 		PortState state;

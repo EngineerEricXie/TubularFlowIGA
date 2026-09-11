@@ -1,4 +1,5 @@
 #include "PressureFlowComponentExecutor.hpp"
+#include "DomainResourcePlan.hpp"
 #include "ZeroDFlowDomain.hpp"
 
 #include <cassert>
@@ -373,6 +374,21 @@ int main()
 	const auto graph = Chain();
 	const iga::DomainStepContext step{0, 0.0, 0.1};
 	{
+		const auto branch = Branch();
+		iga::DomainResourceDefinition resources;
+		resources.mode = iga::DomainResourceMode::DomainGroups;
+		resources.groups = {{"source", 1, {"up"}}, {"junction", 1, {"junction"}},
+			{"left", 1, {"branch_a"}}, {"right", 1, {"branch_b"}}};
+		const auto parallel = iga::MakeDomainResourcePlan(branch, "up", resources, 4);
+		assert((parallel.hydraulic_batches == std::vector<std::vector<std::string>>{
+			{"up"}, {"junction"}, {"branch_a", "branch_b"}}));
+		resources.groups = {{"source", 1, {"up"}}, {"junction", 1, {"junction"}},
+			{"branches", 1, {"branch_a", "branch_b"}}};
+		const auto serialized = iga::MakeDomainResourcePlan(branch, "up", resources, 3);
+		assert((serialized.hydraulic_batches == std::vector<std::vector<std::string>>{
+			{"up"}, {"junction"}, {"branch_a"}, {"branch_b"}}));
+	}
+	{
 		Fixture fixture(graph);
 		iga::PressureFlowExecutionControls controls;
 		iga::PressureFlowComponentExecutor executor(*fixture.registry, "up", controls);
@@ -551,6 +567,33 @@ int main()
 			assert(runtime.second->solves == 1);
 			assert(runtime.second->commits == 1);
 		}
+	}
+	{
+		const auto branch = Branch();
+		BranchFixture serial(branch);
+		BranchFixture grouped(branch);
+		iga::PressureFlowExecutionControls controls;
+		const std::map<std::string, double> pressure{
+			{"a_source", 0.0}, {"b_left", 0.0}, {"c_right", 0.0}};
+		iga::PressureFlowComponentExecutor serial_executor(*serial.registry, "up", controls);
+		const auto reference = serial_executor.Advance(step, pressure);
+		std::vector<std::vector<std::string>> observed;
+		iga::PressureFlowExecutionSynchronization synchronization;
+		synchronization.hydraulic_batches = {{"up"}, {"junction"}, {"branch_a", "branch_b"}};
+		synchronization.solve_trial_batch = [&](const std::vector<std::string>& batch) {
+			observed.push_back(batch);
+			for (const auto& domain : batch) grouped.registry->Runtime(domain).SolveTrial();
+		};
+		iga::PressureFlowComponentExecutor grouped_executor(*grouped.registry, "up",
+			controls, synchronization);
+		const auto actual = grouped_executor.Advance(step, pressure);
+		RequireSameStepResult(reference, actual);
+		assert(observed == synchronization.hydraulic_batches);
+		RequireRejected([&] {
+			auto invalid = synchronization;
+			invalid.hydraulic_batches = {{"up", "junction"}, {"branch_a", "branch_b"}};
+			iga::PressureFlowComponentExecutor rejected(*grouped.registry, "up", controls, invalid);
+		});
 	}
 	{
 		const auto branch = Branch();

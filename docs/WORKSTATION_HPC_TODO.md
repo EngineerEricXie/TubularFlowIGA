@@ -2,9 +2,10 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-04B／C、HPC-05D、HPC-06A／B／C、
+最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-04B／C、HPC-05D、HPC-06A–D、
 HPC-07A／B 已完成；moving／FSI pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。
-HPC-05C 的大型排程、HPC-06D、HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。
+HPC-08A–C 的程序群、相依排程與雙 3D 實測已完成；HPC-05C 的大型排程、
+HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。
 其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
@@ -49,11 +50,11 @@ HPC-05C 的大型排程、HPC-06D、HPC-07C／D 與 HPC-09 的跨節點驗收仍
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（26 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–C、HPC-07A／B |
-| 已有部分進度、尚未完成（2 項） | HPC-05C、HPC-07C |
-| 其餘待辦（10 項） | HPC-06D、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
+| 已勾選完成（30 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–D、HPC-07A／B、HPC-08A–C |
+| 已有部分進度、尚未完成（3 項） | HPC-05C、HPC-07C／D |
+| 其餘待辦（5 項） | HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 12 項未勾選，其中 2 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 8 項未勾選，其中 3 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -101,7 +102,6 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
 | HPC-05C | native graph／providers／完整歷史／CLI 的單機驗收完成；接續大型及跨節點 allocation 的 checkpoint／訊號轉送驗收 | [完整 graph 進度](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)、[使用說明](COUPLED_RESTART.md) |
-| HPC-06D | 量測 mesh、spline 與 packer 的大型案例時間、RSS 及輸出規模，再依證據決定是否平行化 | [基準規格](HPC_BENCHMARKS.md)、[HPC-06A／B／C 完成報告](progress/HPC_06ABC_COMPLETION_REPORT.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
 Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
@@ -717,8 +717,13 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   phase 時間均已記錄，降低頻率時 final checkpoint 不變。本機證據未支持新增
   aggregator，決定保留 rank-local pieces，見
   [完成報告](progress/HPC_06ABC_COMPLETION_REPORT.md)。
-- [ ] **HPC-06D：前處理大型案例。** 量測 mesh、spline、packer 的工作量與
+- [x] **HPC-06D：前處理大型案例。** 量測 mesh、spline、packer 的工作量與
   記憶體上限；優先保留串流／分塊設計。只有已證明為瓶頸時才增加其平行化。
+  2,880／11,520／34,560-element 案例的 stage wall、CPU、peak RSS 與產物大小
+  已記錄；large spline 1→4 threads 為 2.456×，peak RSS 168.0 MiB，packer 在
+  343 MiB database 下 peak RSS 19.7 MiB。Cache／legacy pack 的 `.ntiga` 逐位元
+  相同；依量測保留現有 chunked OpenMP spline 及序列 mesh／packer，見
+  [完成報告](progress/HPC_06D_COMPLETION_REPORT.md)。
 
 驗收：大型場輸出不再要求 rank 0 收集完整場；輸出可被目標 ParaView 版本讀取，
 數值與既有輸出一致；記錄所有 rank 的峰值而非只記 rank 0。
@@ -829,14 +834,22 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 
 ## HPC-08：多域資源配置
 
-- [ ] **HPC-08A：程序群配置。** 為大型 3D domain 配置 communicator；
+- [x] **HPC-08A：程序群配置。** 為大型 3D domain 配置 communicator；
   小型 0D／1D 可指定 owner。設計跨群 port 資料交換及全域步驟協調，
   不將原有的 `PETSC_COMM_WORLD` 呼叫遺留在子域內。
-- [ ] **HPC-08B：合法並行排程。** 依 graph 依賴判斷哪些 domain 可同時求解，
+- [x] **HPC-08B：合法並行排程。** 依 graph 依賴判斷哪些 domain 可同時求解，
   保留需要前序邊界結果的順序；壓力／物種方向反轉及 staged transport 均需驗證。
   不以平行化為由暗中改成不同 coupling scheme。
-- [ ] **HPC-08C：實測資源分配。** 比較單一 communicator 與 domain 分群的
+- [x] **HPC-08C：實測資源分配。** 比較單一 communicator 與 domain 分群的
   通訊、閒置、記憶體及端到端時間；保留較簡單配置作為小案例預設。
+  已完成可選 manifest 配置、collective proxy、flow／動態 species dependency
+  batching 與 0D／1D owner。五 ranks、兩個 128-element 3D domains 的三次
+  分岔 DAG 實測中，grouped/shared wall ratio 為 0.5058，individual peak RSS
+  加總 ratio 為 0.9200，三次數值差皆為 5.4853e-7；具前後相依的負面案例則無
+  wall-time 收益。Shared 保持預設，映射由原 graph manifest 依 group 順序重建，
+  詳見 [完成報告](progress/HPC_08ABC_COMPLETION_REPORT.md)與
+  [資源配置說明](MULTIDOMAIN_RESOURCES.md)。Grouped checkpoint／immersed 限制
+  已明確記錄，跨節點配置由 HPC-09 驗收。
 
 驗收：至少一個具有兩個足量 3D 區域的案例證明程序分組與 port 交換正確，
 不同分組符合數值門檻；checkpoint 包含必要資源映射資訊或明確重建策略。

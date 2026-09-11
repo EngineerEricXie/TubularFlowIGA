@@ -185,6 +185,44 @@ std::string ImmersedConfiguration()
 int main()
 {
 	{
+		auto grouped = Replace(ValidConfiguration(),
+			"  \"domains\": [",
+			"  \"resources\": {\"mode\":\"domain_groups\",\"groups\":["
+			"{\"id\":\"upstream_owner\",\"ranks\":1,\"domains\":[\"upstream\"]},"
+			"{\"id\":\"roi_workers\",\"ranks\":3,\"domains\":[\"roi\"]},"
+			"{\"id\":\"downstream_owner\",\"ranks\":1,\"domains\":[\"downstream\"]}]},\n"
+			"  \"domains\": [");
+		const auto configuration = iga::ParseMultidomainConfiguration(grouped);
+		const auto plan = iga::MakeDomainResourcePlan(configuration.graph,
+			configuration.start_domain_id, configuration.resources, 6);
+		assert(plan.mode == iga::DomainResourceMode::DomainGroups);
+		assert(plan.groups.size() == 3);
+		assert(plan.GroupFor("roi").world_ranks == std::vector<int>({1, 2, 3}));
+		assert(plan.GroupFor("downstream").world_ranks == std::vector<int>({4}));
+		assert(plan.hydraulic_batches == std::vector<std::vector<std::string>>(
+			{{"upstream"}, {"roi"}, {"downstream"}}));
+		RequireRejectedWith([&] {
+			(void)iga::MakeDomainResourcePlan(configuration.graph,
+				configuration.start_domain_id, configuration.resources, 4);
+		}, "exceeds allocation");
+		RequireRejectedWith([&] {
+			auto incomplete = configuration.resources;
+			incomplete.groups.pop_back();
+			(void)iga::MakeDomainResourcePlan(configuration.graph,
+				configuration.start_domain_id, incomplete, 5);
+		}, "exact graph-domain coverage");
+		RequireRejectedWith([&] {
+			auto duplicate = configuration.resources;
+			duplicate.groups[2].domains = {"roi"};
+			(void)iga::MakeDomainResourcePlan(configuration.graph,
+				configuration.start_domain_id, duplicate, 5);
+		}, "exactly once");
+		RequireRejectedWith([&] {
+			(void)iga::ParseMultidomainConfiguration(Replace(grouped,
+				"\"mode\":\"domain_groups\"", "\"mode\":\"invalid\""));
+		}, "unsupported resources mode");
+	}
+	{
 		const auto configuration = iga::ParseMultidomainConfiguration(ValidZeroDConfiguration());
 		assert(configuration.schema_version == 5);
 		assert(configuration.graph.Domain("source").kind == iga::DomainKind::ZeroDFlow);

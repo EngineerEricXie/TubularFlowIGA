@@ -361,6 +361,37 @@ int main()
 	}
 	{
 		Fixture fixture;
+		fixture.a->signed_flow = -1.0;
+		fixture.b->signed_flow = -1.0;
+		std::vector<std::pair<std::string, std::string>> observed_dependencies;
+		iga::SpeciesPressureFlowExecutionSynchronization synchronization;
+		synchronization.execution.hydraulic_batches = {{"a"}, {"b"}};
+		synchronization.execution.solve_hydraulic_batch = [&](const auto& batch) {
+			for (const auto& domain : batch)
+				dynamic_cast<iga::StagedFlowTransportDomainRuntime&>(
+					fixture.registry->Runtime(domain)).SolveHydraulicTrial();
+		};
+		synchronization.execution.make_batches = [&](const auto& order, const auto& dependencies) {
+			observed_dependencies = dependencies;
+			std::vector<std::vector<std::string>> batches;
+			for (const auto& domain : order) batches.push_back({domain});
+			return batches;
+		};
+		synchronization.execution.solve_transport_batch = [&](const auto& batch) {
+			for (const auto& domain : batch)
+				dynamic_cast<iga::StagedFlowTransportDomainRuntime&>(
+					fixture.registry->Runtime(domain)).SolveTransportTrial();
+		};
+		iga::SpeciesPressureFlowComponentExecutor executor(*fixture.registry, "a",
+			Controls(), synchronization);
+		const auto result = executor.Advance(step, {{"edge", 0.0}});
+		assert((result.transport_domain_order == std::vector<std::string>{"b", "a"}));
+		assert((observed_dependencies
+			== std::vector<std::pair<std::string, std::string>>{{"b", "a"}, {"b", "a"}}));
+		assert(fixture.a->transport_solves == 1 && fixture.b->transport_solves == 1);
+	}
+	{
+		Fixture fixture;
 		fixture.a->corrupt_port_amounts = true;
 		fixture.b->corrupt_port_amounts = true;
 		iga::SpeciesPressureFlowComponentExecutor executor(*fixture.registry, "a", Controls());
