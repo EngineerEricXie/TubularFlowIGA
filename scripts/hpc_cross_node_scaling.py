@@ -42,14 +42,17 @@ def samples(values):
 
 def iterations(directory):
     total = 0
-    seen = 0
+    configured = 0
     for line in (directory / "rank-0/stdout.log").read_text().splitlines():
-        if not line.startswith("solver_configuration "):
-            continue
-        value = json.loads(line[len("solver_configuration "):])
-        total += int(value["last_iterations"])
-        seen += 1
-    if not seen or total < 1:
+        match = re.search(r"(?:^|\s)linear_iterations=(\d+)(?:\s|$)", line)
+        if match:
+            total += int(match.group(1))
+        if line.startswith("solver_configuration "):
+            values = dict(token.split("=", 1) for token in line.split()[1:] if "=" in token)
+            if int(values.get("reason", "0")) <= 0:
+                raise ValueError("solver configuration reports a nonconverged reason")
+            configured += 1
+    if not configured or total < 1:
         raise ValueError("missing positive solver iteration evidence")
     return total
 
@@ -116,16 +119,26 @@ def main():
     environment = os.environ.copy()
     environment.update(OMP_NUM_THREADS="1", OMP_THREAD_LIMIT="1", OMP_DYNAMIC="FALSE",
                        OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", BLIS_NUM_THREADS="1",
-                       IGA_PROFILE="1", PETSC_OPTIONS="-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps")
+                       IGA_PROFILE="1", PETSC_OPTIONS=(
+                           "-ksp_type fgmres -ksp_rtol 1e-8 -pc_type bjacobi "
+                           "-sub_ksp_type preonly -sub_pc_type ilu"))
     report = {"schema_version": 1, "kind": "hpc_cross_node_scaling",
               "created_utc": datetime.now(timezone.utc).isoformat(), "status": "running",
               "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"],
                                                         cwd=ROOT, text=True).strip(),
+              "source_status": subprocess.check_output(
+                  ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                  cwd=ROOT, text=True).splitlines(),
               "ranks": ranks, "repetitions": args.repetitions, "launcher": launcher,
               "allocation": {name: os.environ.get(name) for name in (
                   "SLURM_JOB_ID", "SLURM_JOB_NUM_NODES", "SLURM_NODELIST",
                   "SLURM_NTASKS", "SLURM_CPUS_PER_TASK")},
               "inputs": {}, "runs": [], "summary": {}}
+    provenance_paths = [args.binary.resolve(), args.checker.resolve(), args.validator.resolve(),
+                        ROOT / "scripts/hpc_cross_node_scaling.py",
+                        ROOT / "scripts/hpc_rank_run.py", ROOT / "scripts/hpc_profile_summary.py",
+                        ROOT / "scripts/hpc_compare_fields.py", ROOT / "scripts/hpc_inventory.py"]
+    report["provenance_sha256"] = {str(path): digest(path) for path in provenance_paths}
     write(report_path, report)
     failure = None
     try:
@@ -237,6 +250,8 @@ def main():
             if item["case_sha256"] != {str(path): digest(path)
                     for path in sorted(Path(item["case"]).rglob("*")) if path.is_file()}:
                 raise RuntimeError("scaling case changed during measurement")
+        if report["provenance_sha256"] != {str(path): digest(path) for path in provenance_paths}:
+            raise RuntimeError("scaling executable or collector changed during measurement")
         report["status"] = "passed"
     except BaseException as error:
         failure = str(error)

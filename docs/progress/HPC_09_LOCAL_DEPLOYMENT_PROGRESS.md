@@ -1,9 +1,9 @@
 # HPC-09A–E 本機部署進度
 
 - 狀態：HPC-09E 完成；HPC-09A–D 的本機工具與回歸通過，等待實際跨節點 allocation 驗收。
-- 基準 revision：`ed4333f` 加本報告所列工作區變更。
+- 基準 revision：`66fd930` 加本報告所列 scaling case 產生器變更。
 - 日期／主機：2026-09-11，`TsungYehLab`。
-- 機器可讀摘要：`outputs/hpc09/local-deployment-v2/summary.json`。
+- 機器可讀摘要：`outputs/hpc09/local-deployment-v3/summary.json`。
 
 ## 已完成實作
 
@@ -23,6 +23,8 @@
   strong／weak scaling。Collector 要求至少三次 repetition、strong 一 rank 數值
   參考、每次 native physical validation，以及 weak elements/rank 容許範圍；輸出
   wall、speedup、efficiency、iterations、phase／communication 與 RSS。
+  `hpc_prepare_scaling_cases.py` 可直接產生 16,384-element fixed strong case 與
+  每 rank 256 elements 的 weak cases，免除提交前手工建立未稽核案例。
 - `cross_node_fsi.sbatch` 將 1-rank reference、跨兩節點 4-rank nonzero strong
   FSI writer 與新 2-rank read-only pair restore 串成單一驗收；既有 checkers 驗證
   完整 field／surface／history／ports／守恆、4→2 重分區及 checkpoint bytes 不變。
@@ -45,7 +47,7 @@ LD_LIBRARY_PATH=/home/tsungyeh/anaconda3/envs/tubularflow-cuda/targets/x86_64-li
 python3 scripts/hpc_test_tiers.py --tier scheduled --output-dir /tmp/scheduled
 ```
 
-結果：CPU／CUDA dependency reports 通過；56 個 Python tests 通過；unit tier
+結果：CPU／CUDA dependency reports 通過；57 個 Python tests 通過；unit tier
 四組命令、MPI build 加 1／2／4-rank 數值案例、CUDA execution contract 加真實
 RTX 4080 SUPER `device-info` 都通過。非 Slurm 工作站的 scheduled tier 正確寫出
 `skipped`，理由為缺少至少兩節點 allocation，沒有誤報為 pass。Slurm scripts 經
@@ -53,6 +55,14 @@ RTX 4080 SUPER `device-info` 都通過。非 Slurm 工作站的 scheduled tier �
 
 既有 shared multidomain smoke suite 亦在相同本機程式狀態完整通過；species 最大
 edge／domain／global residual 分別為 `6.7763e-20`、`9.5563e-15`、`8.8902e-15`。
+
+Scaling case generator 與 collector 另以 128-element fixed case、每 rank 32
+elements 的工具自測執行 strong／weak 各三次。六次實際 PETSc process、geometry、
+physical validation、strong fields、profile／RSS 與統計全部通過；strong 三次各
+30 次、weak 三次各 25 次線性迭代。證據在
+`outputs/hpc09/scaling-collector-self-test-v3/results/summary.json`。此案例只驗證
+collector 全路徑，不作效能或 scaling 宣稱；正式 scheduler 預設使用 16,384-element
+strong 與每 rank 256 elements 的 weak cases。
 
 ## 尚待實際硬體驗收
 

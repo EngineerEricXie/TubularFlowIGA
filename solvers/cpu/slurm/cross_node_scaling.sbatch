@@ -13,10 +13,10 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 source_root=${IGA_SCALING_CASE_ROOT:?Set IGA_SCALING_CASE_ROOT on the shared filesystem}
 output_root=${IGA_SCALING_OUTPUT:?Set IGA_SCALING_OUTPUT to a new shared output directory}
-strong_case=${IGA_STRONG_CASE:?Set IGA_STRONG_CASE relative to IGA_SCALING_CASE_ROOT}
-strong_database=${IGA_STRONG_DATABASE:?Set IGA_STRONG_DATABASE, using {ranks} where needed}
-weak_case=${IGA_WEAK_CASE:?Set IGA_WEAK_CASE relative to IGA_SCALING_CASE_ROOT and include {ranks}}
-weak_database=${IGA_WEAK_DATABASE:?Set IGA_WEAK_DATABASE, using {ranks} where needed}
+strong_case=${IGA_STRONG_CASE:-strong-{ranks}/root3d}
+strong_database=${IGA_STRONG_DATABASE:-../duct.ntiga}
+weak_case=${IGA_WEAK_CASE:-weak-{ranks}/root3d}
+weak_database=${IGA_WEAK_DATABASE:-../duct.ntiga}
 : "${PETSC_DIR:?Set PETSC_DIR to the PETSc installation used for this build}"
 module load openmpi/4.0.5-gcc10.2.0
 
@@ -39,13 +39,17 @@ export OMP_PLACES=cores
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
+read -r -a ranks <<<"${IGA_SCALING_RANKS:-1 64 128 256}"
+if [[ ${IGA_SCALING_PREPARE:-0} == 1 ]]; then
+	python3 "${repo_root}/scripts/hpc_prepare_scaling_cases.py" \
+		--output-dir "${source_root}" --ranks "${ranks[@]}"
+fi
 export IGA_STAGE_SOURCE=$(realpath "${source_root}")
 srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
 	--ntasks-per-node=1 --cpus-per-task=1 \
 	bash -c 'mkdir -p "$SLURM_TMPDIR/tubularflowiga-scaling"; rsync -a --delete "$IGA_STAGE_SOURCE/" "$SLURM_TMPDIR/tubularflowiga-scaling/"'
 staged_root=${SLURM_TMPDIR}/tubularflowiga-scaling
 
-read -r -a ranks <<<"${IGA_SCALING_RANKS:-1 64 128 256}"
 tasks_per_node=${SLURM_NTASKS_PER_NODE}
 launcher="mpiexec --bind-to core --map-by ppr:${tasks_per_node}:node"
 python3 "${repo_root}/scripts/hpc_build_manifest.py" --component cpu \

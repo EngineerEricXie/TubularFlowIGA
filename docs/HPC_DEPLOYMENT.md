@@ -119,8 +119,17 @@ surface publications, convergence checks, and checkpoint shards span ranks.
 
 Prepare a fixed physical case packed for every strong-scaling rank count. Also
 prepare one weak case per rank count, increasing global elements so elements per
-rank remain within the configured tolerance. Tiny fixtures are rejected as
-evidence by review even if the collector itself can run them.
+rank remain within the configured tolerance. `hpc_prepare_scaling_cases.py`
+generates C2 duct cases from the repository fixture: the default strong case has
+16,384 elements, while every weak case has exactly 256 elements per rank. Tiny
+fixtures are rejected as evidence by review even if the collector itself can
+run them.
+
+```bash
+make hpc-prepare-scaling \
+  HPC_SCALING_CASES=/shared/cases/scaling \
+  HPC_SCALING_RANKS='1 64 128 256'
+```
 
 `hpc_cross_node_scaling.py` performs geometry preflight, at least three fresh
 solver repetitions, native physical validation, and strong-case velocity and
@@ -134,16 +143,21 @@ exclusive allocation:
 
 ```bash
 export IGA_SCALING_CASE_ROOT=/shared/cases/scaling
-export IGA_STRONG_CASE=strong
-export IGA_STRONG_DATABASE='duct-{ranks}.ntiga'
-export IGA_WEAK_CASE='weak-{ranks}'
-export IGA_WEAK_DATABASE='duct-{ranks}.ntiga'
 export IGA_SCALING_OUTPUT=/shared/results/scaling-${USER}
 export IGA_SCALING_RANKS='1 64 128 256'
+export IGA_SCALING_PREPARE=1
 sbatch -A "$PROJECT_ACCOUNT" \
-  --export=ALL,IGA_SCALING_CASE_ROOT,IGA_STRONG_CASE,IGA_STRONG_DATABASE,IGA_WEAK_CASE,IGA_WEAK_DATABASE,IGA_SCALING_OUTPUT,IGA_SCALING_RANKS,PETSC_DIR,PETSC_ARCH \
+  --export=ALL,IGA_SCALING_CASE_ROOT,IGA_SCALING_OUTPUT,IGA_SCALING_RANKS,IGA_SCALING_PREPARE,PETSC_DIR,PETSC_ARCH \
   solvers/cpu/slurm/cross_node_scaling.sbatch
 ```
+
+Auto-preparation requires the prebuilt
+`solvers/coupling/hpc_duct_solver_fixture`. Set `IGA_SCALING_PREPARE=0` to use
+an existing immutable case tree. The default relative patterns are
+`strong-{ranks}/root3d`, `weak-{ranks}/root3d`, and `../duct.ntiga`; override
+them with the four `IGA_STRONG_*`／`IGA_WEAK_*` variables for production data.
+The collector uses distributed FGMRES with rank-local block Jacobi/ILU for this
+study, rather than a global direct solve that would obscure MPI scaling.
 
 Choose rank counts and `--ntasks-per-node` for the actual node type. Retain
 negative scaling results. Report maximum-rank critical-path phases separately;

@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc hpc-build-manifest hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc hpc-build-manifest hpc-prepare-scaling hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
 
 all: cpu
 
@@ -21,6 +21,12 @@ cpu-petsc:
 HPC_BUILD_MANIFEST ?= $(CURDIR)/hpc-build-manifest.json
 hpc-build-manifest:
 	./scripts/check_dependencies.sh cpu --report $(HPC_BUILD_MANIFEST)
+
+HPC_SCALING_CASES ?= $(CURDIR)/hpc-scaling-cases
+HPC_SCALING_RANKS ?= 1 64 128 256
+hpc-prepare-scaling:
+	$(MAKE) -C solvers/coupling hpc_duct_solver_fixture
+	python3 scripts/hpc_prepare_scaling_cases.py --output-dir $(HPC_SCALING_CASES) --ranks $(HPC_SCALING_RANKS)
 
 HPC_TEST_OUTPUT ?= $(CURDIR)/hpc-test-results
 HPC_TEST_TIMEOUT ?= 300

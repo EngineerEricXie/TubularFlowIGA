@@ -13,12 +13,15 @@ int main(int argc, char** argv)
 			return 0;
 		}
 		Require(argc==5, "usage: hpc_duct_solver_fixture ROOT TRANSVERSE AXIAL RANKS | --validate OUTPUT");
-		auto positive = [](const char* text) {
+		auto positive = [](const char* text, unsigned long maximum, const char* name) {
 			std::size_t used = 0; const auto value = std::stoul(text, &used);
-			Require(used==std::string(text).size() && value>=1 && value<=128, "fixture dimensions and ranks must be in [1,128]");
+			Require(used==std::string(text).size() && value>=1 && value<=maximum,
+				std::string("fixture ")+name+" must be in [1,"+std::to_string(maximum)+"]");
 			return static_cast<int>(value);
 		};
-		const int transverse = positive(argv[2]), axial = positive(argv[3]), ranks = positive(argv[4]);
+		const int transverse = positive(argv[2],128,"transverse dimension");
+		const int axial = positive(argv[3],128,"axial dimension");
+		const int ranks = positive(argv[4],4096,"rank count");
 		Require(ranks<=transverse*transverse*axial, "fixture requires at least one element per rank");
 		const fs::path root = argv[1];
 		Require(fs::create_directories(root), "fixture output already exists");

@@ -22,6 +22,7 @@ def load(name):
 
 build = load("hpc_build_manifest")
 scaling = load("hpc_cross_node_scaling")
+prepare = load("hpc_prepare_scaling_cases")
 tiers = load("hpc_test_tiers")
 
 
@@ -61,6 +62,12 @@ class DeploymentTests(unittest.TestCase):
             scaling.samples([1.0, 2.0])
         result = scaling.samples([3.0, 1.0, 2.0])
         self.assertEqual(result["median"], 2.0)
+
+    def test_weak_dimensions_hold_work_per_rank(self):
+        for ranks in (1, 64, 128, 256):
+            transverse, axial = prepare.weak_dimensions(ranks, 256, 8)
+            self.assertLessEqual(max(transverse, axial), 128)
+            self.assertEqual(transverse * transverse * axial // ranks, 256)
 
     def test_slurm_wrappers_parse(self):
         for path in (ROOT / "solvers/cpu/slurm/multinode_graph.sbatch",
