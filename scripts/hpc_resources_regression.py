@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise resource and packed-database preflight at actual CPU/1D/graph CLI entrypoints."""
+"""Exercise resource and packed-database preflight at production PETSc CLI entrypoints."""
 import argparse
 import json
 import os
@@ -27,7 +27,9 @@ def main():
         if not p.is_file(): parser.error(f'missing fixture {p}')
     out = args.output_dir.resolve(); out.mkdir(parents=True,exist_ok=False)
     binaries = dict(flow=repo/'solvers/cpu/iga_navier_stokes',transport=repo/'solvers/cpu/iga_solve',
-                    one_d=repo/'solvers/one_d/iga_1d',graph=repo/'solvers/coupling/iga_multidomain_flow')
+                    one_d=repo/'solvers/one_d/iga_1d',graph=repo/'solvers/coupling/iga_multidomain_flow',
+                    sequential=repo/'solvers/coupling/iga_1d_3d_explicit',
+                    fsi_exporter=repo/'solvers/cpu/phase8_compliant_channel_fsi_paraview')
     env = dict(os.environ,OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',
                PETSC_OPTIONS='-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps')
     summary = dict(status='running',binaries={k:dict(path=str(p),sha256=digest(p)) for k,p in binaries.items()},

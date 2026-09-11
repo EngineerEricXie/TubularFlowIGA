@@ -2,7 +2,7 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-10。HPC-03D、HPC-05D、HPC-07A／B 已完成；moving／FSI
+最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-05D、HPC-07A／B 已完成；moving／FSI
 pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。HPC-05C 的大型排程、
 HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。其他既有完成狀態沿用對應報告，
 未宣稱本批重新驗收整份清單。
@@ -49,11 +49,11 @@ HPC-07C／D 與 HPC-09 的跨節點驗收仍待完成。其他既有完成狀態
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（19 項） | HPC-00A–D、HPC-01A／B、HPC-02A–C、HPC-03A–D、HPC-04A、HPC-05A／B／D、HPC-07A／B |
-| 已有部分進度、尚未完成（9 項） | HPC-01C、HPC-01D、HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07C |
+| 已勾選完成（21 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A、HPC-05A／B／D、HPC-07A／B |
+| 已有部分進度、尚未完成（7 項） | HPC-04B、HPC-04C、HPC-05C、HPC-06A、HPC-06B、HPC-06C、HPC-07C |
 | 其餘待辦（10 項） | HPC-06D、HPC-07D、HPC-08A–C、HPC-09A–E；既有程式能力不等於已通過各項驗收 |
 
-合計尚有 19 項未勾選，其中 9 項已有部分進度。此數量依現有紀錄彙整，
+合計尚有 17 項未勾選，其中 7 項已有部分進度。此數量依現有紀錄彙整，
 後續 goal 應依實際驗收結果更新。
 
 啟動後續 goal 時：
@@ -93,15 +93,14 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 4. **分散式耦合與部署：HPC-07／08／09。** 完成 FSI、domain 程序群，
    最後取得實際跨節點驗收證據。
 
-已有部分完成紀錄，後續可先指定 `HPC-01C` 的剩餘工作；
+已有部分完成紀錄，後續可先指定 `HPC-04B` 的剩餘工作；
 每次 goal 應以當時程式與測試證據核對清單狀態。
 
 ### 下一次開發的具體入口
 
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
-| HPC-01C | F01／F03／F04 與 F02 的 CPU／1D／耦合／四個序列工具已驗證；CUDA stdout 亦已驗證；F05 診斷亦已驗證；接續 F06 完整入口覆蓋 | [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)、[本輪串行工具與 FSI 驗收](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md) |
-| HPC-01D | 剩餘 embedding／工具入口、PETSc 型別、配置與後端能力矩陣；CUDA 啟動檢查已補入 | [資源檢查進度](progress/HPC_01D_PROGRESS.md)、[工具進度](progress/HPC_01CD_TOOLS_PROGRESS.md)、[CUDA 進度](progress/HPC_01D_CUDA_PROGRESS.md) |
+| HPC-04B／C | 完成代表案例的求解器／預條件器矩陣及大案例效能／記憶體驗收 | [refined duct 進度](progress/HPC_04B_REFINED_DUCT_PROGRESS.md)、[rank scaling 進度](progress/HPC_04C_RANK_SCALING_PROGRESS.md) |
 | HPC-05C | native graph／providers／完整歷史／CLI 的單機驗收完成；接續大型及跨節點 allocation 的 checkpoint／訊號轉送驗收 | [完整 graph 進度](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)、[使用說明](COUPLED_RESTART.md) |
 
 上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
@@ -254,7 +253,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   runtime 的 halo row 建立。空 rank、遺漏／重複貢獻、表面發布權、真實案例
   halo 更新與數值回歸均通過；浸入式／FSI 分散計算仍由 HPC-03／07 驗收，見
   [所有權契約](architecture/PARALLEL_OWNERSHIP.md)與[進度報告](progress/HPC_01B_PROGRESS.md)。
-- [ ] **HPC-01C：一致失敗處理。** 在輸入、配置、組裝與輸出階段建立跨 rank
+- [x] **HPC-01C：一致失敗處理。** 在輸入、配置、組裝與輸出階段建立跨 rank
   錯誤協議，避免一個 rank 丟例外而其他 rank 永久等待。
   對可控制的局部錯誤進行故障注入，並用 timeout 證明可有限時間退出。
   明確區分協同失敗退出與作業系統殺死 rank；本任務不承諾 MPI 程序故障後原地續跑。
@@ -392,7 +391,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   1D VTP 檔名與 flow／transport／staged adapter 簽章亦已補強，原生格式化例外
   與既有故障測試詳見 [串流邊界驗收](progress/HPC_01C_STREAM_BOUNDARY_PROGRESS.md)。
   支援入口、共同階段及剩餘 F01～F06 已整理於
-  [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)；完整覆蓋尚未完成。
+  [MPI 錯誤邊界索引](architecture/MPI_FAILURE_BOUNDARIES.md)；F01～F06 已完成。
   F01 abort 診斷與 F03 snapshot 的既有修正已重建驗證；packer、Womersley、
   transport budget 及 FSI helper 已補齊讀寫檢查，原生故障／重試與 cache/text
   相容性驗證詳見 [串行工具進度](progress/HPC_01C_SERIAL_TOOL_PROGRESS.md)。
@@ -405,27 +404,33 @@ F05 的原始診斷例外保存與恢復亦通過，見
   runtime Close、144 次故障／重試與最終 112 個原生 CLI 作業通過；
   graph／sequential 清理失敗不發布 completion manifest，見
   [runtime cleanup 驗收](progress/HPC_01C_RUNTIME_CLEANUP_PROGRESS.md)與
-  [入口稽核](progress/HPC_01C_ENTRY_AUDIT.md)。F06 其餘呼叫鏈與
-  HPC-01D 剩餘能力矩陣繼續追蹤。
+  [入口稽核](progress/HPC_01C_ENTRY_AUDIT.md)。F06 最終核對八個 production MPI
+  入口、93 個 rank-local callback 與七種 distributed owner；目前 HEAD 的
+  112 個原生作業及 296 份輸出比較通過，見
+  [F06 最終簽核](progress/HPC_01C_F06_COMPLETION_REPORT.md)。
   後續已核對五個 main 的控制流程，並修正 memory report 關檔失敗仍回報成功：
   12 個原生作業、10 個場比較及 world3／split1+2 關檔與重試通過，見
   [記憶體報告驗收](progress/HPC_01C_MEMORY_CLOSE_PROGRESS.md)。
 
-- [ ] **HPC-01D：執行資源與能力檢查。** 檢查分區數／rank 數、執行緒配置、
+- [x] **HPC-01D：執行資源與能力檢查。** 檢查分區數／rank 數、執行緒配置、
   PETSc index/scalar 型別及必要後端能力；提供清楚錯誤資訊與執行摘要。
   已接入 CPU flow／transport、1D 與 graph 啟動檢查及摘要，並查詢明確指定的
   factor backend。150 個 resource unit 案例、實際 MPI thread level、16 項
-  原生 CLI 資源案例及既有數值回歸通過；其餘入口／配置與後端矩陣仍待
-  完成，故保持未勾選，見 [HPC-01D 進度](progress/HPC_01D_PROGRESS.md)。後續亦已
+  原生 CLI 資源案例及既有數值回歸通過，見
+  [HPC-01D 進度](progress/HPC_01D_PROGRESS.md)。後續亦已
   接入 mesh check、assembly smoke 與 legacy transport，39 項工具回歸、
   幾何錯誤同步及既有 runtime／VCA 回歸通過，見
-  [其餘 MPI 工具驗收](progress/HPC_01CD_TOOLS_PROGRESS.md)；其餘能力矩陣保持待辦。
+  [其餘 MPI 工具驗收](progress/HPC_01CD_TOOLS_PROGRESS.md)。
   Standalone FSI exporter 已在建立輸出前拒絕多 rank；2／3-rank 拒絕與既有
   輸出保留檢查通過，單 rank 完整案例亦已以 4 次耦合迭代收斂，見
   [exporter 入口](progress/HPC_01C_EXPORTER_ENTRY_PROGRESS.md)。
   CUDA 五個入口已加入單程序、thread requests、索引容量與版本摘要檢查；
   84 項 host checks、23 個原生啟動案例及 CPU 共用 parser 的 150 項檢查通過。
-  數值與限制詳見 [CUDA 資源驗收](progress/HPC_01D_CUDA_PROGRESS.md)。
+  數值與限制詳見 [CUDA 資源驗收](progress/HPC_01D_CUDA_PROGRESS.md)。最終補入
+  sequential 與 FSI exporter，六個 production entry 的 20-case 矩陣及新版
+  coupling 80-case／222-output 回歸通過，見
+  [完成報告](progress/HPC_01D_COMPLETION_REPORT.md)。完整 KSP／PC 調校、HDF5 I/O
+  與 scheduler 綁定分別由 HPC-04、HPC-06 與 HPC-09 驗收。
 
 驗收：既有單程序與小型 MPI 數值門檻通過；subcommunicator 測試無串擾；
 錯誤注入不掛住、不寫出成功標記。不以替換 communicator 常數宣稱分散式完成。

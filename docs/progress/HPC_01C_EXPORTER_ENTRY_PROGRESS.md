@@ -40,3 +40,6 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 ```
 
 分散式 FSI 仍依 HPC-07 的介面、所有權、全域收斂與跨節點驗收要求開發。
+2026-09-11 的 [HPC-01D 最終簽核](HPC_01D_COMPLETION_REPORT.md)另在此入口建立
+輸出前加入共同 PETSc ABI／thread resource preflight；兩種非法 thread 設定的
+原生拒絕案例通過。既有單 rank 完整物理結果未被改寫。

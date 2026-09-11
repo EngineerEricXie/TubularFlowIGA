@@ -1,5 +1,6 @@
 #include "CompliantChannelFsiFixture.hpp"
 #include "CheckedText.hpp"
+#include "ExecutionResources.hpp"
 #include "MovingImmersedTransientFlowFsiRuntime.hpp"
 #include "PretensionedMembraneFsiRuntime.hpp"
 #include "StrongFluidStructureCoupling.hpp"
@@ -222,6 +223,7 @@ int main(int argc, char** argv)
 {
 	fs::path output_directory; PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	try {
+		iga::RequireExecutionResources(PETSC_COMM_WORLD, &std::cout);
 		int ranks = 1;
 		MPI_Comm_size(PETSC_COMM_WORLD, &ranks);
 		Require(ranks == 1, "phase8_compliant_channel_fsi_paraview requires one MPI rank; distributed FSI is not supported by this exporter");

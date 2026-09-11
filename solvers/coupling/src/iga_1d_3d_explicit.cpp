@@ -4,6 +4,7 @@
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
 #include "DomainRuntimeRegistry.hpp"
+#include "ExecutionResources.hpp"
 #include "CollectiveDomainRuntimeRegistry.hpp"
 #include "CollectiveAssetInput.hpp"
 #include "CollectivePetscOptions.hpp"
@@ -645,6 +646,7 @@ int iga::RunSequentialFlow(int argc, char** argv, MPI_Comm communicator)
 	MPI_Comm_rank(communicator, &rank);
 	int status = 0;
 	try {
+		iga::RequireExecutionResources(communicator, &std::cout);
 		auto options = SequentialLocalValue(communicator, "sequential arguments", [&] {
 			return ParseOptions(argc, argv);
 		});

@@ -1,6 +1,7 @@
 # HPC-01C：runtime 結束清理
 
-日期：2026-09-09。基準工作樹 `d9eaea9`。F06 部分完成；HPC-01C 未勾選。
+日期：2026-09-09。基準工作樹 `d9eaea9`；2026-09-11 已由目前 HEAD 的
+[F06 最終簽核](HPC_01C_F06_COMPLETION_REPORT.md)完成 HPC-01C。
 證據根目錄：`outputs/hpc01/runtime-cleanup/`；最終彙整為 `acceptance.json`。
 
 ## 問題與結果
@@ -18,7 +19,7 @@ CPU flow／VCA 在最後輸出關閉後明確 Close；graph／bifurcation 與 se
 
 完整 lifecycle、物件順序與 embedding caller 責任見
 [Runtime cleanup 契約](../architecture/RUNTIME_CLEANUP.md)。
-本批的終止呼叫鏈稽核與 F06 剩餘工作見 [入口稽核](HPC_01C_ENTRY_AUDIT.md)。
+本批的終止呼叫鏈稽核見 [入口稽核](HPC_01C_ENTRY_AUDIT.md)。
 
 ## 驗收
 
@@ -91,4 +92,5 @@ sequential-output fixtures；case／binary hashes 與完整 argv 在 summaries�
 MPI 失聯或 rank 死亡測試，不能用來宣稱那些情況可原地恢復／無洩漏。
 終止 Close 後不能再求解；重試建立新 runtime。GPU、完整 FSI 與前處理
 未因本批重跑，因它們不使用這兩個 runtime 的新 Close 路徑。
-完整 F06／HPC-01D、HPC-03～09 與跨節點驗收均繼續保留。
+F06 已由最終呼叫鏈與原生矩陣簽核；HPC-01D 亦已完成，HPC-03～09 的其餘項目
+與跨節點驗收仍依各自任務追蹤。

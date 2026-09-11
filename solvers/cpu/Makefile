@@ -517,7 +517,7 @@ compliant-channel-fsi-test: compliant_channel_fsi_test
 	./compliant_channel_fsi_test
 
 phase8_compliant_channel_fsi_paraview: CPPFLAGS += -Itests
-phase8_compliant_channel_fsi_paraview: src/phase8_compliant_channel_fsi_paraview.cpp tests/CompliantChannelFsiFixture.hpp include/StrongFluidStructureCoupling.hpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshot.hpp include/PretensionedMembraneFsiRuntime.hpp include/PretensionedMembrane.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
+phase8_compliant_channel_fsi_paraview: src/phase8_compliant_channel_fsi_paraview.cpp tests/CompliantChannelFsiFixture.hpp include/ExecutionResources.hpp include/StrongFluidStructureCoupling.hpp include/MovingImmersedTransientFlowFsiRuntime.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshot.hpp include/PretensionedMembraneFsiRuntime.hpp include/PretensionedMembrane.hpp include/MovingImmersedTransientFlowRuntime.hpp include/FluidSurfaceTraction.hpp include/MaterialSurfacePatchKinematics.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 PHASE8_PARAVIEW_DIR ?= ../../results/phase8_compliant_channel_fsi_paraview

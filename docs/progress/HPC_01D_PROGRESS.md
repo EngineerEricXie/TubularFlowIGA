@@ -1,6 +1,7 @@
 # HPC-01D：執行資源與 PETSc 後端檢查
 
-日期：2026-09-08。狀態：本批通過，HPC-01D 部分完成；整份清單範圍不變。
+日期：2026-09-08。狀態：本批通過；2026-09-11 已由
+[最終入口與能力矩陣](HPC_01D_COMPLETION_REPORT.md)完成 HPC-01D。
 
 ## 實作範圍
 
@@ -124,16 +125,16 @@ native attempts／authoritative records、build logs、evidence summary、invent
 保存命令、環境、退出碼、目前 binary 與 log hashes。先前各階段報告保留原 revision
 證據，不改成這次重跑的結果。
 
-## 剩餘範圍
+## 後續分工
 
 後續 CUDA 啟動、版本摘要及索引容量檢查見
 [CUDA 資源驗收](HPC_01D_CUDA_PROGRESS.md)；本報告的原始量測維持不變。
 
-HPC-01D 尚需其餘 embedding／工具路徑的完整能力矩陣、scheduler allocation
-與綁定配置核對，以及 HDF5 等輸出後端的細部能力檢查。預條件器內部 sub-KSP、
-PETSc 自動挑選的 backend 與完整 options 支援矩陣仍依 HPC-04 補齊。
-純 C++ 1D、浸入式／FSI 的 embedding callers 尚未自動套用此 MPI 啟動摘要。
+最終批已補齊 sequential 與單 rank FSI exporter，並核對所有 production PETSc
+入口；純 C++ library embedding 不自行初始化 MPI／PETSc，資源 preflight 仍由
+其 application caller 負責。預條件器 sub-KSP 與完整 options 矩陣依 HPC-04，
+HDF5 細部能力依 HPC-06，scheduler allocation 與綁定依 HPC-09 驗收。
 
 沒有執行新的跨節點、GPU、64-bit／complex PETSc、效能或擴展性驗收；沒有以
 宏定義、max threads 或 mpiexec 可啟動宣稱加速。Geometry 未變，未重跑 mesh-test。
-其餘 HPC-01C 邊界與整份 38 項清單繼續追蹤，沒有縮減 goal 範圍。
+其餘清單項目繼續依各自驗收條件追蹤。

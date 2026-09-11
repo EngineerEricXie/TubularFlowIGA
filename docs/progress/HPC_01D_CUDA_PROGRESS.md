@@ -1,7 +1,8 @@
 # HPC-01D：CUDA 啟動資源與容量檢查
 
 日期：2026-09-09。基準 HEAD `8a7e549` 加本批工作樹。
-HPC-01D 部分完成，整份清單仍維持原範圍。
+本批 CUDA 範圍完成；HPC-01D 已於 2026-09-11 由
+[最終入口與能力矩陣](HPC_01D_COMPLETION_REPORT.md)完成。
 
 ## 實作
 
@@ -99,5 +100,6 @@ conda run --no-capture-output -n tubularflow-cuda env \
 首次 `numerical/` 程序中斷、缺少完整報告，保留作中斷紀錄；重新執行於
 `numerical-final/`，不把中斷作業納入通過案例。
 
-HPC-01D 尚需其餘 embedding 入口、PETSc 64-bit／complex／backend 與輸出能力矩陣、
-真實 scheduler 資源／綁定核對；本批不是效能、跨節點或多 GPU 驗收。
+最終 CPU／coupling 入口、PETSc ABI／backend 與任務分工見完成報告。真實
+scheduler 資源／綁定、其他 PETSc build、HDF5 細部驗收、效能、跨節點與多 GPU
+仍分別由 HPC-09、HPC-06 及後續明確目標追蹤。

@@ -1,6 +1,6 @@
 # HPC-01C／D：其餘 CPU MPI 工具
 
-日期：2026-09-08。狀態：本批通過；HPC-01C／D 與完整清單仍未完成。
+日期：2026-09-08。狀態：本批通過；HPC-01C／D 已於 2026-09-11 完成最終簽核。
 接續 [資源檢查報告](HPC_01D_PROGRESS.md)。
 
 ## 變更
@@ -112,5 +112,5 @@ Ignored evidence 位於 `outputs/hpc01/tools/`：`before/` 與 `fixture/`、
 Legacy 其餘矩陣／vector 回傳碼、完整配置與外部資產一致性、constructor 清理
 仍需依 HPC-01C 補齊。本批不宣稱任意 PETSc 內部失敗都可恢復，也不保證
 失敗 CLI 在退出前釋放每個舊有 PETSc resource。Output 仍需 root 集中場資料。
-Sequential coupling 入口、其餘工具／CUDA／scheduler 與 HDF5 能力矩陣依
-HPC-01D／06／09 追蹤；本批沒有 GPU、跨節點、效能或擴展性驗收。
+Sequential coupling 入口已在 [HPC-01D 完成報告](HPC_01D_COMPLETION_REPORT.md)
+補齊；scheduler、HDF5、跨節點、效能與擴展性仍依 HPC-06／09 追蹤。

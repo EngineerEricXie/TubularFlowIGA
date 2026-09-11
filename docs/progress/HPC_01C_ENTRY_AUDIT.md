@@ -1,7 +1,8 @@
 # HPC-01C：入口與清理稽核
 
-日期：2026-09-09。基準 `d9eaea9` 加本批 runtime cleanup 修改。
-狀態：F06 進行中；此表記錄已核對的呼叫鏈，未把歷史測試自動視為本版實測。
+日期：2026-09-09；2026-09-11 完成最終簽核。基準 `d9eaea9` 加本批 runtime
+cleanup 修改。此表記錄逐步核對的呼叫鏈；目前 HEAD 的完整結果見
+[F06 最終簽核](HPC_01C_F06_COMPLETION_REPORT.md)。
 
 2026-09-09 接續以 `f9c7223` 核對下列五個 main 的控制流程，並補強 memory
 report 的 terminal close；此項驗收見 [memory close 報告](HPC_01C_MEMORY_CLOSE_PROGRESS.md)。
@@ -55,18 +56,16 @@ gate 未通過，不能由本次入口稽核改寫為通過。配置與資產的
 本批新增的 [終止清理契約](../architecture/RUNTIME_CLEANUP.md) 明確列出
 各物件順序、重複 Close、程序存活假設與 PETSc 內部故障限制。
 
-## 尚未簽核的 F06 範圍
+## F06 最終簽核
 
-1. 把各入口的參數早退、configuration／external asset、時間步控制、
-   runtime／adapter／executor 與 writer 呼叫，逐項對到現有 stage 及故障證據；
-   上表已核對五個 main 的交界及分支，仍需其餘 runner 和 runtime/helper 內部的
-   完整呼叫鏈；不以「已看過 main」替代完整覆蓋。
-2. 核對共用 helper 的 error-handler stack／cleanup fallback 與呼叫端的假設，
-   區分可控制的本地／返回錯誤和 MPI／PETSc 內部程序故障；目前不同 helper
-   的 Close 在第一個共同失敗後由 destructor 清理剩餘物件，與新 runtime 的
-   全部釋放後協調不同，不能混稱同一實作。
-3. 依上述核對結果補最後的必要原生／subcommunicator 整合驗收；既有 F01～F05
-   已驗證項目可引用精確 revision／binary 證據，不必機械式重跑所有歷史測試。
+1. 八個 MPI production 入口的參數早退、configuration／external asset、時間步、
+   runtime／adapter／executor、writer、checkpoint、Close 與 completion 已逐項對到
+   共同階段及故障證據。
+2. 93 個含 MPI／PETSc API 的 `CollectiveLocalStage` callback 已掃描；沒有在
+   rank-local callback 內發現 MPI／PETSc collective 或 distributed destroy。
+   七種主要 owner 的明確 Close、固定釋放順序與 destructor 後備亦已核對。
+3. 目前 HEAD 的 world3、split1+2 protocol／executor／construction／cleanup tests
+   及 112 個原生 CLI 作業通過；完整數量、來源 hash 與限制見最終簽核報告。
 
 CUDA／FSI exporter 與前處理仍保留各自的單程序限制；本批不宣稱這些入口
 支援跨 rank runtime。HPC-01D 能力矩陣及 HPC-03～09 的必要驗收保持原範圍。
