@@ -76,6 +76,7 @@ LoadConfig()
 
 	CASE_ROOT=Input
 	OUTPUT_ROOT=
+	OUTPUT_MODE=atomic
 	RANKS=2
 	BACKEND=cpu
 	BUILD_SOLVERS=1
@@ -88,6 +89,7 @@ LoadConfig()
 	MPIEXEC=mpiexec
 	OMP_NUM_THREADS=2
 	SOLVER_ARGS=
+	PETSC_OPTIONS=${PETSC_OPTIONS:-}
 	DRY_RUN=0
 	PETSC_DIR=${PETSC_DIR:-}
 	PETSC_ARCH=${PETSC_ARCH:-}
@@ -105,7 +107,7 @@ LoadConfig()
 		[[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] \
 			|| Die "$config_file:$line_number: invalid key: $key"
 		case $key in
-			CASE_ROOT|OUTPUT_ROOT|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|SOLVER_ARGS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
+			CASE_ROOT|OUTPUT_ROOT|OUTPUT_MODE|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|SOLVER_ARGS|PETSC_OPTIONS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
 			*) Die "$config_file:$line_number: unknown setting: $key" ;;
 		esac
 		if (( ${#value} >= 2 )); then
@@ -125,6 +127,10 @@ ValidateConfig()
 	[[ $OMP_NUM_THREADS =~ ^[0-9]+$ ]] && (( OMP_NUM_THREADS >= 1 )) \
 		|| Die "OMP_NUM_THREADS must be a positive integer"
 	case $BACKEND in cpu|cuda) ;; *) Die "BACKEND must be cpu or cuda; got: $BACKEND" ;; esac
+	case $OUTPUT_MODE in
+		atomic|versioned) ;;
+		*) Die "OUTPUT_MODE must be atomic or versioned; got: $OUTPUT_MODE" ;;
+	esac
 	case $SOLVER in
 		auto|navier_stokes|transport) ;;
 		*) Die "SOLVER must be auto, navier_stokes, or transport; got: $SOLVER" ;;
@@ -155,7 +161,11 @@ RunMpi()
 	local launcher=()
 	read -r -a launcher <<< "$MPIEXEC"
 	(( ${#launcher[@]} > 0 )) || Die "MPIEXEC cannot be empty"
-	Run "${launcher[@]}" -np "$RANKS" "$@"
+	if [[ -n $PETSC_OPTIONS ]]; then
+		Run env "PETSC_OPTIONS=$PETSC_OPTIONS" "${launcher[@]}" -np "$RANKS" "$@"
+	else
+		Run "${launcher[@]}" -np "$RANKS" "$@"
+	fi
 }
 
 SelectCases()
@@ -326,11 +336,20 @@ BuildRuntime()
 GeneratedDirectory()
 {
 	local source_dir=$1 output_root=$2
-	local candidate
+	local candidate base index
 	if [[ -n $output_root ]]; then
 		candidate=$output_root/${source_dir##*/}
 	else
 		candidate=$source_dir/generated
+	fi
+	if [[ $OUTPUT_MODE == versioned ]]; then
+		base=$candidate
+		index=1
+		candidate=${base}_$index
+		while [[ -e $candidate ]]; do
+			((index += 1))
+			candidate=${base}_$index
+		done
 	fi
 	[[ ! -L $candidate ]] || Die "refusing to replace a symbolic-link output: $candidate"
 	realpath -m "$candidate"
@@ -409,6 +428,22 @@ RunOneDCase()
 			--system "$selected_system" --output-dir "$final_results" "${extra_args[@]}"
 		return 0
 	fi
+	if [[ $OUTPUT_MODE == versioned ]]; then
+		mkdir -p "$final_results"
+		RunMpi "$repo_dir/solvers/one_d/iga_1d" "$source_dir" \
+			--system "$selected_system" --output-dir "$final_results" "${extra_args[@]}"
+		validation=not_requested
+		if IsTruthy "$RUN_VALIDATION"; then
+			[[ -s $final_results/summary.json ]] || Die "1D solver did not create summary.json"
+			validation=summary_present
+		fi
+		WriteRunManifest "$generated_dir/run_manifest.json" "$case_name" \
+			"results/$selected_system" "$validation"
+		cp "$source_dir/simulation_config.json" "$generated_dir/"
+		printf '1D case completed\ncase: %s\ngenerated root: %s\nrun manifest: %s\n' \
+			"$source_dir" "$generated_dir" "$generated_dir/run_manifest.json"
+		return 0
+	fi
 	if [[ -d $generated_dir && -n $(find "$generated_dir" -mindepth 1 -maxdepth 1 -print -quit) ]] \
 		&& ! IsTruthy "$CLEAN"; then
 		Die "generated-output directory is not empty; set CLEAN=1 to replace it: $generated_dir"
@@ -461,6 +496,7 @@ RunThreeDCase()
 	local results_dir=$generated_dir/results/$selected_system
 	local generate_args=("$source_dir" --output "$generated_dir" --ranks "$RANKS")
 	if IsTruthy "$CLEAN"; then generate_args+=(--clean); fi
+	if [[ $OUTPUT_MODE == versioned ]]; then generate_args+=(--direct-output); fi
 	Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" \
 		"$repo_dir/scripts/generate_case.sh" "${generate_args[@]}"
 	if ! IsTruthy "$DRY_RUN"; then
