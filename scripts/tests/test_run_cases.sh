@@ -27,6 +27,7 @@ RANKS=$ranks
 BACKEND=$backend
 BUILD_SOLVERS=0
 CLEAN=$clean
+OUTPUT_MODE=atomic
 RUN_MESH_CHECK=0
 RUN_SOLVER=1
 RUN_VALIDATION=1
@@ -110,5 +111,13 @@ WriteConfig "$config" "$output_root" 1 cpu 1
 clean_one_d_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" one_d)
 [[ $clean_one_d_output == *"iga_1d"* ]]
 [[ -f $output_root/one_d/run_manifest.json ]]
+
+mkdir -p "$output_root/simple_1" "$output_root/simple_2"
+WriteConfig "$config" "$output_root" 0 cpu 2
+printf '\nOUTPUT_MODE=versioned\n' >> "$config"
+versioned_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
+[[ $versioned_output == *"$output_root/simple_3"* ]]
+[[ $versioned_output == *"--direct-output"* ]]
+[[ $versioned_output != *".simple_3.staging."* ]]
 
 printf 'run_cases tests passed\n'
