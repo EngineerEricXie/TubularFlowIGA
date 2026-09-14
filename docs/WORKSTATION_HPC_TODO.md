@@ -2,12 +2,9 @@
 
 建立日期：2026-09-07。用途：**分階段開發待辦與進度追蹤，供後續 goal 指定範圍**。
 
-最近更新：2026-09-11。HPC-01C／D、HPC-03D、HPC-04B／C、HPC-05D、HPC-06A–D、
-HPC-07A／B 已完成；moving／FSI pair 通過同 rank 與 4→2、4→1、1→4-rank 新作業續跑。
-HPC-08A–C 的程序群、相依排程與雙 3D 實測已完成；HPC-09 的本機部署工具與
-文件收尾完成，09A–D 等待實際跨節點證據。HPC-05C 的大型排程與 HPC-07C／D
-亦仍待跨節點驗收。
-其他既有完成狀態沿用對應報告，未宣稱本批重新驗收整份清單。
+最近更新：2026-09-14。HPC-05C、HPC-07C／D、HPC-09A–D 已取得真實跨節點證據，
+finalizer 為 passed；全部 38 個子任務完成。見 [Bridges-2 跨節點驗收](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)。
+其他完成項目沿用原有報告，本批沒有宣稱重新驗收全部既有模式。
 
 快速導覽：[進度總覽](#接續開發的狀態總覽) ·
 [優先順序](#建議開發順序) · [goal 範本](#可複製的-goal-範本) ·
@@ -51,12 +48,11 @@ HPC-08A–C 的程序群、相依排程與雙 3D 實測已完成；HPC-09 的本
 
 | 狀態 | 任務 |
 |---|---|
-| 已勾選完成（31 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A／B／D、HPC-06A–D、HPC-07A／B、HPC-08A–C、HPC-09E |
-| 已有部分進度、尚未完成（7 項） | HPC-05C、HPC-07C／D、HPC-09A–D |
-| 其餘待辦（0 項） | 無；既有程式能力不等於已通過上述跨節點驗收 |
+| 已勾選完成（38 項） | HPC-00A–D、HPC-01A–D、HPC-02A–C、HPC-03A–D、HPC-04A–C、HPC-05A–D、HPC-06A–D、HPC-07A–D、HPC-08A–C、HPC-09A–E |
+| 已有部分進度、尚未完成（0 項） | 無 |
+| 其餘待辦（0 項） | 無；七項跨節點驗收經 finalizer 通過後關閉 |
 
-合計尚有 7 項未勾選，皆已有部分進度。此數量依現有紀錄彙整，
-後續 goal 應依實際驗收結果更新。
+合計 38 項已勾選，0 項未勾選；本批 job IDs、source revision、數值與 scaling 指標見跨節點驗收報告。
 
 啟動後續 goal 時：
 
@@ -95,16 +91,15 @@ P2 是分散式耦合與部署驗收。優先級用來選擇下一項工作，�
 4. **分散式耦合與部署：HPC-07／08／09。** 完成 FSI、domain 程序群，
    最後取得實際跨節點驗收證據。
 
-已有部分完成紀錄，後續可先指定 `HPC-05C` 的剩餘工作；
-每次 goal 應以當時程式與測試證據核對清單狀態。
+本清單已完成；後續新增工作另立範圍，並以當時程式與測試證據核對。
 
-### 下一次開發的具體入口
+### 本批完成驗收的入口
 
 | 子任務 | 優先核對的剩餘工作 | 接續閱讀 |
 |---|---|---|
-| HPC-05C | native graph／providers／完整歷史／CLI 的單機驗收完成；接續大型及跨節點 allocation 的 checkpoint／訊號轉送驗收 | [完整 graph 進度](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)、[使用說明](COUPLED_RESTART.md) |
+| HPC-05C／07C／07D／09A–D | 真實跨節點 Graph、FSI、scaling 與 finalizer 通過 | [Bridges-2 跨節點驗收](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md) |
 
-上述入口用於定位下一批工作；各子任務仍須滿足下方完整驗收條件。
+上述入口記錄本批完成證據；原有驗收條件與歷史報告保留如下。
 Checkpoint 的完整發布與恢復協議繼續由 HPC-05 追蹤。
 1D／graph／sequential 的 216 個原生作業與四個序列工具的 48 個作業亦已通過，
 詳見 [耦合與工具 stdout 驗收](progress/HPC_01C_COUPLING_STDOUT_PROGRESS.md)。
@@ -641,7 +636,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   [發布／恢復驗收](progress/HPC_05B_CHECKPOINT_BUNDLE_REPORT.md)：734 個預期拒絕、
   並行 producer、新程序恢復、兩個程序中斷點、32 MiB 串流及 sanitizer 通過。
   此項為儲存元件；完整 MPI graph 的 runtime capture／restore 由 05C 接續。
-- [ ] **HPC-05C：既有 0D／1D／貼體 3D graph 續跑。** 先支援相同 rank 數，
+- [x] **HPC-05C：既有 0D／1D／貼體 3D graph 續跑。** 先支援相同 rank 數，
   比較不中斷與中斷後續跑的完整歷史；測試 commit 前、寫分片中與 manifest
   發布前的中斷。整個作業終止後可由新的作業載入最後完整 checkpoint。
   已交付 [0D 與耦合控制狀態介面](progress/HPC_05C_ACCEPTED_STATE_PROGRESS.md)：
@@ -660,8 +655,7 @@ F05 的原始診斷例外保存與恢復亦通過，見
   來源／輸入／執行身分、完整 history prefix、CLI 與 accepted-step SIGUSR1 保存；
   七種案例／方法、三個中斷點、1／2／4 ranks 及 split 1＋2 均通過新作業恢復。
   所有輸出與分片 payload 精確一致，I/O／fsync／各 rank RSS 另行記錄。
-  依狀態契約的規模驗收要求，大型 graph／實際跨節點與 scheduler 訊號轉送仍待
-  compute allocation 驗收，故保持未勾選；操作見 [graph restart](COUPLED_RESTART.md)。
+  大型 16,384-element、8-step graph 的跨節點 SIGUSR1、checkpoint、requeue 與新 attempt 恢復已通過，見 [Bridges-2 跨節點驗收](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)。
 - [x] **HPC-05D：新增 runtime 與重分區續跑。** 在相應 runtime 完成後加入
   浸入式／移動流場與 FSI；最後評估不同 rank 數的恢復。
   此模式需明確搬移 ownership，並處理 `.ntiga` 分區相依性，不能僅改啟動參數。
@@ -797,7 +791,7 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   distributed moving-fluid transaction、全域守恆 gate、single-owner bounded
   membrane update 與 kinematics redistribution 已完成。膜矩陣集中成本明確保留；
   現有證據未支持改為分散式結構矩陣。
-- [ ] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
+- [x] **HPC-07C：全域強耦合。** Aitken 內積、加權 RMS／最大殘差與收斂決策
   使用全域量；所有 rank 同步接受、回復或拒絕同一次 trial。
   Aitken helper 已支援空 local weights，三 rank 真實 reduction 與單 rank
   係數／控制身分比較通過，見 [FSI 接線進度](progress/HPC_07_DISTRIBUTED_CONTRACT.md)；
@@ -815,9 +809,9 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   全域 Aitken、位移／速度收斂與 paired commit；4-rank communicator
   拒絕、提交前故障與健康重試通過。非零 fixed-point 兩步已通過 4 ranks，
   1／2／4-rank 完整 fields／history／ports／守恆比較與 1-rank 迭代耗盡
-  rollback／retry 亦已通過。跨節點驗收仍待完成，保持未勾選，見
+  rollback／retry 亦已通過。本批跨兩節點 nonzero strong FSI 與完整歷史比較通過；既有本機驗證見
   [強耦合接線與驗證進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
-- [ ] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
+- [x] **HPC-07D：驗證與續跑。** 比較單／多 rank 的位移、速度、牽引力、
   流量、守恆及收斂歷史，測試局部失敗、rollback／retry 與 FSI checkpoint。
   單機 1／2／4-rank 非零強耦合矩陣已通過；膜 checkpoint 的跨 rank 數
   續算、moving-fluid 實際 MPI 檔案 bundle 與 4-rank changing-layout
@@ -825,7 +819,7 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
   續算已通過；2-rank 可變 port controls 的檔案還原與下一步數值解亦
   已通過。非零 FSI pair 的 1／2／4-rank 同作業檔案還原與續算、
   零解與非零的獨立作業還原，以及 4→2、4→1、1→4-rank pair 重分區均已
-  通過。現在只剩跨節點驗收，見
+  通過。本批跨兩節點 4→2 pair restart、fields／surface／traction／history／ports／守恆及 input bundle 不變亦通過；既有報告見
   [checkpoint 與強耦合進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)與
   [重分區完成報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)。
 
@@ -857,32 +851,30 @@ HPC-05D 可依 runtime 分批交付；其 FSI 部分在 HPC-07A/C 完成後與 H
 
 ## HPC-09：部署、CI 與最終擴展性驗收
 
-- [ ] **HPC-09A：可重現建置。** 延伸既有 Makefile／依賴檢查，提供工作站與
+- [x] **HPC-09A：可重現建置。** 延伸既有 Makefile／依賴檢查，提供工作站與
   叢集配置；記錄 MPI、PETSc、HDF5 的 ABI／能力及 CUDA 目標架構。
   不把新增另一套 build system 當作必要前提。
-  本機 build manifest、Make target、PETSc／HDF5／MPI／CUDA probe 已通過；尚缺
-  同 revision 的實際叢集 build report。
-- [ ] **HPC-09B：分層測試。** 快速單元測試、小型 1／2／4-rank 數值測試、
+  本機工具與 probe 已通過；本批 compute allocation 的相容 MPI／PETSc／HDF5／compiler ABI 與乾淨 source build manifest 亦通過，見 [Bridges-2 跨節點驗收](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)。
+- [x] **HPC-09B：分層測試。** 快速單元測試、小型 1／2／4-rank 數值測試、
   有硬體的 GPU 回歸、排程執行的跨節點與大型測試分開。
   測試有 timeout、非零退出與機器可讀結果；跳過必須有原因。
   Unit、1／2／4-rank MPI 與本機 GPU tier 已通過；無 Slurm 時 scheduled tier 以
-  明確理由 skip。尚缺實際 two-node scheduled tier 與大型作業。
-- [ ] **HPC-09C：排程與執行配置。** 提供匹配 `ntasks`、`cpus-per-task`、
+  明確理由 skip。本批真實 two-node scheduled tier 為 passed，並完成大型 Graph／FSI／scaling 作業。
+- [x] **HPC-09C：排程與執行配置。** 提供匹配 `ntasks`、`cpus-per-task`、
   OpenMP／BLAS threads、CPU／NUMA 綁定的範例；整合輸入 staging、
   安全時間步 checkpoint 及重提交流程。依實際站點政策驗證。
   Bridges-2 scripts 已整合 node-local staging、binding、SIGUSR1 accepted-step
-  checkpoint 與 requeue；仍待站點實跑確認。
-- [ ] **HPC-09D：Strong／weak scaling。** 固定問題增加核心測 strong scaling；
+  checkpoint 與 requeue；本批 Bridges-2 實跑通過，包含提前訊號與新 allocation attempt 的 restart。
+- [x] **HPC-09D：Strong／weak scaling。** 固定問題增加核心測 strong scaling；
   隨核心數增加工作量測 weak scaling。報告速度比、平行效率、每 rank 工作量、
   solver iterations、記憶體及通訊。不要使用只有兩個元素的 Phase 9 fixture
   宣稱四 rank 或大規模擴展性。
-  Collector 與 exclusive RM wrapper 已完成；非微型 prepared cases 及真實跨節點
-  repetitions 尚待執行。
+  真實兩節點 ranks 1／64／128／256 的 strong／weak 各至少三次通過；strong 16,384 elements、weak 256 elements/rank，全部數值與量測見 [Bridges-2 跨節點驗收](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)。
 - [x] **HPC-09E：相容性與文件收尾。** 更新 root README 的能力矩陣、限制與
   可重現命令；保留既有案例、cache/text packing 與 CPU/CUDA 數值介面。
   如尚有階段或硬體測試未完成，明確列出，不將本清單整體標為完成。
   README、Bridges-2、部署與 domain-resource 文件已更新；原案例和資料介面未改，
-  grouped／moving／FSI／跨節點缺口明列。見
+  grouped 與 native moving／FSI graph checkpoint 的限制仍明列；本批跨節點缺口已關閉。見
   [本機部署進度](progress/HPC_09_LOCAL_DEPLOYMENT_PROGRESS.md)。
 
 驗收：以相同 source revision 在工作站與實際多節點 allocation 完成宣告範圍的

@@ -1,6 +1,6 @@
 # HPC-09A–E 本機部署進度
 
-- 狀態：HPC-09E 完成；HPC-09A–D 的本機工具與回歸通過，等待實際跨節點 allocation 驗收。
+- 狀態：本機歷史驗收已完成；後續 HPC-09A–D 真實跨節點驗收亦通過，見 [Bridges-2 完成報告](HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)。
 - 基準 revision：`66fd930` 加本報告所列 scaling case 產生器變更。
 - 日期／主機：2026-09-11，`TsungYehLab`。
 - 機器可讀摘要：`outputs/hpc09/local-deployment-v3/summary.json`。
@@ -73,10 +73,9 @@ physical validation、strong fields、profile／RSS 與統計全部通過；stro
 collector 全路徑，不作效能或 scaling 宣稱；正式 scheduler 預設使用 16,384-element
 strong 與每 rank 256 elements 的 weak cases。
 
-## 尚待實際硬體驗收
+## 原本待實際硬體驗收的項目（現已完成）
 
-目前主機沒有 `sbatch`／`srun`、`SLURM_JOB_ID` 或跨節點 allocation，因此沒有執行
-或宣稱下列結果：
+以下記錄原工作站驗收當時缺少 Slurm／跨節點 allocation 的項目；後續已在 Bridges-2 完成，數值與 job IDs 見上述完成報告：
 
 1. 同 revision 的 Bridges-2 build manifest、two-node scheduled tier 與 rank binding。
 2. 大型 native graph 的跨節點 checkpoint、`SIGUSR1` 轉送、完整 generation 及
@@ -85,5 +84,4 @@ strong 與每 rank 256 elements 的 weak cases。
    restart；這同時是 HPC-07C／D 的剩餘驗收。
 4. 非微型 strong／weak cases 的三次以上獨占量測及完整效能／記憶體報告。
 
-因此 HPC-09A–D 保持未勾選。HPC-09E 已完成，因為 README 能力矩陣、限制、命令
-及所有硬體缺口均已收尾且沒有將整份清單誤標完成。
+上述四組跨節點證據經 finalizer passed 後，HPC-09A–D 與相關 HPC-05C／07C／07D 已勾選；全部 38 項完成。原工作站的 GPU 與本機結果仍屬各自歷史 revision，沒有改寫為本批實測。

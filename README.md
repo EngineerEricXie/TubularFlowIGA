@@ -25,7 +25,7 @@ general-purpose CFD package.
 | Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
 | Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer; optional disjoint MPI groups for independent domains | Executable graphs require supported acyclic topology. Grouped execution supports 0D, 1D, and body-fitted 3D; grouped checkpoint/restart and immersed domains use shared mode. 0D species and a full closed-loop 0D heart are deferred |
 | Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry | Moving geometry uses a fixed Eulerian background with distributed active-set/history transfer. ALE/remeshing and a native moving-domain graph CLI remain deferred |
-| Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated locally for a small-displacement compliant-channel benchmark at 1/2/4 ranks. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, valve/contact models, and cross-node acceptance are deferred |
+| Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark at 1/2/4 ranks, including a two-node 4-rank strong writer and 2-rank paired restart reader. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
 | Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
 
@@ -512,9 +512,11 @@ Current scope limits are important when interpreting results:
 
 For shared clusters, run simulations on allocated compute resources rather
 than login nodes and follow the local scheduler policy.
-The repository includes cross-node Slurm and scaling workflows, but the current
-workstation revision has no actual multi-node allocation evidence; HPC-05C,
-HPC-07C/D, and HPC-09A-D remain pending that validation.
+Bridges-2 cross-node Graph checkpoint/requeue/restart, strong FSI paired restart,
+and the formal 1/64/128/256-rank scaling matrix passed at the recorded clean source
+revision. All 38 HPC TODO items are complete; see the
+[acceptance report](docs/progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
+for job IDs, numerical checks, timings, and scope limits.
 
 ## Performance evidence
 

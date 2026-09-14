@@ -43,7 +43,7 @@ def main():
             "SLURM_CPUS_PER_TASK", "SLURM_CPUS_ON_NODE", "SLURM_MEM_PER_CPU")},
         "job": probe(["scontrol", "show", "job", "-dd", job]) if job else None,
         "step_accounting": probe(["sstat", "-j", f"{job}.batch", "--parsable2",
-                                  "--noheader", "--format=JobID,NTasks,MaxRSS,AveRSS,Elapsed,CPUTime"])
+                                  "--noheader", "--format=JobID,NTasks,MaxRSS,AveRSS,AveCPU"])
                            if job else None,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

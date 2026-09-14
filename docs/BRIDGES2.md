@@ -180,3 +180,10 @@ As of the 2026-09-11 documentation audit, the official
 specifies 128 cores per RM node and restricts RM-shared to one node. Full-node
 RM scaling jobs therefore request 128 tasks per node. Recheck the guide before
 submission because PSC scheduling policies can change.
+
+## Completed cross-node acceptance
+
+See the [Bridges-2 acceptance report](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
+for ABI, job IDs, numerical results, and formal scaling metrics. For long
+macro-steps, request a checkpoint early; the default five-minute warning may
+not leave enough time to reach an accepted step.

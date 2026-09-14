@@ -85,8 +85,8 @@ Slurm sends `SIGUSR1` five minutes before the time limit. The batch shell trap
 forwards it to `mpiexec`, whose Open MPI 4.0.5
 `--mca ess_base_forward_signals SIGUSR1` setting delivers it to solver ranks. The native graph exits after the next accepted macro-step and a
 published checkpoint. The script records `checkpointed` and requeues by
-default. The wrapper explicitly enables the job requeue flag after allocation,
-because Bridges-2 may reset the submission flag. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
+default. Immediately before requeue, the wrapper explicitly enables the job
+requeue flag because launcher startup on Bridges-2 may reset the submission flag. Set `IGA_REQUEUE_ON_SIGNAL=0` to stop after the safe checkpoint. Each
 attempt uses `attempt-$SLURM_RESTART_COUNT`; a resumed attempt adds
 `--restart-dir` when a published generation exists.
 
@@ -216,3 +216,14 @@ physical gates, field comparisons, phase/RSS records, checkpoint generation,
 and `sacct` or `sstat` accounting. Generated databases, results, JSON evidence,
 and scheduler logs remain outside Git; commit only the scripts and a concise
 report that points to their location.
+
+## Recorded Bridges-2 acceptance
+
+The [completed acceptance report](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
+records the tested revision, actual jobs, numerical checks, and formal scaling.
+The graph used 256 ranks (128/node) and a four-hour allocation per attempt.
+Accepted macro-steps exceeded the default five-minute warning margin: request
+checkpoints early with `scancel --signal=USR1 --batch JOBID` and leave
+enough time for the current macro-step to converge and publish. The recorded
+run used early requests on subsequent attempts without reducing numerical or
+physical workload requirements.

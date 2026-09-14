@@ -52,10 +52,6 @@ if [[ ${SLURM_JOB_NUM_NODES:-0} -lt 2 || ${SLURM_NTASKS:-0} -lt 2 ]]; then
 	echo "multinode_graph.sbatch requires at least two nodes and two tasks" >&2
 	exit 2
 fi
-# Bridges-2 may reset the submission flag; job owners can enable it explicitly.
-if [[ ${IGA_REQUEUE_ON_SIGNAL:-1} == 1 ]]; then
-	scontrol update "JobId=${SLURM_JOB_ID}" Requeue=1
-fi
 if [[ ! -x ${repo_root}/solvers/coupling/iga_multidomain_flow ]]; then
 	echo "build solvers/coupling/iga_multidomain_flow before submission" >&2
 	exit 2
@@ -164,6 +160,8 @@ if (( checkpoint_requested )); then
 	python3 "${repo_root}/scripts/hpc_scheduler_record.py" "${record_args[@]}" \
 		--status checkpointed -- "${command[@]}"
 	if [[ ${IGA_REQUEUE_ON_SIGNAL:-1} == 1 ]]; then
+		# Launcher startup may reset the flag; enable it after the accepted checkpoint.
+		scontrol update "JobId=${SLURM_JOB_ID}" Requeue=1
 		scontrol requeue "${SLURM_JOB_ID}"
 		exit 0
 	fi
