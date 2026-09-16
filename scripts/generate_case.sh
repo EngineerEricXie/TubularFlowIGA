@@ -8,11 +8,10 @@ output_argument=
 clean=false
 legacy_vtk=false
 allow_preflight_failure=false
-direct_output=false
 
 usage()
 {
-	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--clean] [--legacy-vtk] [--allow-preflight-failure] [--direct-output]\n' "$0" >&2
+	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--clean] [--legacy-vtk] [--allow-preflight-failure]\n' "$0" >&2
 }
 
 if [[ $# -lt 1 ]]; then
@@ -43,10 +42,6 @@ while (( $# > 0 )); do
 			;;
 		--allow-preflight-failure)
 			allow_preflight_failure=true
-			shift
-			;;
-		--direct-output)
-			direct_output=true
 			shift
 			;;
 		*)
@@ -103,9 +98,8 @@ if [[ -e $output_dir && ! -d $output_dir ]]; then
 	exit 2
 fi
 if [[ -d $output_dir ]]; then
-	if [[ -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) \
-		&& ( $clean != true || $direct_output == true ) ]]; then
-		printf 'generated-output directory is not empty: %s\n' "$output_dir" >&2
+	if [[ $clean != true && -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+		printf 'generated-output directory is not empty; rerun with --clean to replace it: %s\n' "$output_dir" >&2
 		exit 2
 	fi
 fi
@@ -113,11 +107,7 @@ fi
 output_parent=${output_dir%/*}
 output_base=${output_dir##*/}
 mkdir -p "$output_parent"
-if [[ $direct_output == true ]]; then
-	staging_dir=$output_dir
-else
-	staging_dir=$output_parent/.${output_base}.staging.$BASHPID
-fi
+staging_dir=$output_parent/.${output_base}.staging.$BASHPID
 backup_dir=
 if [[ -e $staging_dir ]]; then
 	printf 'staging path already exists: %s\n' "$staging_dir" >&2
@@ -125,7 +115,7 @@ if [[ -e $staging_dir ]]; then
 fi
 cleanup()
 {
-	if [[ $direct_output != true && -n ${staging_dir:-} && -d $staging_dir ]]; then
+	if [[ -n ${staging_dir:-} && -d $staging_dir ]]; then
 		rm -rf -- "$staging_dir"
 	fi
 	if [[ -n ${backup_dir:-} && -e $backup_dir && ! -e $output_dir ]]; then
@@ -242,15 +232,11 @@ done
 	printf '}\n'
 } > "$staging_dir/manifest.json"
 
-if [[ $direct_output == true ]]; then
-	staging_dir=
-elif [[ -e $output_dir ]]; then
+if [[ -e $output_dir ]]; then
 	backup_dir=$output_parent/.${output_base}.previous.$BASHPID
 	mv "$output_dir" "$backup_dir"
 fi
-if [[ $direct_output == true ]]; then
-	:
-elif mv "$staging_dir" "$output_dir"; then
+if mv "$staging_dir" "$output_dir"; then
 	staging_dir=
 else
 	if [[ -n $backup_dir && -e $backup_dir ]]; then

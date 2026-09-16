@@ -345,10 +345,17 @@ GeneratedDirectory()
 	if [[ $OUTPUT_MODE == versioned ]]; then
 		base=$candidate
 		index=1
-		candidate=${base}_$index
-		while [[ -e $candidate ]]; do
-			((index += 1))
+		while true; do
 			candidate=${base}_$index
+			[[ ! -L $candidate ]] || Die "refusing to use a symbolic-link output: $candidate"
+			if IsTruthy "$DRY_RUN"; then
+				[[ -e $candidate ]] || break
+			elif mkdir -- "$candidate" 2>/dev/null; then
+				break
+			elif [[ ! -e $candidate ]]; then
+				Die "cannot claim versioned output directory: $candidate"
+			fi
+			((index += 1))
 		done
 	fi
 	[[ ! -L $candidate ]] || Die "refusing to replace a symbolic-link output: $candidate"
@@ -411,14 +418,14 @@ RunOneDCase()
 {
 	local source_dir=$1 output_root=$2
 	local case_name=${source_dir##*/}
-	local generated_dir
-	generated_dir=$(GeneratedDirectory "$source_dir" "$output_root")
-	if IsTruthy "$RUN_SOLVER"; then ValidateGeneratedTarget "$source_dir" "$generated_dir" "$case_name"; fi
 	if IsTruthy "$RUN_MESH_CHECK"; then
 		RunMpi "$repo_dir/solvers/one_d/iga_1d" "$source_dir" \
 			--system "$selected_system" --check
 	fi
 	IsTruthy "$RUN_SOLVER" || return 0
+	local generated_dir
+	generated_dir=$(GeneratedDirectory "$source_dir" "$output_root")
+	ValidateGeneratedTarget "$source_dir" "$generated_dir" "$case_name"
 
 	local extra_args=()
 	if [[ -n $SOLVER_ARGS ]]; then read -r -a extra_args <<< "$SOLVER_ARGS"; fi
@@ -496,9 +503,13 @@ RunThreeDCase()
 	local results_dir=$generated_dir/results/$selected_system
 	local generate_args=("$source_dir" --output "$generated_dir" --ranks "$RANKS")
 	if IsTruthy "$CLEAN"; then generate_args+=(--clean); fi
-	if [[ $OUTPUT_MODE == versioned ]]; then generate_args+=(--direct-output); fi
-	Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" \
-		"$repo_dir/scripts/generate_case.sh" "${generate_args[@]}"
+	if ! Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" \
+		"$repo_dir/scripts/generate_case.sh" "${generate_args[@]}"; then
+		if [[ $OUTPUT_MODE == versioned ]] && ! IsTruthy "$DRY_RUN"; then
+			rmdir -- "$generated_dir" 2>/dev/null || true
+		fi
+		return 1
+	fi
 	if ! IsTruthy "$DRY_RUN"; then
 		[[ -s $database ]] || Die "generated database not found: $database"
 		mkdir -p "$results_dir"
@@ -591,4 +602,6 @@ Main()
 	printf '\ncompleted %s case(s)\n' "${#case_dirs[@]}"
 }
 
-Main "$@"
+if [[ ${TUBULARFLOWIGA_RUN_CASES_NO_MAIN:-0} != 1 ]]; then
+	Main "$@"
+fi

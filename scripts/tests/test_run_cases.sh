@@ -36,6 +36,7 @@ SYSTEM=
 MPIEXEC=mpiexec
 OMP_NUM_THREADS=2
 SOLVER_ARGS=
+PETSC_OPTIONS=
 DRY_RUN=1
 CONFIG
 }
@@ -117,7 +118,31 @@ WriteConfig "$config" "$output_root" 0 cpu 2
 printf '\nOUTPUT_MODE=versioned\n' >> "$config"
 versioned_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $versioned_output == *"$output_root/simple_3"* ]]
-[[ $versioned_output == *"--direct-output"* ]]
+[[ $versioned_output != *"--direct-output"* ]]
+[[ $versioned_output == *"$output_root/simple_3/results/blood_flow/navier_stokes-cpu.txt"* ]]
 [[ $versioned_output != *".simple_3.staging."* ]]
+
+printf '\nPETSC_OPTIONS=-ksp_type cg -pc_type jacobi\n' >> "$config"
+petsc_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
+[[ $petsc_output == *"PETSC_OPTIONS=-ksp_type\\ cg\\ -pc_type\\ jacobi"* ]]
+
+claim_source=$work_dir/claim_case
+claim_root=$work_dir/concurrent_versions
+mkdir -p "$claim_source" "$claim_root"
+for claim in 1 2 3 4 5 6 7 8; do
+	(
+		export TUBULARFLOWIGA_RUN_CASES_NO_MAIN=1
+		# shellcheck source=../run_cases.sh
+		source "$repo_dir/scripts/run_cases.sh"
+		OUTPUT_MODE=versioned
+		DRY_RUN=0
+		GeneratedDirectory "$claim_source" "$claim_root"
+	) > "$work_dir/claim.$claim" &
+done
+wait
+cat "$work_dir"/claim.* > "$work_dir/claims"
+[[ $(wc -l < "$work_dir/claims") -eq 8 ]]
+[[ $(sort -u "$work_dir/claims" | wc -l) -eq 8 ]]
+while IFS= read -r claimed; do [[ -d $claimed ]]; done < "$work_dir/claims"
 
 printf 'run_cases tests passed\n'

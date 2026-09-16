@@ -37,10 +37,21 @@ commands without generating or solving anything. A fresh checkout must first
 build the dependency-free config checker with `make cpu` before automatic
 solver selection can be inspected in dry-run mode.
 
-By default, each output is written to `CASE/generated`. `OUTPUT_ROOT` may place
-the generated cases below a separate root. `CLEAN=0` is the safe default; when
-enabled, cleanup is accepted only for a directory containing a matching
-generated-case `manifest.json` or `run_manifest.json`.
+`OUTPUT_ROOT` may place generated cases below a separate root. In
+`OUTPUT_MODE=atomic`, each output uses `CASE/generated` and replaces it only
+after hidden staging succeeds. In `OUTPUT_MODE=versioned`, the runner
+atomically claims fresh `generated_1`, `generated_2`, ... directories and never
+replaces an earlier run. Three-dimensional preprocessing still uses hidden
+staging; after it is published, the solver writes directly to the final
+versioned `results/` directory so in-progress visualization files remain
+visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is
+accepted only for a directory containing a matching generated-case
+`manifest.json` or `run_manifest.json`.
+
+`PETSC_OPTIONS` may contain whitespace-separated PETSc options that are
+exported through the MPI launcher. Keep the shared profile solver-neutral and
+put machine- or experiment-specific preconditioner choices in a separate
+configuration file.
 
 `SOLVER=auto` uses the machine-readable execution plan from
 `iga_config_check --execution-plan`, rather than searching the JSON text. That
