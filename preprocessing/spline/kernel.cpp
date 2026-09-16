@@ -2,15 +2,61 @@
 #include "IgaPreprocessCache.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
+
+#include <omp.h>
 
 typedef unsigned int uint;
 
 namespace {
+
+struct EdgeKeyHash
+{
+	size_t operator()(const array<int, 2>& key) const
+	{
+		const size_t first = static_cast<size_t>(static_cast<unsigned int>(key[0]));
+		const size_t second = static_cast<size_t>(static_cast<unsigned int>(key[1]));
+		return first * static_cast<size_t>(0x9e3779b1U) ^ second;
+	}
+};
+
+struct FaceKeyHash
+{
+	size_t operator()(const array<int, 4>& key) const
+	{
+		size_t result = 0;
+		for (size_t i = 0; i < key.size(); i++)
+		{
+			const size_t value = static_cast<size_t>(static_cast<unsigned int>(key[i]));
+			result ^= value + static_cast<size_t>(0x9e3779b9U) + (result << 6) + (result >> 2);
+		}
+		return result;
+	}
+};
+
+array<int, 2> CanonicalEdgeKey(int first, int second)
+{
+	if (second < first) swap(first, second);
+	return {{ first, second }};
+}
+
+array<int, 4> CanonicalFaceKey(const Face3D& face)
+{
+	array<int, 4> key = {{ face.cnct[0], face.cnct[1], face.cnct[2], face.cnct[3] }};
+	sort(key.begin(), key.end());
+	return key;
+}
+
+double ElapsedSeconds(const chrono::steady_clock::time_point& begin)
+{
+	return chrono::duration_cast<chrono::duration<double>>(chrono::steady_clock::now() - begin).count();
+}
 
 template <class T>
 void AppendBinary(string& output, const T& value)
@@ -133,8 +179,15 @@ string BezierPointRecord(const BezierElement3D& element)
 
 void kernel::run(string fn_in, bool legacy_text, bool legacy_vtk)
 {
+	const chrono::steady_clock::time_point total_begin = chrono::steady_clock::now();
+	const chrono::steady_clock::time_point initialize_begin = chrono::steady_clock::now();
 	InitializeMesh(fn_in);
+	cout << fixed << setprecision(6)
+		<< "spline phase initialize seconds: " << ElapsedSeconds(initialize_begin) << "\n";
+	const chrono::steady_clock::time_point extraction_begin = chrono::steady_clock::now();
 	ExtractAndOutput(fn_in, legacy_text, legacy_vtk);
+	cout << "spline phase extract_output seconds: " << ElapsedSeconds(extraction_begin) << "\n"
+		<< "spline total seconds: " << ElapsedSeconds(total_begin) << "\n";
 }
 
 void kernel::ExtractAndOutput(const string& fn, bool legacy_text, bool legacy_vtk)
@@ -174,6 +227,7 @@ void kernel::ExtractAndOutput(const string& fn, bool legacy_text, bool legacy_vt
 	}
 
 	const size_t elements = tmesh.size();
+	cout << "OpenMP threads: " << omp_get_max_threads() << "\n";
 	if (legacy_vtk)
 	{
 		vtk << "# vtk DataFile Version 2.0\nBezier mesh\nASCII\nDATASET UNSTRUCTURED_GRID\n";
@@ -1239,6 +1293,10 @@ void kernel::BuildInitialEdges()
 	uint i, j, k;
 	tmedge.clear();
 	tmface.clear();
+	unordered_map<array<int, 2>, int, EdgeKeyHash> edge_ids;
+	unordered_map<array<int, 4>, int, FaceKeyHash> face_ids;
+	edge_ids.reserve(tmesh.size() * 12);
+	face_ids.reserve(tmesh.size() * 6);
 	//point-hex relation
 	for (i = 0; i < tmesh.size(); i++)
 	{
@@ -1250,47 +1308,23 @@ void kernel::BuildInitialEdges()
 	//construct edges
 	for (i = 0; i<tmesh.size(); i++)
 	{
-		vector<int> nb;
-		for (j = 0; j < 8; j++)
-		{
-			for (k = 0; k < cp[tmesh[i].cnct[j]].hex.size(); k++)
-			{
-				int eid(cp[tmesh[i].cnct[j]].hex[k]);
-				if (eid < i)
-				{
-					vector<int>::iterator it = find(nb.begin(), nb.end(), eid);
-					if (it == nb.end())
-					{
-						nb.push_back(eid);
-					}
-				}
-			}
-		}
 		for (j = 0; j < 12; j++)//edge
 		{
 			Edge3D edtmp;
 			edtmp.pt[0] = tmesh[i].cnct[edloc[j][0]];
 			edtmp.pt[1] = tmesh[i].cnct[edloc[j][1]];
-			int flag(-1);
-			for (k = 0; k < nb.size(); k++)
+			const array<int, 2> key = CanonicalEdgeKey(edtmp.pt[0], edtmp.pt[1]);
+			const unordered_map<array<int, 2>, int, EdgeKeyHash>::const_iterator existing = edge_ids.find(key);
+			if (existing != edge_ids.end())
 			{
-				for (int k0 = 0; k0 < 12; k0++)
-				{
-					if (edtmp == tmedge[tmesh[nb[k]].edge[k0]])
-					{
-						flag = tmesh[nb[k]].edge[k0]; break;
-					}
-				}
-				if (flag != -1) break;
-			}
-			if (flag != -1)
-			{
-				tmesh[i].edge[j] = flag;
+				tmesh[i].edge[j] = existing->second;
 			}
 			else
 			{
 				tmedge.push_back(edtmp);
-				tmesh[i].edge[j] = tmedge.size() - 1;
+				const int edge_id = static_cast<int>(tmedge.size() - 1);
+				edge_ids.emplace(key, edge_id);
+				tmesh[i].edge[j] = edge_id;
 			}
 		}
 		for (j = 0; j < 6; j++)//face
@@ -1301,26 +1335,18 @@ void kernel::BuildInitialEdges()
 				fctmp.cnct[k] = tmesh[i].cnct[fcloc[j][k]];
 				fctmp.edge[k] = tmesh[i].edge[fced[j][k]];
 			}
-			int flag(-1);
-			for (k = 0; k < nb.size(); k++)
+			const array<int, 4> key = CanonicalFaceKey(fctmp);
+			const unordered_map<array<int, 4>, int, FaceKeyHash>::const_iterator existing = face_ids.find(key);
+			if (existing != face_ids.end())
 			{
-				for (int k0 = 0; k0 < 6; k0++)
-				{
-					if (fctmp == tmface[tmesh[nb[k]].face[k0]])
-					{
-						flag = tmesh[nb[k]].face[k0]; break;
-					}
-				}
-				if (flag != -1) break;
-			}
-			if (flag != -1)
-			{
-				tmesh[i].face[j] = flag;
+				tmesh[i].face[j] = existing->second;
 			}
 			else
 			{
 				tmface.push_back(fctmp);
-				tmesh[i].face[j] = tmface.size() - 1;
+				const int face_id = static_cast<int>(tmface.size() - 1);
+				face_ids.emplace(key, face_id);
+				tmesh[i].face[j] = face_id;
 			}
 		}
 	}
