@@ -11,6 +11,7 @@ From the repository root:
 ```bash
 make spline EIGEN_DIR=/path/to/eigen3
 OMP_NUM_THREADS=8 ./preprocessing/spline/spline /path/to/case/
+./preprocessing/spline/spline /path/to/case/ --threads 8
 OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
   /path/to/case/ --no-legacy-text
 OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
@@ -19,7 +20,8 @@ OMP_NUM_THREADS=8 ./preprocessing/spline/spline \
 
 The trailing slash is required because the argument is a directory prefix.
 Run large cases on an allocated compute resource and choose a thread count that
-matches the allocated CPU cores.
+matches the allocated CPU cores. `--threads N` overrides `OMP_NUM_THREADS` for
+this process and makes the selected parallelism explicit in scripts and logs.
 
 The case directory must contain `controlmesh.vtk`. All invocations write:
 
@@ -40,7 +42,16 @@ not copied, and released after their formatted records are written. Record
 formatting runs in parallel, while final file writes remain ordered. A
 thread-local control-point map replaces the former full-node allocation and
 initialization performed for every element. Unused eager 64-point buffers were
-also removed from `Element3D`.
+also removed from `Element3D`. Initial edge and face construction uses
+canonical hash keys, giving expected O(N) topology construction independently
+of vertex valence; the former neighbor scan could degrade on high-valence or
+pathological meshes.
+
+The program reports initialization, extraction/output, and total wall time.
+Initialization is currently serial to preserve deterministic global edge and
+face numbering. Per-element spline construction, Bezier extraction, cache
+encoding, and text formatting use OpenMP; ordered file emission remains serial
+so output files stay byte-for-byte reproducible across thread counts.
 
 The cache includes a format version, dimensions, and control-mesh content hash.
 The packer rejects stale, corrupt, or truncated input rather than silently
