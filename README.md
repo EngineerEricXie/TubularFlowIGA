@@ -7,7 +7,7 @@
 # TubularFlowIGA
 
 TubularFlowIGA is a native C++ simulation toolkit for tubular and branching
-networks. It provides a direct SWC-to-1D vascular flow/transport path and a
+networks. It provides direct SWC-to-0D/1D vascular flow and transport paths and a
 three-dimensional isogeometric-analysis (IGA) pipeline that generates a
 hexahedral control mesh, constructs the spline and Bezier representation,
 packs a partition-aware database, and solves on MPI/PETSc CPUs or one CUDA GPU.
@@ -19,7 +19,7 @@ general-purpose CFD package.
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled runs support one in-memory transport system. CUDA VCA, 3D replay/open-loop, and 3D FSI are not included |
+| Vascular flow | Native 0D R/RC/RLC circuits; native compliant 1D A/Q PDE networks; CPU 3D rigid-wall steady/transient Navier--Stokes; native network and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled runs support one in-memory transport system. CUDA VCA, 3D replay/open-loop, and 3D FSI are not included |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
 | Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D vasodilation is disabled because rigid-wall flow has no FSI |
 
@@ -77,7 +77,8 @@ visualization, and results below its ignored `generated/` directory.
 | README showcase | Connected IGA wordmark | `./scripts/generate_case.sh examples/vascular_flow/iga_wordmark --ranks 2` |
 | First neuron run | Straight neurite | `./scripts/generate_case.sh examples/neuron_transport/straight_neurite --ranks 2` |
 | Branching neuron transport | Branched neurite | `./scripts/generate_case.sh examples/neuron_transport/branched_neurite --ranks 2` |
-| First native 1D run | Straight Poiseuille vessel | `./solvers/one_d/iga_1d examples/one_d/rigid_straight --check` |
+| First native 0D run | Straight Poiseuille R network | `./solvers/one_d/iga_0d examples/zero_d/steady_resistive_straight --check` |
+| Native 0D RC/RCR | Lumped transient bifurcation | `./solvers/one_d/iga_0d examples/zero_d/rc_rcr_bifurcation --check` |
 | Compliant 1D flow | Pulsatile Y-bifurcation | `./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation` |
 | 1D multispecies physiology | Six-species pulse network | `./solvers/one_d/iga_1d examples/one_d/multispecies_physiology` |
 | 3D multispecies pulse | Navier--Stokes plus six species | `./scripts/generate_case.sh examples/vascular_flow/multispecies_pulse --ranks 2` |
@@ -130,14 +131,20 @@ Python, FEniCS, or HexSim. Coordinates and radii are converted to SI using
 ./scripts/check_dependencies.sh one-d
 make one-d-petsc
 
-./solvers/one_d/iga_1d examples/one_d/rigid_straight --check
-./solvers/one_d/iga_1d examples/one_d/rigid_straight \
-  --output-dir /tmp/tubularflowiga-1d-rigid
+./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation --check
+./solvers/one_d/iga_1d examples/one_d/compliant_bifurcation \
+  --output-dir /tmp/tubularflowiga-1d-compliant
 ```
 
-Open `/tmp/tubularflowiga-1d-rigid/profile_1d.pvd` in ParaView. For MPI and
+Open `/tmp/tubularflowiga-1d-compliant/profile_1d.vtkhdf` in ParaView. For MPI and
 PETSc options, compliant formulations, transport, checkpoint/restart, SI units,
 and the Hex-to-schema-v3 field map, see the [native 1D guide](docs/ONE_D.md).
+
+For lumped circuits, build `make zero-d-petsc` and run either the
+[steady R example](examples/zero_d/steady_resistive_straight/) or the
+[mixed RC/RCR example](examples/zero_d/rc_rcr_bifurcation/) with `iga_0d`.
+The [native 0D guide](docs/ZERO_D.md) documents the R/RC/RLC formulations,
+Windkessel boundaries, conservation diagnostics, MPI, and restart.
 
 ## Five-minute preprocessing check
 
@@ -348,6 +355,7 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
+| Native 0D RC/RCR circuits, parameters, and outputs | [Native 0D guide](docs/ZERO_D.md) |
 | Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
 | Run the large morphology-derived neuron regression | [NMO_06840 transport](examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | SWC and radius-annotated line-OBJ inputs | [Skeleton formats](docs/SKELETON_FORMATS.md) |
@@ -372,7 +380,7 @@ Current scope limits are important when interpreting results:
   do not constitute 3D FSI;
 - native 1D and CPU 3D `vca_closed_loop` coupling are available, but CUDA VCA,
   3D replay/open-loop, arbitrary multi-system coupling, and 3D FSI are not;
-- 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
+- 0D/1D pressure/R/RC/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
   models, not tissue-resolved circulation;
 - the 1D physiology layer is configurable and reduced, not automatically a
   patient-validated model;

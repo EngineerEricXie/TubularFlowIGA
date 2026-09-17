@@ -27,7 +27,13 @@ std::string Configuration(const std::string& model = "rigid",
   ],
   "time": {"dt": 0.00001, "steps": 2, "output_every": 1},
   "temporal_functions": [
-    {"name": "inlet_q", "kind": "constant", "units": "m3/s", "value": 1.0e-9}
+    {"name": "inlet_q", "kind": "constant", "units": "m3/s", "value": 1.0e-9},
+    {"name": "pulse", "kind": "sinusoid", "units": "m3/s",
+     "mean": 2.0, "amplitude": 3.0, "period": 1.0, "phase": 0.0},
+    {"name": "measured", "kind": "periodic_table", "units": "m3/s",
+     "file": "inlet_flow.csv", "period": 1.0, "interpolation": "linear"},
+    {"name": "harmonics", "kind": "fourier", "units": "m3/s",
+     "mean": 1.0, "period": 1.0, "cosine": [2.0], "sine": [3.0]}
   ],
   "equation_systems": [
     {"name": "flow", "kind": "network_flow_1d", "unknowns": ["area", "flow_rate", "pressure"],
@@ -55,6 +61,44 @@ std::string Configuration(const std::string& model = "rigid",
 })json";
 }
 
+std::string ZeroDConfiguration()
+{
+	return R"json({
+  "schema_version": 3,
+  "dimension": "0d",
+  "geometry": {"kind": "swc_network", "file": "tree.swc", "length_scale_to_m": 1.0},
+  "fields": [
+    {"name": "area", "kind": "scalar"},
+    {"name": "flow_rate", "kind": "scalar"},
+    {"name": "pressure", "kind": "pressure"}
+  ],
+  "time": {"dt": 0.001, "steps": 10, "output_every": 1},
+  "temporal_functions": [
+    {"name": "inlet_q", "kind": "constant", "units": "m3/s", "value": 1.0e-9}
+  ],
+  "equation_systems": [{
+    "name": "circuit", "kind": "network_flow_0d",
+    "unknowns": ["area", "flow_rate", "pressure"],
+    "model": "lumped", "scheme": "petsc", "formulation": "transient_rc",
+    "dynamic_viscosity": 0.004, "density": 1060.0,
+    "lumped_parameters": {
+      "resistance_scale": 1.0, "compliance_scale": 0.0,
+      "segment_resistance": {"2": 100000000.0},
+      "segment_compliance": {"2": 1.0e-10}
+    }
+  }],
+  "boundaries": [
+    {"name": "inlet", "role": "inlet", "node_ids": [1], "conditions": [
+      {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_q"}
+    ]},
+    {"name": "outlet", "role": "outlet", "conditions": [
+      {"field": "pressure", "type": "windkessel_rc", "resistance": 1.0e9,
+       "capacitance": 1.0e-10, "reference_pressure": 0.0, "initial_pressure": 0.0}
+    ]}
+  ]
+})json";
+}
+
 void WriteTree(const fs::path& path)
 {
 	std::ofstream output(path);
@@ -72,6 +116,64 @@ int main()
 	assert(configuration.schema_version == 3);
 	assert(configuration.flow_systems.size() == 1);
 	assert(configuration.transport_systems.size() == 1);
+	assert(configuration.temporal_functions.size() == 4);
+	assert(!configuration.warnings.empty());
+	assert(std::string(iga::NetworkFlowPhysicalDimension(
+		configuration.flow_systems.front())) == "0d");
+	const auto zero_d_configuration = iga::ParseOneDConfiguration(ZeroDConfiguration());
+	assert(zero_d_configuration.dimension == "0d");
+	assert(zero_d_configuration.flow_systems.front().model == iga::OneDFlowModel::Lumped);
+	assert(zero_d_configuration.flow_systems.front().scheme == iga::OneDFlowScheme::Petsc);
+	assert(zero_d_configuration.flow_systems.front().formulation
+		== iga::OneDImplicitFormulation::TransientRc);
+	assert(zero_d_configuration.flow_systems.front().lumped.compliance_scale == 0.0);
+	assert(zero_d_configuration.boundaries.back().conditions.front().type == "windkessel_rc");
+	assert(zero_d_configuration.warnings.empty());
+	auto rlc_text = ZeroDConfiguration();
+	const auto rc_name = rlc_text.find("\"transient_rc\"");
+	assert(rc_name != std::string::npos);
+	rlc_text.replace(rc_name, std::string("\"transient_rc\"").size(), "\"transient_rlc\"");
+	const auto rlc_configuration = iga::ParseOneDConfiguration(rlc_text);
+	assert(rlc_configuration.flow_systems.front().formulation
+		== iga::OneDImplicitFormulation::TransientRlc);
+	auto legacy_zero_d = ZeroDConfiguration();
+	const auto petsc_name = legacy_zero_d.find("\"petsc\"");
+	legacy_zero_d.replace(petsc_name, std::string("\"petsc\"").size(), "\"implicit_petsc\"");
+	const auto transient_name = legacy_zero_d.find("\"transient_rc\"");
+	legacy_zero_d.replace(transient_name, std::string("\"transient_rc\"").size(), "\"lumped_rc\"");
+	const auto legacy_configuration = iga::ParseOneDConfiguration(legacy_zero_d);
+	assert(legacy_configuration.flow_systems.front().scheme == iga::OneDFlowScheme::Petsc);
+	assert(legacy_configuration.flow_systems.front().formulation
+		== iga::OneDImplicitFormulation::TransientRc);
+	assert(legacy_configuration.warnings.size() == 2);
+	const auto waveform_directory = fs::temp_directory_path()/"tubularflowiga-one-d-waveforms";
+	fs::create_directories(waveform_directory);
+	{
+		std::ofstream output(waveform_directory/"inlet_flow.csv");
+		output << "time,value\n0,1\n0.5,3\n";
+	}
+	const iga::OneDWaveformEvaluator waveforms(configuration, waveform_directory);
+	assert(std::abs(waveforms.Evaluate("inlet_q", 4.0)-1.0e-9) < 1.0e-20);
+	assert(std::abs(waveforms.Evaluate("pulse", 0.25)-5.0) < 1.0e-14);
+	assert(std::abs(waveforms.Evaluate("harmonics", 0.25)-4.0) < 1.0e-14);
+	assert(std::abs(waveforms.Evaluate("measured", 0.25)-2.0) < 1.0e-14);
+	fs::remove(waveform_directory/"inlet_flow.csv");
+	assert(std::abs(waveforms.Evaluate("measured", 1.25)-2.0) < 1.0e-14);
+	iga::OneDInletState velocity_inlet;
+	velocity_inlet.quantity = "centerline_velocity";
+	velocity_inlet.waveform = "pulse";
+	assert(std::abs(iga::EvaluateOneDInlet(velocity_inlet, waveforms, 0.25, 0.2)-0.5) < 1.0e-14);
+	auto invalid_waveform_configuration = configuration;
+	for (auto& function : invalid_waveform_configuration.temporal_functions)
+		if (function.name == "measured") function.file = "/tmp/outside.csv";
+	bool waveform_path_rejected = false;
+	try {
+		const iga::OneDWaveformEvaluator invalid_waveforms(
+			invalid_waveform_configuration, waveform_directory);
+	}
+	catch (const std::runtime_error&) { waveform_path_rejected = true; }
+	assert(waveform_path_rejected);
+	fs::remove(waveform_directory);
 	auto obj_configuration_text = Configuration();
 	const auto kind_position = obj_configuration_text.find("\"kind\": \"swc_network\"");
 	const auto file_position = obj_configuration_text.find("\"file\": \"tree.swc\"");
@@ -143,6 +245,24 @@ int main()
 	assert(std::abs(flow_state.segment_flow[1]-0.5e-9) < 1.0e-20);
 	assert(std::abs(flow_state.segment_flow[2]-0.5e-9) < 1.0e-20);
 	assert(flow_state.node_pressure[0] > flow_state.node_pressure[1]);
+	iga::OneDFlowState compliant_initial_state;
+	compliant_initial_state.outlets = iga::ResolveOneDOutlets(configuration, network);
+	iga::InitializeCompliantOneDFromRigid(network, configuration.flow_systems.front(),
+		compliant_initial_state, 1.0e-9, 0.0);
+	assert(std::abs(compliant_initial_state.inlet_flow-1.0e-9) < 1.0e-20);
+	iga::OneDFlowState unequal_pressure_state;
+	unequal_pressure_state.outlets = iga::ResolveOneDOutlets(configuration, network);
+	unequal_pressure_state.outlets[0].pressure = 1.0;
+	const double branch_resistance = network.segments[1].resistance;
+	iga::SolveRigidOneD(network, configuration.flow_systems.front(),
+		unequal_pressure_state, 1.0e-9, configuration.time.dt);
+	const double expected_first_branch_flow = 0.5e-9-0.5/branch_resistance;
+	assert(std::abs(unequal_pressure_state.segment_flow[1]
+		-expected_first_branch_flow) < 1.0e-20);
+	assert(std::abs(unequal_pressure_state.segment_flow[2]
+		-(1.0e-9-expected_first_branch_flow)) < 1.0e-20);
+	assert(std::abs(unequal_pressure_state.node_pressure[2]-1.0) < 1.0e-12);
+	assert(std::abs(unequal_pressure_state.node_pressure[3]) < 1.0e-12);
 
 	const auto& wall = configuration.flow_systems.front().wall;
 	const double expanded = segment.area0*1.1;
@@ -189,7 +309,7 @@ int main()
 
 	auto transport = iga::InitializeOneDTransport(configuration,
 		configuration.transport_systems.front(), network);
-	iga::AdvanceOneDTransport(configuration, network, flow_state, transport, ".", 0.0,
+	iga::AdvanceOneDTransport(configuration, network, flow_state, transport, waveforms, 0.0,
 		configuration.time.dt);
 	assert(transport.species.size() == 1);
 	for (const double value : transport.species.front().concentration)
@@ -223,6 +343,35 @@ int main()
 	catch (const std::runtime_error&) { rejected = true; }
 	fs::remove(invalid);
 	assert(rejected);
+
+	const auto cyclic_obj = fs::temp_directory_path()/"tubularflowiga-one-d-cycle.obj";
+	{
+		std::ofstream output(cyclic_obj);
+		output << "v 0 0 0 0.001 0 0\n"
+			<< "v 1 0 0 0.0009 0 0\n"
+			<< "v 2 1 0 0.0008 0 0\n"
+			<< "v 2 -1 0 0.0008 0 0\n"
+			<< "v 3 0 0 0.0007 0 0\n"
+			<< "v 4 0 0 0.0006 0 0\n"
+			<< "l 1 2\n"
+			<< "l 2 3\n"
+			<< "l 2 4\n"
+			<< "l 3 5\n"
+			<< "l 4 5\n"
+			<< "l 5 6\n";
+	}
+	rejected = false;
+	try { iga::ReadOneDNetwork(cyclic_obj, 1.0, 1, 0.004, 1); }
+	catch (const std::runtime_error&) { rejected = true; }
+	assert(rejected);
+	const auto cyclic_network = iga::ReadOneDNetwork(
+		cyclic_obj, 1.0, 1, 0.004, 1, true);
+	fs::remove(cyclic_obj);
+	assert(cyclic_network.has_cycles);
+	assert(cyclic_network.segments.size() == 6);
+	assert(cyclic_network.outlet_nodes.size() == 1);
+	assert(cyclic_network.nodes[static_cast<std::size_t>(
+		cyclic_network.outlet_nodes.front())].id == 6);
 
 	std::cout << "one-dimensional core tests passed\n";
 }

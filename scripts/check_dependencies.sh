@@ -95,6 +95,7 @@ check_one_d() {
 	else
 		fail "OpenMP compiler support"
 	fi
+	check_hdf5
 }
 
 case "$component" in

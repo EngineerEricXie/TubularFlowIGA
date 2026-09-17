@@ -46,6 +46,9 @@ struct OneDFlowState {
 	double physical_time = 0.0;
 	long long internal_substeps = 0;
 	double inlet_flow = 0.0;
+	double storage_rate = 0.0;
+	double relative_continuity_residual = 0.0;
+	bool has_conservation_diagnostic = false;
 };
 
 inline double OneDWallStiffness(double radius0, const OneDWallDefinition& wall)
@@ -112,41 +115,6 @@ inline double OneDPressurePotential(double area, double area0, double radius0,
 	return stiffness*std::pow(area, 1.5)/(3.0*density*std::sqrt(area0));
 }
 
-inline std::vector<double> SolveDenseSystem(std::vector<double> matrix,
-	std::vector<double> rhs)
-{
-	const int n = static_cast<int>(rhs.size());
-	if (matrix.size() != static_cast<std::size_t>(n*n))
-		throw std::runtime_error("dense system dimensions do not agree");
-	for (int column = 0; column < n; ++column) {
-		int pivot = column;
-		for (int row = column+1; row < n; ++row)
-			if (std::abs(matrix[static_cast<std::size_t>(row*n+column)])
-				> std::abs(matrix[static_cast<std::size_t>(pivot*n+column)])) pivot = row;
-		if (std::abs(matrix[static_cast<std::size_t>(pivot*n+column)]) < 1.0e-30)
-			throw std::runtime_error("singular 1d network system");
-		if (pivot != column) {
-			for (int item = column; item < n; ++item)
-				std::swap(matrix[static_cast<std::size_t>(column*n+item)],
-					matrix[static_cast<std::size_t>(pivot*n+item)]);
-			std::swap(rhs[static_cast<std::size_t>(column)], rhs[static_cast<std::size_t>(pivot)]);
-		}
-		const double diagonal = matrix[static_cast<std::size_t>(column*n+column)];
-		for (int item = column; item < n; ++item)
-			matrix[static_cast<std::size_t>(column*n+item)] /= diagonal;
-		rhs[static_cast<std::size_t>(column)] /= diagonal;
-		for (int row = 0; row < n; ++row) {
-			if (row == column) continue;
-			const double factor = matrix[static_cast<std::size_t>(row*n+column)];
-			if (factor == 0.0) continue;
-			for (int item = column; item < n; ++item)
-				matrix[static_cast<std::size_t>(row*n+item)] -= factor*matrix[static_cast<std::size_t>(column*n+item)];
-			rhs[static_cast<std::size_t>(row)] -= factor*rhs[static_cast<std::size_t>(column)];
-		}
-	}
-	return rhs;
-}
-
 inline OneDInletState ResolveOneDInlet(const OneDConfiguration& configuration)
 {
 	for (const auto& boundary : configuration.boundaries) {
@@ -178,7 +146,8 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 		const OneDBoundaryCondition* selected = nullptr;
 		for (const auto& condition : boundary.conditions)
 			if (condition.field == "pressure" && (condition.type == "pressure"
-				|| condition.type == "resistance" || condition.type == "windkessel_rcr")) {
+				|| condition.type == "resistance" || condition.type == "windkessel_rc"
+				|| condition.type == "windkessel_rcr")) {
 				if (selected) throw std::runtime_error("an outlet boundary may define only one pressure closure");
 				selected = &condition;
 			}
@@ -197,7 +166,7 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 		const auto found = conditions.find(node);
 		if (found != conditions.end()) condition = found->second;
 		else if (default_condition) condition = *default_condition;
-		else throw std::runtime_error("every 1d outlet leaf requires a pressure, resistance, or RCR closure");
+		else throw std::runtime_error("every network outlet leaf requires a pressure, resistance, RC, or RCR closure");
 		OneDOutletState outlet;
 		outlet.node = node;
 		if (condition.type == "pressure") {
@@ -210,6 +179,13 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 			outlet.resistance = condition.resistance;
 			outlet.reference_pressure = condition.reference_pressure;
 			outlet.capacitor_pressure = condition.reference_pressure;
+		} else if (condition.type == "windkessel_rc") {
+			outlet.kind = OneDOutletKind::WindkesselRc;
+			outlet.distal_resistance = condition.resistance;
+			outlet.capacitance = condition.capacitance;
+			outlet.reference_pressure = condition.reference_pressure;
+			outlet.capacitor_pressure = condition.initial_pressure;
+			outlet.pressure = condition.initial_pressure;
 		} else {
 			outlet.kind = OneDOutletKind::WindkesselRcr;
 			outlet.proximal_resistance = condition.proximal_resistance;
@@ -217,27 +193,61 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 			outlet.capacitance = condition.capacitance;
 			outlet.reference_pressure = condition.reference_pressure;
 			outlet.capacitor_pressure = condition.initial_pressure;
+			outlet.pressure = condition.initial_pressure;
 		}
 		result.push_back(outlet);
 	}
 	return result;
 }
 
-inline double EvaluateOneDInlet(const OneDConfiguration& configuration,
-	const OneDInletState& inlet, const std::filesystem::path& case_directory,
-	double time, double inlet_area)
+class OneDWaveformEvaluator {
+public:
+	OneDWaveformEvaluator(const OneDConfiguration& configuration,
+		std::filesystem::path case_directory)
+		: configuration_(configuration),
+		  case_directory_(std::filesystem::weakly_canonical(std::move(case_directory)))
+	{
+		for (const auto& function : configuration_.temporal_functions)
+			if (function.kind == TemporalFunctionKind::PeriodicTable) {
+				const auto path = ResolveTablePath(function.file);
+				samples_.emplace(function.name,
+					ReadTemporalCsv(path.string(), function.period));
+			}
+	}
+
+	double Evaluate(const std::string& name, double time) const
+	{
+		const auto& function = FindOneDTemporalFunction(configuration_, name);
+		const std::vector<TemporalSample>* pointer = nullptr;
+		if (function.kind == TemporalFunctionKind::PeriodicTable)
+			pointer = &samples_.at(name);
+		return EvaluateTemporalFunction(function, time, pointer);
+	}
+
+private:
+	std::filesystem::path ResolveTablePath(const std::string& file) const
+	{
+		const std::filesystem::path relative(file);
+		if (relative.empty() || relative.is_absolute())
+			throw std::runtime_error("1d periodic_table file must be relative to the case directory");
+		const auto resolved = std::filesystem::weakly_canonical(case_directory_/relative);
+		const auto mismatch = std::mismatch(case_directory_.begin(), case_directory_.end(),
+			resolved.begin(), resolved.end());
+		if (mismatch.first != case_directory_.end())
+			throw std::runtime_error("1d periodic_table file escapes the case directory");
+		return resolved;
+	}
+
+	const OneDConfiguration& configuration_;
+	std::filesystem::path case_directory_;
+	std::map<std::string, std::vector<TemporalSample>> samples_;
+};
+
+inline double EvaluateOneDInlet(const OneDInletState& inlet,
+	const OneDWaveformEvaluator& waveforms, double time, double inlet_area)
 {
 	double value = inlet.value;
-	if (!inlet.waveform.empty()) {
-		const auto& function = FindOneDTemporalFunction(configuration, inlet.waveform);
-		std::vector<TemporalSample> samples;
-		const std::vector<TemporalSample>* pointer = nullptr;
-		if (function.kind == TemporalFunctionKind::PeriodicTable) {
-			samples = ReadTemporalCsv((case_directory/function.file).string(), function.period);
-			pointer = &samples;
-		}
-		value = EvaluateTemporalFunction(function, time, pointer);
-	}
+	if (!inlet.waveform.empty()) value = waveforms.Evaluate(inlet.waveform, time);
 	if (inlet.quantity == "centerline_velocity") return 0.5*inlet_area*value;
 	return value;
 }
@@ -248,6 +258,15 @@ inline double OutletEffectiveResistance(const OneDOutletState& outlet, double dt
 	if (outlet.kind == OneDOutletKind::Resistance) return outlet.resistance;
 	const double denominator = 1.0+dt/(outlet.distal_resistance*outlet.capacitance);
 	return outlet.proximal_resistance + dt/(outlet.capacitance*denominator);
+}
+
+inline double OneDLumpedSegmentResistance(const OneDNetwork& network,
+	const OneDFlowSystemDefinition& flow, const OneDSegment& segment)
+{
+	const int child_id = network.nodes[static_cast<std::size_t>(segment.child)].id;
+	const auto configured = flow.lumped.segment_resistance.find(child_id);
+	if (configured != flow.lumped.segment_resistance.end()) return configured->second;
+	return flow.lumped.resistance_scale*segment.resistance;
 }
 
 inline double OutletEffectivePressure(const OneDOutletState& outlet, double dt)
@@ -277,40 +296,80 @@ inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefin
 	OneDFlowState& state, double inlet_flow, double dt)
 {
 	state.inlet_flow = inlet_flow;
-	const int n = static_cast<int>(network.nodes.size());
-	std::vector<double> matrix(static_cast<std::size_t>(n*n), 0.0);
-	std::vector<double> rhs(static_cast<std::size_t>(n), 0.0);
-	auto add_conductance = [&](const OneDSegment& segment) {
-		const double conductance = 1.0/segment.resistance;
-		matrix[static_cast<std::size_t>(segment.parent*n+segment.parent)] += conductance;
-		matrix[static_cast<std::size_t>(segment.parent*n+segment.child)] -= conductance;
-		matrix[static_cast<std::size_t>(segment.child*n+segment.child)] += conductance;
-		matrix[static_cast<std::size_t>(segment.child*n+segment.parent)] -= conductance;
-	};
-	for (const auto& segment : network.segments) add_conductance(segment);
-	rhs[static_cast<std::size_t>(network.root)] += inlet_flow;
-	for (auto& outlet : state.outlets) {
-		const int node = outlet.node;
-		if (outlet.kind == OneDOutletKind::Pressure) {
-			for (int column = 0; column < n; ++column)
-				matrix[static_cast<std::size_t>(node*n+column)] = 0.0;
-			matrix[static_cast<std::size_t>(node*n+node)] = 1.0;
-			rhs[static_cast<std::size_t>(node)] = outlet.pressure;
-		} else {
-			const double resistance = OutletEffectiveResistance(outlet, dt);
-			const double pressure = OutletEffectivePressure(outlet, dt);
-			matrix[static_cast<std::size_t>(node*n+node)] += 1.0/resistance;
-			rhs[static_cast<std::size_t>(node)] += pressure/resistance;
+	const std::size_t n = network.nodes.size();
+	std::vector<int> incoming_segment(n, -1);
+	for (const auto& segment : network.segments)
+		incoming_segment[static_cast<std::size_t>(segment.child)] = segment.index;
+	std::vector<int> outlet_at_node(n, -1);
+	for (std::size_t i = 0; i < state.outlets.size(); ++i)
+		outlet_at_node[static_cast<std::size_t>(state.outlets[i].node)] = static_cast<int>(i);
+
+	// Reduce each subtree to p = equivalent_pressure + equivalent_resistance*q.
+	// A tree admits this O(nodes) solve and avoids the prohibitive dense nodal matrix.
+	std::vector<double> equivalent_pressure(n, 0.0);
+	std::vector<double> equivalent_resistance(n, 0.0);
+	for (auto item = network.topological_nodes.rbegin();
+		item != network.topological_nodes.rend(); ++item) {
+		const int node = *item;
+		const auto& children = network.nodes[static_cast<std::size_t>(node)].children;
+		if (children.empty()) {
+			const int outlet_index = outlet_at_node[static_cast<std::size_t>(node)];
+			if (outlet_index < 0)
+				throw std::runtime_error("rigid 1d tree leaf has no outlet closure");
+			const auto& outlet = state.outlets[static_cast<std::size_t>(outlet_index)];
+			if (outlet.kind == OneDOutletKind::Pressure) {
+				equivalent_pressure[static_cast<std::size_t>(node)] = outlet.pressure;
+				equivalent_resistance[static_cast<std::size_t>(node)] = 0.0;
+			} else {
+				equivalent_pressure[static_cast<std::size_t>(node)] =
+					OutletEffectivePressure(outlet, dt);
+				equivalent_resistance[static_cast<std::size_t>(node)] =
+					OutletEffectiveResistance(outlet, dt);
+			}
+			continue;
+		}
+		double conductance_sum = 0.0;
+		double pressure_conductance_sum = 0.0;
+		for (const int child : children) {
+			const int segment_index = incoming_segment[static_cast<std::size_t>(child)];
+			if (segment_index < 0)
+				throw std::runtime_error("rigid 1d tree child has no incoming segment");
+			const auto& segment = network.segments[static_cast<std::size_t>(segment_index)];
+			const double branch_resistance = segment.resistance
+				+equivalent_resistance[static_cast<std::size_t>(child)];
+			const double conductance = 1.0/branch_resistance;
+			conductance_sum += conductance;
+			pressure_conductance_sum += conductance
+				*equivalent_pressure[static_cast<std::size_t>(child)];
+		}
+		if (!(conductance_sum > 0.0) || !std::isfinite(conductance_sum))
+			throw std::runtime_error("rigid 1d subtree has invalid equivalent conductance");
+		equivalent_resistance[static_cast<std::size_t>(node)] = 1.0/conductance_sum;
+		equivalent_pressure[static_cast<std::size_t>(node)] =
+			pressure_conductance_sum/conductance_sum;
+	}
+
+	state.node_pressure.assign(n, 0.0);
+	state.segment_flow.assign(network.segments.size(), 0.0);
+	state.node_pressure[static_cast<std::size_t>(network.root)] =
+		equivalent_pressure[static_cast<std::size_t>(network.root)]
+		+equivalent_resistance[static_cast<std::size_t>(network.root)]*inlet_flow;
+	for (const int parent : network.topological_nodes) {
+		const double parent_pressure = state.node_pressure[static_cast<std::size_t>(parent)];
+		for (const int child : network.nodes[static_cast<std::size_t>(parent)].children) {
+			const int segment_index = incoming_segment[static_cast<std::size_t>(child)];
+			const auto& segment = network.segments[static_cast<std::size_t>(segment_index)];
+			const double branch_resistance = segment.resistance
+				+equivalent_resistance[static_cast<std::size_t>(child)];
+			const double branch_flow = (parent_pressure
+				-equivalent_pressure[static_cast<std::size_t>(child)])/branch_resistance;
+			state.segment_flow[static_cast<std::size_t>(segment_index)] = branch_flow;
+			state.node_pressure[static_cast<std::size_t>(child)] =
+				parent_pressure-segment.resistance*branch_flow;
 		}
 	}
-	state.node_pressure = SolveDenseSystem(std::move(matrix), std::move(rhs));
-	state.segment_flow.resize(network.segments.size());
-	for (const auto& segment : network.segments)
-		state.segment_flow[static_cast<std::size_t>(segment.index)] =
-			(state.node_pressure[static_cast<std::size_t>(segment.parent)]
-			-state.node_pressure[static_cast<std::size_t>(segment.child)])/segment.resistance;
 	for (auto& outlet : state.outlets) {
-		const int incoming = OneDSegmentIntoNode(network, outlet.node);
+		const int incoming = incoming_segment[static_cast<std::size_t>(outlet.node)];
 		AdvanceOutletState(outlet, state.segment_flow[static_cast<std::size_t>(incoming)], dt);
 	}
 	state.area.assign(static_cast<std::size_t>(network.cells), 0.0);
@@ -397,6 +456,23 @@ inline void InitializeCompliantOneD(const OneDNetwork& network,
 			state.area.begin()+segment.cell_offset+segment.cells, segment.area0);
 }
 
+inline void InitializeLumpedOneD(const OneDNetwork& network,
+	const OneDFlowSystemDefinition& flow, OneDFlowState& state, double inlet_flow)
+{
+	InitializeCompliantOneD(network, flow, state);
+	state.inlet_flow = inlet_flow;
+	state.storage_rate = inlet_flow;
+	state.relative_continuity_residual = 0.0;
+	state.has_conservation_diagnostic = true;
+	for (auto& outlet : state.outlets) {
+		outlet.flow = 0.0;
+		if (outlet.kind == OneDOutletKind::Pressure) continue;
+		if (outlet.kind == OneDOutletKind::Resistance)
+			outlet.pressure = outlet.reference_pressure;
+		else outlet.pressure = outlet.capacitor_pressure;
+	}
+}
+
 inline void InitializeCompliantOneDFromRigid(const OneDNetwork& network,
 	const OneDFlowSystemDefinition& flow, OneDFlowState& state,
 	double inlet_flow, double dt)
@@ -406,6 +482,7 @@ inline void InitializeCompliantOneDFromRigid(const OneDNetwork& network,
 	SolveRigidOneD(network, flow, rigid, inlet_flow, dt);
 	InitializeCompliantOneD(network, flow, state);
 	state.outlets = rigid.outlets;
+	state.inlet_flow = rigid.inlet_flow;
 	state.node_pressure = rigid.node_pressure;
 	state.segment_flow = rigid.segment_flow;
 	for (const auto& segment : network.segments)

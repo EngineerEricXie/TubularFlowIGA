@@ -44,12 +44,20 @@ inline std::uint64_t OneDFingerprint(const std::string& text)
 
 inline std::uint64_t OneDNetworkFingerprint(const OneDNetwork& network)
 {
-	std::ostringstream text;
-	text << std::setprecision(17);
-	for (const auto& node : network.nodes)
-		text << node.id << ' ' << node.parent_id << ' ' << node.position[0] << ' '
+	std::uint64_t hash = 1469598103934665603ull;
+	std::ostringstream line;
+	line << std::setprecision(17);
+	for (const auto& node : network.nodes) {
+		line.str("");
+		line.clear();
+		line << node.id << ' ' << node.parent_id << ' ' << node.position[0] << ' '
 			<< node.position[1] << ' ' << node.position[2] << ' ' << node.radius << '\n';
-	return OneDFingerprint(text.str());
+		for (const unsigned char character : line.str()) {
+			hash ^= character;
+			hash *= 1099511628211ull;
+		}
+	}
+	return hash;
 }
 
 inline std::vector<std::string> OneDCheckpointSpecies(
@@ -65,6 +73,10 @@ inline std::vector<double> PackOneDCheckpointState(const OneDFlowState& flow,
 	const std::vector<OneDTransportState>& transports, const OneDNetwork& network)
 {
 	std::vector<double> values;
+	std::size_t species_count = 0;
+	for (const auto& transport : transports) species_count += transport.species.size();
+	values.reserve(3*flow.area.size()+flow.node_pressure.size()+flow.segment_flow.size()
+		+3*flow.outlets.size()+network.segments.size()+species_count*flow.area.size());
 	values.insert(values.end(), flow.area.begin(), flow.area.end());
 	values.insert(values.end(), flow.flow.begin(), flow.flow.end());
 	values.insert(values.end(), flow.pressure.begin(), flow.pressure.end());
@@ -87,8 +99,11 @@ inline void UnpackOneDCheckpointState(const std::vector<double>& values,
 	const OneDCheckpointMetadata& metadata, OneDNetwork& network,
 	double dynamic_viscosity)
 {
-	const std::size_t expected = static_cast<std::size_t>(3*metadata.cells+metadata.nodes
-		+2*metadata.segments+3*metadata.outlets+metadata.cells*metadata.species.size());
+	const std::size_t expected = 3*static_cast<std::size_t>(metadata.cells)
+		+static_cast<std::size_t>(metadata.nodes)
+		+2*static_cast<std::size_t>(metadata.segments)
+		+3*static_cast<std::size_t>(metadata.outlets)
+		+static_cast<std::size_t>(metadata.cells)*metadata.species.size();
 	if (values.size() != expected) throw std::runtime_error("1d checkpoint state size is invalid");
 	std::size_t offset = 0;
 	auto assign = [&](std::vector<double>& target, std::size_t count) {
@@ -259,6 +274,7 @@ inline OneDCheckpointMetadata ReadOneDCheckpoint(const std::filesystem::path& pr
 	flow.internal_substeps = metadata.internal_substeps;
 	flow.physical_time = metadata.physical_time;
 	flow.inlet_flow = metadata.inlet_flow;
+	flow.has_conservation_diagnostic = false;
 	return metadata;
 }
 

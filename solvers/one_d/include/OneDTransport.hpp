@@ -92,19 +92,11 @@ inline OneDTransportState InitializeOneDTransport(const OneDConfiguration& confi
 	return state;
 }
 
-inline double EvaluateOneDSpeciesInlet(const OneDConfiguration& configuration,
-	const OneDSpeciesState& species, const std::filesystem::path& case_directory,
-	double time)
+inline double EvaluateOneDSpeciesInlet(const OneDSpeciesState& species,
+	const OneDWaveformEvaluator& waveforms, double time)
 {
 	if (species.inlet_waveform.empty()) return species.inlet_value;
-	const auto& function = FindOneDTemporalFunction(configuration, species.inlet_waveform);
-	std::vector<TemporalSample> samples;
-	const std::vector<TemporalSample>* pointer = nullptr;
-	if (function.kind == TemporalFunctionKind::PeriodicTable) {
-		samples = ReadTemporalCsv((case_directory/function.file).string(), function.period);
-		pointer = &samples;
-	}
-	return EvaluateTemporalFunction(function, time, pointer);
+	return waveforms.Evaluate(species.inlet_waveform, time);
 }
 
 inline double OneDTransportStableDt(const OneDNetwork& network,
@@ -126,7 +118,7 @@ inline double OneDTransportStableDt(const OneDNetwork& network,
 
 inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDSpeciesState& species,
-	const std::filesystem::path& case_directory, double start_time, double requested_dt)
+	const OneDWaveformEvaluator& waveforms, double start_time, double requested_dt)
 {
 	double remaining = requested_dt;
 	std::vector<double> scalar(species.concentration.size());
@@ -137,8 +129,8 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 		const double dt = std::min(remaining,
 			std::isfinite(stable) && stable > 0.0 ? stable : remaining);
 		const double elapsed = requested_dt-remaining;
-		const double inlet_concentration = EvaluateOneDSpeciesInlet(configuration,
-			species, case_directory, start_time+elapsed+dt);
+		const double inlet_concentration = EvaluateOneDSpeciesInlet(species,
+			waveforms, start_time+elapsed+dt);
 		for (const auto& segment : network.segments) {
 			const double dx = segment.length/segment.cells;
 			std::vector<double> concentration(static_cast<std::size_t>(segment.cells+2));
@@ -197,14 +189,14 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 
 inline void AdvanceOneDTransport(const OneDConfiguration& configuration,
 	const OneDNetwork& network, const OneDFlowState& flow, OneDTransportState& transport,
-	const std::filesystem::path& case_directory, double start_time, double dt)
+	const OneDWaveformEvaluator& waveforms, double start_time, double dt)
 {
 	#ifdef _OPENMP
 	#pragma omp parallel for schedule(static) if(transport.species.size() >= 4)
 	#endif
 	for (long long i = 0; i < static_cast<long long>(transport.species.size()); ++i)
 		AdvanceOneDSpecies(configuration, network, flow,
-			transport.species[static_cast<std::size_t>(i)], case_directory, start_time, dt);
+			transport.species[static_cast<std::size_t>(i)], waveforms, start_time, dt);
 }
 
 inline const OneDSpeciesState* FindOneDSpecies(const std::vector<OneDTransportState>& transports,

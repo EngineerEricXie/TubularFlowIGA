@@ -53,8 +53,10 @@ struct OneDNetwork {
 	std::unordered_map<int, int> node_index;
 	std::vector<int> topological_nodes;
 	std::vector<int> outlet_nodes;
+	std::vector<int> incoming_segment;
 	int root = -1;
 	int cells = 0;
+	bool has_cycles = false;
 };
 
 inline std::vector<SkeletonOutputNode> OneDSkeletonOutputNodes(
@@ -81,10 +83,16 @@ inline void WriteOneDSkeletonFiles(const std::filesystem::path& directory,
 	const OneDNetwork& network, double length_scale_to_m)
 {
 	std::filesystem::create_directories(directory);
-	WriteNormalizedSkeletonSwc(directory/"skeleton_normalized.swc",
-		OneDSkeletonOutputNodes(network, 1.0/length_scale_to_m));
-	WriteSkeletonVtp(directory/"skeleton.vtp",
-		OneDSkeletonOutputNodes(network, 1.0));
+	const auto normalized = OneDSkeletonOutputNodes(network, 1.0/length_scale_to_m);
+	const auto si = OneDSkeletonOutputNodes(network, 1.0);
+	WriteNormalizedSkeletonSwc(directory/"skeleton_normalized.swc", normalized);
+	if (network.has_cycles) {
+		std::vector<std::pair<int, int>> edges;
+		edges.reserve(network.segments.size());
+		for (const auto& segment : network.segments)
+			edges.emplace_back(segment.parent, segment.child);
+		WriteSkeletonGraphVtp(directory/"skeleton.vtp", si, edges, network.root);
+	} else WriteSkeletonVtp(directory/"skeleton.vtp", si);
 }
 
 inline double OneDDistance(const std::array<double, 3>& first,
@@ -98,15 +106,20 @@ inline double OneDDistance(const std::array<double, 3>& first,
 
 inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 	double length_scale_to_m, int cells_per_segment, double dynamic_viscosity,
-	int obj_root_node_id = 0)
+	int obj_root_node_id = 0, bool allow_cycles = false)
 {
 	if (!(length_scale_to_m > 0.0) || cells_per_segment < 1 || !(dynamic_viscosity > 0.0))
 		throw std::runtime_error("invalid 1d network construction parameters");
 	OneDNetwork network;
+	std::vector<std::pair<int, int>> obj_edges;
+	std::vector<int> obj_depth;
 	if (IsRadiusAnnotatedObjPath(path)) {
-		const auto tree = ReadRadiusAnnotatedObj(path, obj_root_node_id);
+		auto tree = ReadRadiusAnnotatedObj(path, obj_root_node_id, allow_cycles);
 		network.root = tree.root;
-		for (const auto& source : tree.nodes) {
+		network.has_cycles = tree.has_cycles;
+		obj_edges = tree.edges;
+		obj_depth = tree.depth;
+		for (auto& source : tree.nodes) {
 			OneDNode node;
 			node.id = source.id;
 			node.type = 2;
@@ -116,7 +129,7 @@ inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 			node.parent = source.parent;
 			node.parent_id = source.parent < 0 ? -1
 				: tree.nodes[static_cast<std::size_t>(source.parent)].id;
-			node.children = source.children;
+			node.children = std::move(source.children);
 			network.node_index.emplace(node.id, static_cast<int>(network.nodes.size()));
 			network.nodes.push_back(std::move(node));
 		}
@@ -183,10 +196,8 @@ inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 	if (network.topological_nodes.size() != network.nodes.size())
 		throw std::runtime_error("skeleton network contains nodes disconnected from the root");
 
-	for (const int parent : network.topological_nodes) {
-		const auto& parent_node = network.nodes[static_cast<std::size_t>(parent)];
-		if (parent_node.children.empty()) network.outlet_nodes.push_back(parent);
-		for (const int child : parent_node.children) {
+	auto append_segment = [&](int parent, int child) {
+			const auto& parent_node = network.nodes[static_cast<std::size_t>(parent)];
 			const auto& child_node = network.nodes[static_cast<std::size_t>(child)];
 			OneDSegment segment;
 			segment.index = static_cast<int>(network.segments.size());
@@ -209,23 +220,51 @@ inline OneDNetwork ReadOneDNetwork(const std::filesystem::path& path,
 			segment.cells = cells_per_segment;
 			network.cells += cells_per_segment;
 			network.segments.push_back(segment);
+	};
+	if (network.has_cycles) {
+		for (const auto& edge : obj_edges) {
+			int parent = edge.first;
+			int child = edge.second;
+			if (obj_depth[static_cast<std::size_t>(parent)]
+				> obj_depth[static_cast<std::size_t>(child)]
+				|| (obj_depth[static_cast<std::size_t>(parent)]
+					== obj_depth[static_cast<std::size_t>(child)] && parent > child))
+				std::swap(parent, child);
+			append_segment(parent, child);
 		}
+	} else for (const int parent : network.topological_nodes) {
+		const auto& parent_node = network.nodes[static_cast<std::size_t>(parent)];
+		for (const int child : parent_node.children) append_segment(parent, child);
 	}
+	std::vector<int> degree(network.nodes.size(), 0);
+	for (const auto& segment : network.segments) {
+		++degree[static_cast<std::size_t>(segment.parent)];
+		++degree[static_cast<std::size_t>(segment.child)];
+	}
+	for (std::size_t node = 0; node < degree.size(); ++node)
+		if (static_cast<int>(node) != network.root && degree[node] == 1)
+			network.outlet_nodes.push_back(static_cast<int>(node));
+	network.incoming_segment.assign(network.nodes.size(), -1);
+	for (const auto& segment : network.segments)
+		if (network.incoming_segment[static_cast<std::size_t>(segment.child)] < 0)
+			network.incoming_segment[static_cast<std::size_t>(segment.child)] = segment.index;
 	return network;
 }
 
 inline int OneDSegmentIntoNode(const OneDNetwork& network, int node)
 {
-	for (const auto& segment : network.segments)
-		if (segment.child == node) return segment.index;
-	return -1;
+	if (node < 0 || node >= static_cast<int>(network.incoming_segment.size())) return -1;
+	return network.incoming_segment[static_cast<std::size_t>(node)];
 }
 
 inline std::vector<int> OneDSegmentsOutOfNode(const OneDNetwork& network, int node)
 {
 	std::vector<int> result;
-	for (const auto& segment : network.segments)
-		if (segment.parent == node) result.push_back(segment.index);
+	if (node < 0 || node >= static_cast<int>(network.nodes.size())) return result;
+	const auto& children = network.nodes[static_cast<std::size_t>(node)].children;
+	result.reserve(children.size());
+	for (const int child : children)
+		result.push_back(network.incoming_segment[static_cast<std::size_t>(child)]);
 	return result;
 }
 
@@ -253,7 +292,8 @@ inline void ValidateOneDTopologyReferences(const OneDConfiguration& configuratio
 			if (boundary.role == "inlet" && found->second != network.root)
 				throw std::runtime_error("1d inlet node must be the skeleton root");
 			if (boundary.role == "outlet"
-				&& !network.nodes[static_cast<std::size_t>(found->second)].children.empty())
+				&& std::find(network.outlet_nodes.begin(), network.outlet_nodes.end(),
+					found->second) == network.outlet_nodes.end())
 				throw std::runtime_error("1d outlet node must be a leaf");
 			if (boundary.role == "outlet") configured_outlets.insert(found->second);
 		}
@@ -266,6 +306,14 @@ inline void ValidateOneDTopologyReferences(const OneDConfiguration& configuratio
 		}
 	}
 	if (!inlet) throw std::runtime_error("1d configuration requires an inlet boundary");
+	for (const auto& flow : configuration.flow_systems)
+		for (const auto* values : {&flow.lumped.segment_resistance,
+			&flow.lumped.segment_compliance})
+			for (const auto& item : *values) {
+				const auto found = network.node_index.find(item.first);
+				if (found == network.node_index.end() || found->second == network.root)
+					throw std::runtime_error("lumped segment override must reference a non-root child node");
+			}
 	for (const auto& flow : configuration.flow_systems)
 		for (const auto& coefficient : flow.junctions.node_coefficients) {
 			const auto found = network.node_index.find(coefficient.first);

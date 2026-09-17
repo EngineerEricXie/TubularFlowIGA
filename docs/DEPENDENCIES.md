@@ -14,7 +14,7 @@ required only by the MPI CPU solvers. CUDA does not use PETSc.
 |---|---|---:|---:|
 | Preprocessing-only | GNU Make, C++ compiler, Eigen 3, OpenMP, METIS/`mpmetis` | No | No |
 | CPU-only solver | Preprocessing requirements, MPI, optimized PETSc with C++, HDF5 | Yes | No |
-| Native 1D solver | C++17, OpenMP, MPI, PETSc; MUMPS recommended for multi-rank nonlinear solves | Yes | No |
+| Native 1D solver | C++17, OpenMP, MPI, PETSc, HDF5; MUMPS recommended for multi-rank nonlinear solves | Yes | No |
 | CUDA-only solver | Preprocessing requirements, CUDA Toolkit, cuBLAS, HDF5 | No | Yes at runtime |
 
 The CPU and CUDA solvers consume the same packed `.ntiga` database. Preparing

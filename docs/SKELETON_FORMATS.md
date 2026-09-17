@@ -1,8 +1,9 @@
 # Skeleton input formats
 
 TubularFlowIGA accepts rooted SWC centerlines and radius-annotated line OBJ
-trees. The same input readers feed native 1D networks and the 3D control-mesh
-preprocessor.
+networks. Tree inputs feed both native 1D and the 3D control-mesh preprocessor;
+connected OBJ graphs with split--merge cycles have restricted native implicit
+1D support.
 
 ## SWC
 
@@ -31,8 +32,11 @@ read and required to be finite but are not used. The supplied
 `liver_veins_central.obj` uses zero for both. Line indices are positive,
 1-based, vertex-only OBJ indices. A polyline such as `l 1 2 3` is accepted and
 creates edges 1–2 and 2–3. Texture/normal index syntax, faces, duplicate edges,
-self edges, zero-length edges, cycles, undefined indices, and disconnected
-vertices are rejected.
+self edges, zero-length edges, undefined indices, and disconnected vertices are
+rejected. Cycles are rejected by default. Native
+`implicit_petsc` + `implicit_1d_pde` may opt into a connected cyclic graph when
+there is one inlet terminal and at least one outlet terminal; this path
+currently requires no transport system and junction `loss_model: "none"`.
 
 Because OBJ edges are undirected, the default root is the terminal vertex with
 the largest radius; ties choose the lowest vertex index. A schema-v3 1D case
@@ -72,6 +76,11 @@ Every successful 1D simulation and 3D preparation writes:
 
 - `skeleton_normalized.swc`, an explicitly rooted canonical SWC;
 - `skeleton.vtp`, a ParaView-ready line skeleton.
+
+For a cyclic implicit 1D graph, `skeleton.vtp` and the time-series VTP retain
+every graph edge. Because SWC can encode only one parent per node,
+`skeleton_normalized.swc` contains the deterministic rooted spanning tree and
+is not a lossless cyclic-graph export.
 
 The VTP contains point arrays `radius`, `diameter`, `node_id`, `parent_id`,
 `degree`, and `role`, plus cell arrays `segment_id` and `branch_id`. Numeric

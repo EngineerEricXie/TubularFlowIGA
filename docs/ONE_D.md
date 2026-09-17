@@ -28,7 +28,7 @@ the validated execution plan, bypasses the 3D mesh/database pipeline, invokes
 `iga_1d`, and writes the completed run below `CASE/generated/` (or the selected
 `OUTPUT_ROOT`). `BACKEND=cuda` is rejected for 1D before launch.
 
-`--check` parses the complete schema, reads and validates the SWC tree, resolves
+`--check` parses the complete schema, reads and validates the network, resolves
 topological boundaries, and checks referenced node IDs without advancing time.
 Without `--system`, a case must have exactly one 1D flow system; the solver then
 runs every transport system whose `flow_system` names it.
@@ -69,8 +69,11 @@ rejected before simulation.
 
 Radius-annotated line OBJ is selected with `kind: "obj_network"`. Its `v`
 records carry `x y z radius auxiliary auxiliary`, while `l` records define the
-undirected tree. `root_node_id` optionally selects a 1-based OBJ vertex;
-otherwise the largest-radius terminal is the root. See the strict
+undirected network. `root_node_id` optionally selects a 1-based OBJ vertex;
+otherwise the largest-radius terminal is the root. Connected cyclic OBJ graphs
+are supported only by `implicit_petsc` + `implicit_1d_pde`, currently with no
+transport system and `junctions.loss_model: "none"`. Explicit 1D, 0D, SWC,
+and the 3D mesh pipeline remain tree-only. See the strict
 [skeleton-format contract](SKELETON_FORMATS.md).
 
 The 1D schema uses SI for flow:
@@ -120,15 +123,16 @@ the equation and boundary kinds below are specific to a topological network.
 
 | Model and scheme | Formulation | Purpose |
 |---|---|---|
-| `rigid` + `steady_poiseuille` | no `formulation` key | Segment Poiseuille resistance, downstream reduction, pressure, and flow split; a time-varying inlet is solved quasi-statically |
 | `compliant` + `explicit_rusanov` | no `formulation` key | Conservative finite-volume A/Q equations, Rusanov flux, friction, internal CFL substeps, and linear or Olufsen wall law |
-| `compliant` + `implicit_petsc` | `pressure_network` | Lumped compliant pressure network |
-| `compliant` + `implicit_petsc` | `linearized_aq` | Linearized nodal-pressure/branch-flow system |
-| `compliant` + `implicit_petsc` | `nonlinear_aq` | SNES nonlinear nodal-pressure/branch-flow system with analytic sparse Jacobian |
 | `compliant` + `implicit_petsc` | `implicit_1d_pde` | Multi-cell nonlinear implicit A/Q network |
 
-`rigid` cannot be paired with a compliant scheme, and `formulation` is accepted
-only for `implicit_petsc`. Wall laws are `linear` and `olufsen`.
+Only formulations that resolve A/Q along centerline cells are classified as
+1D. Steady Poiseuille R networks, compliant pressure networks, and one-state-
+per-segment RLC networks are 0D circuits and are documented in
+[ZERO_D.md](ZERO_D.md). Their former 1D spellings remain deprecated input
+aliases and print a migration warning.
+
+Wall laws are `linear` and `olufsen`.
 `cells_per_segment`, `cfl`, momentum correction `alpha`, and
 `min_area_fraction` live in `discretization`. The explicit solver terminates on
 a non-finite state or an area below the configured physical bound; it does not
@@ -143,6 +147,7 @@ An inlet Dirichlet condition selects `quantity: flow_rate` or
 
 - `pressure`: prescribed terminal pressure;
 - `resistance`: terminal resistance and reference pressure;
+- `windkessel_rc`: two-element resistance/capacitance terminal;
 - `windkessel_rcr`: proximal resistance, distal resistance, capacitance,
   reference pressure, and initial capacitor pressure.
 
@@ -160,6 +165,58 @@ data such as:
 ```
 
 `reference_velocity` chooses the parent or child dynamic-pressure scale.
+
+### Inlet waveforms
+
+The 1D inlet evaluates its named temporal function at every physical time step.
+Unlike the 3D inlet, where a temporal function normally multiplies a spatial
+velocity profile, a 1D waveform is the absolute inlet value: use `m3/s` for
+`quantity: "flow_rate"` and `m/s` for `quantity: "centerline_velocity"`.
+The latter is converted to mean flow assuming a parabolic profile,
+`Q = 0.5 A u_centerline`.
+
+The supported temporal-function kinds are:
+
+- `constant`: requires `value`;
+- `sinusoid`: requires `mean`, `amplitude`, and positive `period`, with optional
+  phase in radians;
+- `periodic_table`: requires a positive `period`, relative CSV `file`, and
+  `interpolation: "linear"`;
+- `fourier`: requires `mean`, positive `period`, and equal-length `cosine` and
+  `sine` coefficient arrays, with optional phase in radians.
+
+For example, a measured periodic inflow is configured as:
+
+```json
+"temporal_functions": [
+  {
+    "name": "measured_inlet_flow",
+    "kind": "periodic_table",
+    "units": "m3/s",
+    "period": 0.8,
+    "file": "inlet_flow.csv",
+    "interpolation": "linear"
+  }
+]
+```
+
+with a case-local CSV such as:
+
+```csv
+time,value
+0.0,8.0e-7
+0.2,1.4e-6
+0.5,7.0e-7
+```
+
+Sample times must be strictly increasing, start at zero, and lie in
+`[0, period)`. Linear interpolation also joins the last sample to the first
+sample at the period boundary. The solver resolves the CSV inside the case
+directory and caches it on first use, so it is not reread at every time step.
+
+For Fourier input, coefficient index 0 is the first harmonic. With
+`theta = 2*pi*(t mod period)/period + phase`, the evaluated value is
+`mean + sum(cosine[n]*cos((n+1)*theta) + sine[n]*sin((n+1)*theta))`.
 
 ### Transport and physiology
 
@@ -241,17 +298,29 @@ All generated files go to `--output-dir` (default:
   topology, role, segment, and branch arrays;
 - `flow_timeseries.csv`: inlet/outlet flow, sampled storage/continuity
   diagnostic, pressure drop, and area bounds;
+- `outlet_timeseries.csv`: terminal inflow/pressure, capacitor pressure,
+  distal flow, capacitor storage rate, and RC/RCR parameters;
 - `branch_timeseries.csv`: segment flow, endpoint pressure, and resistance;
 - `profile_1d.csv`: cell A/Q/pressure/velocity;
 - `species_profile_1d.csv` and `derived_profile_1d.csv`;
-- `profile_1d_*.vtp` and `profile_1d.pvd` for ParaView;
+- `profile_1d.vtkhdf`: the default compressed ParaView time series; geometry
+  and topology are stored once, while A/Q/pressure/velocity, transported
+  species, and derived fields are appended at each output time;
 - `summary.json` with model, timing, completion, sampled conservation, and peak
   RSS;
 - `physiology_fields.json` with solved/derived/skipped status.
 
-Open `skeleton.vtp` for the static network or `profile_1d.pvd` for simulated
-fields. Choose a point-data array and use **Tube** with `radius` as an absolute
-scalar when a finite-width skeleton rendering is desired.
+Open `skeleton.vtp` for the static network or `profile_1d.vtkhdf` for simulated
+fields. The temporal file also includes static segment/node IDs, cell-local
+position, and reference radius. Choose a point-data array and use **Tube** when
+a finite-width rendering is desired.
+
+VTKHDF is the default because one file contains every output time without
+repeating the network geometry. Use `--visualization-format vtp` only when a
+legacy ParaView workflow requires `profile_1d_*.vtp` plus `profile_1d.pvd`.
+Checkpoint and CSV files remain independent of the visualization selection.
+On restart, an existing compatible VTKHDF file is safely appended; the restart
+time replaces an identical final time instead of creating a duplicate step.
 
 ## Hex/FEniCS concept map
 

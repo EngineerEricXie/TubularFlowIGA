@@ -39,6 +39,7 @@
 /solvers/cpu/bezier_visualization_test
 /solvers/cpu/temporal_vtkhdf_test
 /solvers/one_d/iga_1d
+/solvers/one_d/iga_0d
 /solvers/one_d/one_d_core_test
 /solvers/one_d/one_d_coupling_test
 /solvers/one_d/one_d_petsc_test
@@ -72,6 +73,7 @@ core.*
 /build/
 /cmake-build-*/
 /examples/**/generated/
+/examples/**/results/
 /Input/*
 !/Input/README.md
 CMakeCache.txt

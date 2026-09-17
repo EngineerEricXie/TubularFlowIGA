@@ -1,0 +1,47 @@
+{
+  "schema_version": 3,
+  "dimension": "0d",
+  "geometry": {
+    "kind": "swc_network",
+    "file": "skeleton_initial.swc",
+    "length_scale_to_m": 1.0
+  },
+  "fields": [
+    {"name": "area", "kind": "scalar"},
+    {"name": "flow_rate", "kind": "scalar"},
+    {"name": "pressure", "kind": "pressure"}
+  ],
+  "time": {"dt": 0.01, "steps": 1, "output_every": 1},
+  "temporal_functions": [
+    {"name": "inlet_flow", "kind": "constant", "units": "m3/s", "value": 1.0e-8}
+  ],
+  "equation_systems": [{
+    "name": "resistive_network",
+    "kind": "network_flow_0d",
+    "unknowns": ["area", "flow_rate", "pressure"],
+    "model": "lumped",
+    "scheme": "petsc",
+    "formulation": "steady_r",
+    "dynamic_viscosity": 0.004,
+    "density": 1060.0,
+    "discretization": {"cells_per_segment": 1}
+  }],
+  "boundaries": [
+    {
+      "name": "inlet",
+      "role": "inlet",
+      "node_ids": [1],
+      "conditions": [
+        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_flow"}
+      ]
+    },
+    {
+      "name": "outlet",
+      "role": "outlet",
+      "node_ids": [3],
+      "conditions": [
+        {"field": "pressure", "type": "pressure", "value": 0.0}
+      ]
+    }
+  ]
+}

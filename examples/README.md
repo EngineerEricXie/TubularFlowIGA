@@ -17,10 +17,11 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
 | Vascular flow | `vascular_flow/multispecies_pulse` | Pulsatile 3D Navier--Stokes and six-species physiology | `blood_flow` + `multispecies_physiology_3d` |
 | Vascular flow | `vascular_flow/vca_bifurcation` | CPU 3D VCA closed-loop bifurcation and restart smoke case | `blood_flow` + one VCA transport system |
-| Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
+| Native 0D | `zero_d/steady_resistive_straight` | Analytic steady Poiseuille R network | `resistive_network` |
+| Native 0D | `zero_d/rc_rcr_bifurcation` | Transient RC network with RC/RCR terminal beds | `lumped_circuit` |
 | Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
-| Native 1D | `one_d/multispecies_physiology` | Pulsatile six-species transport, physiology, and vasodilation | `blood_flow_1d` + `multispecies_physiology_1d` |
-| Native 1D | `one_d/liver_vein_obj_segment` | Radius-annotated OBJ skeleton input | `blood_flow_1d` |
+| Hybrid legacy | `one_d/multispecies_physiology` | 0D pressure flow with 1D six-species transport | `blood_flow_1d` + `multispecies_physiology_1d` |
+| 0D migration | `one_d/liver_vein_obj_segment` | Deprecated rigid alias and radius-annotated OBJ input | `blood_flow_1d` |
 | Vascular flow | `vascular_flow/liver_vein_obj_segment` | 3D mesh and flow from the same OBJ excerpt | `blood_flow` |
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
@@ -45,10 +46,13 @@ The preparation pipeline generates all downstream files, including
 partitions, the `.ntiga` database, and a cubic `bzmesh.vtkhdf` geometry preview.
 Do not commit these generated artifacts.
 
-Native 1D directories instead contain only `skeleton_initial.swc` or
+Native network directories instead contain only `skeleton_initial.swc` or
 `skeleton_initial.obj` and a schema-v3 `simulation_config.json`. Run them
-directly with `iga_1d`; they do not use the 3D mesh block, the preparation
-pipeline, or a packed database. See the [1D example guide](one_d/README.md).
+directly with `iga_0d` or `iga_1d`; they do not use the 3D mesh block, the
+preparation pipeline, or a packed database. See the
+[1D example guide](one_d/README.md).
+Native 0D cases use the same source-only geometry contract with
+`dimension: "0d"`; see the [0D guide](../docs/ZERO_D.md).
 
 ## Prepare a case
 

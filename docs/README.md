@@ -9,6 +9,8 @@ vascular and neuron workflows. Then choose the document matching the task:
 | Follow a fresh-clone vascular and neuron walkthrough | [QUICKSTART.md](QUICKSTART.md) |
 | Understand generated files and stage interfaces | [PIPELINE.md](PIPELINE.md) |
 | Configure fields, operators, time stepping, checkpointing, and solver CLI | [PDE_CONFIGURATION.md](PDE_CONFIGURATION.md) |
+| Configure and run native lumped 0D R/RC/RLC networks | [ZERO_D.md](ZERO_D.md) |
+| Configure spatially distributed compliant 1D A/Q networks | [ONE_D.md](ONE_D.md) |
 | Run and validate native CPU 3D VCA coupling | [VCA bifurcation case](../examples/vascular_flow/vca_bifurcation/README.md) |
 | Run the large morphology-derived neuron regression | [NMO_06840 transport](../examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 | Configure wall, inlet, outlet, waveform, and Windkessel conditions | [BOUNDARY_CONDITIONS.md](BOUNDARY_CONDITIONS.md) |

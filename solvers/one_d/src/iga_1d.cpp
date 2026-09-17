@@ -29,6 +29,8 @@ struct Options {
 	int checkpoint_every = 0;
 	fs::path restart;
 	int stop_after_step = 0;
+	iga::OneDVisualizationFormat visualization_format =
+		iga::OneDVisualizationFormat::VtkHdf;
 };
 
 int PositiveInteger(const std::string& text, const std::string& option)
@@ -44,9 +46,9 @@ int PositiveInteger(const std::string& text, const std::string& option)
 Options ParseOptions(int argc, char** argv)
 {
 	if (argc < 2) throw std::runtime_error(
-		"usage: iga_1d CASE_DIR [--system NAME] [--output-dir DIR] [--check] "
+		"usage: iga_1d|iga_0d CASE_DIR [--system NAME] [--output-dir DIR] [--check] "
 		"[--checkpoint PREFIX --checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [PETSc options]");
+		"[--stop-after-step N] [--visualization-format auto|vtkhdf|vtp] [PETSc options]");
 	Options options;
 	options.case_directory = argv[1];
 	for (int i = 2; i < argc; ++i) {
@@ -58,7 +60,8 @@ Options ParseOptions(int argc, char** argv)
 		}
 		if (argument == "--system" || argument == "--output-dir"
 			|| argument == "--checkpoint" || argument == "--checkpoint-every"
-			|| argument == "--restart" || argument == "--stop-after-step") {
+			|| argument == "--restart" || argument == "--stop-after-step"
+			|| argument == "--visualization-format") {
 			if (++i >= argc) throw std::runtime_error(argument+" requires a value");
 			const std::string value(argv[i]);
 			if (argument == "--system") options.system = value;
@@ -66,11 +69,16 @@ Options ParseOptions(int argc, char** argv)
 			else if (argument == "--checkpoint") options.checkpoint = value;
 			else if (argument == "--checkpoint-every") options.checkpoint_every = PositiveInteger(value, argument);
 			else if (argument == "--restart") options.restart = value;
-			else options.stop_after_step = PositiveInteger(value, argument);
+			else if (argument == "--stop-after-step")
+				options.stop_after_step = PositiveInteger(value, argument);
+			else options.visualization_format = iga::ParseOneDVisualizationFormat(value);
 			PetscOptionsClearValue(nullptr, argument.c_str());
 			continue;
 		}
-		if (!argument.empty() && argument[0] == '-') continue;
+		if (!argument.empty() && argument[0] == '-') {
+			if (i+1 < argc && argv[i+1][0] != '-') ++i;
+			continue;
+		}
 		throw std::runtime_error("unexpected argument: "+argument);
 	}
 		if (options.checkpoint_every > 0 && options.checkpoint.empty())
@@ -93,12 +101,12 @@ const iga::OneDFlowSystemDefinition& SelectFlow(const iga::OneDConfiguration& co
 {
 	if (name.empty()) {
 		if (configuration.flow_systems.size() != 1)
-			throw std::runtime_error("--system is required when a 1d case contains multiple flow systems");
+			throw std::runtime_error("--system is required when a network case contains multiple flow systems");
 		return configuration.flow_systems.front();
 	}
 	for (const auto& flow : configuration.flow_systems)
 		if (flow.name == name) return flow;
-	throw std::runtime_error("unknown 1d flow system '"+name+"'");
+	throw std::runtime_error("unknown network flow system '"+name+"'");
 }
 
 std::vector<iga::OneDTransportState> InitializeTransports(
@@ -158,7 +166,7 @@ void ValidateRestart(const iga::OneDCheckpointMetadata& metadata,
 
 int main(int argc, char** argv)
 {
-	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA native one-dimensional solver\n");
+	PetscInitialize(&argc, &argv, nullptr, "TubularFlowIGA native 0D/1D network flow solver\n");
 	int rank = 0;
 	MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
 	int status = 0;
@@ -169,11 +177,28 @@ int main(int argc, char** argv)
 		const auto config_text = ReadText(config_path);
 		auto configuration = iga::ParseOneDConfiguration(config_text);
 		const auto& flow = SelectFlow(configuration, options.system);
+		const auto executable = fs::path(argv[0]).filename().string();
+		const std::string physical_dimension = iga::NetworkFlowPhysicalDimension(flow);
+		if (executable == "iga_0d" && physical_dimension != "0d")
+			throw std::runtime_error("iga_0d accepts only lumped 0D flow formulations; use iga_1d");
+		if (executable == "iga_1d" && configuration.dimension == "0d")
+			throw std::runtime_error("dimension '0d' must be run with iga_0d");
+		if (rank == 0)
+			for (const auto& warning : configuration.warnings)
+				std::cerr << "warning: " << warning << '\n';
+		const bool allow_cycles = flow.scheme == iga::OneDFlowScheme::ImplicitPetsc
+			&& flow.formulation == iga::OneDImplicitFormulation::ImplicitPde;
 		auto network = iga::ReadOneDNetwork(options.case_directory/configuration.geometry.file,
 			configuration.geometry.length_scale_to_m, flow.discretization.cells_per_segment,
-			flow.dynamic_viscosity, configuration.geometry.root_node_id);
+			flow.dynamic_viscosity, configuration.geometry.root_node_id, allow_cycles);
 		iga::ValidateOneDTopologyReferences(configuration, network);
+		if (network.has_cycles && !configuration.transport_systems.empty())
+			throw std::runtime_error("cyclic 1d networks do not yet support transport systems");
+		if (network.has_cycles && flow.junctions.loss_model != "none")
+			throw std::runtime_error("cyclic 1d networks currently require junction loss_model 'none'");
 		const auto inlet = iga::ResolveOneDInlet(configuration);
+		const iga::OneDWaveformEvaluator waveforms(configuration,
+			options.case_directory);
 		auto flow_state = iga::OneDFlowState{};
 		flow_state.outlets = iga::ResolveOneDOutlets(configuration, network);
 		auto transports = InitializeTransports(configuration, flow, network);
@@ -190,13 +215,21 @@ int main(int argc, char** argv)
 				"closed-loop checkpoint/restart requires coupled reservoir state and is not yet enabled");
 		const auto config_fingerprint = iga::OneDFingerprint(config_text);
 		if (options.check) {
-			if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
+			if (rank == 0) std::cout << "schema_version=" << configuration.schema_version
+				<< " dimension=" << iga::NetworkFlowPhysicalDimension(flow)
+				<< " system=" << flow.name
 				<< " nodes=" << network.nodes.size() << " segments=" << network.segments.size()
 				<< " root_id=" << network.nodes[static_cast<std::size_t>(network.root)].id
 				<< " cells=" << network.cells << " outlets=" << network.outlet_nodes.size()
 				<< " transport_systems=" << transports.size() << '\n';
 			PetscFinalize();
 			return 0;
+		}
+		std::unique_ptr<iga::OneDPressureNetworkWorkspace> pressure_workspace;
+		if (flow.formulation == iga::OneDImplicitFormulation::SteadyR
+			|| flow.formulation == iga::OneDImplicitFormulation::TransientRc) {
+			pressure_workspace = std::make_unique<iga::OneDPressureNetworkWorkspace>();
+			pressure_workspace->Initialize(network);
 		}
 		const double inlet_area = network.segments.front().area0;
 		auto open_loop_inlet = [&](double time, double flow_value) {
@@ -207,16 +240,15 @@ int main(int argc, char** argv)
 			for (const auto& transport : transports)
 				for (const auto& species : transport.species)
 					state.species[species.definition.field]
-						= iga::EvaluateOneDSpeciesInlet(configuration, species,
-							options.case_directory, time);
+						= iga::EvaluateOneDSpeciesInlet(species, waveforms, time);
 			if (configuration.physiology.enabled) {
 				state.has_hematocrit = true;
 				state.hematocrit_percent = configuration.physiology.hematocrit_percent;
 			}
 			return state;
 		};
-		double initial_inlet = iga::EvaluateOneDInlet(configuration, inlet,
-			options.case_directory, 0.0, inlet_area);
+		double initial_inlet = iga::EvaluateOneDInlet(inlet, waveforms,
+			0.0, inlet_area);
 		iga::VascularInletState initial_port;
 		if (replay) {
 			initial_port = replay->StateAt(0.0);
@@ -226,9 +258,23 @@ int main(int argc, char** argv)
 			initial_inlet = iga::ApplyOneDCoupledInlet(configuration, transports, initial_port);
 		} else initial_port = open_loop_inlet(0.0, initial_inlet);
 		if (flow.model == iga::OneDFlowModel::Rigid)
-			iga::SolveRigidOneD(network, flow, flow_state, initial_inlet, configuration.time.dt);
-		else iga::InitializeCompliantOneDFromRigid(network, flow, flow_state,
-			initial_inlet, configuration.time.dt);
+			iga::SolveRigidOneD(network, flow, flow_state, initial_inlet, 0.0);
+		else if (flow.model == iga::OneDFlowModel::Lumped) {
+			iga::InitializeLumpedOneD(network, flow, flow_state, initial_inlet);
+			if (flow.formulation == iga::OneDImplicitFormulation::SteadyR)
+				iga::AdvanceImplicitOneD(network, flow, flow_state, initial_inlet,
+					configuration.time.dt, pressure_workspace.get());
+		}
+		else if (network.has_cycles) {
+			iga::InitializeCompliantOneD(network, flow, flow_state);
+			auto steady_flow = flow;
+			steady_flow.formulation = iga::OneDImplicitFormulation::SteadyR;
+			iga::SolveOneDPressureNetworkPetsc(network, steady_flow, flow_state,
+				initial_inlet, configuration.time.dt);
+			flow_state.inlet_flow = initial_inlet;
+			flow_state.has_conservation_diagnostic = false;
+		} else iga::InitializeCompliantOneDFromRigid(network, flow, flow_state,
+			initial_inlet, 0.0);
 		if (!options.restart.empty()) {
 			const auto metadata = iga::ReadOneDCheckpoint(options.restart, flow_state, transports,
 				network, flow.dynamic_viscosity);
@@ -237,14 +283,16 @@ int main(int argc, char** argv)
 		if (options.stop_after_step > configuration.time.steps)
 			throw std::runtime_error("--stop-after-step exceeds configured steps");
 		if (options.output_directory.empty())
-			options.output_directory = options.case_directory/"results"/"one_d"/flow.name;
+			options.output_directory = options.case_directory/"results"/
+				iga::NetworkFlowPhysicalDimension(flow)/flow.name;
 		std::unique_ptr<iga::OneDOutputWriter> writer;
 		std::unique_ptr<iga::CouplingHistoryWriter> coupling_writer;
 		if (rank == 0) {
 			iga::WriteOneDSkeletonFiles(options.output_directory, network,
 				configuration.geometry.length_scale_to_m);
 			writer = std::make_unique<iga::OneDOutputWriter>(
-				options.output_directory, network, flow);
+				options.output_directory, network, flow, options.visualization_format,
+				!options.restart.empty());
 		}
 		if (rank == 0 && configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly)
 			coupling_writer = std::make_unique<iga::CouplingHistoryWriter>(
@@ -270,8 +318,8 @@ int main(int argc, char** argv)
 			? options.stop_after_step : configuration.time.steps;
 		for (int step = flow_state.completed_step+1; step <= final_step; ++step) {
 			const double time = step*configuration.time.dt;
-			double inlet_flow = iga::EvaluateOneDInlet(configuration, inlet,
-				options.case_directory, time, inlet_area);
+			double inlet_flow = iga::EvaluateOneDInlet(inlet, waveforms,
+				time, inlet_area);
 			iga::VascularInletState port_inlet;
 			if (replay) {
 				port_inlet = replay->StateAt(time);
@@ -286,10 +334,11 @@ int main(int argc, char** argv)
 				iga::SolveRigidOneD(network, flow, flow_state, inlet_flow, configuration.time.dt);
 			else if (flow.scheme == iga::OneDFlowScheme::ExplicitRusanov)
 				iga::AdvanceExplicitOneD(network, flow, flow_state, inlet_flow, configuration.time.dt);
-			else iga::AdvanceImplicitOneD(network, flow, flow_state, inlet_flow, configuration.time.dt);
+			else iga::AdvanceImplicitOneD(network, flow, flow_state, inlet_flow,
+				configuration.time.dt, pressure_workspace.get());
 			for (auto& transport : transports)
 				iga::AdvanceOneDTransport(configuration, network, flow_state, transport,
-					options.case_directory, (step-1)*configuration.time.dt, configuration.time.dt);
+					waveforms, (step-1)*configuration.time.dt, configuration.time.dt);
 			iga::ApplyOneDVasodilation(configuration, network, transports,
 				configuration.time.dt, flow.dynamic_viscosity);
 			flow_state.completed_step = step;
@@ -336,7 +385,8 @@ int main(int argc, char** argv)
 				std::chrono::duration<double>(setup_end-setup_start).count(),
 				std::chrono::duration<double>(solve_end-solve_start).count()-solve_output_seconds,
 				output_seconds);
-			std::cout << "completed 1d system=" << flow.name << " steps="
+			std::cout << "completed " << iga::NetworkFlowPhysicalDimension(flow)
+				<< " system=" << flow.name << " steps="
 				<< flow_state.completed_step << " output=" << options.output_directory << '\n';
 		}
 	} catch (const std::exception& error) {

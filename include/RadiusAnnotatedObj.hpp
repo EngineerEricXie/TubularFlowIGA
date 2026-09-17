@@ -9,7 +9,6 @@
 #include <fstream>
 #include <limits>
 #include <queue>
-#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -27,7 +26,10 @@ struct RadiusAnnotatedObjNode {
 
 struct RadiusAnnotatedObjTree {
 	std::vector<RadiusAnnotatedObjNode> nodes;
+	std::vector<std::pair<int, int>> edges;
+	std::vector<int> depth;
 	int root = -1;
+	bool has_cycles = false;
 };
 
 inline bool IsRadiusAnnotatedObjPath(const std::filesystem::path& path)
@@ -52,13 +54,13 @@ inline int RadiusAnnotatedObjIndex(const std::string& token,
 }
 
 inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
-	const std::filesystem::path& path, int requested_root_id = 0)
+	const std::filesystem::path& path, int requested_root_id = 0,
+	bool allow_cycles = false)
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open radius-annotated OBJ skeleton: "+path.string());
 	RadiusAnnotatedObjTree result;
 	std::vector<std::pair<int, int>> edges;
-	std::set<std::pair<int, int>> unique_edges;
 	std::string line;
 	int line_number = 0;
 	while (std::getline(input, line)) {
@@ -102,9 +104,6 @@ inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
 					throw std::runtime_error(path.string()+":"+std::to_string(line_number)
 						+": OBJ skeleton contains a self edge");
 				if (first_index > second_index) std::swap(first_index, second_index);
-				if (!unique_edges.emplace(first_index, second_index).second)
-					throw std::runtime_error(path.string()+":"+std::to_string(line_number)
-						+": OBJ skeleton contains a duplicate edge");
 				edges.emplace_back(first_index, second_index);
 			}
 		} else {
@@ -114,6 +113,10 @@ inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
 	}
 	if (result.nodes.size() < 2 || edges.empty())
 		throw std::runtime_error("radius-annotated OBJ skeleton requires vertices and edges");
+	std::sort(edges.begin(), edges.end());
+	if (std::adjacent_find(edges.begin(), edges.end()) != edges.end())
+		throw std::runtime_error("radius-annotated OBJ skeleton contains a duplicate edge");
+	result.edges = edges;
 	std::vector<std::vector<int>> adjacency(result.nodes.size());
 	for (const auto& edge : edges) {
 		if (edge.first >= static_cast<int>(result.nodes.size())
@@ -147,8 +150,10 @@ inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
 			throw std::runtime_error("radius-annotated OBJ skeleton has no terminal vertex for root inference");
 	}
 	std::vector<int> visited(result.nodes.size(), 0);
+	result.depth.assign(result.nodes.size(), -1);
 	std::queue<int> pending;
 	visited[static_cast<std::size_t>(result.root)] = 1;
+	result.depth[static_cast<std::size_t>(result.root)] = 0;
 	pending.push(result.root);
 	std::size_t visited_count = 0;
 	while (!pending.empty()) {
@@ -159,9 +164,13 @@ inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
 		std::sort(neighbors.begin(), neighbors.end());
 		for (const int neighbor : neighbors) {
 			if (neighbor == result.nodes[static_cast<std::size_t>(node)].parent) continue;
-			if (visited[static_cast<std::size_t>(neighbor)])
-				throw std::runtime_error("radius-annotated OBJ skeleton contains a cycle");
+			if (visited[static_cast<std::size_t>(neighbor)]) {
+				result.has_cycles = true;
+				continue;
+			}
 			visited[static_cast<std::size_t>(neighbor)] = 1;
+			result.depth[static_cast<std::size_t>(neighbor)]
+				= result.depth[static_cast<std::size_t>(node)]+1;
 			result.nodes[static_cast<std::size_t>(neighbor)].parent = node;
 			result.nodes[static_cast<std::size_t>(node)].children.push_back(neighbor);
 			pending.push(neighbor);
@@ -169,6 +178,8 @@ inline RadiusAnnotatedObjTree ReadRadiusAnnotatedObj(
 	}
 	if (visited_count != result.nodes.size())
 		throw std::runtime_error("radius-annotated OBJ skeleton contains disconnected vertices");
+	if (result.has_cycles && !allow_cycles)
+		throw std::runtime_error("radius-annotated OBJ skeleton contains a cycle");
 	return result;
 }
 

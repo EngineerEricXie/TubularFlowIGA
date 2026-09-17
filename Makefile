@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test cuda spline workflow-test clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc one-d-petsc one-d-test zero-d-petsc zero-d-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -22,6 +22,12 @@ one-d-petsc:
 	$(MAKE) -C solvers/one_d petsc
 
 one-d-test:
+	$(MAKE) -C solvers/one_d test
+
+zero-d-petsc:
+	$(MAKE) -C solvers/one_d zero-d
+
+zero-d-test:
 	$(MAKE) -C solvers/one_d test
 
 cuda:
