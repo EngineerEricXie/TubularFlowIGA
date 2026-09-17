@@ -5,6 +5,7 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 config_file=$repo_dir/execution.conf
 requested_cases=()
+live_output_override=
 built_cpu_3d=false
 built_cuda_3d=false
 built_cpu_1d=false
@@ -12,7 +13,7 @@ built_cpu_1d=false
 Usage()
 {
 	cat <<USAGE
-usage: $0 [--config FILE] [CASE ...]
+usage: $0 [--config FILE] [--live-output|--no-live-output] [CASE ...]
 
 Validate and optionally prepare and solve one or more 1D or 3D cases. CASE
 values are directory names directly below CASE_ROOT. With no CASE arguments,
@@ -21,6 +22,7 @@ every immediate subdirectory of CASE_ROOT is run.
 Examples:
   $0 MyCase
   $0 --config execution.conf CaseA CaseB
+  $0 --live-output MyCase
 USAGE
 }
 
@@ -63,6 +65,8 @@ ParseArgs()
 				shift 2
 				;;
 			--config=*) config_file=${1#*=}; shift ;;
+			--live-output) live_output_override=1; shift ;;
+			--no-live-output) live_output_override=0; shift ;;
 			--*) Die "unknown option: $1" ;;
 			*) requested_cases+=("$1"); shift ;;
 		esac
@@ -77,6 +81,7 @@ LoadConfig()
 	CASE_ROOT=Input
 	OUTPUT_ROOT=
 	OUTPUT_MODE=atomic
+	LIVE_OUTPUT=0
 	RANKS=2
 	BACKEND=cpu
 	BUILD_SOLVERS=1
@@ -107,7 +112,7 @@ LoadConfig()
 		[[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] \
 			|| Die "$config_file:$line_number: invalid key: $key"
 		case $key in
-			CASE_ROOT|OUTPUT_ROOT|OUTPUT_MODE|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|SOLVER_ARGS|PETSC_OPTIONS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
+			CASE_ROOT|OUTPUT_ROOT|OUTPUT_MODE|LIVE_OUTPUT|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|SOLVER_ARGS|PETSC_OPTIONS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
 			*) Die "$config_file:$line_number: unknown setting: $key" ;;
 		esac
 		if (( ${#value} >= 2 )); then
@@ -131,6 +136,10 @@ ValidateConfig()
 		atomic|versioned) ;;
 		*) Die "OUTPUT_MODE must be atomic or versioned; got: $OUTPUT_MODE" ;;
 	esac
+	IsTruthy "$LIVE_OUTPUT" || true
+	if IsTruthy "$LIVE_OUTPUT" && [[ $OUTPUT_MODE != versioned ]]; then
+		Die "LIVE_OUTPUT=1 requires OUTPUT_MODE=versioned"
+	fi
 	case $SOLVER in
 		auto|navier_stokes|transport) ;;
 		*) Die "SOLVER must be auto, navier_stokes, or transport; got: $SOLVER" ;;
@@ -503,6 +512,7 @@ RunThreeDCase()
 	local results_dir=$generated_dir/results/$selected_system
 	local generate_args=("$source_dir" --output "$generated_dir" --ranks "$RANKS")
 	if IsTruthy "$CLEAN"; then generate_args+=(--clean); fi
+	if IsTruthy "$LIVE_OUTPUT"; then generate_args+=(--direct-output); fi
 	if ! Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" \
 		"$repo_dir/scripts/generate_case.sh" "${generate_args[@]}"; then
 		if [[ $OUTPUT_MODE == versioned ]] && ! IsTruthy "$DRY_RUN"; then
@@ -583,6 +593,7 @@ Main()
 {
 	ParseArgs "$@"
 	LoadConfig
+	if [[ -n $live_output_override ]]; then LIVE_OUTPUT=$live_output_override; fi
 	ValidateConfig
 	local case_root output_root= case_dir
 	case_root=$(ResolvePath "$CASE_ROOT")
@@ -595,9 +606,9 @@ Main()
 	fi
 	SelectCases "$case_root"
 	EnsureConfigChecker
-	printf 'execution profile: %s\ncase root:         %s\noutput mode:       %s\nbackend:           %s\nranks:             %s\ncases:             %s\n' \
+	printf 'execution profile: %s\ncase root:         %s\noutput root:       %s\noutput mode:       %s\nlive output:       %s\nbackend:           %s\nranks:             %s\ncases:             %s\n' \
 		"$config_file" "$case_root" "${output_root:-CASE/generated}" \
-		"$BACKEND" "$RANKS" "${#case_dirs[@]}"
+		"$OUTPUT_MODE" "$LIVE_OUTPUT" "$BACKEND" "$RANKS" "${#case_dirs[@]}"
 	for case_dir in "${case_dirs[@]}"; do RunCase "$case_dir" "$output_root"; done
 	printf '\ncompleted %s case(s)\n' "${#case_dirs[@]}"
 }

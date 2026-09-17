@@ -41,12 +41,21 @@ solver selection can be inspected in dry-run mode.
 `OUTPUT_MODE=atomic`, each output uses `CASE/generated` and replaces it only
 after hidden staging succeeds. In `OUTPUT_MODE=versioned`, the runner
 atomically claims fresh `generated_1`, `generated_2`, ... directories and never
-replaces an earlier run. Three-dimensional preprocessing still uses hidden
-staging; after it is published, the solver writes directly to the final
-versioned `results/` directory so in-progress visualization files remain
+replaces an earlier run. By default, three-dimensional preprocessing still
+uses hidden staging; after it is published, the solver writes directly to the
+final versioned `results/` directory so in-progress visualization files remain
 visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is
 accepted only for a directory containing a matching generated-case
 `manifest.json` or `run_manifest.json`.
+
+Set `LIVE_OUTPUT=1`, or pass `--live-output` to `run_cases.sh`, with
+`OUTPUT_MODE=versioned` to write 3D preprocessing directly into the newly
+claimed version directory. Files then become visible as each stage creates
+them, and a failed run intentionally leaves its partial directory available
+for diagnosis. Use `--no-live-output` to override an enabled profile. Atomic
+mode deliberately rejects live output because directly replacing an existing
+output could destroy the last complete result. Direct use of
+`generate_case.sh --direct-output` likewise requires an empty output directory.
 
 `PETSC_OPTIONS` may contain whitespace-separated PETSc options that are
 exported through the MPI launcher. Keep the shared profile solver-neutral and

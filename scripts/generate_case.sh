@@ -8,10 +8,11 @@ output_argument=
 clean=false
 legacy_vtk=false
 allow_preflight_failure=false
+direct_output=false
 
 usage()
 {
-	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--clean] [--legacy-vtk] [--allow-preflight-failure]\n' "$0" >&2
+	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--clean] [--direct-output] [--legacy-vtk] [--allow-preflight-failure]\n' "$0" >&2
 }
 
 if [[ $# -lt 1 ]]; then
@@ -34,6 +35,10 @@ while (( $# > 0 )); do
 			;;
 		--clean)
 			clean=true
+			shift
+			;;
+		--direct-output)
+			direct_output=true
 			shift
 			;;
 		--legacy-vtk)
@@ -98,7 +103,10 @@ if [[ -e $output_dir && ! -d $output_dir ]]; then
 	exit 2
 fi
 if [[ -d $output_dir ]]; then
-	if [[ $clean != true && -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+	if [[ $direct_output == true && -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+		printf 'direct-output directory must be empty: %s\n' "$output_dir" >&2
+		exit 2
+	elif [[ $clean != true && -n $(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
 		printf 'generated-output directory is not empty; rerun with --clean to replace it: %s\n' "$output_dir" >&2
 		exit 2
 	fi
@@ -107,11 +115,18 @@ fi
 output_parent=${output_dir%/*}
 output_base=${output_dir##*/}
 mkdir -p "$output_parent"
-staging_dir=$output_parent/.${output_base}.staging.$BASHPID
+staging_dir=
 backup_dir=
-if [[ -e $staging_dir ]]; then
-	printf 'staging path already exists: %s\n' "$staging_dir" >&2
-	exit 1
+if [[ $direct_output == true ]]; then
+	mkdir -p "$output_dir"
+	work_dir=$output_dir
+else
+	staging_dir=$output_parent/.${output_base}.staging.$BASHPID
+	if [[ -e $staging_dir ]]; then
+		printf 'staging path already exists: %s\n' "$staging_dir" >&2
+		exit 1
+	fi
+	work_dir=$staging_dir
 fi
 cleanup()
 {
@@ -124,10 +139,10 @@ cleanup()
 }
 trap cleanup EXIT
 
-preprocessing_dir=$staging_dir/preprocessing
-database_dir=$staging_dir/database
-visualization_dir=$staging_dir/visualization
-results_dir=$staging_dir/results
+preprocessing_dir=$work_dir/preprocessing
+database_dir=$work_dir/database
+visualization_dir=$work_dir/visualization
+results_dir=$work_dir/results
 mkdir -p "$preprocessing_dir" "$database_dir" "$visualization_dir" "$results_dir"
 
 "$repo_dir/scripts/check_dependencies.sh" preprocessing
@@ -230,24 +245,26 @@ done
 	printf '    "results": "results"\n'
 	printf '  }\n'
 	printf '}\n'
-} > "$staging_dir/manifest.json"
+} > "$work_dir/manifest.json"
 
-if [[ -e $output_dir ]]; then
-	backup_dir=$output_parent/.${output_base}.previous.$BASHPID
-	mv "$output_dir" "$backup_dir"
-fi
-if mv "$staging_dir" "$output_dir"; then
-	staging_dir=
-else
-	if [[ -n $backup_dir && -e $backup_dir ]]; then
-		mv "$backup_dir" "$output_dir"
+if [[ $direct_output != true ]]; then
+	if [[ -e $output_dir ]]; then
+		backup_dir=$output_parent/.${output_base}.previous.$BASHPID
+		mv "$output_dir" "$backup_dir"
+	fi
+	if mv "$staging_dir" "$output_dir"; then
+		staging_dir=
+	else
+		if [[ -n $backup_dir && -e $backup_dir ]]; then
+			mv "$backup_dir" "$output_dir"
+			backup_dir=
+		fi
+		exit 1
+	fi
+	if [[ -n $backup_dir ]]; then
+		rm -rf -- "$backup_dir"
 		backup_dir=
 	fi
-	exit 1
-fi
-if [[ -n $backup_dir ]]; then
-	rm -rf -- "$backup_dir"
-	backup_dir=
 fi
 trap - EXIT
 

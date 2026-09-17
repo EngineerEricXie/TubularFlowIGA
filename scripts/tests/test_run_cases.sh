@@ -122,6 +122,15 @@ versioned_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $versioned_output == *"$output_root/simple_3/results/blood_flow/navier_stokes-cpu.txt"* ]]
 [[ $versioned_output != *".simple_3.staging."* ]]
 
+live_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" --live-output simple)
+[[ $live_output == *"--direct-output"* ]]
+[[ $live_output == *"live output:       1"* ]]
+
+printf '\nLIVE_OUTPUT=1\n' >> "$config"
+staged_override_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" --no-live-output simple)
+[[ $staged_override_output != *"--direct-output"* ]]
+[[ $staged_override_output == *"live output:       0"* ]]
+
 printf '\nPETSC_OPTIONS=-ksp_type cg -pc_type jacobi\n' >> "$config"
 petsc_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $petsc_output == *"PETSC_OPTIONS=-ksp_type\\ cg\\ -pc_type\\ jacobi"* ]]
