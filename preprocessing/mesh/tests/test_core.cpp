@@ -49,6 +49,13 @@ int main(int argc, char** argv)
 	short_options.target_spacing=0.25;
 	RequireFailure([&] { SampleBranch({{0,0,0},{1,0,0}}, {1,1}, short_options, 2, "short arm"); },
 		"insufficient bifurcation clearance");
+	BranchSamplingOptions explicit_options;
+	explicit_options.target_spacing=0.5;
+	const auto explicit_clearance_samples=SampleBranch(
+		{{0,0,0},{0.1,0,0},{5,0,0}}, {1,1,1}, explicit_options,
+		BranchClearance{2.0,0.0},2,"explicit clearance");
+	Require(std::abs(explicit_clearance_samples[1].point.x-2.0)<1.0e-10,
+		"explicit clearance was not inserted at its arc-length position");
 	BranchSamplingOptions adaptive_options;
 	adaptive_options.target_spacing=10.0;
 	adaptive_options.max_spacing_over_diameter=10.0;
@@ -193,6 +200,61 @@ int main(int argc, char** argv)
 	multiway.RebuildChildren();
 	RequireFailure([&] { multiway.Validate(); },
 		"3d mesh generation supports at most two children; node 2 has 3");
+
+	const double clearance_half_angle=10.0*std::acos(-1.0)/180.0;
+	auto make_clearance_y=[clearance_half_angle](bool dense) {
+		SwcGraph result;
+		auto add=[&](int parent,double distance,double sign) {
+			SwcNode node;
+			node.parent=parent;
+			node.position={distance*std::cos(clearance_half_angle),
+				sign*distance*std::sin(clearance_half_angle),0.0};
+			node.diameter=1.0;
+			result.nodes.push_back(node);
+			return static_cast<int>(result.nodes.size())-1;
+		};
+		result.nodes.resize(2);
+		result.nodes[0].parent=-1;result.nodes[0].position={-5,0,0};result.nodes[0].diameter=1.0;
+		result.nodes[1].parent=0;result.nodes[1].position={0,0,0};result.nodes[1].diameter=1.0;
+		if(dense) {
+			int parent=add(1,0.1,1.0);
+			parent=add(parent,1.0,1.0);
+			add(parent,8.0,1.0);
+			parent=add(1,0.1,-1.0);
+			parent=add(parent,1.0,-1.0);
+			add(parent,8.0,-1.0);
+		} else {
+			add(1,8.0,1.0);
+			add(1,8.0,-1.0);
+		}
+		result.RebuildChildren();
+		result.Validate();
+		return result;
+	};
+	MeshParameters clearance_parameters;
+	clearance_parameters.segment_length=0.25;
+	const auto sparse_clearance_y=SmoothSkeleton(make_clearance_y(false),clearance_parameters);
+	const auto dense_clearance_y=SmoothSkeleton(make_clearance_y(true),clearance_parameters);
+	auto first_child_clearance=[](const SwcGraph& value) {
+		for(std::size_t i=0;i<value.nodes.size();++i) {
+			if(!value.is_branch(static_cast<int>(i))) continue;
+			const auto& branch=value.nodes[i];
+			const auto& first=value.nodes.at(branch.children[0]);
+			const auto& second=value.nodes.at(branch.children[1]);
+			return std::array<double,2>{{Norm(first.position-branch.position),
+				Norm(first.position-second.position)}};
+		}
+		throw std::runtime_error("clearance test graph has no bifurcation");
+	};
+	const auto sparse_clearance=first_child_clearance(sparse_clearance_y);
+	const auto dense_clearance=first_child_clearance(dense_clearance_y);
+	const double expected_angle_clearance=1.0/(2.0*std::sin(clearance_half_angle));
+	Require(std::abs(sparse_clearance[0]-expected_angle_clearance)<1.0e-8,
+		"bifurcation angle did not increase downstream clearance analytically");
+	Require(sparse_clearance[1]>=1.0-1.0e-8,
+		"angle-adaptive sibling rings still overlap");
+	Require(std::abs(sparse_clearance[0]-dense_clearance[0])<1.0e-4,
+		"junction clearance changed when the same centerline was densely sampled");
 
 	SwcGraph y;
 	y.nodes.resize(5);

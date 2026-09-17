@@ -24,6 +24,20 @@ struct BranchSamplingOptions
 	double downstream_clearance_over_diameter = 1.5;
 };
 
+struct BranchClearance
+{
+	double start = 0.0;
+	double end = 0.0;
+};
+
+std::vector<CurveSample> SampleBranch(
+	const std::vector<Vec3>& points,
+	const std::vector<double>& diameters,
+	const BranchSamplingOptions& options,
+	const BranchClearance& clearance,
+	int mode,
+	const std::string& context);
+
 std::vector<CurveSample> SampleBranch(
 	const std::vector<Vec3>& points,
 	const std::vector<double>& diameters,

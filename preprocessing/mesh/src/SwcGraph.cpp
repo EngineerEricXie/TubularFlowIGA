@@ -256,6 +256,103 @@ std::vector<std::vector<int>> SwcGraph::Sections() const
 	return result;
 }
 
+namespace {
+
+struct SectionProbe
+{
+	Vec3 direction;
+	double diameter = 0.0;
+};
+
+SectionProbe ProbeSection(
+	const SwcGraph& graph,
+	const std::vector<int>& section,
+	double distance,
+	bool from_start)
+{
+	if(section.size()<2 || !std::isfinite(distance) || distance<=0.0)
+		throw std::runtime_error("invalid section-clearance probe");
+	const int anchor=from_start?section.front():section.back();
+	double traversed=0.0;
+	for(std::size_t step=1;step<section.size();++step) {
+		const std::size_t previous_position=from_start?step-1:section.size()-step;
+		const std::size_t next_position=from_start?step:section.size()-step-1;
+		const auto& previous=graph.nodes.at(section[previous_position]);
+		const auto& next=graph.nodes.at(section[next_position]);
+		const double segment=Norm(next.position-previous.position);
+		if(traversed+segment>=distance) {
+			const double alpha=(distance-traversed)/segment;
+			const Vec3 point=previous.position+(next.position-previous.position)*alpha;
+			const double log_diameter=(1.0-alpha)*std::log(previous.diameter)
+				+alpha*std::log(next.diameter);
+			return {point-graph.nodes.at(anchor).position,std::exp(log_diameter)};
+		}
+		traversed+=segment;
+	}
+	const int terminal=from_start?section.back():section.front();
+	return {graph.nodes.at(terminal).position-graph.nodes.at(anchor).position,
+		graph.nodes.at(terminal).diameter};
+}
+
+const std::vector<int>& ChildSection(
+	const std::vector<std::vector<int>>& sections,
+	int branch,
+	int child)
+{
+	for(const auto& section:sections)
+		if(section.size()>=2 && section.front()==branch && section[1]==child) return section;
+	throw std::runtime_error("cannot find bifurcation child section");
+}
+
+double DiameterScaledClearance(
+	const SwcGraph& graph,
+	const std::vector<int>& section,
+	double factor,
+	bool from_start)
+{
+	const int anchor=from_start?section.front():section.back();
+	const double initial=factor*graph.nodes.at(anchor).diameter;
+	const auto probe=ProbeSection(graph,section,initial,from_start);
+	return factor*std::max(graph.nodes.at(anchor).diameter,probe.diameter);
+}
+
+std::vector<double> DownstreamClearances(
+	const SwcGraph& graph,
+	const std::vector<std::vector<int>>& sections,
+	const std::vector<int>& branches,
+	const MeshParameters& parameters)
+{
+	std::vector<double> result(graph.nodes.size(),0.0);
+	for(int branch:branches) {
+		const auto& junction=graph.nodes.at(branch);
+		const auto& first=ChildSection(sections,branch,junction.children[0]);
+		const auto& second=ChildSection(sections,branch,junction.children[1]);
+		const double first_base=DiameterScaledClearance(graph,first,
+			parameters.downstream_clearance_over_diameter,true);
+		const double second_base=DiameterScaledClearance(graph,second,
+			parameters.downstream_clearance_over_diameter,true);
+		const double common_base=std::max(first_base,second_base);
+		const auto first_probe=ProbeSection(graph,first,common_base,true);
+		const auto second_probe=ProbeSection(graph,second,common_base,true);
+		const Vec3 first_direction=Normalized(first_probe.direction,
+			"bifurcation child clearance direction");
+		const Vec3 second_direction=Normalized(second_probe.direction,
+			"bifurcation child clearance direction");
+		const double angle=std::acos(ClampUnit(Dot(first_direction,second_direction)));
+		const double half_sine=std::sin(angle/2.0);
+		if(!(half_sine>0.0))
+			throw std::runtime_error("bifurcation children have coincident clearance directions");
+		const double first_radius=std::max(junction.diameter,first_probe.diameter)/2.0;
+		const double second_radius=std::max(junction.diameter,second_probe.diameter)/2.0;
+		const double angle_clearance=parameters.collision_safety_factor
+			*(first_radius+second_radius)/(2.0*half_sine);
+		result[branch]=std::max(common_base,angle_clearance);
+	}
+	return result;
+}
+
+} // namespace
+
 SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 {
 	parameters.Validate();
@@ -307,6 +404,7 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 	sampling.max_diameter_change_fraction = parameters.max_diameter_change_fraction;
 	sampling.upstream_clearance_over_diameter = parameters.upstream_clearance_over_diameter;
 	sampling.downstream_clearance_over_diameter = parameters.downstream_clearance_over_diameter;
+	const auto downstream_clearance=DownstreamClearances(work,sections,branches,parameters);
 	for (const auto& section : sections) {
 		std::vector<Vec3> points;
 		std::vector<double> diameters;
@@ -320,7 +418,13 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 		else if (work.is_terminal(section.back())) mode = 2;
 		else if (section.front() == work.root()) mode = 3;
 		else throw std::runtime_error("cannot classify skeleton section");
-		const auto samples = SampleBranch(points, diameters, sampling, mode,
+		BranchClearance clearance;
+		if(work.is_branch(section.front()))
+			clearance.start=downstream_clearance.at(section.front());
+		if(work.is_branch(section.back()))
+			clearance.end=DiameterScaledClearance(work,section,
+				parameters.upstream_clearance_over_diameter,false);
+		const auto samples = SampleBranch(points, diameters, sampling, clearance, mode,
 			"section "+std::to_string(work.nodes[section.front()].id)
 			+"->"+std::to_string(work.nodes[section.back()].id));
 		int parent = critical_map.at(section.front());
