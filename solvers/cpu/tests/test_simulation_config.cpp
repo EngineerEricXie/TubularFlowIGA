@@ -96,6 +96,40 @@ int main()
 	assert(v4_configuration.has_mesh);
 	assert(v4_configuration.geometry.file == "skeleton_initial.swc");
 	assert(v4_configuration.mesh.quality.minimum_scaled_jacobian == 0.1);
+
+	auto circle_v4_json=v4_json;
+	const auto mesh_block=circle_v4_json.find("\"smoothing\"");
+	circle_v4_json.insert(mesh_block,"\"cross_section\":{\"kind\":\"circle\",\"target_size\":0.25},");
+	assert(iga::ParseSimulationConfiguration(circle_v4_json).mesh.cross_section.target_size==0.25);
+	assert(v4_configuration.mesh.cross_section.target_size==0.0);
+	auto default_v4_json=v4_json;
+	default_v4_json.insert(mesh_block,"\"cross_section\":{\"kind\":\"default\"},");
+	assert(iga::ParseSimulationConfiguration(default_v4_json).mesh.cross_section.target_size==0.0);
+	{
+		auto bad=default_v4_json;
+		bad.replace(bad.find("\"kind\":\"default\""),16,"\"kind\":\"default\",\"target_size\":0.25");
+		bool rejected=false;
+		try { iga::ParseSimulationConfiguration(bad); }
+		catch(const std::runtime_error&) { rejected=true; }
+		assert(rejected);
+	}
+
+	for(const std::string replacement : {"ellipse", "square"}) {
+		auto bad=circle_v4_json;
+		bad.replace(bad.find("\"kind\":\"circle\""),15,"\"kind\":\""+replacement+"\"");
+		bool rejected=false;
+		try { iga::ParseSimulationConfiguration(bad); }
+		catch(const std::runtime_error&) { rejected=true; }
+		assert(rejected);
+	}
+
+	for (const auto& replacement : {std::string("0"),std::string("-0.25"),std::string("0.0001"),std::string("2")}) {
+		auto bad=circle_v4_json;
+		bad.replace(bad.find("\"target_size\":0.25")+14,4,replacement);
+		bool rejected=false;
+		try { iga::ParseSimulationConfiguration(bad); } catch(const std::runtime_error&) { rejected=true; }
+		assert(rejected);
+	}
 	auto invalid_v4_json = v4_json;
 	const auto optimization_position = invalid_v4_json.find("\"optimization_iterations\":4");
 	assert(optimization_position != std::string::npos);

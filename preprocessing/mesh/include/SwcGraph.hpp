@@ -9,6 +9,7 @@ namespace tubular {
 
 struct MeshParameters
 {
+	double cross_section_size = 0.0;
 	int noise_iterations = 0;
 	double bifurcation_smoothing = 0.0;
 	double noise_smoothing = 0.0;

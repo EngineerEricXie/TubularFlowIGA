@@ -5,12 +5,21 @@ CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 CPPFLAGS ?= -Iinclude -I../../include
 SPECIES_COUPLING_HEADER := ../../include/SpeciesCoupling.hpp
 LDLIBS ?= -lstdc++fs
-HDF5_CFLAGS ?= $(firstword $(shell pkg-config --cflags-only-I hdf5 2>/dev/null))
-HDF5_ALL_CFLAGS ?= $(shell pkg-config --cflags hdf5 2>/dev/null)
+# Keep headers and libraries from the same active Conda installation when
+# pkg-config is unavailable; otherwise use the system HDF5 development files.
+HDF5_CONDA_PREFIX ?= $(firstword $(foreach prefix,$(CONDA_PREFIX) $(CONDA_ROOT),\
+	$(if $(and $(wildcard $(prefix)/include/hdf5.h),\
+		$(wildcard $(prefix)/lib/libhdf5.so $(prefix)/lib/libhdf5.dylib)),$(prefix))))
+HDF5_CFLAGS ?= $(if $(HDF5_CONDA_PREFIX),-I$(HDF5_CONDA_PREFIX)/include,\
+	$(shell pkg-config --cflags hdf5 2>/dev/null))
+HDF5_ALL_CFLAGS ?= $(HDF5_CFLAGS)
 HDF5_SERIAL_LIBRARY ?= $(firstword $(wildcard \
 	/usr/lib/*/libhdf5_serial.so /usr/lib/*/libhdf5_serial.so.[0-9]* \
-	/lib/*/libhdf5_serial.so /lib/*/libhdf5_serial.so.[0-9]*))
-HDF5_LIBS ?= $(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-config --libs hdf5 2>/dev/null))
+	/lib/*/libhdf5_serial.so /lib/*/libhdf5_serial.so.[0-9]* \
+	/usr/lib64/libhdf5.so /usr/lib/libhdf5.so /lib64/libhdf5.so /lib/libhdf5.so))
+HDF5_CONDA_LIBS = -L$(HDF5_CONDA_PREFIX)/lib -Wl,-rpath,$(HDF5_CONDA_PREFIX)/lib -lhdf5
+HDF5_LIBS ?= $(if $(HDF5_CONDA_PREFIX),$(HDF5_CONDA_LIBS),\
+	$(if $(HDF5_SERIAL_LIBRARY),$(HDF5_SERIAL_LIBRARY),$(shell pkg-config --libs hdf5 2>/dev/null)))
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
@@ -254,7 +263,7 @@ iga_inspect: src/iga_inspect.cpp include/IgaDatabase.hpp
 iga_bezier_export: src/iga_bezier_export.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ $(HDF5_LIBS) $(LDLIBS)
 
-iga_case_check: src/iga_case_check.cpp include/IgaDatabase.hpp include/CaseInput.hpp include/GenericCaseInput.hpp ../../include/CaseConfig.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/OutletModel.hpp
+iga_case_check: src/iga_case_check.cpp include/IgaDatabase.hpp include/CaseInput.hpp include/GenericCaseInput.hpp ../../include/CaseConfig.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/TemporalFunction.hpp ../../include/OutletModel.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 iga_config_check: src/iga_config_check.cpp ../../include/MultidomainConfig.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -265,10 +274,10 @@ config-check-dispatch-test: iga_config_check tests/test_iga_config_check.sh
 iga_flow_validate: src/iga_flow_validate.cpp include/BoundaryFlow.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/WomersleyReference.hpp ../../include/VelocitySeries.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-iga_transport_validate: src/iga_transport_validate.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+iga_transport_validate: src/iga_transport_validate.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-transport_budget_test: tests/test_transport_budget.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+transport_budget_test: tests/test_transport_budget.cpp include/TransportBudget.hpp include/BoundaryFlow.hpp include/GenericCaseInput.hpp include/CaseInput.hpp include/IgaDatabase.hpp include/Quadrature.hpp include/ElementGeometry.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 .PHONY: transport-budget-test
@@ -296,7 +305,7 @@ coupling_port_test: tests/test_coupling_port.cpp ../../include/CouplingPort.hpp 
 quadrature_test: tests/test_quadrature.cpp include/Quadrature.hpp include/ElementGeometry.hpp include/TransportElement.hpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-generic_transport_test: tests/test_generic_transport.cpp include/GenericTransportElement.hpp include/FieldCouplingPattern.hpp include/TransportElement.hpp include/CaseInput.hpp ../../include/SimulationConfig.hpp
+generic_transport_test: tests/test_generic_transport.cpp include/GenericTransportElement.hpp include/FieldCouplingPattern.hpp include/TransportElement.hpp include/CaseInput.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 navier_stokes_test: tests/test_navier_stokes.cpp include/ImmersedFlowPort.hpp include/ImmersedSurfaceQuadrature.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/TransportElement.hpp include/IgaDatabase.hpp
@@ -574,7 +583,7 @@ surface_vtp_test: tests/test_surface_vtp.cpp include/SurfaceReaders.hpp include/
 vtk_output_test: tests/test_vtk_output.cpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-text_output_failure_test: tests/test_text_output_failure.cpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/VelocitySeries.hpp ../../include/SimulationConfig.hpp ../../include/OxygenCapacity.hpp ../../include/BezierVisualization.hpp ../../include/CouplingHistory.hpp ../../include/VascularCoupling.hpp include/IgaDatabase.hpp
+text_output_failure_test: tests/test_text_output_failure.cpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/VelocitySeries.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/OxygenCapacity.hpp ../../include/BezierVisualization.hpp ../../include/CouplingHistory.hpp ../../include/VascularCoupling.hpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 .PHONY: text-output-failure-test
@@ -617,7 +626,7 @@ transport_checkpoint_test: tests/test_transport_checkpoint.cpp ../../include/Tra
 vca_checkpoint_test: tests/test_vca_checkpoint.cpp ../../include/VcaCheckpoint.hpp ../../include/VascularCoupling.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-outlet_model_test: tests/test_outlet_model.cpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/FlowCheckpoint.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp
+outlet_model_test: tests/test_outlet_model.cpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/FlowCheckpoint.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 boundary_flow_test: tests/test_boundary_flow.cpp include/BoundaryFlow.hpp include/OutletFlow.hpp include/PressureTractionFlow.hpp include/IgaDatabase.hpp ../../include/OutletModel.hpp ../../include/PressureTraction.hpp
@@ -639,13 +648,13 @@ petsc-test: quadrature_test generic_transport_test navier_stokes_test nitsche_wa
 	./vca_3d_runtime_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./vca_3d_smoke_test
 
-vca_3d_runtime_test: tests/test_vca_3d_runtime.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/CoupledDomainRuntime.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp
+vca_3d_runtime_test: tests/test_vca_3d_runtime.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/CoupledDomainRuntime.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/TemporalFunction.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-vca_3d_smoke_test: tests/test_vca_3d_smoke.cpp iga_navier_stokes include/IgaDatabase.hpp ../../include/SimulationConfig.hpp ../../include/VcaCheckpoint.hpp
+vca_3d_smoke_test: tests/test_vca_3d_smoke.cpp iga_navier_stokes include/IgaDatabase.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/VcaCheckpoint.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
-transport_boundary_preflight_test: tests/test_transport_boundary_preflight.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/TransportElement.hpp ../../include/SimulationConfig.hpp
+transport_boundary_preflight_test: tests/test_transport_boundary_preflight.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/TransportElement.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 iga_assembly_smoke: src/iga_assembly_smoke.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp
@@ -661,7 +670,7 @@ phase_profile_test: tests/test_phase_profile.cpp ../../include/PhaseProfile.hpp
 phase-profile-test: phase_profile_test
 	./phase_profile_test
 
-iga_solve: src/iga_solve.cpp ../../include/PhaseProfile.hpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/PetscBezierVisualization.hpp include/ParallelVtkOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/BezierVisualization.hpp ../../include/PartitionedVtkOutput.hpp ../../include/TemporalVtkHdf.hpp
+iga_solve: src/iga_solve.cpp ../../include/PhaseProfile.hpp include/IgaDatabase.hpp include/MemoryReport.hpp include/OwnedRowAssembler.hpp include/TransportBoundaryPreflight.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/PetscBezierVisualization.hpp include/ParallelVtkOutput.hpp ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/TemporalFunction.hpp ../../include/VelocitySeries.hpp ../../include/FlowCheckpoint.hpp ../../include/TransportCheckpoint.hpp ../../include/VtkOutput.hpp ../../include/PhysiologyOutput.hpp ../../include/BezierVisualization.hpp ../../include/PartitionedVtkOutput.hpp ../../include/TemporalVtkHdf.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 iga_transport: src/iga_transport.cpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/FieldCouplingPattern.hpp include/CaseInput.hpp include/TransportElement.hpp ../../include/CaseConfig.hpp
@@ -669,7 +678,7 @@ iga_transport: src/iga_transport.cpp include/IgaDatabase.hpp include/OwnedRowAss
 
 iga_navier_stokes_openmp: CXXFLAGS += -fopenmp
 iga_navier_stokes iga_navier_stokes_openmp: include/CollectiveAssetInput.hpp include/Sha256.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp
-iga_navier_stokes iga_navier_stokes_openmp: src/iga_navier_stokes.cpp include/BoundarySupport.hpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/TransportElement.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/PressureTractionFlow.hpp ../../include/CaseConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/VascularCoupling.hpp ../../include/CouplingConfig.hpp ../../include/TemporalFunction.hpp ../../include/FlowCheckpoint.hpp ../../include/VcaCheckpoint.hpp ../../include/CouplingHistory.hpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/PressureTraction.hpp ../../include/VelocitySeries.hpp ../../include/VtkOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
+iga_navier_stokes iga_navier_stokes_openmp: src/iga_navier_stokes.cpp include/BoundarySupport.hpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/TransportElement.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/PressureTractionFlow.hpp ../../include/CaseConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/VascularCoupling.hpp ../../include/CouplingConfig.hpp ../../include/TemporalFunction.hpp ../../include/FlowCheckpoint.hpp ../../include/VcaCheckpoint.hpp ../../include/CouplingHistory.hpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/PressureTraction.hpp ../../include/VelocitySeries.hpp ../../include/VtkOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/TransportElement.hpp

@@ -96,8 +96,11 @@ Do not mix MPI implementations between PETSc compilation and solver runtime.
 The temporal VTKHDF writer runs only on rank zero and uses serial HDF5 calls.
 Prefer a serial HDF5 development package. If only parallel HDF5 is available,
 it must use the same MPI implementation as PETSc. `HDF5_CFLAGS` and
-`HDF5_LIBS` can override `pkg-config hdf5`; this is useful on systems exposing
-more than one HDF5 installation.
+`HDF5_LIBS` can override automatic detection; this is useful on systems exposing
+more than one HDF5 installation. The CPU build first uses a complete HDF5
+installation under `CONDA_PREFIX` or `CONDA_ROOT`, with a runtime library path,
+then falls back to system libraries (including `/usr/lib64` on Bridges-2) and
+`pkg-config`. `HDF5_CFLAGS` applies to both tools and PETSc solver builds.
 
 ### If Eigen or `mpmetis` is unavailable
 
