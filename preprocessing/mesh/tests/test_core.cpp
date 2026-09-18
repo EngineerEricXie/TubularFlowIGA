@@ -256,6 +256,70 @@ int main(int argc, char** argv)
 	Require(std::abs(sparse_clearance[0]-dense_clearance[0])<1.0e-4,
 		"junction clearance changed when the same centerline was densely sampled");
 
+	const double acute_angle=30.0*std::acos(-1.0)/180.0;
+	auto make_acute_asymmetric_y=[acute_angle](bool dense) {
+		SwcGraph result;
+		auto add=[&](int parent,const Vec3& position,double diameter) {
+			SwcNode node;
+			node.parent=parent;node.position=position;node.diameter=diameter;
+			result.nodes.push_back(node);
+			return static_cast<int>(result.nodes.size())-1;
+		};
+		const Vec3 parent_direction{std::cos(acute_angle),std::sin(acute_angle),0.0};
+		const Vec3 second_direction{std::cos(-2.0*std::acos(-1.0)/3.0),
+			std::sin(-2.0*std::acos(-1.0)/3.0),0.0};
+		int parent=add(-1,parent_direction*10.0,1.0);
+		if(dense) {
+			parent=add(parent,parent_direction,1.0);
+			parent=add(parent,parent_direction*0.1,1.0);
+		}
+		const int branch=add(parent,{0,0,0},1.0);
+		int first=add(branch,{0.01,0,0},1.4);
+		if(dense) first=add(first,{1,0,0},1.4);
+		add(first,{10,0,0},1.4);
+		int second=branch;
+		if(dense) {
+			second=add(second,second_direction*0.1,1.0);
+			second=add(second,second_direction,1.0);
+		}
+		add(second,second_direction*10.0,1.0);
+		result.RebuildChildren();result.Validate();
+		return result;
+	};
+	auto arm_clearances=[](const SwcGraph& value) {
+		for(std::size_t i=0;i<value.nodes.size();++i) {
+			if(!value.is_branch(static_cast<int>(i))) continue;
+			const auto& branch=value.nodes[i];
+			return std::array<double,3>{{
+				Norm(value.nodes.at(branch.parent).position-branch.position),
+				Norm(value.nodes.at(branch.children[0]).position-branch.position),
+				Norm(value.nodes.at(branch.children[1]).position-branch.position)}};
+		}
+		throw std::runtime_error("three-arm clearance test graph has no bifurcation");
+	};
+	const auto acute_sparse=arm_clearances(SmoothSkeleton(
+		make_acute_asymmetric_y(false),clearance_parameters));
+	const auto acute_dense=arm_clearances(SmoothSkeleton(
+		make_acute_asymmetric_y(true),clearance_parameters));
+	const double expected_parent_clearance=(0.5*std::cos(acute_angle)+0.7)
+		/std::sin(acute_angle);
+	const double expected_first_clearance=(0.7*std::cos(acute_angle)+0.5)
+		/std::sin(acute_angle);
+	Require(std::abs(acute_sparse[0]-expected_parent_clearance)<1.0e-8,
+		"acute parent-child angle did not increase upstream clearance");
+	Require(std::abs(acute_sparse[1]-expected_first_clearance)<1.0e-4,
+		"asymmetric child radius did not produce an arm-specific clearance");
+	Require(acute_sparse[2]>=2.1-1.0e-8,
+		"arm-specific clearance reduced the existing downstream lower bound");
+	for(std::size_t i=0;i<acute_sparse.size();++i)
+		Require(std::abs(acute_sparse[i]-acute_dense[i])<1.0e-4,
+			"three-arm clearance changed when collinear samples were added");
+	auto coincident_arms=make_acute_asymmetric_y(false);
+	coincident_arms.nodes[0].position={10,0,0};
+	coincident_arms.RebuildChildren();coincident_arms.Validate();
+	RequireFailure([&] { SmoothSkeleton(coincident_arms,clearance_parameters); },
+		"coincident outward arm directions");
+
 	SwcGraph y;
 	y.nodes.resize(5);
 	y.nodes[0].parent=-1;y.nodes[0].position={0,0,0};y.nodes[0].diameter=1.0;

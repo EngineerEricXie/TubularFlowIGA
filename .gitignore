@@ -76,6 +76,8 @@ core.*
 /examples/**/results/
 /Input/*
 !/Input/README.md
+# Ad hoc geometry attachments belong in cases or examples, not the repository root.
+/*.obj
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json

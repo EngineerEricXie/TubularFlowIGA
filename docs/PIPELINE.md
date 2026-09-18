@@ -155,14 +155,24 @@ layer-count boundaries.
 
 Junction clearance is based on physical arc length rather than a fixed number
 of source nodes. The smoother retains every source sample for its B-spline fit,
-then inserts the first ordinary child-ring position at an interpolated arc
-length outside the junction. The legacy lower bounds are one local diameter
-upstream and 1.5 local diameters downstream. For two child arms separated by
-angle `theta`, the common downstream clearance is also bounded by
-`collision_safety_factor * (r1 + r2) / (2*sin(theta/2))`. Consequently, adding
-collinear samples does not change the junction geometry. A section that cannot
-provide the resulting clearance is rejected instead of falling back to
-sample-index-dependent node deletion.
+then inserts ordinary ring positions at interpolated arc lengths outside the
+junction. The legacy lower bounds are one local diameter upstream and 1.5
+local diameters downstream. For two child arms separated by angle `theta`,
+both downstream clearances remain bounded by
+`collision_safety_factor * (r1 + r2) / (2*sin(theta/2))`.
+
+The parent and both children additionally receive independent pairwise
+clearances. For two outward arms `i` and `j` in the same half-space, arm `i`
+is bounded by
+`collision_safety_factor * (ri*cos(theta_ij) + rj) / sin(theta_ij)`. This is
+the useful geometric constraint from the earlier node-pruning implementation,
+but it is iterated with arc-length probes and never deletes or reconnects
+source nodes. Opposing arms use the diameter lower bounds, avoiding the
+straight-taper singularity of the old formula. Coincident outward directions
+are rejected. Consequently, each arm can respond to its own angle and radius,
+while adding collinear samples does not change the junction geometry. A
+section that cannot provide the resulting clearance is rejected instead of
+falling back to sample-index-dependent node deletion.
 
 MATLAB remains as an optional reference workflow. Install TREES separately,
 add both TREES and this repository recursively to the MATLAB path, set

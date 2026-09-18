@@ -304,6 +304,15 @@ const std::vector<int>& ChildSection(
 	throw std::runtime_error("cannot find bifurcation child section");
 }
 
+const std::vector<int>& ParentSection(
+	const std::vector<std::vector<int>>& sections,
+	int branch)
+{
+	for(const auto& section:sections)
+		if(section.size()>=2 && section.back()==branch) return section;
+	throw std::runtime_error("cannot find bifurcation parent section");
+}
+
 double DiameterScaledClearance(
 	const SwcGraph& graph,
 	const std::vector<int>& section,
@@ -316,13 +325,50 @@ double DiameterScaledClearance(
 	return factor*std::max(graph.nodes.at(anchor).diameter,probe.diameter);
 }
 
-std::vector<double> DownstreamClearances(
+struct JunctionClearances
+{
+	std::vector<double> upstream;
+	std::vector<double> downstream;
+};
+
+struct JunctionArm
+{
+	const std::vector<int>* section = nullptr;
+	bool from_start = false;
+	double base = 0.0;
+	double clearance = 0.0;
+};
+
+double AcutePairwiseClearance(
+	double radius,
+	double other_radius,
+	const Vec3& direction,
+	const Vec3& other_direction,
+	double safety_factor,
+	const std::string& context)
+{
+	const double cosine=ClampUnit(Dot(direction,other_direction));
+	// Opposing arms separate as they leave the junction. Applying the legacy
+	// formula there is both unnecessary and singular for a straight taper.
+	if(cosine<=0.0) return 0.0;
+	const double sine=std::sqrt(std::max(0.0,1.0-cosine*cosine));
+	if(sine<=1.0e-12)
+		throw std::runtime_error(context+": coincident outward arm directions");
+	const double result=safety_factor*(radius*cosine+other_radius)/sine;
+	if(!std::isfinite(result)||result<0.0)
+		throw std::runtime_error(context+": invalid pairwise arm clearance");
+	return result;
+}
+
+JunctionClearances ComputeJunctionClearances(
 	const SwcGraph& graph,
 	const std::vector<std::vector<int>>& sections,
 	const std::vector<int>& branches,
 	const MeshParameters& parameters)
 {
-	std::vector<double> result(graph.nodes.size(),0.0);
+	JunctionClearances result;
+	result.upstream.assign(graph.nodes.size(),0.0);
+	result.downstream.assign(graph.nodes.size(),0.0);
 	for(int branch:branches) {
 		const auto& junction=graph.nodes.at(branch);
 		const auto& first=ChildSection(sections,branch,junction.children[0]);
@@ -332,21 +378,66 @@ std::vector<double> DownstreamClearances(
 		const double second_base=DiameterScaledClearance(graph,second,
 			parameters.downstream_clearance_over_diameter,true);
 		const double common_base=std::max(first_base,second_base);
-		const auto first_probe=ProbeSection(graph,first,common_base,true);
-		const auto second_probe=ProbeSection(graph,second,common_base,true);
-		const Vec3 first_direction=Normalized(first_probe.direction,
-			"bifurcation child clearance direction");
-		const Vec3 second_direction=Normalized(second_probe.direction,
-			"bifurcation child clearance direction");
-		const double angle=std::acos(ClampUnit(Dot(first_direction,second_direction)));
-		const double half_sine=std::sin(angle/2.0);
-		if(!(half_sine>0.0))
-			throw std::runtime_error("bifurcation children have coincident clearance directions");
-		const double first_radius=std::max(junction.diameter,first_probe.diameter)/2.0;
-		const double second_radius=std::max(junction.diameter,second_probe.diameter)/2.0;
-		const double angle_clearance=parameters.collision_safety_factor
-			*(first_radius+second_radius)/(2.0*half_sine);
-		result[branch]=std::max(common_base,angle_clearance);
+		std::vector<JunctionArm> arms;
+		int parent_arm=-1;
+		if(junction.parent>=0) {
+			const auto& parent=ParentSection(sections,branch);
+			const double parent_base=DiameterScaledClearance(graph,parent,
+				parameters.upstream_clearance_over_diameter,false);
+			parent_arm=static_cast<int>(arms.size());
+			arms.push_back({&parent,false,parent_base,parent_base});
+		}
+		const int first_arm=static_cast<int>(arms.size());
+		arms.push_back({&first,true,common_base,common_base});
+		const int second_arm=static_cast<int>(arms.size());
+		arms.push_back({&second,true,common_base,common_base});
+		const int node_id=junction.id>0?junction.id:branch+1;
+		const std::string context="bifurcation node "+std::to_string(node_id);
+
+		bool converged=false;
+		for(int iteration=0;iteration<32;++iteration) {
+			std::vector<Vec3> directions;
+			std::vector<double> radii;
+			directions.reserve(arms.size());
+			radii.reserve(arms.size());
+			for(const auto& arm:arms) {
+				const auto probe=ProbeSection(graph,*arm.section,arm.clearance,arm.from_start);
+				directions.push_back(Normalized(probe.direction,context+" clearance direction"));
+				radii.push_back(std::max(junction.diameter,probe.diameter)/2.0);
+			}
+			std::vector<double> next;
+			next.reserve(arms.size());
+			for(const auto& arm:arms) next.push_back(arm.base);
+			for(std::size_t i=0;i<arms.size();++i) {
+				for(std::size_t j=i+1;j<arms.size();++j) {
+					next[i]=std::max(next[i],AcutePairwiseClearance(radii[i],radii[j],
+						directions[i],directions[j],parameters.collision_safety_factor,context));
+					next[j]=std::max(next[j],AcutePairwiseClearance(radii[j],radii[i],
+						directions[j],directions[i],parameters.collision_safety_factor,context));
+				}
+			}
+			const double child_cosine=ClampUnit(Dot(directions[first_arm],directions[second_arm]));
+			const double half_sine=std::sqrt(std::max(0.0,(1.0-child_cosine)/2.0));
+			if(!(half_sine>1.0e-12))
+				throw std::runtime_error(context+": children have coincident clearance directions");
+			const double common_child_clearance=parameters.collision_safety_factor
+				*(radii[first_arm]+radii[second_arm])/(2.0*half_sine);
+			next[first_arm]=std::max(next[first_arm],common_child_clearance);
+			next[second_arm]=std::max(next[second_arm],common_child_clearance);
+
+			bool changed=false;
+			for(std::size_t i=0;i<arms.size();++i) {
+				const double updated=std::max(arms[i].clearance,next[i]);
+				if(updated-arms[i].clearance>1.0e-10*std::max(1.0,updated)) changed=true;
+				arms[i].clearance=updated;
+			}
+			if(!changed) { converged=true; break; }
+		}
+		if(!converged)
+			throw std::runtime_error(context+": pairwise clearance iteration did not converge");
+		if(parent_arm>=0) result.upstream[branch]=arms[parent_arm].clearance;
+		result.downstream[junction.children[0]]=arms[first_arm].clearance;
+		result.downstream[junction.children[1]]=arms[second_arm].clearance;
 	}
 	return result;
 }
@@ -404,7 +495,7 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 	sampling.max_diameter_change_fraction = parameters.max_diameter_change_fraction;
 	sampling.upstream_clearance_over_diameter = parameters.upstream_clearance_over_diameter;
 	sampling.downstream_clearance_over_diameter = parameters.downstream_clearance_over_diameter;
-	const auto downstream_clearance=DownstreamClearances(work,sections,branches,parameters);
+	const auto junction_clearance=ComputeJunctionClearances(work,sections,branches,parameters);
 	for (const auto& section : sections) {
 		std::vector<Vec3> points;
 		std::vector<double> diameters;
@@ -420,10 +511,9 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 		else throw std::runtime_error("cannot classify skeleton section");
 		BranchClearance clearance;
 		if(work.is_branch(section.front()))
-			clearance.start=downstream_clearance.at(section.front());
+			clearance.start=junction_clearance.downstream.at(section[1]);
 		if(work.is_branch(section.back()))
-			clearance.end=DiameterScaledClearance(work,section,
-				parameters.upstream_clearance_over_diameter,false);
+			clearance.end=junction_clearance.upstream.at(section.back());
 		const auto samples = SampleBranch(points, diameters, sampling, clearance, mode,
 			"section "+std::to_string(work.nodes[section.front()].id)
 			+"->"+std::to_string(work.nodes[section.back()].id));
