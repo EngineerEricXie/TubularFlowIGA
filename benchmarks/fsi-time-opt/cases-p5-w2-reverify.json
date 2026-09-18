@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "phase": "P5-W2-verification-only-after-near-zero-roundoff-fix",
+  "source_job": 46219623,
+  "verifier_variant": "P5VerifierR3",
+  "baseline": "P4ValidationR2",
+  "candidate": "P5ValidationR2",
+  "simulation_executed": false,
+  "reason": "initial verifier incorrectly applied relative tolerance to near-zero dimensionless continuity; replacement bound is 256*epsilon*sqrt(rows) at natural scale 1"
+}

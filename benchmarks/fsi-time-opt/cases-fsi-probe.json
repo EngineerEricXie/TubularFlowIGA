@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "phase": "P1-A-before-change-proof",
+  "source": "test_compliant_channel_fsi.cpp",
+  "scope": "27-cell compliant channel, existing complete one-step two-way FSI, original conservation gates",
+  "profile_detail": true,
+  "reference_export": "--reference-output reference",
+  "proof": "completed adapter-initial immediately followed by initial with identical input/state/history/map/epoch/generation/DOF and coupling identity",
+  "algorithm_changes": false,
+  "formal_physics_acceptance": false
+}

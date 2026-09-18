@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "phase": "P1-A-isolated-full-immersed-unit-suite",
+  "regressions": ["immersed"],
+  "matched_complete_fsi": false,
+  "per_process_timeout_seconds": 12600,
+  "native_gates": "all original assertions, geometry depths and quadrature unchanged",
+  "threads": 8,
+  "batch": 8,
+  "formal_physics_acceptance": false
+}

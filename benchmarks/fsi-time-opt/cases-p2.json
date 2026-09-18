@@ -1,0 +1,10 @@
+{
+  "phase": "P2-batch-selection-W0-W1",
+  "threads": 8,
+  "batches": [8, 16, 32],
+  "process_orders": [[8,16,32],[32,16,8]],
+  "closest_to_fastest_fraction": 0.02,
+  "rss_limit_fraction": 0.70,
+  "W2_required_before_promotion": true,
+  "formal_physics_acceptance": false
+}

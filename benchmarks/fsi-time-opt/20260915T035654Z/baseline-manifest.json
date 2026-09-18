@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "variant": "B0",
+  "source_archive": "B0-source.tar",
+  "source_sha256": "011810116cc08865d098128686c33547451a346ec65d5cc481a8c5a11434f7a9",
+  "file_hashes": "B0-source-files.sha256",
+  "git_head": "db8c66a2ccdbe90101a296b27eae6bac97c0d93b",
+  "dirty_tree_preserved": true,
+  "worktree_patch": "B0-worktree.patch",
+  "status": "source_audited_rebuilt_operator_verified",
+  "historical_tested_job": 45982619,
+  "tested_runtime_header_sha256": "1698eb75b49ff29e83a6278e00d05a3796f122520211f02966930a276858928c",
+  "source_audit": "baseline-source-audit.txt",
+  "workload_source": "Shared benchmark.cpp from immutable P0D archive plus driver.cpp from archived-workload.tar.gz; never use stale B0 runner/workload files",
+  "workload_reference_job": 45981715,
+  "archived_workload_hash": "archived-workload.sha256",
+  "surface_hash": "surface.sha256",
+  "binary_environment_evidence": "job-46014291",
+  "formal_physics_acceptance": false
+}

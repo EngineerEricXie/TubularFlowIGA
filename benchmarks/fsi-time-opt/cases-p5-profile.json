@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "phase": "P5-solver-setup-profile",
+  "variant": "P4ValidationR2",
+  "binary_build_job": 46203125,
+  "steps": 1,
+  "grid": [16, 16, 5],
+  "dt_s": 0.05,
+  "pressure_base_pa": 5,
+  "pressure_amplitude_pa": 30,
+  "period_s": 1,
+  "cut_depth": 1,
+  "wall_inertial_gamma0": 1,
+  "native_reference": false,
+  "threads": 8,
+  "batch": 32,
+  "purpose": "measure actual PETSc KSP/PC/factor backend and symbolic/numeric setup split; no candidate promotion"
+}

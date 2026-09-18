@@ -1,0 +1,193 @@
+{
+  "status": "passed",
+  "job_id": "45981715",
+  "assembly": {
+    "status": "passed",
+    "scope": "Y-vessel fixed-geometry assembly; not full FSI time-step speedup",
+    "records": {
+      "baseline": [
+        {
+          "trial": 0,
+          "seconds": 29.456677851000002,
+          "sha256": "d67dfc4ff72363aa99b0b7228a3328fdfb162f687f78d74189eb8816a048cf8f",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 1,
+          "seconds": 28.205426335,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 2,
+          "seconds": 28.543797581000007,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        }
+      ],
+      "candidate": [
+        {
+          "trial": 0,
+          "seconds": 16.053446909,
+          "sha256": "d67dfc4ff72363aa99b0b7228a3328fdfb162f687f78d74189eb8816a048cf8f",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 1,
+          "seconds": 15.911738026000002,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 2,
+          "seconds": 15.982731132000005,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        }
+      ],
+      "candidate-serial": [
+        {
+          "trial": 0,
+          "seconds": 57.28600760500001,
+          "sha256": "d67dfc4ff72363aa99b0b7228a3328fdfb162f687f78d74189eb8816a048cf8f",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 1,
+          "seconds": 58.191612848000005,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        },
+        {
+          "trial": 2,
+          "seconds": 58.190114988000005,
+          "sha256": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373",
+          "mallocs": 0.0
+        }
+      ]
+    },
+    "assembly_speedup": 1.785914894348108
+  },
+  "small_fsi": {
+    "background_cells": 27,
+    "threads": 8,
+    "runs_per_variant": 1,
+    "reported_coupling_and_final_diagnostics_exact_match": true,
+    "baseline_seconds": 473.5619382500008,
+    "candidate_seconds": 445.3920552629861,
+    "speedup": 1.063247385430756,
+    "time_reduction_fraction": 0.05948510788496564,
+    "profiles": {
+      "baseline": {
+        "schema_version": 1,
+        "rank": 0,
+        "ranks": 1,
+        "status": 0,
+        "elapsed_s": 473.5619382500008,
+        "phases": {
+          "input": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          },
+          "geometry": {
+            "inclusive_s": 50.69450921998941,
+            "exclusive_s": 25.556200391234597,
+            "calls": 15
+          },
+          "assembly": {
+            "inclusive_s": 436.93278463193565,
+            "exclusive_s": 436.93278463193565,
+            "calls": 28
+          },
+          "solver_setup": {
+            "inclusive_s": 4.634589734982001,
+            "exclusive_s": 4.634589734982001,
+            "calls": 8
+          },
+          "linear_solve": {
+            "inclusive_s": 0.927802336984314,
+            "exclusive_s": 0.927802336984314,
+            "calls": 12
+          },
+          "coupling": {
+            "inclusive_s": 468.54465332601103,
+            "exclusive_s": 5.122030458209338,
+            "calls": 1
+          },
+          "communication": {
+            "inclusive_s": 0.015200754685793072,
+            "exclusive_s": 0.015200754685793072,
+            "calls": 72
+          },
+          "output": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          },
+          "diagnostics": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          }
+        },
+        "unscoped_s": 0.37332994196913205
+      },
+      "candidate": {
+        "schema_version": 1,
+        "rank": 0,
+        "ranks": 1,
+        "status": 0,
+        "elapsed_s": 445.3920552629861,
+        "phases": {
+          "input": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          },
+          "geometry": {
+            "inclusive_s": 42.704145367024466,
+            "exclusive_s": 21.502954088966362,
+            "calls": 15
+          },
+          "assembly": {
+            "inclusive_s": 420.03293289701105,
+            "exclusive_s": 420.03293289701105,
+            "calls": 28
+          },
+          "solver_setup": {
+            "inclusive_s": 1.8978239010029938,
+            "exclusive_s": 1.8978239010029938,
+            "calls": 8
+          },
+          "linear_solve": {
+            "inclusive_s": 0.007251346949487925,
+            "exclusive_s": 0.007251346949487925,
+            "calls": 12
+          },
+          "coupling": {
+            "inclusive_s": 440.81390011898475,
+            "exclusive_s": 1.7553617750818375,
+            "calls": 1
+          },
+          "communication": {
+            "inclusive_s": 8.839595830067992e-05,
+            "exclusive_s": 8.839595830067992e-05,
+            "calls": 72
+          },
+          "output": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          },
+          "diagnostics": {
+            "inclusive_s": 0,
+            "exclusive_s": 0,
+            "calls": 0
+          }
+        },
+        "unscoped_s": 0.19564285801607184
+      }
+    }
+  }
+}

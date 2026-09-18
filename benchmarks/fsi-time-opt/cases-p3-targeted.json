@@ -1,0 +1,1 @@
+{"phase":"P3-residual-only-targeted","depth":2,"cases":["zero","one-step","normal","half","nan-first","failure","nan-all","throw-ready"],"full_original_suite_required":true,"W2_required":true,"formal_physics_acceptance":false}

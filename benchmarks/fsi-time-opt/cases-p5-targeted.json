@@ -1,0 +1,17 @@
+{
+  "phase": "P5-preconditioner-reuse-targeted",
+  "depth": 2,
+  "candidate": "same-runtime previous LU as right preconditioner for current Jacobian",
+  "checks": [
+    "disabled control rebuilds every Newton system",
+    "enabled candidate accepts at least one reused preconditioner",
+    "current Jacobian true residual gate",
+    "maximum iteration gate",
+    "forced rejection rebuilds current Jacobian exactly",
+    "no factor handle crosses runtime geometry epoch",
+    "reuse build accept rebuild rejection counters visible"
+  ],
+  "W1_required": true,
+  "W2_required": true,
+  "formal_physics_acceptance": false
+}

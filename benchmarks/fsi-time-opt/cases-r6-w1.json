@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "phase": "R6-production-thread-scaling-W1",
+  "variant": "R6Scaling",
+  "accepted_baseline": "P5ValidationR2_batch32",
+  "threads": [1, 2, 4, 8],
+  "process_orders": [[1, 2, 4, 8], [8, 4, 2, 1]],
+  "batch": 32,
+  "allocation_cpus": 8,
+  "closest_to_fastest_fraction": 0.05,
+  "operator_hashes": {
+    "zero": "d67dfc4ff72363aa99b0b7228a3328fdfb162f687f78d74189eb8816a048cf8f",
+    "nonzero": "982aa0be0e6fc99bfc949526a1b227a963bed900c01bb459e469c9366790c373"
+  },
+  "W2_top_two_required": true,
+  "formal_physics_acceptance": false
+}

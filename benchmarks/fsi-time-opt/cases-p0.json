@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "workloads": ["W0", "W1"],
+  "W0": {"targets": ["parallel_element_batch_test", "parallel_element_batch_openmp_test", "element_assembly_execution_openmp_test"], "wrapped_test": "test_parallel_immersed_volume.cpp", "assertions": true},
+  "W1": {"source": "heartbeat-performance-45981715/benchmark.cpp", "grid": [16,16,5], "states": ["zero", "0.01*sin(0.13*(i+1))"], "samples": 6, "warmups": 1, "paired_process_order": "AB/BA", "rho": 1060.0, "mu": 0.0035, "dt": 0.05, "storage": "compact", "matrix_mallocs": 0},
+  "replay": {"status": "not_yet_verified", "vtu_restart": false},
+  "formal_physics_acceptance": false
+}

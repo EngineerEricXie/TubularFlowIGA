@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "phase": "P1-A-six-volume-equality-fault-retry-cases",
+  "regressions": ["volume"],
+  "matched_complete_fsi": false,
+  "per_process_timeout_seconds": 2100,
+  "native_gates": "all original assertions, geometry and quadrature unchanged",
+  "threads": 8,
+  "batch": 8,
+  "formal_physics_acceptance": false
+}

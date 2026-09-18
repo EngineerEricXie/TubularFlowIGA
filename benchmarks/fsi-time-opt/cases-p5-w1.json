@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "phase": "P5-preconditioner-reuse-W1",
+  "baseline": "P4ValidationR2",
+  "candidate": "P5ValidationR2",
+  "binary_build_job": 46215836,
+  "orders": ["baseline-candidate", "candidate-baseline", "baseline-candidate"],
+  "steps": 1,
+  "grid": [16, 16, 5],
+  "dt_s": 0.05,
+  "pressure_base_pa": 5,
+  "pressure_amplitude_pa": 30,
+  "period_s": 1,
+  "cut_depth": 1,
+  "wall_inertial_gamma0": 1,
+  "native_reference": true,
+  "threads": 8,
+  "batch": 32,
+  "rtol_by_quantity": 1e-8,
+  "median_elapsed_reduction_gate": 0.05,
+  "all_pairs_candidate_faster": true,
+  "formal_physics_acceptance": false
+}

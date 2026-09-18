@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "phase": "P1-A-V0-V1-V2",
+  "baseline": "P1ABefore",
+  "candidate": "P1A",
+  "tests": ["test_immersed_transient_flow.cpp", "test_moving_immersed_transient_flow_fsi_runtime.cpp", "test_parallel_immersed_volume.cpp"],
+  "matched_complete_fsi": "test_compliant_channel_fsi.cpp",
+  "native_conservation_gates": "unchanged",
+  "comparison": "exact native accepted-state field hashes and remaining assembly input identities",
+  "detail_profile": true,
+  "threads": 8,
+  "batch": 8,
+  "formal_physics_acceptance": false
+}

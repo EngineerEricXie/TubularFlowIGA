@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "phase": "P5-original-Y-W2-independent-rerun",
+  "optimization_card": "P5",
+  "binary_build_job": 46215836,
+  "verifier_variant": "P5VerifierR3",
+  "baseline": "P4ValidationR2",
+  "candidate": "P5ValidationR2",
+  "batch_by_variant": {
+    "P4ValidationR2": 32,
+    "P5ValidationR2": 32
+  },
+  "steps": 2,
+  "grid": [16, 16, 5],
+  "dt_s": 0.05,
+  "pressure_base_pa": 5,
+  "pressure_amplitude_pa": 30,
+  "period_s": 1,
+  "cut_depth": 1,
+  "empty_rule_rescue_max_depth": 3,
+  "wall_inertial_gamma0": 1,
+  "native_reference": true,
+  "visualization_only": false,
+  "threads": 8,
+  "memory_mb": 15200,
+  "maximum_rss_fraction": 0.7,
+  "solver_path_change": true,
+  "frozen_per_quantity_rtol": 1e-8,
+  "near_zero_continuity_roundoff_bound": "256*epsilon*sqrt(rows) at natural dimensionless scale 1",
+  "reused_preconditioner_true_linear_relative_tolerance": 1e-10,
+  "historical_history_sha256": "ab5f0aa39714d49274ca3442d8a1d003399ac37b0e29bd6676d5ec86a94c5025",
+  "formal_physics_acceptance": false
+}
