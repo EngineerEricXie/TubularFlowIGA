@@ -1,0 +1,167 @@
+{
+  "status": "visualization_vtk_verified",
+  "formal_acceptance": false,
+  "vtk_version": "9.4.1",
+  "frames": [
+    {
+      "time_s": 0.05,
+      "points": {
+        "fluid": 39703,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.1,
+      "points": {
+        "fluid": 39710,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.15000000000000002,
+      "points": {
+        "fluid": 39714,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.2,
+      "points": {
+        "fluid": 39726,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.25,
+      "points": {
+        "fluid": 39751,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.3,
+      "points": {
+        "fluid": 39756,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.35,
+      "points": {
+        "fluid": 39769,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.39999999999999997,
+      "points": {
+        "fluid": 39780,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.44999999999999996,
+      "points": {
+        "fluid": 39798,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.49999999999999994,
+      "points": {
+        "fluid": 39800,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.5499999999999999,
+      "points": {
+        "fluid": 39800,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.6,
+      "points": {
+        "fluid": 39798,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.65,
+      "points": {
+        "fluid": 39792,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.7000000000000001,
+      "points": {
+        "fluid": 39775,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.7500000000000001,
+      "points": {
+        "fluid": 39756,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.8000000000000002,
+      "points": {
+        "fluid": 39755,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.8500000000000002,
+      "points": {
+        "fluid": 39741,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.9000000000000002,
+      "points": {
+        "fluid": 39720,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 0.9500000000000003,
+      "points": {
+        "fluid": 39712,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    },
+    {
+      "time_s": 1.0000000000000002,
+      "points": {
+        "fluid": 39710,
+        "membrane": 806,
+        "membrane-display": 806
+      }
+    }
+  ]
+}

@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "captured_utc": "2026-09-18T14:54:45Z",
+  "git_head_at_curation": "c53c2db0dcc5fd2bd088f4fae2b649cda9ac3c46",
+  "tested_source_base_git_head": "db8c66a2ccdbe90101a296b27eae6bac97c0d93b",
+  "tested_source_archive_sha256": "0aeb8a2d12cc09035514b27c838defd84c55916a52d2b8e6e693f2d9b96d4993",
+  "job_id": "46243889",
+  "scope": "Exact copies of selected original inputs and evidence; no simulation or numerical revalidation performed during curation.",
+  "original_run_root": "benchmarks/fsi-time-opt/20260915T035654Z",
+  "original_repository_root": "/ocean/projects/mch260002p/thsieh1/TubularFlowIGA",
+  "copy_policy": "Bytes preserved, including newlines; old absolute paths and original status fields are not rewritten. Relative sha256 verification is provided separately in SHA256SUMS.",
+  "numerical_status": {
+    "software_comparison_checks_passed": 19,
+    "total_time_steps": 20,
+    "conservation_failed_steps": 17,
+    "formal_physics_acceptance": false,
+    "classification": "visualization_only"
+  },
+  "reproduction_status": "Curated evidence is not a standalone source release, binary package, full VTK delivery, checkpoint, or fresh-clone runnable benchmark. Original runner still requires frozen archives, PSC paths and its historical environment.",
+  "files": [
+    {
+      "path": "inputs/surface.txt",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/surface.txt",
+      "bytes": 76906,
+      "sha256": "b6111efeb0992ebf6992ca106d8f8de4858bb3e7f1d896f9945a5fa57f6065bd"
+    },
+    {
+      "path": "provenance/surface.sha256",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/surface.sha256",
+      "bytes": 169,
+      "sha256": "c687ff8307c5409bcfd9b31f0dc167de0bf04ceb1646eaa7fb040da8d14dac91"
+    },
+    {
+      "path": "provenance/R7Final-source-files.sha256",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/R7Final-source-files.sha256",
+      "bytes": 49253,
+      "sha256": "d4943e18c2b43b401a35480c135f34493558a74bd7d1f4ba2a6ecf90c121edc1"
+    },
+    {
+      "path": "provenance/R7Final-source.sha256",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/R7Final-source.sha256",
+      "bytes": 176,
+      "sha256": "443d04380e604e4816dc859b91ccf44bb5311fabb557134bc48b541048ab6dbb"
+    },
+    {
+      "path": "provenance/R7Final-head.txt",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/R7Final-head.txt",
+      "bytes": 41,
+      "sha256": "b9b5973c25a2a300a73b0c0a2133331a7626616eaf1cf35e3283a835bccc3aa6"
+    },
+    {
+      "path": "provenance/baseline-manifest.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/baseline-manifest.json",
+      "bytes": 962,
+      "sha256": "8b57d95353b315b0598179ed0d3275e774f61d4592976ccd92fe0ee09d862e6f"
+    },
+    {
+      "path": "final/correctness.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/correctness.json",
+      "bytes": 1111,
+      "sha256": "847bd4f2821de88a7860cef91b7866d4b4fdf98021d50def9ec9abff1b3b58c8"
+    },
+    {
+      "path": "final/manifest.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/manifest.json",
+      "bytes": 834,
+      "sha256": "b2a0f2f9ff6527a0b612c735efa4906372f2738423c136d314e9bfbeafd877ce"
+    },
+    {
+      "path": "final/status.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/status.json",
+      "bytes": 164,
+      "sha256": "ea9e16d2c9bcdbe9ed914abbce77fd80e92fa29a6e4682fffadc2044fbaaabd3"
+    },
+    {
+      "path": "final/timing.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/timing.json",
+      "bytes": 1893,
+      "sha256": "5ba946e90c2ee707ceebe327bf920536f4e036b06967f138cdbca5e23a1c4612"
+    },
+    {
+      "path": "final/case.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/case.json",
+      "bytes": 1328,
+      "sha256": "e0bd079252ebbc57aea2df7ef94428f875f98ba3b31c3e5a742884cedf6513c6"
+    },
+    {
+      "path": "final/archive.sha256",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/archive.sha256",
+      "bytes": 130,
+      "sha256": "ffafa6417e7ab61f4a87d7265d0d69e80d480f608ee445c1f30e8c9814c2d0a8"
+    },
+    {
+      "path": "final/input-binary.sha256",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/input-binary.sha256",
+      "bytes": 380,
+      "sha256": "f748ab8513f1d9c25ff34b884f0160c81fb79668f914c2e9267ff599ead9c597"
+    },
+    {
+      "path": "final/results/history.csv",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/final/results/history.csv",
+      "bytes": 7077,
+      "sha256": "a89043c09484a521bb020f41e1f72302c8dbaff57f10d44d2044c21aec4e0e8a"
+    },
+    {
+      "path": "final/results/coupling.csv",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/final/results/coupling.csv",
+      "bytes": 4011,
+      "sha256": "89ee66b8142c298796294da748f19a7dd263db662b45028a9d7826018f3eca53"
+    },
+    {
+      "path": "final/results/run.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/final/results/run.json",
+      "bytes": 345,
+      "sha256": "f253182285c6a1d0e40eb6188c80e500db6dfd638a5b747309bde8c823fe2a68"
+    },
+    {
+      "path": "final/results/heartbeat-verification.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/final/results/heartbeat-verification.json",
+      "bytes": 830,
+      "sha256": "4112f8901c1c44c22dbfd22c1e2eef1e98cfcd44369d9f0aca0c7bc3b0cf0229"
+    },
+    {
+      "path": "final/results/heartbeat-vtk-verification.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/final/results/heartbeat-vtk-verification.json",
+      "bytes": 3127,
+      "sha256": "ad2e2e86bbe14e9e59bee8f8d06b67cb270c8c34b3756b0dd6e78897f54a043e"
+    },
+    {
+      "path": "historical/history.csv",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/historical/history.csv",
+      "bytes": 7083,
+      "sha256": "ab5f0aa39714d49274ca3442d8a1d003399ac37b0e29bd6676d5ec86a94c5025"
+    },
+    {
+      "path": "historical/coupling.csv",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/historical/coupling.csv",
+      "bytes": 4012,
+      "sha256": "fcc17f6ab13d6f690250547c3fec9ed030b45544839f7925f82e334829f08a82"
+    },
+    {
+      "path": "historical/run.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/historical/run.json",
+      "bytes": 345,
+      "sha256": "f253182285c6a1d0e40eb6188c80e500db6dfd638a5b747309bde8c823fe2a68"
+    },
+    {
+      "path": "historical/heartbeat-verification.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/historical/heartbeat-verification.json",
+      "bytes": 829,
+      "sha256": "6db3c1c6b29f6ba6a41c6ab92df3dc688731ab2ff1742a4577bd565429a6f595"
+    },
+    {
+      "path": "historical/heartbeat-vtk-verification.json",
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/historical/heartbeat-vtk-verification.json",
+      "bytes": 3127,
+      "sha256": "ad2e2e86bbe14e9e59bee8f8d06b67cb270c8c34b3756b0dd6e78897f54a043e"
+    }
+  ],
+  "exclusions": [
+    {
+      "original_path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/solver-options.txt",
+      "reason": "Original is a 228-byte command string without a trailing newline; retained in external inventory, not normalized into a supposedly byte-identical text copy. final/case.json and original runner document run parameters."
+    }
+  ]
+}

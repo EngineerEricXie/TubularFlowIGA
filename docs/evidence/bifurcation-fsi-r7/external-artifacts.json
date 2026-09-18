@@ -1,0 +1,469 @@
+{
+  "schema_version": 1,
+  "captured_utc": "2026-09-18T14:54:45Z",
+  "repository_root_at_capture": "/ocean/projects/mch260002p/thsieh1/TubularFlowIGA",
+  "status": "inventory_only_not_backup",
+  "independent_backup_verified": false,
+  "scope": "49 files: 45 source archives, archived workload, final visualization archive, executed binary and original solver options. Not a recursive inventory of all job outputs.",
+  "checksum_policy": "Recorded hashes come from original checksum records or binary manifest. Presence and sizes were checked, but bulk contents were not rehashed during indexing. Curated local file integrity is checked separately using SHA256SUMS.",
+  "retention": "Keep originals until an independent backup has been verified. This step does not authorize deletion, movement or upload.",
+  "directory_records": [
+    {
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z",
+      "role": "full_optimization_run_tree",
+      "exists_at_capture": true,
+      "recursive_contents_hashed": false,
+      "notes": "Includes raw logs, source snapshots, patches, intermediate/failed-run evidence and the indexed file records; do not double-count bytes."
+    },
+    {
+      "path": "benchmarks/heartbeat-optimized-45982619/results",
+      "role": "historical_20_step_reference",
+      "exists_at_capture": true,
+      "recursive_contents_hashed": false,
+      "notes": "Five small reference files also preserved here; full historical field output remains external to Git."
+    }
+  ],
+  "files": [
+    {
+      "bytes": 4720640,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/B0-source.sha256",
+      "mtime_utc": "2026-09-15T03:59:07Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/B0-source.tar",
+      "recorded_sha256": "011810116cc08865d098128686c33547451a346ec65d5cc481a8c5a11434f7a9",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4771840,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P0D-source.sha256",
+      "mtime_utc": "2026-09-15T04:09:01Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P0D-source.tar",
+      "recorded_sha256": "e36fec4ed13bab67aac28bcfc62b0f373de62b3f9711dc151e2dfb114dc82397",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4782080,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P0Probe-source.sha256",
+      "mtime_utc": "2026-09-15T04:59:53Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P0Probe-source.tar",
+      "recorded_sha256": "c1821f41463b7a24064955d7b7935035777050b4ea305dc34750431f455b871b",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4802560,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1A-source.sha256",
+      "mtime_utc": "2026-09-15T05:18:23Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1A-source.tar",
+      "recorded_sha256": "04ca216a52ed15bd7d4e7b186dd64cb275186330de0117a63d0b3d3b67389aad",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4802560,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1ABefore-source.sha256",
+      "mtime_utc": "2026-09-15T05:18:17Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1ABefore-source.tar",
+      "recorded_sha256": "a4c2ab62b0b935eabe891eaf5c0fe16e1157339b1eece43f9f3fdf5f5843beb4",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4812800,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidation-source.sha256",
+      "mtime_utc": "2026-09-15T07:40:17Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidation-source.tar",
+      "recorded_sha256": "008b7a10c7d726b96f7643db5efc421d93f56827e7fa6bb8ded75448c642fd4d",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4812800,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR2-source.sha256",
+      "mtime_utc": "2026-09-15T14:08:58Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR2-source.tar",
+      "recorded_sha256": "0435f2794d6f97ce2b2fa7bc4b8c8a1bb8250a90834814c294b4f5feb36f54b9",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4812800,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR3-source.sha256",
+      "mtime_utc": "2026-09-15T15:13:31Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR3-source.tar",
+      "recorded_sha256": "8e991d78a2ceea28fd41a5c2970d0731bd8e25fa52604cec211e5f18e06ceddd",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4823040,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR4-source.sha256",
+      "mtime_utc": "2026-09-15T16:19:46Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR4-source.tar",
+      "recorded_sha256": "b58a245dace296e09ebcb067165ab93efb465e18d226fed8dcdc102b797bd354",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4823040,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR5-source.sha256",
+      "mtime_utc": "2026-09-15T17:25:22Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1AValidationR5-source.tar",
+      "recorded_sha256": "74c80cc0adf340baee0e0b7c0610dcdb7a46d9502d7dbb7a5603057c19f475dd",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4884480,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1B-source.sha256",
+      "mtime_utc": "2026-09-15T21:06:32Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1B-source.tar",
+      "recorded_sha256": "a588354c3a9b53049097b2fbe9da544312a8f951287dd1c801cada8570779d34",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4864000,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1BBefore-source.sha256",
+      "mtime_utc": "2026-09-15T21:02:08Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1BBefore-source.tar",
+      "recorded_sha256": "32b17336ad3dd025bea354c0f2df9100b68cfc6071d2bfcbcc7162c4dcb95a9f",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4884480,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1BValidationR1-source.sha256",
+      "mtime_utc": "2026-09-15T23:53:59Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1BValidationR1-source.tar",
+      "recorded_sha256": "e43f2fda138e99c0d0107588eeacd2c47725d43afd1919083b83b427d8f49442",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4894720,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1BValidationR2-source.sha256",
+      "mtime_utc": "2026-09-16T03:59:48Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1BValidationR2-source.tar",
+      "recorded_sha256": "b5f8449b483ab99bc5234a18f5b2dd4f07c399dd8c1f7f6bd939ad1d2cd0f73e",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4894720,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P1BW2Runner-source.sha256",
+      "mtime_utc": "2026-09-15T23:55:25Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P1BW2Runner-source.tar",
+      "recorded_sha256": "d32662dd92575b0c8cdcf1f35db5d907d05aa056a94f3f5b506fc7546dc332fe",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4894720,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P2D-source.sha256",
+      "mtime_utc": "2026-09-16T07:38:46Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P2D-source.tar",
+      "recorded_sha256": "a9913d80bd081043b32d56705272863e1bee20e99113e6c7e9a0bdac5d98e440",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4904960,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P2Validation-source.sha256",
+      "mtime_utc": "2026-09-16T07:40:46Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P2Validation-source.tar",
+      "recorded_sha256": "9352ab9e2aa132e17a33dc3a8b79601685e7c8ed3add5e7e7cf38a67027d1ba0",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4904960,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P2ValidationR2-source.sha256",
+      "mtime_utc": "2026-09-16T10:54:43Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P2ValidationR2-source.tar",
+      "recorded_sha256": "e476464325c9ec258c004b2c80b431435c3badb3a4c68aec4c1a6ed9412e4b51",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4904960,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P2W2Runner-source.sha256",
+      "mtime_utc": "2026-09-16T14:01:26Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P2W2Runner-source.tar",
+      "recorded_sha256": "1fb7037b93258f686972ca07b6802f15eb2f1fd6a6b2232439c226856b5b57e4",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4915200,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3Candidate-source.sha256",
+      "mtime_utc": "2026-09-16T17:13:52Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3Candidate-source.tar",
+      "recorded_sha256": "03b705c900b82246917bbabd11bdee42289d8a6d04581afb6b49e23d6ebc1f3e",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4915200,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3Validation-source.sha256",
+      "mtime_utc": "2026-09-16T17:19:03Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3Validation-source.tar",
+      "recorded_sha256": "1664193b2222b09ccd09b3d534dc5a2aca86eb2aedb45112a1bd8ea7a5e23948",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4915200,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR2-source.sha256",
+      "mtime_utc": "2026-09-16T17:20:15Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR2-source.tar",
+      "recorded_sha256": "32ef018ae17a9db14c362ee36504fcf56bb81af0649dae0b11b5840dc3bef964",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4915200,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR3-source.sha256",
+      "mtime_utc": "2026-09-16T17:51:56Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR3-source.tar",
+      "recorded_sha256": "5596d6009419bea4dc820a8894d8f621902b16541e94e7f7412720ae37e59c6c",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4915200,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR4-source.sha256",
+      "mtime_utc": "2026-09-16T18:11:47Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR4-source.tar",
+      "recorded_sha256": "cde3c8361ae042a956f549c0912b51b35c9ae4655ee7c6cec42c223be96f1982",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4935680,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR5-source.sha256",
+      "mtime_utc": "2026-09-16T19:28:57Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR5-source.tar",
+      "recorded_sha256": "f083218030094ec8816bbb1401a606fa92451aff2c3d180ec38f074ee227620e",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4935680,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR6-source.sha256",
+      "mtime_utc": "2026-09-16T19:35:35Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3ValidationR6-source.tar",
+      "recorded_sha256": "192352c89fcb33bfd115beec0912defada78df28f8b6f7a60994e287655cada7",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4935680,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR1-source.sha256",
+      "mtime_utc": "2026-09-16T19:20:49Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR1-source.tar",
+      "recorded_sha256": "e59f327fb1983b22ee6602e2fe69e79f1714f3f1f48ea940d93fd6061d45fb30",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4935680,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR2-source.sha256",
+      "mtime_utc": "2026-09-16T19:29:44Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR2-source.tar",
+      "recorded_sha256": "8d1ca7988b3dd8104cb60cbd4c21038a6fec8b392aa84f2999d45f433669c18d",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4935680,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR3-source.sha256",
+      "mtime_utc": "2026-09-16T19:36:12Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P3VerifierR3-source.tar",
+      "recorded_sha256": "245e4a5a06a04d17256359185ba76c43c5f4f374d9b72be588f22cabbd40bcc5",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4956160,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P4Validation-source.sha256",
+      "mtime_utc": "2026-09-16T22:10:55Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P4Validation-source.tar",
+      "recorded_sha256": "28d5f7946d9c30f8e7d6c441c9c7aede8a8c21c07c9c2f49945cb7a37d03471d",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4966400,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P4ValidationR2-source.sha256",
+      "mtime_utc": "2026-09-17T02:20:07Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P4ValidationR2-source.tar",
+      "recorded_sha256": "bf43dca26b8d77f5a73870e61153915be0eb36b33d0cc3fb2a6bff72c54b25cb",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4966400,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P4Verifier-source.sha256",
+      "mtime_utc": "2026-09-17T02:44:46Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P4Verifier-source.tar",
+      "recorded_sha256": "96fb6c015c4a2b4ebd21722650434acada9ce5a9c1e84ff582b75ad1b4668a49",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4997120,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P5Validation-source.sha256",
+      "mtime_utc": "2026-09-17T05:14:32Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P5Validation-source.tar",
+      "recorded_sha256": "b60ff956609a7bb092b72e13183894be23fac5dd1df72aeb376543813ebf3c8b",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4997120,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P5ValidationR2-source.sha256",
+      "mtime_utc": "2026-09-17T05:37:44Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P5ValidationR2-source.tar",
+      "recorded_sha256": "9ba7ef56189f19a29126acb5f461dcfee94cd1204e3e7490035eaeeb01b86c5e",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5017600,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P5Verifier-source.sha256",
+      "mtime_utc": "2026-09-17T07:02:15Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P5Verifier-source.tar",
+      "recorded_sha256": "d4ed66aaf1fe81fb9c7365db016dc0a14c0fe3896146e5ce93908bb442309130",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5017600,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P5VerifierR2-source.sha256",
+      "mtime_utc": "2026-09-17T07:51:50Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P5VerifierR2-source.tar",
+      "recorded_sha256": "ad7f7ec989d82acff70dcb5a404f29745523457ab81facfa33ca8b2a921de74c",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5017600,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P5VerifierR3-source.sha256",
+      "mtime_utc": "2026-09-17T08:46:54Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P5VerifierR3-source.tar",
+      "recorded_sha256": "24db08eeac25334f72f8b33dc6cbc9aed72e1fa23f94de2408577f9899d267c5",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5027840,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/P6Profile-source.sha256",
+      "mtime_utc": "2026-09-17T09:42:37Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/P6Profile-source.tar",
+      "recorded_sha256": "0619efb045869debda2ffecd0e328ebe5550e2432081f4be0aa1e10e52f902f6",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5038080,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/R6Scaling-source.sha256",
+      "mtime_utc": "2026-09-17T10:05:10Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/R6Scaling-source.tar",
+      "recorded_sha256": "5506098e7efa796b243382a6855523d0d174bc02703952b305adaebd199ad522",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5058560,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/R6Verifier-source.sha256",
+      "mtime_utc": "2026-09-17T10:39:12Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/R6Verifier-source.tar",
+      "recorded_sha256": "565e1db4a2dc7f0153846fec022f7329b530e005c004a6e66741111406206022",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5058560,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/R6VerifierR2-source.sha256",
+      "mtime_utc": "2026-09-17T11:32:12Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/R6VerifierR2-source.tar",
+      "recorded_sha256": "24c1aea54a6bc1beda0f515b54c21bce03e3bd4df310a920d220ba3dee6e4d75",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5058560,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/R6VerifierR3-source.sha256",
+      "mtime_utc": "2026-09-17T11:44:51Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/R6VerifierR3-source.tar",
+      "recorded_sha256": "4b5ab21428f78197777abfec9bb5b9ece034cfcf7320ff8e0c7ecf69ff6da5ab",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 5079040,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/R7Final-source.sha256",
+      "mtime_utc": "2026-09-17T12:58:11Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/R7Final-source.tar",
+      "recorded_sha256": "0aeb8a2d12cc09035514b27c838defd84c55916a52d2b8e6e693f2d9b96d4993",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4864000,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/W2Runner-source.sha256",
+      "mtime_utc": "2026-09-15T17:48:02Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/W2Runner-source.tar",
+      "recorded_sha256": "32b17336ad3dd025bea354c0f2df9100b68cfc6071d2bfcbcc7162c4dcb95a9f",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 4843520,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/W2Tools-source.sha256",
+      "mtime_utc": "2026-09-15T17:34:49Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/W2Tools-source.tar",
+      "recorded_sha256": "698fe1ea19f3e7d53a0bcf4639f4ddcd162545eb7a7b74628a898142166b09df",
+      "role": "immutable_source_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 1971186,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/archived-workload.sha256",
+      "mtime_utc": "2026-09-15T04:09:01Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/archived-workload.tar.gz",
+      "recorded_sha256": "9c295ed873e3fd2f919dc397f64f2d7877c1549cbd49754c4e0b1dc65b29617d",
+      "role": "historical_benchmark_workload",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 1536032,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/manifest.json#binary_sha256",
+      "mtime_utc": "2026-09-17T13:21:21Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/heartbeat",
+      "recorded_sha256": "27a40bd3dbbef13f957e35526be59a6e54ab3e3c3f5cb8b8e96809f7ffab92b8",
+      "role": "executed_binary",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 93174492,
+      "checksum_source": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/archive.sha256",
+      "mtime_utc": "2026-09-17T15:18:56Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/heartbeat-paraview.tar.gz",
+      "recorded_sha256": "5936dd2905e2dbf1dcf5a0bc3314bf1ef3180b44ed3a7e64985e14932613dce5",
+      "role": "final_visualization_archive",
+      "content_rehashed_during_indexing": false
+    },
+    {
+      "bytes": 228,
+      "checksum_source": null,
+      "mtime_utc": "2026-09-17T13:21:21Z",
+      "path": "benchmarks/fsi-time-opt/20260915T035654Z/job-46243889/solver-options.txt",
+      "recorded_sha256": null,
+      "role": "original_solver_options",
+      "content_rehashed_during_indexing": false
+    }
+  ]
+}

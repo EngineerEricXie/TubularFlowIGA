@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "solver_elapsed_s": 6968.953234664979,
+  "historical_solver_elapsed_s": 13603,
+  "historical_elapsed_reduction_fraction": 0.48768997760310373,
+  "phase_profile": {
+    "schema_version": 1,
+    "rank": 0,
+    "ranks": 1,
+    "status": 0,
+    "elapsed_s": 6968.953234664979,
+    "phases": {
+      "input": {
+        "inclusive_s": 0,
+        "exclusive_s": 0,
+        "calls": 0
+      },
+      "geometry": {
+        "inclusive_s": 4568.341998708493,
+        "exclusive_s": 2463.8349446429056,
+        "calls": 240
+      },
+      "assembly": {
+        "inclusive_s": 2974.6855698640575,
+        "exclusive_s": 2974.6855698640575,
+        "calls": 616
+      },
+      "solver_setup": {
+        "inclusive_s": 577.5790313594625,
+        "exclusive_s": 577.5790313594625,
+        "calls": 229
+      },
+      "linear_solve": {
+        "inclusive_s": 38.41991051787045,
+        "exclusive_s": 38.41991051787045,
+        "calls": 308
+      },
+      "coupling": {
+        "inclusive_s": 6898.642465009994,
+        "exclusive_s": 864.7715135887847,
+        "calls": 20
+      },
+      "communication": {
+        "inclusive_s": 0.0021282058442011476,
+        "exclusive_s": 0.0021282058442011476,
+        "calls": 1414
+      },
+      "output": {
+        "inclusive_s": 0,
+        "exclusive_s": 0,
+        "calls": 0
+      },
+      "diagnostics": {
+        "inclusive_s": 0,
+        "exclusive_s": 0,
+        "calls": 0
+      }
+    },
+    "unscoped_s": 49.6601364860544
+  },
+  "assembly_records": 458,
+  "full_assembly_records": 229,
+  "residual_only_records": 229,
+  "preconditioner_builds": 79,
+  "preconditioner_reuse_attempts": 150,
+  "preconditioner_rebuilds": 0,
+  "threads": 8,
+  "batch": 32,
+  "historical_comparison": "cross-job/cross-node reference, not paired full-cycle timing",
+  "archive_sha256": "5936dd2905e2dbf1dcf5a0bc3314bf1ef3180b44ed3a7e64985e14932613dce5"
+}

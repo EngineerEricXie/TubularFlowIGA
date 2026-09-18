@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "checks": {
+    "run_parameters_and_status": true,
+    "historical_run_identity": true,
+    "full_history_within_frozen_per_quantity_tolerance": true,
+    "full_coupling_within_frozen_per_quantity_tolerance": true,
+    "twenty_finite_steps": true,
+    "conservation_failure_count_preserved": true,
+    "expansion_contraction_verifier": true,
+    "mean_normal_displacement_within_frozen_tolerance": true,
+    "native_vtk_verifier": true,
+    "native_vtk_frame_topology_exact": true,
+    "native_vtk_frame_times_exact": true,
+    "all_assembly_records_complete": true,
+    "residual_full_paths_visible": true,
+    "volume_basis_cache_contract": true,
+    "preconditioner_reuse_visible": true,
+    "true_linear_residual_gate": true,
+    "solver_complete_and_profiled": true,
+    "archive_integrity": true,
+    "archive_sha256_matches": true
+  },
+  "job_id": "46243889",
+  "formal_physics_acceptance": false,
+  "conservation_failed_steps": 17,
+  "scope": "full 20-step visualization-only heartbeat with historical per-quantity comparison, native VTK, and package"
+}
