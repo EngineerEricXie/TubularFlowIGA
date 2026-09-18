@@ -89,13 +89,14 @@ inline void AddImmersedFlowPortFinite(double& total, double value, const char* w
 // The stored vector is -R, hence the +N_a p n and -N_a(u.n) additions below.
 inline NavierStokesSystem BuildImmersedConservativeMixedTraceElement(
 	const Element& element, const SurfaceQuadratureRule& rule,
-	const std::vector<std::array<double, 4>>& nodal_state)
+	const std::vector<std::array<double, 4>>& nodal_state,
+	NavierStokesAssemblyRequest request = NavierStokesAssemblyRequest::ResidualAndJacobian)
 {
 	if (nodal_state.size() != element.connectivity.size())
 		throw std::invalid_argument("immersed conservative mixed trace nodal-state size is invalid");
 	ValidateSurfaceQuadratureRule(element, rule);
 	const std::size_t ndof = 4*element.connectivity.size();
-	NavierStokesSystem result{std::vector<PetscScalar>(ndof*ndof, 0.0),
+	NavierStokesSystem result{request==NavierStokesAssemblyRequest::ResidualAndJacobian?std::vector<PetscScalar>(ndof*ndof,0.0):std::vector<PetscScalar>{},
 		std::vector<PetscScalar>(ndof, 0.0)};
 	for (const auto& point : rule.Points()) {
 		const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
@@ -121,7 +122,7 @@ inline NavierStokesSystem BuildImmersedConservativeMixedTraceElement(
 				AddImmersedFlowPortFinite(momentum_rhs, CheckedImmersedFlowPortProduct(CheckedImmersedFlowPortProduct(test_weight, pressure, "mixed trace momentum pressure"), point.normal[component], "mixed trace momentum normal"), "mixed trace momentum residual accumulation");
 				result.negative_residual[velocity_row] = momentum_rhs;
 			}
-			for (std::size_t b = 0; b < element.connectivity.size(); ++b)
+			if(request==NavierStokesAssemblyRequest::ResidualAndJacobian) for (std::size_t b = 0; b < element.connectivity.size(); ++b)
 				for (int component = 0; component < 3; ++component) {
 					const double coefficient = CheckedImmersedFlowPortProduct(CheckedImmersedFlowPortProduct(test_weight, basis.value[b], "mixed trace Jacobian basis"), point.normal[component], "mixed trace Jacobian normal");
 					const std::size_t up = (4*a+component)*ndof+4*b+3;

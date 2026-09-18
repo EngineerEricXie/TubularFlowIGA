@@ -88,7 +88,22 @@ bool SameDiagnosticsPublic(const iga::ImmersedTransientFlowDiagnostics& a, const
 		&& a.idle==b.idle && a.trial_active==b.trial_active && a.converged==b.converged && a.prepared==b.prepared && a.committed==b.committed && a.scalar_diagonal_structure_verified==b.scalar_diagonal_structure_verified
 		&& a.attempt_count==b.attempt_count && a.abort_count==b.abort_count && a.rollback_count==b.rollback_count && a.prepare_count==b.prepare_count && a.finalize_count==b.finalize_count && a.commit_count==b.commit_count && SameBits(a.last_assembly_seconds,b.last_assembly_seconds) && SameBits(a.last_linear_solve_seconds,b.last_linear_solve_seconds)
 		&& a.geometry_identity_sha256==b.geometry_identity_sha256 && a.layout_hash_sha256==b.layout_hash_sha256 && a.committed_state_hash_sha256==b.committed_state_hash_sha256 && a.trial_state_hash_sha256==b.trial_state_hash_sha256 && a.history_hash_sha256==b.history_hash_sha256 && a.moving_map_identity_sha256==b.moving_map_identity_sha256 && a.input_hash_sha256==b.input_hash_sha256 && a.solved_state_hash_sha256==b.solved_state_hash_sha256 && a.prepared_hash_sha256==b.prepared_hash_sha256 && a.attempt_hash_sha256==b.attempt_hash_sha256
-		&& a.attempt_assembly_count==b.attempt_assembly_count && SamePortsBitwise(a.ports,b.ports) && SameNewtonRecords(a.newton_steps,b.newton_steps);
+		&& a.attempt_assembly_count==b.attempt_assembly_count
+		&& a.volume_basis_cache_enabled==b.volume_basis_cache_enabled
+		&& a.volume_basis_cache_build_misses==b.volume_basis_cache_build_misses
+		&& a.volume_basis_cache_hits==b.volume_basis_cache_hits
+		&& a.volume_basis_cache_misses==b.volume_basis_cache_misses
+		&& a.volume_basis_cache_bytes==b.volume_basis_cache_bytes
+		&& a.volume_basis_cache_key_sha256==b.volume_basis_cache_key_sha256
+		&& a.preconditioner_reuse_enabled==b.preconditioner_reuse_enabled
+		&& a.preconditioner_builds==b.preconditioner_builds
+		&& a.preconditioner_reuse_attempts==b.preconditioner_reuse_attempts
+		&& a.preconditioner_reuse_accepts==b.preconditioner_reuse_accepts
+		&& a.preconditioner_rebuilds==b.preconditioner_rebuilds
+		&& a.preconditioner_rejections_ksp==b.preconditioner_rejections_ksp
+		&& a.preconditioner_rejections_iterations==b.preconditioner_rejections_iterations
+		&& a.preconditioner_rejections_true_residual==b.preconditioner_rejections_true_residual
+		&& SamePortsBitwise(a.ports,b.ports) && SameNewtonRecords(a.newton_steps,b.newton_steps);
 }
 
 iga::ImmersedTransientFlowOptions Options()
@@ -534,10 +549,14 @@ FirstSolveFormulationGate EvaluateFirstSolveFormulationGate(
 			&& std::isfinite(step.linear_relative_residual) && std::isfinite(step.damping)
 			&& step.damping>=options.minimum_damping && step.damping<=1.0;
 	}
+	// Every solve retains one initial full assembly and one full candidate
+	// assembly per accepted Newton update. P1-B consumes an accepted candidate's
+	// complete R/J next iteration; that removed pure-work call cannot remain a
+	// correctness requirement. Rejected damping candidates only raise the count.
 	gate.accounting_consistent=records_consistent
 		&& diagnostics.nonlinear_iterations==static_cast<PetscInt>(steps.size())
 		&& diagnostics.ksp_iterations==summed_ksp_iterations
-		&& diagnostics.attempt_assembly_count>=2*steps.size();
+		&& diagnostics.attempt_assembly_count>=steps.size()+1;
 	return gate;
 }
 
@@ -586,17 +605,195 @@ int RunNewtonDiagnostic()
 	return 0;
 }
 
+int RunVolumeBasisCacheDiagnostic()
+{
+	const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
+	iga::MovingCutGeometryOptions geometry_options;
+	geometry_options.volume.max_depth=2; geometry_options.volume.max_nodes=200000;
+	geometry_options.volume.max_leaves=200000; geometry_options.volume.max_points=1000000;
+	const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+	auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	auto cached_options=Options(),uncached_options=Options(); uncached_options.cache_volume_basis=false;
+	iga::ImmersedTransientFlowRuntime cached(*geometry,cached_options),uncached(*geometry,uncached_options);
+	const auto points=LogicalVolumePoints(*geometry);
+	assert(points>0 && cached.Diagnostics().volume_basis_cache_enabled
+		&& cached.Diagnostics().volume_basis_cache_build_misses==points
+		&& cached.Diagnostics().volume_basis_cache_bytes>0
+		&& !uncached.Diagnostics().volume_basis_cache_enabled
+		&& uncached.Diagnostics().volume_basis_cache_build_misses==0
+		&& uncached.Diagnostics().volume_basis_cache_bytes==0
+		&& cached.Diagnostics().volume_basis_cache_key_sha256==uncached.Diagnostics().volume_basis_cache_key_sha256);
+	const auto fields=NonconstantFields(cached.Layout());
+	const iga::ImmersedGlobalFlowState seed(0.0,0,cached.Layout(),fields,{.019,-.023},true,.031);
+	cached.SetCommittedGlobalState(seed); uncached.SetCommittedGlobalState(seed);
+	cached.BeginTrial(1.0,1,1.0); uncached.BeginTrial(1.0,1,1.0);
+	const auto state=NonconstantTrial(cached),direction=Direction(cached);
+	cached.SetTrialState(state); uncached.SetTrialState(state); cached.Assemble(); uncached.Assemble();
+	assert(cached.AssembledNegativeResidual()==uncached.AssembledNegativeResidual());
+	assert(cached.AssembledJacobianAction(direction)==uncached.AssembledJacobianAction(direction));
+	assert(cached.Diagnostics().volume_basis_cache_hits==points && cached.Diagnostics().volume_basis_cache_misses==0);
+	assert(uncached.Diagnostics().volume_basis_cache_hits==0 && uncached.Diagnostics().volume_basis_cache_misses==points);
+	const auto residual=cached.AssembledNegativeResidual(); cached.AssembleResidualOnlyForTesting();
+	assert(cached.AssembledNegativeResidual()==residual && cached.Diagnostics().volume_basis_cache_hits==2*points);
+	cached.Rollback(); const auto hits_before_fault=cached.Diagnostics().volume_basis_cache_hits;
+	{ iga::ImmersedTransientFlowRuntime::FirstAssemblyFailureScopeForTesting fault;
+		RejectWithMessage([&] { cached.Assemble(); },"injected first immersed transient assembly failure");
+		assert(fault.Consumed() && cached.Diagnostics().volume_basis_cache_hits==hits_before_fault); }
+	cached.Assemble(); assert(cached.Diagnostics().volume_basis_cache_hits==hits_before_fault+points);
+	{ auto coefficient_options=Options(); coefficient_options.parameters.dynamic_viscosity=2.0;
+		iga::ImmersedTransientFlowRuntime coefficient(*geometry,coefficient_options);
+		assert(coefficient.Diagnostics().volume_basis_cache_key_sha256==cached.Diagnostics().volume_basis_cache_key_sha256); }
+	{ auto port_options=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.125);
+		iga::ImmersedTransientFlowRuntime port(*geometry,port_options);
+		assert(port.Diagnostics().volume_basis_cache_key_sha256==cached.Diagnostics().volume_basis_cache_key_sha256); }
+	iga::PrescribedSurfaceMotion changed_motion({{0.0,Cube(.2,.8)},{1.0,Cube(.2,.8)}});
+	auto changed_geometry=iga::MovingCutGeometry::Build(grid,changed_motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	iga::ImmersedTransientFlowRuntime changed(*changed_geometry,Options());
+	assert(changed.Diagnostics().volume_basis_cache_key_sha256!=cached.Diagnostics().volume_basis_cache_key_sha256);
+	std::cout << "volume_basis_cache_contract passed points=" << points
+		<< " bytes=" << cached.Diagnostics().volume_basis_cache_bytes
+		<< " hits=" << cached.Diagnostics().volume_basis_cache_hits
+		<< " misses=" << uncached.Diagnostics().volume_basis_cache_misses << '\n';
+	return 0;
+}
+
+std::string ExactVectorHash(const std::vector<PetscScalar>& values)
+{
+	iga::Sha256 hash;
+	for(const auto value:values) hash.AppendNormalizedDouble(PetscRealPart(value));
+	return hash.Hex();
+}
+
+int RunVolumeBasisCacheW1(bool enabled)
+{
+	const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
+	iga::MovingCutGeometryOptions geometry_options;
+	geometry_options.volume.max_depth=3; geometry_options.volume.max_nodes=500000;
+	geometry_options.volume.max_leaves=500000; geometry_options.volume.max_points=3000000;
+	const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+	auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	auto options=Options(); options.cache_volume_basis=enabled;
+	const auto construct_start=std::chrono::steady_clock::now();
+	std::unique_ptr<iga::ImmersedTransientFlowRuntime> runtime(new iga::ImmersedTransientFlowRuntime(*geometry,options));
+	const double construct_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-construct_start).count();
+	runtime->SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,runtime->Layout(),NonconstantFields(runtime->Layout()),{.019,-.023},true,.031));
+	runtime->BeginTrial(1.0,1,1.0); const auto state=NonconstantTrial(*runtime),direction=Direction(*runtime); runtime->SetTrialState(state);
+	std::array<double,3> samples{}; std::string residual_hash,jacobian_action_hash;
+	for(std::size_t sample=0;sample<4;++sample) {
+		runtime->Assemble();
+		const auto current_residual=ExactVectorHash(runtime->AssembledNegativeResidual());
+		const auto current_action=ExactVectorHash(runtime->AssembledJacobianAction(direction));
+		if(sample==0) { residual_hash=current_residual; jacobian_action_hash=current_action; }
+		else { assert(current_residual==residual_hash && current_action==jacobian_action_hash); samples[sample-1]=runtime->Diagnostics().last_assembly_seconds; }
+	}
+	const auto& diagnostics=runtime->Diagnostics();
+	assert(diagnostics.volume_basis_cache_enabled==enabled);
+	assert(enabled ? diagnostics.volume_basis_cache_hits==4*LogicalVolumePoints(*geometry) && diagnostics.volume_basis_cache_misses==0
+		: diagnostics.volume_basis_cache_hits==0 && diagnostics.volume_basis_cache_misses==4*LogicalVolumePoints(*geometry));
+	std::cout << std::setprecision(17) << "volume_basis_cache_w1 enabled=" << (enabled?1:0)
+		<< " construct_s=" << construct_seconds
+		<< " sample0_s=" << samples[0] << " sample1_s=" << samples[1] << " sample2_s=" << samples[2]
+		<< " residual_sha=" << residual_hash << " jacobian_action_sha=" << jacobian_action_hash
+		<< " points=" << LogicalVolumePoints(*geometry) << " hits=" << diagnostics.volume_basis_cache_hits
+		<< " misses=" << diagnostics.volume_basis_cache_misses << " bytes=" << diagnostics.volume_basis_cache_bytes << '\n';
+	return 0;
+}
+
+struct P5SolveResult {
+	std::vector<PetscScalar> state;
+	std::vector<iga::ImmersedTransientFlowDiagnostics::Port> ports;
+	iga::ImmersedTransientFlowDiagnostics diagnostics;
+};
+
+P5SolveResult RunP5Solve(const iga::MovingCutGeometry& geometry,iga::ImmersedTransientFlowOptions options)
+{
+	iga::ImmersedTransientFlowRuntime runtime(geometry,options);
+	runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,runtime.Layout(),
+		NonconstantFields(runtime.Layout()),{.019,-.023},true,.031));
+	runtime.BeginTrial(1.0,1,1.0);
+	assert(runtime.SolveTrial());
+	return {runtime.TrialState(),runtime.Diagnostics().ports,runtime.Diagnostics()};
+}
+
+double RelativeVectorDifference(const std::vector<PetscScalar>& left,const std::vector<PetscScalar>& right)
+{
+	assert(left.size()==right.size());
+	long double difference=0.0,norm=0.0;
+	for(std::size_t i=0;i<left.size();++i) {
+		const long double a=PetscRealPart(left[i]),b=PetscRealPart(right[i]);
+		difference+=(a-b)*(a-b); norm+=a*a;
+	}
+	return static_cast<double>(std::sqrt(difference)/std::max(std::sqrt(norm),1.0e-30L));
+}
+
+int RunPreconditionerReuseDiagnostic()
+{
+	const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
+	iga::MovingCutGeometryOptions geometry_options;
+	geometry_options.volume.max_depth=2; geometry_options.volume.max_nodes=200000;
+	geometry_options.volume.max_leaves=200000; geometry_options.volume.max_points=1000000;
+	const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+	auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),geometry_options);
+	auto baseline_options=Options(); baseline_options.reuse_preconditioner=false;
+	auto candidate_options=baseline_options; candidate_options.reuse_preconditioner=true;
+	auto fallback_options=candidate_options; fallback_options.reused_preconditioner_maximum_iterations=0;
+	const auto baseline=RunP5Solve(*geometry,baseline_options);
+	const auto candidate=RunP5Solve(*geometry,candidate_options);
+	const auto fallback=RunP5Solve(*geometry,fallback_options);
+	const double candidate_difference=RelativeVectorDifference(baseline.state,candidate.state);
+	std::cout << std::setprecision(17)
+		<< "preconditioner_reuse_contract baseline_builds=" << baseline.diagnostics.preconditioner_builds
+		<< " candidate_steps=" << candidate.diagnostics.newton_steps.size()
+		<< " candidate_builds=" << candidate.diagnostics.preconditioner_builds
+		<< " candidate_reuse_attempts=" << candidate.diagnostics.preconditioner_reuse_attempts
+		<< " candidate_reuse_accepts=" << candidate.diagnostics.preconditioner_reuse_accepts
+		<< " candidate_rebuilds=" << candidate.diagnostics.preconditioner_rebuilds
+		<< " candidate_reject_iterations=" << candidate.diagnostics.preconditioner_rejections_iterations
+		<< " candidate_reject_true_residual=" << candidate.diagnostics.preconditioner_rejections_true_residual
+		<< " fallback_builds=" << fallback.diagnostics.preconditioner_builds
+		<< " fallback_rebuilds=" << fallback.diagnostics.preconditioner_rebuilds
+		<< " relative_state_difference=" << candidate_difference << '\n';
+	assert(!baseline.diagnostics.preconditioner_reuse_enabled
+		&& baseline.diagnostics.preconditioner_reuse_attempts==0
+		&& baseline.diagnostics.preconditioner_builds==baseline.diagnostics.newton_steps.size());
+	assert(candidate.diagnostics.preconditioner_reuse_enabled
+		&& candidate.diagnostics.preconditioner_reuse_attempts>0
+		&& candidate.diagnostics.preconditioner_reuse_accepts>0
+		&& candidate.diagnostics.preconditioner_builds<candidate.diagnostics.newton_steps.size()
+		&& candidate.diagnostics.preconditioner_builds+candidate.diagnostics.preconditioner_reuse_accepts==candidate.diagnostics.newton_steps.size()
+		&& candidate.diagnostics.preconditioner_rebuilds+1==candidate.diagnostics.preconditioner_builds
+		&& candidate.diagnostics.true_linear_relative_residual<=candidate_options.reused_preconditioner_true_linear_relative_tolerance
+		&& candidate_difference<=1.0e-8);
+	assert(fallback.diagnostics.preconditioner_reuse_enabled
+		&& fallback.diagnostics.preconditioner_reuse_attempts>0
+		&& fallback.diagnostics.preconditioner_reuse_accepts==0
+		&& fallback.diagnostics.preconditioner_rebuilds==fallback.diagnostics.preconditioner_reuse_attempts
+		&& fallback.diagnostics.preconditioner_rejections_iterations==fallback.diagnostics.preconditioner_reuse_attempts
+		&& fallback.diagnostics.preconditioner_builds==fallback.diagnostics.newton_steps.size()
+		&& fallback.state==baseline.state && SamePortsBitwise(fallback.ports,baseline.ports));
+	return 0;
+}
+
 }
 
 int main(int argc,char** argv)
 {
-	bool newton_diagnostic=false;
-	for(int i=1;i<argc;++i) if(std::string(argv[i])=="--newton-diagnostic") newton_diagnostic=true;
+	bool newton_diagnostic=false,p4_cache_diagnostic=false,p4_cache_w1_on=false,p4_cache_w1_off=false,p5_preconditioner_reuse=false;
+	for(int i=1;i<argc;++i) {
+		if(std::string(argv[i])=="--newton-diagnostic") newton_diagnostic=true;
+		if(std::string(argv[i])=="--p4-cache") p4_cache_diagnostic=true;
+		if(std::string(argv[i])=="--p4-cache-w1-on") p4_cache_w1_on=true;
+		if(std::string(argv[i])=="--p4-cache-w1-off") p4_cache_w1_off=true;
+		if(std::string(argv[i])=="--p5-preconditioner-reuse") p5_preconditioner_reuse=true;
+	}
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	iga::CurrentPhaseProfile().EnableFromEnvironment();
 	if(newton_diagnostic) std::cout << std::unitbuf;
 	try {
 		if(newton_diagnostic) status=RunNewtonDiagnostic();
+		else if(p4_cache_diagnostic) status=RunVolumeBasisCacheDiagnostic();
+		else if(p4_cache_w1_on!=p4_cache_w1_off) status=RunVolumeBasisCacheW1(p4_cache_w1_on);
+		else if(p5_preconditioner_reuse) status=RunPreconditionerReuseDiagnostic();
 		else {
 		const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
 		iga::MovingCutGeometryOptions go; go.volume.max_depth=4; go.volume.max_nodes=500000; go.volume.max_leaves=500000; go.volume.max_points=3000000;
@@ -626,7 +823,11 @@ int main(int argc,char** argv)
 			Reject([&] { auto bad=Options(); bad.flow_controller_reference_flow_m3_s=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 			Reject([&] { auto bad=Options(); bad.lu_pivot_shift=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 			Reject([&] { auto bad=Options(); bad.minimum_damping=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
+			Reject([&] { auto bad=Options(); bad.reused_preconditioner_true_linear_relative_tolerance=invalid; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		}
+		Reject([&] { auto bad=Options(); bad.reused_preconditioner_maximum_iterations=-1; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
+		Reject([&] { auto bad=Options(); bad.reused_preconditioner_maximum_iteration_factor=.5; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
+		Reject([&] { auto bad=Options(); bad.reused_preconditioner_true_linear_relative_tolerance=0.0; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		Reject([&] { auto bad=Options(); bad.ports[0].value=.25; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		Reject([&] { auto bad=Options(); bad.include_pressure_gauge=false; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
 		Reject([&] { auto bad=Options(); bad.ports[1].boundary_label=1; iga::ImmersedTransientFlowRuntime rejected(*branch_geometry,bad); });
@@ -650,6 +851,13 @@ int main(int argc,char** argv)
 		RejectWithMessage([&] { moving_runtime.BeginTrial(1.0,1,1.0); },"immersed transient fixed geometry requires exactly zero material wall velocity");
 		assert(moving_runtime.CommittedState()==moving_state && moving_runtime.TrialState()==moving_trial && moving_runtime.CommittedGlobalState().HashSha256()==moving_hash && SameDiagnosticsPublic(moving_before,moving_runtime.Diagnostics()));
 		iga::ImmersedTransientFlowRuntime runtime(*geometry,Options());
+		const auto volume_points=LogicalVolumePoints(*geometry);
+		assert(volume_points>0 && runtime.Diagnostics().volume_basis_cache_enabled
+			&& runtime.Diagnostics().volume_basis_cache_build_misses==volume_points
+			&& runtime.Diagnostics().volume_basis_cache_hits==0
+			&& runtime.Diagnostics().volume_basis_cache_misses==0
+			&& runtime.Diagnostics().volume_basis_cache_bytes>0
+			&& runtime.Diagnostics().volume_basis_cache_key_sha256.size()==64);
 		assert(runtime.Layout().PortIds().size()==2 && runtime.Layout().HasGaugeRow());
 		assert(runtime.Diagnostics().scalar_diagonal_structure_verified);
 		assert(runtime.PortMultiplierDof("left")==static_cast<PetscInt>(runtime.Layout().NodeFieldRows()));
@@ -664,6 +872,13 @@ int main(int argc,char** argv)
 		auto candidate=iga::MovingCutGeometry::Build(grid,candidate_motion.Evaluate(1.0,0.0,1.0),go);
 		iga::ImmersedTransientFlowRuntime candidate_runtime(*candidate,Options());
 		assert(candidate_runtime.Layout().GeometryIdentity()!=runtime.Layout().GeometryIdentity());
+		assert(candidate_runtime.Diagnostics().volume_basis_cache_key_sha256!=runtime.Diagnostics().volume_basis_cache_key_sha256);
+		{ auto coefficient_options=Options(); coefficient_options.parameters.dynamic_viscosity=2.0;
+			iga::ImmersedTransientFlowRuntime coefficient_runtime(*geometry,coefficient_options);
+			assert(coefficient_runtime.Diagnostics().volume_basis_cache_key_sha256==runtime.Diagnostics().volume_basis_cache_key_sha256); }
+		{ auto port_options=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,.125);
+			iga::ImmersedTransientFlowRuntime port_runtime(*geometry,port_options);
+			assert(port_runtime.Diagnostics().volume_basis_cache_key_sha256==runtime.Diagnostics().volume_basis_cache_key_sha256); }
 		Reject([&] { runtime.SetCommittedGlobalState(candidate_runtime.CommittedGlobalState()); });
 		iga::ImmersedTransientFlowRuntime overflow_runtime(*geometry,Options());
 		overflow_runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,std::numeric_limits<std::uint64_t>::max(),overflow_runtime.Layout(),NonconstantFields(overflow_runtime.Layout()),{0.0,0.0},true,0.0));
@@ -675,15 +890,29 @@ int main(int argc,char** argv)
 		const auto frozen=runtime.TrialState(); const auto frozen_hash=runtime.Diagnostics().trial_state_hash_sha256;
 		Reject([&] { auto bad=frozen; bad.push_back(0.0); runtime.SetTrialState(bad); }); Reject([&] { auto bad=frozen; bad[0]=std::numeric_limits<double>::quiet_NaN(); runtime.SetTrialState(bad); });
 
-		const auto x=NonconstantTrial(runtime), direction=Direction(runtime); runtime.SetTrialState(x); const auto committed_ports_before_assemble=runtime.Diagnostics().ports; const auto committed_hash_before_assemble=runtime.CommittedGlobalState().HashSha256(); const auto committed_state_before_assemble=runtime.CommittedState(); runtime.Assemble();
+		const auto x=NonconstantTrial(runtime), direction=Direction(runtime); runtime.SetTrialState(x); RejectWithMessage([&] { (void)runtime.AssembledNegativeResidual(); },"immersed transient residual does not belong to current state"); RejectWithMessage([&] { (void)runtime.AssembledJacobianAction(direction); },"immersed transient Jacobian does not belong to current state"); const auto committed_ports_before_assemble=runtime.Diagnostics().ports; const auto committed_hash_before_assemble=runtime.CommittedGlobalState().HashSha256(); const auto committed_state_before_assemble=runtime.CommittedState(); runtime.Assemble();
 		assert(runtime.CommittedGlobalState().HashSha256()==committed_hash_before_assemble && runtime.CommittedState()==committed_state_before_assemble && SamePortsBitwise(committed_ports_before_assemble,runtime.Diagnostics().ports));
 		assert(runtime.Diagnostics().volume_cells>0 && runtime.Diagnostics().surface_cells>0 && runtime.Diagnostics().ghost_faces>0);
-		const auto jd=runtime.AssembledJacobianAction(direction);
+		assert(runtime.Diagnostics().volume_basis_cache_hits==volume_points && runtime.Diagnostics().volume_basis_cache_misses==0);
+		const auto full_residual=runtime.AssembledNegativeResidual(), jd=runtime.AssembledJacobianAction(direction); const auto full_storage=runtime.JacobianStorageInfo(); const auto full_ports=runtime.Diagnostics().ports; const auto full_wall=runtime.Diagnostics().wall_penalty;
+		runtime.AssembleResidualOnlyForTesting(); assert(runtime.AssembledNegativeResidual()==full_residual && runtime.AssembledJacobianAction(direction)==jd && runtime.JacobianStorageInfo().mallocs==full_storage.mallocs && SamePortsBitwise(runtime.Diagnostics().ports,full_ports));
+		assert(SameWallPenaltyBitwise(runtime.Diagnostics().wall_penalty,full_wall) && runtime.Diagnostics().attempt_full_assembly_count==1 && runtime.Diagnostics().attempt_residual_only_count==1);
+		assert(runtime.Diagnostics().volume_basis_cache_hits==2*volume_points && runtime.Diagnostics().volume_basis_cache_misses==0);
+		{ auto uncached_options=Options(); uncached_options.cache_volume_basis=false;
+			iga::ImmersedTransientFlowRuntime uncached(*geometry,uncached_options);
+			assert(!uncached.Diagnostics().volume_basis_cache_enabled && uncached.Diagnostics().volume_basis_cache_build_misses==0
+				&& uncached.Diagnostics().volume_basis_cache_hits==0 && uncached.Diagnostics().volume_basis_cache_misses==0
+				&& uncached.Diagnostics().volume_basis_cache_bytes==0
+				&& uncached.Diagnostics().volume_basis_cache_key_sha256==runtime.Diagnostics().volume_basis_cache_key_sha256);
+			uncached.SetCommittedGlobalState(seeded); uncached.BeginTrial(1.0,1,1.0); uncached.SetTrialState(x); uncached.Assemble();
+			assert(uncached.AssembledNegativeResidual()==full_residual && uncached.AssembledJacobianAction(direction)==jd);
+			assert(uncached.Diagnostics().volume_basis_cache_hits==0 && uncached.Diagnostics().volume_basis_cache_misses==volume_points);
+			uncached.AbortTrial(); }
 		assert(std::abs(PetscRealPart(jd[static_cast<std::size_t>(runtime.PortMultiplierDof("left"))]))>1e-12 && std::abs(PetscRealPart(jd[static_cast<std::size_t>(runtime.GaugeDof())]))>1e-12);
 		double fd_max=0.0, zero_block_max=0.0;
 		for(const double epsilon:{1e-4,1e-5,1e-6}) {
 			auto plus=x,minus=x; for(std::size_t i=0;i<x.size();++i) { plus[i]+=epsilon*direction[i]; minus[i]-=epsilon*direction[i]; }
-			runtime.SetTrialState(plus); runtime.Assemble(); const auto bp=runtime.AssembledNegativeResidual(); runtime.SetTrialState(minus); runtime.Assemble(); const auto bm=runtime.AssembledNegativeResidual();
+			runtime.SetTrialState(plus); runtime.AssembleResidualOnlyForTesting(); const auto bp=runtime.AssembledNegativeResidual(); RejectWithMessage([&] { (void)runtime.AssembledJacobianAction(direction); },"immersed transient Jacobian does not belong to current state"); runtime.SetTrialState(minus); runtime.AssembleResidualOnlyForTesting(); const auto bm=runtime.AssembledNegativeResidual(); RejectWithMessage([&] { (void)runtime.AssembledJacobianAction(direction); },"immersed transient Jacobian does not belong to current state");
 			for(std::size_t i=0;i<x.size();++i) { const double derivative=PetscRealPart((bp[i]-bm[i])/(2.0*epsilon)); const double error=PetscRealPart(jd[i])+derivative; fd_max=std::max(fd_max,std::abs(error)); if(std::abs(PetscRealPart(jd[i]))+std::abs(derivative)<1e-13) zero_block_max=std::max(zero_block_max,std::abs(error)); }
 		}
 		runtime.SetTrialState(x); assert(runtime.TrialState()==x && fd_max<=1e-8 && zero_block_max<=1e-11);
@@ -713,7 +942,15 @@ int main(int argc,char** argv)
 		const auto conservation=runtime.ConservationDiagnostics(); assert(std::abs(conservation.normalized_open_balance)<=1e-3 && std::abs(conservation.normalized_wall_leakage)<=1e-3);
 		iga::ImmersedTransientFlowRuntime conservation_runtime(*geometry,Options()); conservation_runtime.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,conservation_runtime.Layout(),NonconstantFields(conservation_runtime.Layout()),{0.0,0.0},true,0.0)); conservation_runtime.BeginTrial(1.0,1,1.0); const auto nondivergent=GenericTrial(conservation_runtime); conservation_runtime.SetTrialState(nondivergent); conservation_runtime.Assemble(); const auto nondivergence=conservation_runtime.ConservationDiagnostics();
 		double signed_sum=0.0; for(const auto& item:nondivergence.surface_flow_by_boundary_label_m3_s) signed_sum+=item.second;
-		assert(SameBits(signed_sum,nondivergence.total_surface_outward_flow_m3_s));
+		// Per-label and global totals reduce the same flux terms in different
+		// orders. Bound the two accumulation errors instead of requiring bits
+		// to match; the physical conservation gates above remain unchanged.
+		const double flux_sum_epsilon=static_cast<double>(nondivergence.surface_flux_term_count
+			+nondivergence.surface_flow_by_boundary_label_m3_s.size())*std::numeric_limits<double>::epsilon();
+		assert(flux_sum_epsilon<0.5);
+		const double flux_sum_gamma=flux_sum_epsilon/(1.0-flux_sum_epsilon);
+		const double flux_sum_roundoff=2.0*flux_sum_gamma/(1.0-flux_sum_gamma)*nondivergence.absolute_surface_flux_sum_m3_s;
+		assert(std::isfinite(flux_sum_roundoff) && std::abs(signed_sum-nondivergence.total_surface_outward_flow_m3_s)<=flux_sum_roundoff);
 		double material_sum=0.0; for(const auto& item:nondivergence.material_surface_outward_flow_by_boundary_label_m3_s) material_sum+=item.second;
 		assert(std::abs(material_sum-nondivergence.total_material_surface_outward_flow_m3_s)<=2e-11);
 		double material_wall_sum=0.0; for(const auto& item:nondivergence.material_wall_outward_flow_by_boundary_label_m3_s) material_wall_sum+=item.second;

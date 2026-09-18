@@ -261,13 +261,17 @@ void CheckCommitted(const iga::MovingImmersedTransientFlowFsiRuntime& runtime, c
 		&& SameOptionalTractionDiagnostics(actual.traction_diagnostics,expected.traction_diagnostics)
 		&& actual.composition==expected.composition,"fault changed a committed fluid FSI snapshot");
 }
-void CheckNoTrialLeakage(const iga::MovingImmersedTransientFlowFsiRuntime& runtime)
+void CheckNoTrialOutputs(const iga::MovingImmersedTransientFlowFsiRuntime& runtime)
 {
 	Reject([&]{ (void)runtime.GetSurfaceTraction("patch"); });
 	Reject([&]{ (void)runtime.TrialSurfaceTractionDiagnostics(); });
 	Reject([&]{ (void)runtime.TrialFlowDiagnostics(); });
 	Reject([&]{ (void)runtime.TrialMaterialKinematicsSnapshot(); });
 	Reject([&]{ (void)runtime.TrialCompositionIdentitySha256(); });
+}
+void CheckNoTrialLeakage(const iga::MovingImmersedTransientFlowFsiRuntime& runtime)
+{
+	CheckNoTrialOutputs(runtime);
 	Reject([&]{ (void)runtime.ConservationDiagnostics(); });
 }
 
@@ -297,6 +301,44 @@ int main(int argc, char** argv)
 	try {
 		const auto initial=iga::compliant_channel_fixture::InitialMaterial(); const auto map=iga::compliant_channel_fixture::PatchMap(initial); const auto& layout=map.Layout(); const auto fluid=iga::compliant_channel_fixture::Fluid(map.ReferenceIdentitySha256());
 		const iga::FsiCouplingEdge edge("wall",fluid.id,map.Interface().id,iga::FsiCouplingLaw::FluidStructureTractionKinematics);
+		// Zero forcing, stationary material and zero seed must publish a solved
+		// traction after exactly one solve-attempt assembly, without any KSP work.
+		{
+			auto zero_options=iga::compliant_channel_fixture::FlowOptions();
+			for(auto& port:zero_options.flow.ports) port.value=0.;
+			iga::MovingImmersedTransientFlowFsiRuntime zero("fluid","immersed",edge,fluid,map.Interface(),layout,layout,initial,map,zero_options);
+			const auto initial_ports=zero.CommittedFlowDiagnostics().ports;
+			Require(initial_ports.size()==2,"zero fixture lost its pressure ports");
+			auto stationary=Kinematics(map,0);
+			stationary.displacement_m.assign(9,{{0,0,0}}); stationary.velocity_m_per_s.assign(9,{{0,0,0}});
+			zero.BeginMacroStep({1,1.,1.}); zero.BeginCouplingIteration(0,stationary.stamp,Envelope(layout,0));
+			zero.SetSurfaceKinematics("patch",stationary); zero.SolveFluidTrial();
+			const auto& diagnostic=zero.TrialFlowDiagnostics();
+			Require(diagnostic.converged && diagnostic.residual_norm==0. && diagnostic.nonlinear_iterations==0
+				&& diagnostic.ksp_iterations==0 && diagnostic.attempt_assembly_count==1,"zero initial residual adapter solve changed");
+			const auto traction=zero.GetSurfaceTraction("patch");
+			iga::ValidateSurfaceFieldStampMatchesEnvelope(traction.stamp,Envelope(layout,0),layout);
+			for(const auto& value:traction.traction_on_structure_pa) Require(value==std::array<double,3>{{0,0,0}},"zero solve published nonzero traction");
+			// Diagnostics().ports is the committed publication, not trial scratch.
+			// Keep the established transaction boundary; audit actual trial flux
+			// independently and require measured ports only after finalize.
+			Require(SamePorts(diagnostic.ports,initial_ports),"zero solve changed committed port publication");
+			const auto conservation=zero.ConservationDiagnostics();
+			Require(conservation.fluid_surface_outward_flow_by_boundary_label_m3_s.at(1)==0.
+				&& conservation.fluid_surface_outward_flow_by_boundary_label_m3_s.at(2)==0.,"zero trial has nonzero audited port flux");
+			zero.PrepareCommitStep();
+			Require(SamePorts(zero.CommittedFlowDiagnostics().ports,initial_ports),"zero prepare published trial ports early");
+			zero.FinalizeCommitStep();
+			for(const auto& port:zero.CommittedFlowDiagnostics().ports)
+				Require(port.measurement_valid && port.measurement.area_m2>0. && port.measurement.outward_flow_m3_s==0.,"zero finalize lost measured port diagnostics");
+			Require(zero.CommittedGlobalState().Index()==1,"zero solve did not commit the target state");
+			Require(zero.Lifecycle().Phase()==iga::FsiTrialPhase::Idle && zero.MovingDiagnostics().idle
+				&& !zero.MovingDiagnostics().trial_active,"zero finalize retained an active trial");
+			CheckNoTrialOutputs(zero);
+			Require(SameConservation(conservation,zero.ConservationDiagnostics()),"zero finalize changed committed conservation publication");
+			Require(SameTraction(traction,zero.GetCommittedSurfaceTraction("patch",traction.stamp)),"zero finalize changed committed traction");
+			std::cout<<"fsi_adapter_zero_initial_residual passed\n";
+		}
 		auto wrong_fluid=fluid; wrong_fluid.id.interface_id="wrong";
 		Reject([&]{ iga::MovingImmersedTransientFlowFsiRuntime("fluid","immersed",edge,wrong_fluid,map.Interface(),layout,layout,initial,map,iga::compliant_channel_fixture::FlowOptions()); });
 		auto wrong_structure=map.Interface(); wrong_structure.id.subsystem_id="wrong";
@@ -346,7 +388,18 @@ int main(int argc, char** argv)
 		runtime.RejectCouplingIteration();
 		Require(runtime.CommittedGeometry().GeometryIdentitySha256()==geometry&&runtime.CommittedGlobalState().Index()==0,"reject changed committed fluid state");
 		CheckNoTrialLeakage(runtime); CheckCommitted(runtime,committed_before_faults);
-		runtime.BeginCouplingIteration(0,k.stamp,e); runtime.SetSurfaceKinematics("patch",k); runtime.SolveFluidTrial();
+		runtime.BeginCouplingIteration(0,k.stamp,e); runtime.SetSurfaceKinematics("patch",k);
+		{
+			iga::ImmersedTransientFlowRuntime::FirstAssemblyFailureScopeForTesting first;
+			bool failed=false;
+			try { runtime.SolveFluidTrial(); }
+			catch(const std::runtime_error& error) { failed=std::string(error.what())=="injected first immersed transient assembly failure"; }
+			Require(failed && first.Consumed(),"first assembly injection did not fire in Assemble");
+		}
+		Require(runtime.Lifecycle().Phase()==iga::FsiTrialPhase::InputReady,"first assembly failure changed accepted input lifecycle");
+		CheckNoTrialLeakage(runtime); CheckCommitted(runtime,committed_before_faults);
+		runtime.SolveFluidTrial();
+		std::cout<<"fsi_adapter_first_assembly_failure_retry passed\n";
 		const auto ordinary_retry=TakeTrial(runtime);
 		Require(SameTrial(ordinary_retry,original_trial),"ordinary reject/retry changed exact fluid FSI publication");
 		runtime.AbortStep();

@@ -9,6 +9,7 @@
 #include "ImmersedSurfaceQuadrature.hpp"
 #include "Sha256.hpp"
 #include "PhaseProfile.hpp"
+#include "AssemblyDetailProfile.hpp"
 
 #include <algorithm>
 #include <array>
@@ -94,11 +95,16 @@ public:
 private:
 	MovingCutGeometry(CubicCartesianGridSpec grid, MaterialSurfaceKinematics kinematics,
 		MovingCutGeometryOptions options, const MovingCutGeometry* previous)
-		: kinematics_(std::move(kinematics)), domain_(CubicCartesianBackground(grid),
-			SurfaceSpatialIndex(kinematics_.Surface())), volume_(domain_, options.volume, options.volume_storage,
-			options.volume_fitting?&*options.volume_fitting:nullptr),
-		  surface_(domain_, options.surface), ghost_(domain_, volume_, options.ghost), options_(std::move(options))
+		: detail_("geometry"), kinematics_(std::move(kinematics)),
+		  domain_(DetailConstruct<CartesianDomainClassification>(detail_,"classification",
+			CubicCartesianBackground(grid),DetailConstruct<SurfaceSpatialIndex>(detail_,"spatial_index",kinematics_.Surface()))),
+		  volume_(DetailConstruct<CutCellVolumeQuadratureCatalog>(detail_,"volume_rule",domain_,options.volume,options.volume_storage,
+			options.volume_fitting?&*options.volume_fitting:nullptr)),
+		  surface_(DetailConstruct<ImmersedSurfaceQuadratureCatalog>(detail_,"surface_rule",domain_,options.surface)),
+		  ghost_(DetailConstruct<CutCellGhostPenaltyCatalog>(detail_,"ghost_catalog",domain_,volume_,options.ghost)), options_(std::move(options))
 	{
+		{
+		auto timer=detail_.Time("validation_hash_diagnostic");
 		if(previous)previous_material_identity_sha256_=previous->Evaluation().ContentIdentitySha256();
 		kinematics_.Validate();
 		ValidateCatalogs();
@@ -123,6 +129,10 @@ private:
 		if (previous) ComparePrevious(*previous);
 		diagnostics_.geometry_identity_sha256 = HashGeometryState();
 		diagnostics_.publication_identity_sha256 = HashPublicationState(previous);
+		}
+		detail_.String("geometry_epoch",diagnostics_.geometry_identity_sha256);
+		detail_.Number("time_s",diagnostics_.time_s);
+		detail_.Finish();
 	}
 
 	static bool SameGrid(const CubicCartesianGridSpec& left, const CubicCartesianGridSpec& right) noexcept
@@ -307,6 +317,7 @@ private:
 
 	// Declaration order is the required lifetime order: evaluation first, then
 	// the domain (which owns its spatial index), then its dependent catalogs.
+	DetailRecord detail_;
 	MaterialSurfaceKinematics kinematics_;
 	CartesianDomainClassification domain_;
 	CutCellVolumeQuadratureCatalog volume_;

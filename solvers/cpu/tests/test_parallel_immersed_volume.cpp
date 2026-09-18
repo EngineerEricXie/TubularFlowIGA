@@ -70,6 +70,14 @@ int main(int argc, char** argv)
 			if(threads==1) { reference_residual=residual; reference_action=action; reference_input=input; }
 			else Check(residual==reference_residual && action==reference_action && input==reference_input,
 				"parallel residual, Jacobian action or physical input identity changed");
+			// A wall-kernel exception must join workers and allow a clean retry.
+			{
+				iga::ImmersedTransientFlowRuntime::NonfiniteMaterialVelocityScopeForTesting nonfinite_wall;
+				Reject([&] { runtime.Assemble(); },"immersed Nitsche wall velocity is not finite");
+			}
+			runtime.SetTrialState(trial); runtime.Assemble();
+			Check(runtime.AssembledNegativeResidual()==residual && runtime.AssembledJacobianAction(direction)==action,
+				"wall failure retry retained an assembly contribution");
 			// Fail after real integration in the second batch: the first batch
 			// has already been scattered, and later retry must clear its values.
 			completed=0;

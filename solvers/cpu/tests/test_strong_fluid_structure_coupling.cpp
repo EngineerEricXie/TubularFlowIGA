@@ -140,6 +140,26 @@ struct F {
 	}
 };
 
+// Keep the accepted fluid geometry distinct from the raw membrane state.
+struct MovingHistoryFluid : F {
+    using F::F;
+    std::array<std::array<double,3>,3> history{};
+    std::vector<std::array<double,3>> StrongCouplingCommittedDisplacementM() const
+    { return {history.begin(),history.end()}; }
+    void SetSurfaceKinematics(const std::string& id,const iga::SurfaceKinematics& value)
+    {
+        for(std::size_t i=0;i<history.size();++i) for(int c=0;c<3;++c)
+            if(std::abs(value.displacement_m[i][c]-history[i][c]-step.dt_s*value.velocity_m_per_s[i][c])>1e-12)
+                throw std::runtime_error("moving interface violated its own backward-Euler history");
+        F::SetSurfaceKinematics(id,value);
+    }
+    void CoordinatorFinalizeCommitNoexcept() noexcept
+    {
+        for(std::size_t i=0;i<history.size();++i) history[i]=in.displacement_m[i];
+        F::CoordinatorFinalizeCommitNoexcept();
+    }
+};
+
 struct M {
 	iga::DistributedSurfaceLayout l;
 	iga::FsiCouplingEdge e;
@@ -272,6 +292,19 @@ template <class X> void R(X&& action)
 int main()
 {
 	const auto layout = L(); const auto edge = E(); const iga::DomainStepContext step{1, 0, .1};
+    {
+        MovingHistoryFluid fluid(layout,edge); M membrane(layout,edge,1,-3);
+        auto options=O(); options.absolute_displacement_tolerance_m=.01;
+        options.aitken_controls.initial_relaxation=.15; options.aitken_controls.maximum_relaxation=.2;
+        iga::StrongFluidStructureCoupling<MovingHistoryFluid,M> coordinator(fluid,membrane,edge,layout,options);
+        const auto first=coordinator.Execute(step);
+        assert(first.converged && first.history.back().area_weighted_rms_residual_m>1e-8);
+        assert(std::abs(membrane.snap.displacement_m[0]-fluid.history[0][2])>1e-8);
+        const auto input_count=fluid.inputs.size();
+        const auto second=coordinator.Execute({2,.1,.1});
+        assert(second.converged && second.iterations>1 && fluid.inputs.size()>input_count+1);
+        assert(fluid.commits==2 && membrane.commits==2);
+    }
 	// r=(1,0,1), A=(.03,.09,.24): sqrt((.03+.24)/.36)=sqrt(3/4).
 	{
 		F fluid(layout, edge); M membrane(layout, edge, 1, 0); auto options = O();

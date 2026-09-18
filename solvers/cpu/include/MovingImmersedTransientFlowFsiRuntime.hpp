@@ -98,6 +98,20 @@ public:
 		return *trial_target_;
 	}
 	MaterialSurfaceKinematics CommittedMaterialKinematicsSnapshot() const { return *committed_full_; }
+    std::vector<std::array<double,3>> StrongCouplingCommittedDisplacementM() const
+    {
+        std::vector<std::array<double,3>> result;
+        result.reserve(structure_layout_.owned_global_node_ids.size());
+        for(const auto global:structure_layout_.owned_global_node_ids) {
+            const auto source=patch_map_.SourceVertexForGlobalNode(global);
+            std::array<double,3> displacement{};
+            for(int c=0;c<3;++c) displacement[c]=committed_full_->SourceVerticesM().at(source)[c]
+                -patch_map_.FullReference().ReferenceMaterialVerticesM().at(source)[c];
+            result.push_back(displacement);
+        }
+        return result;
+    }
+
 	std::optional<SurfaceTraction> CommittedSurfaceTractionSnapshot() const
 	{ return committed_traction_; }
 	FluidSurfaceTractionDiagnostics TrialSurfaceTractionDiagnostics() const
@@ -154,6 +168,13 @@ public:
 		const SurfaceFieldStampEnvelope& traction_envelope)
 	{ BeginCouplingIteration(iteration, expected_kinematics, traction_envelope); }
 
+	// Change forcing only between complete coupling steps.
+	void SetPortControlValue(const std::string& id, double value)
+	{
+		if (lifecycle_.HasActiveStep()) throw std::logic_error("cannot change FSI pressure during a coupling step");
+		moving_.SetPortControlValue(id, value);
+	}
+
 	void SetSurfaceKinematics(const std::string& interface_id,
 		const SurfaceKinematics& kinematics) override
 	{
@@ -183,8 +204,10 @@ public:
 		const auto composed = MaterialSurfacePatchKinematics::ComposeTarget(patch_map_, *committed_full_,
 			*input_, lifecycle_.Context());
 		try {
+			AssemblyCallScope detail_context("adapter-initial",-1,0.,static_cast<long long>(input_->stamp.coupling_iteration));
 			moving_.BeginTrial(composed.target, lifecycle_.Context().step, lifecycle_.Context().dt_s);
-			moving_.Assemble();
+			// SolveTrial owns the initial full assembly, including zero-residual
+			// publication and failure rollback.  Nothing consumes a preassembly here.
 			if (!moving_.SolveTrial()) return; // preserve diagnostics; caller must reject or abort.
 			const auto state = GatherRequiredTrialSurfaceState();
 			SurfaceFieldStamp actual = MakeActualOutputStamp(state);

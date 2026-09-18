@@ -181,7 +181,7 @@ inline void ValidateImmersedNitscheWallPreassembledVolumeSystem(const Element& e
 		throw std::overflow_error("immersed Nitsche wall local Jacobian count overflows");
 	if (nodal_state.size() != nen || (parameters.dt > 0.0 && previous_nodal_state.size() != nen))
 		throw std::invalid_argument("immersed Nitsche wall preassembled state size does not match Navier-Stokes element");
-	if (system.negative_residual.size() != ndof || system.jacobian.size() != ndof*ndof)
+	if (system.negative_residual.size() != ndof || (!system.jacobian.empty() && system.jacobian.size() != ndof*ndof))
 		throw std::invalid_argument("immersed Nitsche wall preassembled volume-system block size is invalid");
 	for (const auto value : system.negative_residual)
 		if (!std::isfinite(PetscRealPart(value))) throw std::invalid_argument("immersed Nitsche wall preassembled volume residual is not finite");
@@ -393,7 +393,7 @@ inline ImmersedNitscheWallAssembly BuildImmersedNitscheWallElementImpl(
 			RequireFiniteImmersedNitscheWallValue(pressure_residual, "immersed Nitsche wall pressure residual is not finite");
 			AccumulateImmersedNitscheWallValue(result.system.negative_residual[4*a+3], -pressure_residual*point.weight,
 				"immersed Nitsche wall pressure residual contribution is not finite");
-			for (std::size_t b = 0; b < nen; ++b) {
+			if(!result.system.jacobian.empty()) for (std::size_t b = 0; b < nen; ++b) {
 				const auto nb = basis.value[b];
 				const auto& gb = basis.gradient[b];
 				const auto gb_n = ImmersedNitscheWallDot(gb, point.normal, "immersed Nitsche wall trial-normal derivative is not finite");

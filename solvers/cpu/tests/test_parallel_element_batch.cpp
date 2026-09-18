@@ -12,7 +12,7 @@ void Require(bool condition, const char* message)
 	if (!condition) throw std::runtime_error(message);
 }
 
-void Check(int threads)
+void Check(int threads, bool detail=false)
 {
 	const auto caller = std::this_thread::get_id();
 	std::vector<std::size_t> consumed;
@@ -34,14 +34,21 @@ void Check(int threads)
 		for (const auto value : values) Require(value == index*index+1, "worker scratch contaminated");
 		consumed.push_back(index);
 	};
-	const auto statistics = iga::ForEachElementBatch(35, {threads,8}, prepare, compute, consume);
+	const auto statistics = iga::ForEachElementBatch(35, {threads,8,detail}, prepare, compute, consume);
 	Require(consumed.size() == 35 && statistics.items == 35, "missing batch work");
 	Require(statistics.batches == 5 && statistics.maximum_resident_items == 8, "invalid batch bounds");
 	Require(statistics.maximum_team_size == threads, "requested team was not exercised");
+	if(detail) {
+		Require(statistics.prepare_wall_seconds>=0. && statistics.consume_wall_seconds>=0.,"negative caller wall timing");
+		Require(statistics.worker_work_seconds>=statistics.maximum_worker_seconds,"worker aggregation exceeds total work");
+		Require(statistics.compute_wall_seconds>=statistics.maximum_worker_seconds*.99,"worker maximum exceeds batch wall");
+		Require(statistics.maximum_worker_completion_spread_seconds>=0.,"negative worker completion spread");
+		Require(statistics.maximum_resident_result_payload_bytes>=8*sizeof(std::vector<double>),"missing resident result payload accounting");
+	} else Require(statistics.worker_work_seconds==0. && statistics.compute_wall_seconds==0. && statistics.maximum_resident_result_payload_bytes==0,"disabled detail profiling did work");
 	consumed.clear(); prepared_count = 0;
 	bool caught = false;
 	try {
-		iga::ForEachElementBatch(35, {threads,8}, prepare,
+		iga::ForEachElementBatch(35, {threads,8,detail}, prepare,
 			[&](const auto& values, std::size_t index) {
 				if (index == 10 || index == 12) throw std::runtime_error("worker-"+std::to_string(index));
 				return compute(values,index);
@@ -59,8 +66,10 @@ int main()
 		omp_set_dynamic(0);
 #endif
 		Check(1);
+		Check(1,true);
 #ifdef _OPENMP
 		Check(2); Check(4);
+		Check(2,true); Check(4,true);
 #else
 		bool rejected = false;
 		try { iga::ForEachElementBatch(1,{2,1},[](std::size_t i){return i;},

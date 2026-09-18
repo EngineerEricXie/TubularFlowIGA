@@ -98,6 +98,15 @@ public:
 				Add(r.negative_residual[a],-PetscRealPart(r.jacobian[a*ndof+b])*state_at(r.connectivity[b/4],static_cast<int>(b%4)));
 		return r;
 	}
+	template <class StateAt> CutCellGhostPenaltyAssembly AssembleFaceResidualLocal(std::size_t fi,const CartesianDomainClassification& d,const CutCellVolumeQuadratureCatalog& v,StateAt&& state_at,double mu) const {
+		ValidateBinding(d,v); if(fi>=faces_.size())throw std::out_of_range("ghost penalty face index is out of range"); if(!std::isfinite(mu)||!(mu>0.))throw std::invalid_argument("ghost penalty viscosity must be finite and positive");
+		CutCellGhostPenaltyAssembly r; r.connectivity=FaceConnectivity(d,faces_[fi]); const auto n=r.connectivity.size(); if(n>80||n>options_.max_trace_entries)throw std::runtime_error("ghost penalty face trace union exceeds configured bound");
+		const auto ndof=Mul(4,n,"ghost penalty face dof count overflows"), coefficients=Mul(n,n,"ghost penalty residual coefficient count overflows"); r.negative_residual.assign(ndof,PetscScalar(0));
+		std::vector<double> velocity(coefficients,0.),pressure(coefficients,0.); const auto& f=faces_[fi]; const double ku=options_.gamma_u*mu*std::pow(f.h_normal_m,5),kp=options_.gamma_p/mu*std::pow(f.h_normal_m,7);if(!std::isfinite(ku)||!(ku>0.)||!std::isfinite(kp)||!(kp>0.))throw std::overflow_error("ghost penalty coefficient is not finite and positive");
+		for(const auto&q:CubicCartesianSplineFaceTangentialQuadrature()){const double wt=q.weight*f.area_m2/4.;if(!std::isfinite(wt)||!(wt>0.))throw std::overflow_error("ghost penalty face weight is invalid");const auto j=EvaluateFaceJump(fi,3,q.tangential_0,q.tangential_1,d,v).coefficients;for(std::size_t a=0;a<n;++a)for(std::size_t b=0;b<n;++b){const double uv=ku*wt*j[a]*j[b],pp=kp*wt*j[a]*j[b];if(!std::isfinite(uv)||!std::isfinite(pp))throw std::overflow_error("ghost penalty contribution is not finite");r.maximum_abs_contribution=std::max(r.maximum_abs_contribution,std::max(std::abs(uv),std::abs(pp)));Add(velocity[a*n+b],uv);Add(pressure[a*n+b],pp);}}
+		for(std::size_t a=0;a<n;++a) for(int field=0;field<4;++field) for(std::size_t b=0;b<n;++b) Add(r.negative_residual[4*a+field],-(field<3?velocity[a*n+b]:pressure[a*n+b])*state_at(r.connectivity[b],field));
+		return r;
+	}
 	CutCellGhostPenaltyAssembly AssembleFace(std::size_t fi,const CartesianDomainClassification& d,const CutCellVolumeQuadratureCatalog& v,const std::vector<std::array<double,4>>& state,double mu) const {
 		if(state.size()!=d.Background().NodeCount()) throw std::invalid_argument("ghost penalty state must contain four fields for every background node");
 		for(const auto& q:state) for(double x:q) if(!std::isfinite(x)) throw std::invalid_argument("ghost penalty state is not finite");

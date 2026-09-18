@@ -142,6 +142,7 @@ public:
 	{
 		PhaseScope geometry_phase(ProfilePhase::Geometry);
 		RequireIdle("begin trial");
+		DetailRecord detail("moving_begin"); detail.Number("step",target_index);
 		const auto& old_state = committed_->runtime->CommittedGlobalState();
 		if (old_state.Index() == std::numeric_limits<std::uint64_t>::max())
 			throw std::overflow_error("moving immersed transient target index overflows uint64");
@@ -153,23 +154,23 @@ public:
 		// Everything through BeginMovingTrial is local.  A failure destroys the
 		// target PETSc runtime before its referenced target geometry.
 		TestingThrow(FaultStage::Geometry);
-		auto target_geometry = MovingCutGeometry::Build(options_.grid, std::move(target), options_.geometry, committed_->geometry.get());
-		std::unique_ptr<Epoch> candidate(new Epoch(std::move(target_geometry), options_.flow, solver_options_));
+		auto target_geometry = DetailEvaluate(detail,"geometry_build",[&] { return MovingCutGeometry::Build(options_.grid, std::move(target), options_.geometry, committed_->geometry.get()); });
+		auto candidate=DetailEvaluate(detail,"layout_preallocation_runtime",[&] { return std::unique_ptr<Epoch>(new Epoch(std::move(target_geometry), options_.flow, solver_options_)); });
 		// This seam is deliberately after target PETSc creation.  It proves an
 		// unfinished target epoch cannot retain old-layout handles on failure.
 		TestingThrow(FaultStage::InnerRuntime);
 		TestingThrow(FaultStage::Extension);
-		ImmersedVelocityExtension extension = ImmersedVelocityExtension::Build(*committed_->geometry,
+		ImmersedVelocityExtension extension = DetailEvaluate(detail,"extension",[&] { return ImmersedVelocityExtension::Build(*committed_->geometry,
 			committed_->runtime->Layout(), old_state, *candidate->geometry, candidate->runtime->Layout(),
-			options_.extension_layers, options_.extension);
+			options_.extension_layers, options_.extension); });
 		TestingThrow(FaultStage::Scalar);
 		std::vector<double> old_pressure(old_state.Coefficients().size());
 		for (std::size_t i=0; i<old_pressure.size(); ++i) old_pressure[i] = old_state.Coefficients()[i][3];
-		const ImmersedScalarExtension scalar = extension.ExtendScalar(old_pressure);
+		const ImmersedScalarExtension scalar = DetailEvaluate(detail,"scalar_extension",[&] { return extension.ExtendScalar(old_pressure); });
 		TestingThrow(FaultStage::Seed);
-		const auto seed = BuildSeed(*candidate->runtime, extension, scalar, old_state);
+		const auto seed = DetailEvaluate(detail,"seed",[&] { return BuildSeed(*candidate->runtime, extension, scalar, old_state); });
 		TestingThrow(FaultStage::Map);
-		const auto map = BuildMap(*candidate, committed_->runtime->Layout(), extension, scalar, old_state, seed, dt_s, target_index);
+		const auto map = DetailEvaluate(detail,"map",[&] { return BuildMap(*candidate, committed_->runtime->Layout(), extension, scalar, old_state, seed, dt_s, target_index); });
 		TestingThrow(FaultStage::BodyForce);
 		TestingThrow(FaultStage::MovingBegin);
 		candidate->runtime->BeginMovingTrial(target_time_s, target_index, dt_s, extension.TargetHistory(), seed, map);

@@ -17,6 +17,9 @@ namespace iga {
 struct NavierStokesSystem {
 	std::vector<PetscScalar> jacobian;
 	std::vector<PetscScalar> negative_residual;
+	std::size_t ResultPayloadBytes() const noexcept {
+		return sizeof(PetscScalar)*(jacobian.capacity()+negative_residual.capacity());
+	}
 };
 
 struct NavierStokesParameters {
@@ -83,11 +86,39 @@ enum class NavierStokesResolvedMixedForm {
 	Conservative
 };
 
+// Full and residual-only paths share the residual arithmetic below.  The
+// latter does not allocate or execute the dense tangent loops.
+enum class NavierStokesAssemblyRequest { ResidualOnly, ResidualAndJacobian };
+
 // Physical body-force density per unit volume (N/m^3).  Keeping it as a
 // point evaluator makes manufactured loads and spatially varying gravity
 // unambiguous, while the zero evaluator preserves the established API.
 using NavierStokesBodyForceEvaluator = std::function<std::array<double, 3>(
 	const std::array<double, 3>& physical)>;
+
+// Geometry/rule-only data for one volume point.  Moving immersed runtimes may
+// build these entries once per immutable geometry epoch and share them read-only
+// across workers.  State, history, coefficients, ports and body-force values are
+// deliberately absent, so they can never be retained by this cache.
+struct NavierStokesVolumePointCacheEntry {
+	VolumeQuadraturePoint point;
+	BasisValues basis;
+	std::array<double,3> physical{};
+	std::size_t OwnedPayloadBytes() const noexcept {
+		return sizeof(double)*(basis.value.capacity()
+			+ 3*basis.gradient.capacity()+9*basis.hessian.capacity());
+	}
+};
+
+inline NavierStokesVolumePointCacheEntry BuildNavierStokesVolumePointCacheEntry(
+	const Element& element, const VolumeQuadraturePoint& point)
+{
+	NavierStokesVolumePointCacheEntry result;
+	result.point=point;
+	result.basis=EvaluateBasis(element,point.parametric[0],point.parametric[1],point.parametric[2],true);
+	result.physical=EvaluateElementGeometry(element,point.parametric).physical;
+	return result;
+}
 
 inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_jacobian,
 	const std::array<double, 4>& state, double kinematic_viscosity, double dt,
@@ -117,12 +148,13 @@ inline void Stabilization(const std::array<std::array<double, 3>, 3>& inverse_ja
 // The point visitor lets cut-cell callers stream compact quadrature without
 // materializing its logical points.  The callback receives one point at a
 // time and must invoke the supplied consumer in canonical rule order.
-template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElementFromPoints(const Element& element,
+template <class PreparedPointVisitor> inline NavierStokesSystem BuildNavierStokesElementFromPreparedPoints(const Element& element,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
-	const NavierStokesParameters& parameters, PointVisitor&& visit_points,
+	const NavierStokesParameters& parameters, PreparedPointVisitor&& visit_points,
 	const NavierStokesBodyForceEvaluator& body_force,
-	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
+	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted,
+	NavierStokesAssemblyRequest request = NavierStokesAssemblyRequest::ResidualAndJacobian)
 {
 	if (!std::isfinite(parameters.density) || !(parameters.density > 0.0)
 		|| !std::isfinite(parameters.dynamic_viscosity) || !(parameters.dynamic_viscosity > 0.0)
@@ -139,13 +171,12 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 	const auto kinematic_viscosity = viscosity/density;
 	const auto nen = element.connectivity.size();
 	const auto ndof = 4 * nen;
-	NavierStokesSystem system{std::vector<PetscScalar>(ndof*ndof, 0.0), std::vector<PetscScalar>(ndof, 0.0)};
-	visit_points([&](const VolumeQuadraturePoint& point) {
-				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
-					point.parametric[2], true);
+	NavierStokesSystem system{request==NavierStokesAssemblyRequest::ResidualAndJacobian?std::vector<PetscScalar>(ndof*ndof,0.0):std::vector<PetscScalar>{}, std::vector<PetscScalar>(ndof, 0.0)};
+	visit_points([&](const VolumeQuadraturePoint& point, const BasisValues& basis,
+		const std::array<double,3>& physical) {
 				const auto measure = point.weight*basis.raw_determinant;
 				std::array<double, 4> state{};
-				const auto force = body_force(EvaluateElementGeometry(element, point.parametric).physical);
+				const auto force = body_force(physical);
 				for (const double value : force)
 					if (!std::isfinite(value)) throw std::runtime_error("Navier-Stokes body force is not finite");
 				std::array<double, 3> previous_velocity{};
@@ -181,7 +212,7 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 				const auto fine_pressure = -density*tau_c
 					* (gradient[0][0] + gradient[1][1] + gradient[2][2]);
 				double metric[3][3]{};
-				for (int i = 0; i < 3; ++i)
+				if(request==NavierStokesAssemblyRequest::ResidualAndJacobian) for (int i = 0; i < 3; ++i)
 					for (int j = 0; j < 3; ++j)
 						for (int k = 0; k < 3; ++k)
 							metric[i][j] += basis.inverse_jacobian[k][i]*basis.inverse_jacobian[k][j];
@@ -210,6 +241,7 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 						- ga[0]*fine_velocity[0] - ga[1]*fine_velocity[1] - ga[2]*fine_velocity[2];
 					for (int field = 0; field < 4; ++field)
 						system.negative_residual[4*a+field] -= residual[field]*measure;
+					if (request == NavierStokesAssemblyRequest::ResidualOnly) continue;
 
 					// Differentiate the residual above exactly.  In particular, the
 					// continuity row contains -grad(N_a).fine_velocity: its velocity
@@ -284,6 +316,26 @@ template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElement
 				}
 			});
 	return system;
+}
+
+// Compatibility path for callers that do not own an epoch cache.  It prepares
+// one point at a time and then enters the exact same arithmetic kernel as the
+// cached path.
+template <class PointVisitor> inline NavierStokesSystem BuildNavierStokesElementFromPoints(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, PointVisitor&& visit_points,
+	const NavierStokesBodyForceEvaluator& body_force,
+	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted,
+	NavierStokesAssemblyRequest request = NavierStokesAssemblyRequest::ResidualAndJacobian)
+{
+	return BuildNavierStokesElementFromPreparedPoints(element,nodal_state,previous_nodal_state,parameters,
+		[&element,&visit_points](const auto& consume) {
+			visit_points([&](const VolumeQuadraturePoint& point) {
+				auto entry=BuildNavierStokesVolumePointCacheEntry(element,point);
+				consume(entry.point,entry.basis,entry.physical);
+			});
+		},body_force,resolved_mixed_form,request);
 }
 
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,

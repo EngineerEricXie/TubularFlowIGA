@@ -13,6 +13,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -24,6 +25,9 @@
 namespace iga {
 
 namespace strong_fsi_detail {
+template <class Runtime, class = void> struct HasCommittedFluidDisplacement : std::false_type {};
+template <class Runtime> struct HasCommittedFluidDisplacement<Runtime,
+    std::void_t<decltype(std::declval<const Runtime&>().StrongCouplingCommittedDisplacementM())>> : std::true_type {};
 template <class Runtime, class = void> struct HasTrialFlowDiagnostics : std::false_type {};
 template <class Runtime> struct HasTrialFlowDiagnostics<Runtime,
 	std::void_t<decltype(std::declval<const Runtime&>().TrialFlowDiagnostics())>> : std::true_type {};
@@ -181,6 +185,12 @@ public:
 					diagnostic.fluid_residual_norm = flow_diagnostics.residual_norm;
 					diagnostic.fluid_linear_relative_residual = flow_diagnostics.true_linear_relative_residual;
 				}
+                if(CurrentPhaseProfile().Enabled()) {
+                    std::printf("strong_fsi_iteration step=%llu iteration=%llu residual_rms_m=%.17g threshold_m=%.17g converged=%d\n",
+                        static_cast<unsigned long long>(step.step_index),static_cast<unsigned long long>(iteration),
+                        rms,diagnostic.convergence_threshold_m,rms<=diagnostic.convergence_threshold_m ? 1 : 0);
+                    std::fflush(stdout);
+                }
 				if (rms <= diagnostic.convergence_threshold_m) {
 					diagnostic.relaxed_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(current, layout_);
 					diagnostic.converged = true; result.history.push_back(std::move(diagnostic));
@@ -270,13 +280,35 @@ private:
 		for (const double value : scalar) hash.AppendNormalizedDouble(value);
 		return hash.Hex();
 	}
+    void ApplyFluidKinematicHistory(SurfaceKinematics& value, const DomainStepContext& step) const
+    {
+        if constexpr (strong_fsi_detail::HasCommittedFluidDisplacement<FluidRuntime>::value) {
+            // The fluid commits the relaxed iterate; the membrane commits its
+            // raw solution. A finite accepted residual must not change the
+            // fluid's backward-Euler displacement/velocity history next step.
+            const auto history=fluid_.StrongCouplingCommittedDisplacementM();
+            if(history.size()!=value.displacement_m.size())
+                throw std::runtime_error("committed fluid interface history has incompatible size");
+            Sha256 hash;
+            distributed_surface_detail::AppendString(hash,"StrongFsiFluidKinematicHistory/v1");
+            distributed_surface_detail::AppendString(hash,value.stamp.producer_state_identity_sha256);
+            for(std::size_t i=0;i<history.size();++i) for(int c=0;c<3;++c) {
+                if(!std::isfinite(history[i][c]))
+                    throw std::runtime_error("committed fluid interface history is nonfinite");
+                value.velocity_m_per_s[i][c]=(value.displacement_m[i][c]-history[i][c])/step.dt_s;
+                hash.AppendNormalizedDouble(history[i][c]);
+                hash.AppendNormalizedDouble(value.velocity_m_per_s[i][c]);
+            }
+            value.stamp.producer_state_identity_sha256=hash.Hex();
+        }
+    }
 	SurfaceKinematics BuildPredictor(const DomainStepContext& step, const StrongCouplingStructureSnapshot& state) const
 	{
 		SurfaceKinematics result; result.interface = edge_.structure; const auto envelope = Envelope(step, 0);
 		result.stamp = {envelope.time_s,envelope.step,envelope.coupling_iteration,envelope.reference_mesh_identity_sha256,envelope.layout_identity_sha256,envelope.partition_identity_sha256,{}};
 		std::vector<double> scalar(state.displacement_m.size()); result.displacement_m.resize(scalar.size()); result.velocity_m_per_s.resize(scalar.size());
 		for (std::size_t i=0;i<scalar.size();++i) { scalar[i]=state.clamped[i] ? 0.0 : state.displacement_m[i]+step.dt_s*state.velocity_m_per_s[i]; const double v=state.clamped[i]?0.0:state.velocity_m_per_s[i]; for(int c=0;c<3;++c){result.displacement_m[i][c]=scalar[i]*state.immutable_reference_normals[i][c]; result.velocity_m_per_s[i][c]=v*state.immutable_reference_normals[i][c];} }
-		result.stamp.producer_state_identity_sha256=KinematicsProducerIdentity("StrongFsiPredictor/v1",step,0,state,"",nullptr,scalar); ValidateSurfaceKinematics(result,layout_); return result;
+		result.stamp.producer_state_identity_sha256=KinematicsProducerIdentity("StrongFsiPredictor/v1",step,0,state,"",nullptr,scalar); ApplyFluidKinematicHistory(result,step); ValidateSurfaceKinematics(result,layout_); return result;
 	}
 	std::vector<double> ScalarDisplacement(const SurfaceKinematics& value, const std::vector<std::array<double,3>>& normals) const
 	{ ValidateSurfaceKinematics(value,layout_); std::vector<double> r(value.displacement_m.size()); for(std::size_t i=0;i<r.size();++i) r[i]=Dot(value.displacement_m[i],normals[i]); return r; }
@@ -293,7 +325,7 @@ private:
 		SurfaceKinematics result; result.interface=edge_.structure; const auto envelope=Envelope(step,iteration); result.stamp={envelope.time_s,envelope.step,envelope.coupling_iteration,envelope.reference_mesh_identity_sha256,envelope.layout_identity_sha256,envelope.partition_identity_sha256,{}};
 		result.displacement_m.resize(proposal.next.size()); result.velocity_m_per_s.resize(proposal.next.size()); const std::string raw_identity=BuildSurfaceKinematicsIdentitySha256(raw,layout_);
 		for(std::size_t i=0;i<proposal.next.size();++i){ const double d=state.clamped[i]?0.:proposal.next[i]; const double v=state.clamped[i]?0.:(d-state.displacement_m[i])/step.dt_s; for(int c=0;c<3;++c){result.displacement_m[i][c]=d*state.immutable_reference_normals[i][c]; result.velocity_m_per_s[i][c]=v*state.immutable_reference_normals[i][c];} }
-		result.stamp.producer_state_identity_sha256=KinematicsProducerIdentity("StrongFsiRelaxedIterate/v1",step,iteration,state,raw_identity,&proposal,proposal.next); ValidateSurfaceKinematics(result,layout_); return result;
+		result.stamp.producer_state_identity_sha256=KinematicsProducerIdentity("StrongFsiRelaxedIterate/v1",step,iteration,state,raw_identity,&proposal,proposal.next); ApplyFluidKinematicHistory(result,step); ValidateSurfaceKinematics(result,layout_); return result;
 	}
 	void PrepareAndFinalizeAtomically(const DomainStepContext& step, StrongFluidStructureCouplingResult& result)
 	{
