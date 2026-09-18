@@ -164,7 +164,7 @@ fi
 "${pipeline_command[@]}"
 for generated in skeleton_normalized.swc skeleton.vtp skeleton_smooth.swc \
 	mesh_diagnostics.json skeleton_diagnostics.vtp controlmesh.vtk mesh_quality.json \
-	initial_velocityfield.txt; do
+	cross_section_template.vtk merge_template.vtk initial_velocityfield.txt; do
 	if [[ ! -s $preprocessing_dir/$generated ]]; then
 		printf 'mesh preprocessing did not create required output: %s/%s\n' "$preprocessing_dir" "$generated" >&2
 		exit 1
@@ -235,6 +235,7 @@ done
 	printf '    "control_mesh": "source",\n'
 	printf '    "database": "normalized",\n'
 	printf '    "visualization": "source",\n'
+	printf '    "templates": "radius_1_reference",\n'
 	printf '    "transform": "preprocessing/geometry_transform.json"\n'
 	printf '  },\n'
 	printf '  "legacy_vtk": %s,\n' "$legacy_vtk"
@@ -242,6 +243,8 @@ done
 	printf '    "runtime_case": "preprocessing",\n'
 	printf '    "database": "database/%s-%s.ntiga",\n' "$case_name" "$ranks"
 	printf '    "bezier_visualization": "visualization/bzmesh.vtkhdf",\n'
+	printf '    "cross_section_template": "preprocessing/cross_section_template.vtk",\n'
+	printf '    "merge_template": "preprocessing/merge_template.vtk",\n'
 	printf '    "results": "results"\n'
 	printf '  }\n'
 	printf '}\n'
@@ -275,6 +278,8 @@ final_results=$output_dir/results
 printf 'case generation passed\ncase: %s\ngenerated root: %s\nruntime case: %s\ndatabase: %s\nBezier visualization: %s\nmanifest: %s\nresults directory: %s\nranks: %s\n' \
 	"$case_dir" "$output_dir" "$final_preprocessing" "$final_database" \
 	"$final_visualization" "$output_dir/manifest.json" "$final_results" "$ranks"
+printf 'cross-section template: %s\nmerge template: %s\n' \
+	"$final_preprocessing/cross_section_template.vtk" "$final_preprocessing/merge_template.vtk"
 if grep -q '"neuron_transport"' "$case_dir/simulation_config.json"; then
 	printf 'CPU neuron transport:\n  mpiexec -np %s %s/solvers/cpu/iga_solve %s %s --system neuron_transport --output %s/neuron-cpu.txt\n' \
 		"$ranks" "$repo_dir" "$final_database" "$final_preprocessing" "$final_results"

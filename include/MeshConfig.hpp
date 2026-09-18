@@ -53,8 +53,15 @@ struct MeshQualityDefinition
 	double collision_safety_factor = 1.0;
 };
 
+struct MeshCrossSectionDefinition
+{
+	// Omitted/default templates use zero; positive sizes generate a unit disk.
+	double target_size = 0.0;
+};
+
 struct MeshDefinition
 {
+	MeshCrossSectionDefinition cross_section;
 	MeshSmoothingDefinition smoothing;
 	MeshCenterlineDefinition centerline;
 	MeshJunctionDefinition junction;
@@ -137,8 +144,24 @@ inline MeshDefinition ParseMeshDefinition(const config_detail::JsonValue& value)
 {
 	using namespace mesh_config_detail;
 	const auto& root = RequireObject(value, "mesh");
-	RequireKnownKeys(root, {"smoothing", "centerline", "junction", "quality"}, "mesh");
+	RequireKnownKeys(root, {"smoothing", "centerline", "junction", "quality", "cross_section"}, "mesh");
 	MeshDefinition result;
+	if (const auto* value = Find(root, "cross_section")) {
+		const auto& section = RequireObject(*value, "mesh.cross_section");
+		RequireKnownKeys(section, {"kind", "target_size"}, "mesh.cross_section");
+		const auto kind = RequireString(Required(section, "kind", "mesh.cross_section"),
+			"mesh.cross_section.kind");
+		if (kind == "default") {
+			RequireKnownKeys(section, {"kind"}, "mesh.cross_section (default templates)");
+		} else if (kind == "circle") {
+			result.cross_section.target_size = Positive(Required(section, "target_size", "mesh.cross_section"),
+				"mesh.cross_section.target_size");
+			if (result.cross_section.target_size < 1.0/128.0 || result.cross_section.target_size > 1.0)
+				throw std::runtime_error("simulation_config.json: mesh.cross_section.target_size must be in [1/128,1] on the radius-1 disk");
+		} else {
+			throw std::runtime_error("simulation_config.json: mesh.cross_section.kind must be 'default' or 'circle'");
+		}
+	}
 
 	const auto& smoothing = RequireObject(
 		Required(root, "smoothing", "mesh"), "mesh.smoothing");

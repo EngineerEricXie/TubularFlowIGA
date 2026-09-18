@@ -41,6 +41,9 @@ MeshParameters MeshParameters::Read(const std::filesystem::path& path)
 
 void MeshParameters::Validate() const
 {
+	if (!std::isfinite(cross_section_size) || cross_section_size < 0.0
+		|| (cross_section_size > 0.0 && (cross_section_size < 1.0/128.0 || cross_section_size > 1.0)))
+		throw std::runtime_error("cross-section target size must be zero (legacy) or in [1/128,1]");
 	if (noise_iterations < 0)
 		throw std::runtime_error("noise iterations must be non-negative");
 	if (!std::isfinite(bifurcation_smoothing) || bifurcation_smoothing < 0.0 || bifurcation_smoothing > 1.0)

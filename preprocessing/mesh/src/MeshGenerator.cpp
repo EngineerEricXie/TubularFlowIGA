@@ -1,4 +1,5 @@
 #include "MeshGenerator.hpp"
+#include "CrossSectionTemplate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,24 +18,7 @@ namespace {
 using Face = std::array<int,4>;
 using FaceList = std::vector<Face>;
 
-struct Templates
-{
-	std::vector<Vec3> circle;
-	std::vector<Vec3> merge;
-	FaceList circle_faces;
-	FaceList merge_faces;
-	FaceList branch_bottom;
-	FaceList branch_left;
-	FaceList branch_right;
-	std::vector<Vec3> branch_bottom_points;
-	std::vector<Vec3> branch_left_points;
-	std::vector<Vec3> branch_right_points;
-	std::vector<int> boundary_circle;
-	std::vector<int> boundary_merge;
-	std::vector<int> bottom_boundary;
-	std::vector<int> left_boundary;
-	std::vector<int> right_boundary;
-};
+using Templates = CrossSectionTemplates;
 
 struct Layer
 {
@@ -92,6 +76,7 @@ Vec3 RotateRowX(const Vec3& p, double degrees)
 Templates ReadTemplates(const std::filesystem::path& directory)
 {
 	Templates t;
+	t.axis_projections = {{{1,24,123,216}},{{3,31,124,217}}};
 	t.circle = ReadPoints(directory/"template_circle_points90.txt");
 	t.merge = ReadPoints(directory/"template_merge120_points90.txt");
 	t.circle_faces = ReadFaces(directory/"template_circle_elements.txt");
@@ -266,6 +251,25 @@ void AdjustEndFaces(FaceList& faces, double& angle, double sign)
 	}
 }
 
+void AdjustTemplateEndFaces(FaceList& faces, double& angle, double sign, const Templates& t)
+{
+	if (!t.generated) { AdjustEndFaces(faces,angle,sign); return; }
+	const double half_pi = std::acos(-1.0)/2.0;
+	const int steps = std::min(2,static_cast<int>(std::floor(angle/half_pi+0.5)));
+	if (steps==0) return;
+	// Reconstruct the canonical disk -> end-section mapping, including junction IDs.
+	std::vector<int> mapped(t.circle.size(),-1);
+	for (std::size_t f=0;f<t.circle_faces.size();++f)
+		for (int corner=0;corner<4;++corner)
+			mapped[t.circle_faces[f][corner]]=faces[f][corner];
+	const int signed_steps = sign<0.0 ? -steps : steps;
+	const int turn = (4-signed_steps)%4;
+	for (std::size_t f=0;f<t.circle_faces.size();++f)
+		for (int corner=0;corner<4;++corner)
+			faces[f][corner]=mapped[t.quarter_turn_nodes[turn][t.circle_faces[f][corner]]];
+	angle-=steps*half_pi;
+}
+
 std::vector<int> TrimSection(const SwcGraph& graph, const std::vector<int>& section)
 {
 	std::size_t begin = graph.is_branch(section.front()) ? 1 : 0;
@@ -344,6 +348,11 @@ void TransportFrame(
 
 } // namespace
 
+CrossSectionTemplates ReadCrossSectionTemplates(const std::filesystem::path& directory)
+{
+	return ReadTemplates(directory);
+}
+
 ControlMesh GenerateControlMesh(
 	const SwcGraph& skeleton,
 	const MeshParameters& parameters,
@@ -354,7 +363,8 @@ ControlMesh GenerateControlMesh(
 	parameters.Validate();
 	if (!std::isfinite(minimum_scaled_jacobian) || minimum_scaled_jacobian <= 0.0)
 		throw std::runtime_error("minimum scaled Jacobian must be positive");
-	const Templates t = ReadTemplates(template_directory);
+	const Templates t = parameters.cross_section_size > 0.0
+		? GenerateCircularTemplates(parameters.cross_section_size) : ReadTemplates(template_directory);
 	const int root = skeleton.root();
 	const auto sections = skeleton.Sections();
 	const std::size_t node_count = skeleton.nodes.size();
@@ -602,7 +612,7 @@ ControlMesh GenerateControlMesh(
 				double angle=AngleBetween(mapped,ref_end);
 				const double rotation_sign=Norm(rotation_axis)>1.0e-14?Dot(Normalized(rotation_axis,"bif-bif rotation axis"),n_end):0.0;
 				std::cout << "section_start=" << start+1 << " section_end=" << end+1 << " twist_degrees=" << angle*180.0/std::acos(-1.0) << " sign=" << rotation_sign << "\n";
-				AdjustEndFaces(layers[end].alternate,angle,rotation_sign);
+				AdjustTemplateEndFaces(layers[end].alternate,angle,rotation_sign,t);
 				const int inserted=static_cast<int>(trim.size())-2;
 				const double angle_per=angle/(inserted+1);
 				const Vec3 reference_template=RotateSurface({1,0,0},{0,0,1},n_start);
@@ -675,7 +685,7 @@ ControlMesh GenerateControlMesh(
 	}
 
 	const auto incident=BuildIncidentElements(mesh.points.size(),mesh.elements);
-	const std::array<std::array<int,4>,2> extra{{{{1,24,123,216}},{{3,31,124,217}}}};
+	const auto& extra = t.axis_projections;
 	for(std::size_t bi=0;bi<bifurcations.size();++bi) {
 		const auto& b=bifurcations[bi];
 		for(std::size_t q=0;q<t.left_boundary.size();++q) {

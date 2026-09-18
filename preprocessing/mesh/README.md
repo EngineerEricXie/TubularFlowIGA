@@ -43,6 +43,8 @@ The command writes:
   warnings, and errors;
 - `skeleton_diagnostics.vtp`: the same risk metrics as ParaView point/cell arrays;
 - `controlmesh.vtk`: labeled eight-node control elements;
+- `cross_section_template.vtk` and `merge_template.vtk`: radius-1 quad template
+  previews saved directly alongside the control mesh on every run;
 - `mesh_quality.json`: final determinant, scaled-Jacobian, and surface-intersection gates;
 - `initial_velocityfield.txt`: branch-aligned initial velocities.
 
@@ -60,7 +62,8 @@ tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR \
 tubular_mesh pipeline CASE_DIR TEMPLATE_DIR --allow-preflight-failure
 ```
 
-`generate` also writes `mesh_quality.json` beside `controlmesh.vtk`.
+`generate` also writes `mesh_quality.json`, `cross_section_template.vtk`, and
+`merge_template.vtk` beside `controlmesh.vtk`.
 The pipeline override is intended only for explicitly reviewed debug geometry.
 It preserves the failed diagnostics and still enforces the final element-quality
 and surface-intersection gates.
@@ -80,8 +83,59 @@ SWC column 6 remains a radius and is converted internally to diameter.
 
 The topology must be a connected rooted tree. Each nonterminal node must have
 one child or exactly two children; higher-order junctions are not yet
-supported. The 201-point tube and 294-point merge templates under
-`meshgeneration/template/` remain part of the stable interface.
+supported. Without `mesh.cross_section`, the generator uses the original 201-point tube
+and 294-point merge templates under `meshgeneration/template/`.
+
+## Automatic Circular Templates
+
+To generate a circle and its matching bifurcation template, add this optional
+entry to the existing schema-v4 `mesh` block in `simulation_config.json`:
+
+```json
+"cross_section": {"kind": "circle", "target_size": 0.25}
+```
+
+To explicitly use the saved circular and merge templates in
+`meshgeneration/template/`, use this entry instead:
+
+```json
+"cross_section": {"kind": "default"}
+```
+
+Omitting `mesh.cross_section` also selects these defaults. `target_size` is only
+accepted with `kind: "circle"`; default mode uses the saved mesh resolution.
+
+`target_size` is an approximate quad edge length on a **radius-1 reference
+disk**, in the range `[1/128, 1]`. At a vessel radius `R`, cross-section edges
+are approximately `target_size * R` in the geometry's units. Smaller values
+create more quads and increase the volume mesh size. Actual lengths vary across
+the disk; this is not a uniform or exact edge-length constraint. Axial spacing
+is still controlled separately by `mesh.centerline` and `mesh.junction`.
+
+The generator builds a bowed square core with rings extending to the circular
+boundary. On the radius-1 disk, side midpoints extend to radius `0.70`, while
+corners pull inward to coordinates `(±0.55, ±0.55)`. For normalized grid
+coordinates `u,v` in `[-1,1]`, core points are
+`x = u*(0.70 - 0.15*v*v)`, `y = v*(0.70 - 0.15*u*u)`.
+This increases central spacing and reduces the outer-layer thickness. Resolution
+uses `n = 2*ceil(pi/(4*target_size))` divisions per core side and
+`ceil(0.30/target_size)` outer layers; intermediate layers interpolate
+between the bowed core perimeter and the circle. Edge lengths and quad areas
+still vary; the mapping does not impose uniform element sizes.
+
+It folds two half disks and adds a third half disk sharing their
+diameter to produce the merge, then derives all three branch connections and
+boundary-node mappings from the generated topology. No Cubit installation or
+predefined template file is needed in this mode; the required CLI template
+path is ignored. The existing determinant, scaled-Jacobian, and intersection
+gates also apply to these meshes.
+
+Every pipeline run saves `cross_section_template.vtk` and `merge_template.vtk`
+directly in `preprocessing/` when using `scripts/generate_case.sh`. This also
+applies when using predefined templates. The manifest lists both paths.
+
+The run exports only the two template VTK previews. It does not create a
+`generated_templates/` directory or export template text files and reports.
 
 ## Geometry Safety
 
