@@ -383,6 +383,7 @@ inline OneDCheckpointMetadata ReadOneDCheckpoint(const std::filesystem::path& pr
 		flow.internal_substeps = metadata.internal_substeps;
 		flow.physical_time = metadata.physical_time;
 		flow.inlet_flow = metadata.inlet_flow;
+		flow.has_conservation_diagnostic = false;
 	});
 	return metadata;
 }

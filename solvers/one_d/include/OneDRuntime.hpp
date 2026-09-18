@@ -296,10 +296,12 @@ public:
 					inlet_flow = trial_inlet_mode_ == TrialInletMode::Coupled ? coupled_inlet_flow : inlet.flow_m3_s;
 					trial_diagnostics_.substep_endpoint_flows_m3_s.push_back(inlet_flow);
 					transport_initial_area = flow_state_.area;
-					if (flow_.scheme == OneDFlowScheme::ImplicitPetsc && !implicit_advance_)
+					if ((flow_.scheme == OneDFlowScheme::ImplicitPetsc
+						|| flow_.scheme == OneDFlowScheme::Petsc) && !implicit_advance_)
 						throw std::runtime_error("1d implicit trial solve requires an injected PETSc advance function");
 				});
-				if (flow_.scheme == OneDFlowScheme::ImplicitPetsc) {
+				if (flow_.scheme == OneDFlowScheme::ImplicitPetsc
+					|| flow_.scheme == OneDFlowScheme::Petsc) {
 					// This callback may contain collectives; never run it inside a local stage.
 					implicit_advance_(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				} else RunLocalTrialStage("1d local flow solve", [&] {
@@ -390,10 +392,12 @@ public:
 					frame.inlet = inlet;
 					frame.start_time_s = sub_start;
 					frame.dt_s = configuration_.time.dt;
-					if (flow_.scheme == OneDFlowScheme::ImplicitPetsc && !implicit_advance_)
+					if ((flow_.scheme == OneDFlowScheme::ImplicitPetsc
+						|| flow_.scheme == OneDFlowScheme::Petsc) && !implicit_advance_)
 						throw std::runtime_error("1d implicit trial solve requires an injected PETSc advance function");
 				});
-				if (flow_.scheme == OneDFlowScheme::ImplicitPetsc) {
+				if (flow_.scheme == OneDFlowScheme::ImplicitPetsc
+					|| flow_.scheme == OneDFlowScheme::Petsc) {
 					// Group collectives stay outside the local work callback.
 					implicit_advance_(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 				} else RunLocalTrialStage("1d hydraulic local solve", [&] {
@@ -853,6 +857,8 @@ private:
 	{
 		if (flow_.model == OneDFlowModel::Rigid)
 			SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+		else if (flow_.model == OneDFlowModel::Lumped)
+			InitializeLumpedOneD(network_, flow_, flow_state_, inlet_flow);
 		else InitializeCompliantOneDFromRigid(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 	}
 

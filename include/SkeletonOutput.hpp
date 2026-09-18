@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace iga {
@@ -172,6 +173,81 @@ inline void WriteSkeletonVtp(const std::filesystem::path& path,
 		<< "  </PolyData>\n"
 		<< "</VTKFile>\n";
 	if (!output) throw std::runtime_error("cannot write skeleton VTP: "+path.string());
+}
+
+inline void WriteSkeletonGraphVtp(const std::filesystem::path& path,
+	const std::vector<SkeletonOutputNode>& nodes,
+	const std::vector<std::pair<int, int>>& edges, int root)
+{
+	if (nodes.size() < 2 || edges.empty() || root < 0
+		|| root >= static_cast<int>(nodes.size()))
+		throw std::runtime_error("skeleton graph output has invalid dimensions or root");
+	std::vector<int> degree(nodes.size(), 0);
+	for (const auto& edge : edges) {
+		if (edge.first < 0 || edge.second < 0
+			|| edge.first >= static_cast<int>(nodes.size())
+			|| edge.second >= static_cast<int>(nodes.size())
+			|| edge.first == edge.second)
+			throw std::runtime_error("skeleton graph output contains an invalid edge");
+		++degree[static_cast<std::size_t>(edge.first)];
+		++degree[static_cast<std::size_t>(edge.second)];
+	}
+	std::ofstream output(path);
+	if (!output) throw std::runtime_error("cannot create skeleton graph VTP: "+path.string());
+	output << std::setprecision(17)
+		<< "<?xml version=\"1.0\"?>\n"
+		<< "<VTKFile type=\"PolyData\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
+		<< "  <PolyData>\n"
+		<< "    <Piece NumberOfPoints=\"" << nodes.size()
+		<< "\" NumberOfVerts=\"0\" NumberOfLines=\"" << edges.size()
+		<< "\" NumberOfStrips=\"0\" NumberOfPolys=\"0\">\n"
+		<< "      <PointData Scalars=\"radius\">\n";
+	auto integer_array = [&](const char* name, const auto& value) {
+		output << "        <DataArray type=\"Int32\" Name=\"" << name
+			<< "\" format=\"ascii\">\n          ";
+		for (std::size_t i = 0; i < nodes.size(); ++i) output << value(i) << ' ';
+		output << "\n        </DataArray>\n";
+	};
+	auto real_array = [&](const char* name, const auto& value) {
+		output << "        <DataArray type=\"Float64\" Name=\"" << name
+			<< "\" format=\"ascii\">\n          ";
+		for (std::size_t i = 0; i < nodes.size(); ++i) output << value(i) << ' ';
+		output << "\n        </DataArray>\n";
+	};
+	real_array("radius", [&](std::size_t i) { return nodes[i].radius; });
+	real_array("diameter", [&](std::size_t i) { return 2.0*nodes[i].radius; });
+	integer_array("node_id", [&](std::size_t i) { return nodes[i].id; });
+	integer_array("parent_id", [&](std::size_t i) { return nodes[i].parent_id; });
+	integer_array("degree", [&](std::size_t i) { return degree[i]; });
+	integer_array("role", [&](std::size_t i) {
+		if (static_cast<int>(i) == root) return 1;
+		if (degree[i] > 2) return 2;
+		if (degree[i] == 1) return 3;
+		return 0;
+	});
+	output << "      </PointData>\n"
+		<< "      <CellData>\n"
+		<< "        <DataArray type=\"Int32\" Name=\"segment_id\" format=\"ascii\">\n          ";
+	for (std::size_t i = 0; i < edges.size(); ++i) output << i << ' ';
+	output << "\n        </DataArray>\n"
+		<< "        <DataArray type=\"Int32\" Name=\"branch_id\" format=\"ascii\">\n          ";
+	for (std::size_t i = 0; i < edges.size(); ++i) output << i << ' ';
+	output << "\n        </DataArray>\n"
+		<< "      </CellData>\n"
+		<< "      <Points><DataArray type=\"Float64\" NumberOfComponents=\"3\" format=\"ascii\">\n          ";
+	for (const auto& node : nodes)
+		output << node.position[0] << ' ' << node.position[1] << ' ' << node.position[2] << ' ';
+	output << "\n      </DataArray></Points>\n"
+		<< "      <Lines>\n"
+		<< "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n          ";
+	for (const auto& edge : edges) output << edge.first << ' ' << edge.second << ' ';
+	output << "\n        </DataArray>\n"
+		<< "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n          ";
+	for (std::size_t i = 1; i <= edges.size(); ++i) output << 2*i << ' ';
+	output << "\n        </DataArray>\n"
+		<< "      </Lines>\n"
+		<< "    </Piece>\n  </PolyData>\n</VTKFile>\n";
+	if (!output) throw std::runtime_error("cannot write skeleton graph VTP: "+path.string());
 }
 
 } // namespace iga

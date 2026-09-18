@@ -47,6 +47,7 @@ namespace {
 struct FlowOptions {
 	fs::path database;
 	fs::path case_dir;
+	std::string system;
 	int max_newton = 12;
 	fs::path output;
 	fs::path checkpoint;
@@ -93,7 +94,7 @@ FlowStepInput PrepareFlowStepInput(MPI_Comm communicator, const char* stage,
 	bool configured, bool transient, const iga::SimulationConfiguration& configuration,
 	const fs::path& case_directory, double physical_time, double inlet_time,
 	iga::VcaExternalCircuit* circuit, const iga::CompiledLinearSystem* transport,
-	double reference_inlet_flow)
+	double reference_inlet_flow, const std::string& system)
 {
 	static_assert(std::is_nothrow_move_constructible<FlowStepInput>::value,
 		"step input must leave its coordinated stage without another allocation");
@@ -107,7 +108,7 @@ FlowStepInput PrepareFlowStepInput(MPI_Comm communicator, const char* stage,
 		if (circuit) {
 			input->inlet = circuit->InletState(inlet_time);
 			iga::ApplyThreeDVascularInlet(input->configuration,
-				iga::FirstNavierStokesSystem(input->configuration), input->inlet, reference_inlet_flow);
+				iga::FindNavierStokesSystem(input->configuration, system), input->inlet, reference_inlet_flow);
 			if (transport)
 				iga::ApplyThreeDVascularSpeciesInlet(input->configuration, *transport, input->inlet);
 		}
@@ -180,7 +181,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 {
 	if (argc < 3) throw std::runtime_error(
 		"usage: iga_navier_stokes DATABASE.ntiga CASE_DIR [MAX_NEWTON] [OUTPUT] "
-		"[--max-newton N] [--output PATH] [--output-every N] "
+		"[--system NAME] [--max-newton N] [--output PATH] [--output-every N] "
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--diagnostic-every N] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
@@ -211,7 +212,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		}
 		if (i+1 >= argc) throw std::runtime_error(argument+" requires a value");
 		const std::string value(argv[++i]);
-		if (argument == "--max-newton") options.max_newton = ParsePositiveInteger(value, argument);
+		if (argument == "--system") options.system = value;
+		else if (argument == "--max-newton") options.max_newton = ParsePositiveInteger(value, argument);
 		else if (argument == "--output") options.output = value;
 		else if (argument == "--memory-report") options.memory_report = value;
 		else if (argument == "--output-every") options.output_every = ParsePositiveInteger(value, argument);
@@ -379,7 +381,7 @@ int main(int argc, char** argv)
 			std::ostringstream text;
 			text.exceptions(std::ios::badbit | std::ios::failbit);
 			text << std::setprecision(std::numeric_limits<double>::max_digits10)
-				<< options.max_newton << ' ' << options.output_every << ' '
+				<< options.system << '\n' << options.max_newton << ' ' << options.output_every << ' '
 				<< options.checkpoint_every << ' ' << options.diagnostic_every << ' ' << options.stop_after_step << ' '
 				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
 				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
@@ -449,7 +451,7 @@ int main(int argc, char** argv)
 			if (configured) {
 				configuration = iga::ReadSimulationConfiguration(
 					(options.case_dir/"simulation_config.json").string());
-				transient = iga::FirstNavierStokesSystem(configuration).time_integration == "backward_euler";
+				transient = iga::FindNavierStokesSystem(configuration, options.system).time_integration == "backward_euler";
 				// MaterializeBoundaryWaveforms evaluates referenced boundary functions.
 				if (transient)
 					for (const auto& boundary : configuration.boundaries)
@@ -467,7 +469,7 @@ int main(int argc, char** argv)
 		iga::VcaCheckpointIdentity vca_checkpoint_identity;
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow boundary input", [&] {
 			if (configured) {
-				const auto& flow = iga::FirstNavierStokesSystem(configuration);
+				const auto& flow = iga::FindNavierStokesSystem(configuration, options.system);
 				configured = true;
 				transient = flow.time_integration == "backward_euler";
 				if (configuration.coupling.mode != iga::SimulationScopeMode::FlowOnly) {
@@ -488,7 +490,7 @@ int main(int argc, char** argv)
 					: configuration;
 				outlet_models = iga::InitializeOutletModels(configuration, flow);
 				const auto initial = iga::MaterializeOutletPressures(waveform, outlet_models);
-				boundaries = iga::ResolveFlowBoundaries(initial, iga::FirstNavierStokesSystem(initial),
+				boundaries = iga::ResolveFlowBoundaries(initial, iga::FindNavierStokesSystem(initial, options.system),
 					labels, boundary_velocity);
 				boundary_config = "simulation_config.json";
 			} else {
@@ -526,7 +528,7 @@ int main(int argc, char** argv)
 
 		std::string flow_solver_prefix, transport_solver_prefix;
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "flow solver prefixes", [&] {
-			flow_solver_prefix = iga::PetscDomainOptionsPrefix(configured ? iga::FirstNavierStokesSystem(configuration).name : "flow", "flow");
+			flow_solver_prefix = iga::PetscDomainOptionsPrefix(configured ? iga::FindNavierStokesSystem(configuration, options.system).name : "flow", "flow");
 			if (vca_has_transport) transport_solver_prefix = iga::PetscDomainOptionsPrefix(vca_transport_system.name, "transport");
 		});
 		input_phase.Stop();
@@ -572,7 +574,7 @@ int main(int argc, char** argv)
 				const auto traction_configuration = iga::MaterializeOutletPressures(
 					configuration, flow.OutletModels());
 				tractions = iga::ExtractPressureTractions(traction_configuration,
-					iga::FirstNavierStokesSystem(traction_configuration));
+					iga::FindNavierStokesSystem(traction_configuration, options.system));
 			});
 			for (const auto& traction : tractions) {
 				long long local_faces = 0;
@@ -665,7 +667,8 @@ int main(int argc, char** argv)
 			if (vca_circuit) {
 				const auto initial = PrepareFlowStepInput(PETSC_COMM_WORLD, "flow initial VCA input",
 					true, true, configuration, options.case_dir, 0.0, 0.0, vca_circuit.get(),
-					vca_transport ? &vca_transport->System() : nullptr, vca_reference_inlet_flow);
+					vca_transport ? &vca_transport->System() : nullptr, vca_reference_inlet_flow,
+					options.system);
 				flow.InitializeState(initial.configuration);
 			} else {
 				flow.InitializeState();
@@ -680,7 +683,7 @@ int main(int argc, char** argv)
 				if (options.parallel_output && fs::exists(iga::PvdPath(options.output)))
 					throw std::runtime_error("parallel output requires a new PVD path");
 				bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
-					iga::BuildBezierVisualizationMesh(database, false));
+					iga::BuildSourceCoordinateBezierVisualizationMesh(database, false));
 				const auto report = iga::BezierGeometryReportPath(options.output);
 				RequireRegularOutput(report);
 				if (!options.parallel_output) RequireRegularOutput(iga::VtkHdfPath(options.output));
@@ -756,7 +759,8 @@ int main(int argc, char** argv)
 			const auto physical_time = transient ? (step+1)*parameters.dt : 0.0;
 			const auto step_input = PrepareFlowStepInput(PETSC_COMM_WORLD, "flow step input",
 				configured, transient, configuration, options.case_dir, physical_time, step*parameters.dt,
-				vca_circuit.get(), vca_transport ? &vca_transport->System() : nullptr, vca_reference_inlet_flow);
+				vca_circuit.get(), vca_transport ? &vca_transport->System() : nullptr,
+				vca_reference_inlet_flow, options.system);
 			const auto& step_configuration = step_input.configuration;
 			const auto& inlet = step_input.inlet;
 			flow.BeginStep(step, physical_time, options.max_newton,

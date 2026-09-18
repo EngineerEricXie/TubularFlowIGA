@@ -1,8 +1,9 @@
 # Skeleton input formats
 
 TubularFlowIGA accepts rooted SWC centerlines and radius-annotated line OBJ
-trees. The same input readers feed native 1D networks and the 3D control-mesh
-preprocessor.
+networks. Tree inputs feed both native 1D and the 3D control-mesh preprocessor;
+connected OBJ graphs with split--merge cycles have restricted native implicit
+1D support.
 
 ## SWC
 
@@ -31,8 +32,11 @@ read and required to be finite but are not used. The supplied
 `liver_veins_central.obj` uses zero for both. Line indices are positive,
 1-based, vertex-only OBJ indices. A polyline such as `l 1 2 3` is accepted and
 creates edges 1–2 and 2–3. Texture/normal index syntax, faces, duplicate edges,
-self edges, zero-length edges, cycles, undefined indices, and disconnected
-vertices are rejected.
+self edges, zero-length edges, undefined indices, and disconnected vertices are
+rejected. Cycles are rejected by default. Native
+`implicit_petsc` + `implicit_1d_pde` may opt into a connected cyclic graph when
+there is one inlet terminal and at least one outlet terminal; this path
+currently requires no transport system and junction `loss_model: "none"`.
 
 Because OBJ edges are undirected, the default root is the terminal vertex with
 the largest radius; ties choose the lowest vertex index. A schema-v3 1D case
@@ -51,12 +55,32 @@ can explicitly select a different vertex:
 `obj_network`. If omitted, root inference is deterministic. The original liver
 file selects vertex 1 by inference.
 
+### Convert a VTK centerline
+
+The optional converter uses PyVista to turn VTK PolyData lines and a positive
+point-radius array into the radius-annotated OBJ convention:
+
+```bash
+python3 -m pip install pyvista
+python3 scripts/vtk_centerline_to_obj.py centerline.vtk skeleton_initial.obj \
+  --radius-array radius --scale 0.001
+```
+
+`--scale` is applied to both coordinates and radii. The converter rejects a
+missing radius array, nonpositive radii, malformed polylines, and out-of-range
+point indices instead of creating an unusable skeleton.
+
 ## 1D and 3D use
 
 Every successful 1D simulation and 3D preparation writes:
 
 - `skeleton_normalized.swc`, an explicitly rooted canonical SWC;
 - `skeleton.vtp`, a ParaView-ready line skeleton.
+
+For a cyclic implicit 1D graph, `skeleton.vtp` and the time-series VTP retain
+every graph edge. Because SWC can encode only one parent per node,
+`skeleton_normalized.swc` contains the deterministic rooted spanning tree and
+is not a lossless cyclic-graph export.
 
 The VTP contains point arrays `radius`, `diameter`, `node_id`, `parent_id`,
 `degree`, and `role`, plus cell arrays `segment_id` and `branch_id`. Numeric

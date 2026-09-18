@@ -128,6 +128,11 @@ the equation and boundary kinds below are specific to a topological network.
 
 ### Flow schemes
 
+Per-segment R/RC/RLC networks are physically 0D circuits and are documented in
+[ZERO_D.md](ZERO_D.md). Their former 1D spellings remain accepted for backward
+compatibility, while spatially resolved compliant A/Q schemes remain the native
+1D path.
+
 | Model and scheme | Formulation | Purpose |
 |---|---|---|
 | `rigid` + `steady_poiseuille` | no `formulation` key | Segment Poiseuille resistance, downstream reduction, pressure, and flow split; a time-varying inlet is solved quasi-statically |
@@ -301,12 +306,14 @@ All generated files go to `--output-dir` (default:
 - `branch_timeseries.csv`: segment flow, endpoint pressure, and resistance;
 - `profile_1d.csv`: cell A/Q/pressure/velocity;
 - `species_profile_1d.csv` and `derived_profile_1d.csv`;
-- `profile_1d_*.vtp` and `profile_1d.pvd` for ParaView;
+- `profile_1d.vtkhdf`: the default compressed ParaView time series, including
+  boundary and topology metadata;
+- optional `profile_1d_*.vtp` and `profile_1d.pvd` legacy output;
 - `summary.json` with model, timing, completion, sampled conservation, and peak
   RSS;
 - `physiology_fields.json` with solved/derived/skipped status.
 
-Open `skeleton.vtp` for the static network or `profile_1d.pvd` for simulated
+Open `skeleton.vtp` for the static network or `profile_1d.vtkhdf` for simulated
 fields. Choose a point-data array and use **Tube** with `radius` as an absolute
 scalar when a finite-width skeleton rendering is desired.
 

@@ -1,5 +1,83 @@
 # Pipeline and Case Preparation
 
+## Recommended case-level command
+
+Run the complete 3D workflow through one command:
+
+```bash
+./scripts/generate_case.sh CASE_DIR --ranks 2
+```
+
+By default it creates `CASE_DIR/generated/{preprocessing,database,visualization,results}`.
+All work is completed and validated in a sibling staging directory before the
+finished tree becomes visible. An existing nonempty output is not overwritten;
+use `--clean` to replace it deliberately. `--output DIR` selects another root,
+and `--legacy-vtk` adds `visualization/bzmesh.vtk`.
+
+Strict geometry preflight remains the default. For reviewed debugging geometry
+only, `--allow-preflight-failure` records the failed preflight in
+`manifest.json` and continues to the mandatory final mesh-quality and Bezier
+geometry gates.
+
+## Batch generation and execution
+
+[`run_cases.sh`](../scripts/run_cases.sh) is a thin orchestration layer over the
+native 1D solver and the 3D `generate_case.sh` pipeline. It can check, solve,
+and validate several cases while preserving a per-case `generated/` layout:
+
+```bash
+./scripts/run_cases.sh --config execution.conf CaseA CaseB
+```
+
+The execution profile contains machine and launch settings such as `RANKS`,
+`BACKEND`, and `OMP_NUM_THREADS`. Scientific inputs remain exclusively in each
+case's `simulation_config.json`. With no case names, all immediate
+subdirectories of `CASE_ROOT` are selected. Set `DRY_RUN=1` to inspect the
+commands without generating or solving anything. A fresh checkout must first
+build the dependency-free config checker with `make cpu` before automatic
+solver selection can be inspected in dry-run mode.
+
+`OUTPUT_ROOT` may place generated cases below a separate root. In
+`OUTPUT_MODE=atomic`, each output uses `CASE/generated` and replaces it only
+after hidden staging succeeds. In `OUTPUT_MODE=versioned`, the runner
+atomically claims fresh `generated_1`, `generated_2`, ... directories and never
+replaces an earlier run. By default, three-dimensional preprocessing still
+uses hidden staging; after it is published, the solver writes directly to the
+final versioned `results/` directory so in-progress visualization files remain
+visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is
+accepted only for a directory containing a matching generated-case
+`manifest.json` or `run_manifest.json`.
+
+Set `LIVE_OUTPUT=1`, or pass `--live-output` to `run_cases.sh`, with
+`OUTPUT_MODE=versioned` to write 3D preprocessing directly into the newly
+claimed version directory. Files then become visible as each stage creates
+them, and a failed run intentionally leaves its partial directory available
+for diagnosis. Use `--no-live-output` to override an enabled profile. Atomic
+mode deliberately rejects live output because directly replacing an existing
+output could destroy the last complete result. Direct use of
+`generate_case.sh --direct-output` likewise requires an empty output directory.
+
+`PETSC_OPTIONS` may contain whitespace-separated PETSc options that are
+exported through the MPI launcher. Keep the shared profile solver-neutral and
+put machine- or experiment-specific preconditioner choices in a separate
+configuration file.
+
+`SOLVER=auto` uses the machine-readable execution plan from
+`iga_config_check --execution-plan`, rather than searching the JSON text. That
+plan declares the dimension, mesh requirement, coupling mode, systems, and
+supported backends. Ambiguous multi-system configurations must set `SYSTEM`.
+
+Native 1D cases bypass mesh generation and `.ntiga` packing, run `iga_1d`, and
+may use `RANKS=1`. Three-dimensional cases require at least two partitions for
+`mpmetis`; CPU uses the same number of MPI processes, while CUDA reads the
+packed database on one GPU. CUDA is rejected before launch for native 1D and
+3D VCA cases because those coupling paths are currently CPU-only.
+
+A successful solve writes `run_manifest.json` with the selected dimension,
+backend, ranks, primary system, coupling mode, result path, and validation
+status. The generic runner performs normal per-run checks; specialized
+rank-parity and checkpoint/restart regression scripts remain separate.
+
 ## 1. Generate the control mesh
 
 A 3D case directory starts with a schema-v4 `simulation_config.json`. Its
@@ -54,6 +132,10 @@ make mesh-test
   "$CASE_DIR" meshgeneration/template
 ```
 
+This low-level command writes preprocessing artifacts directly into the path
+it receives. Prefer `generate_case.sh` for normal case generation and use the
+low-level stages for development or regression tests.
+
 After strict parsing and topology validation, it writes
 `skeleton_normalized.swc` and `skeleton.vtp`. OBJ is thereby converted to an
 explicitly rooted SWC before smoothing continues. Valid SWC follows the same
@@ -70,6 +152,27 @@ reports the offending node ID and child count if this constraint is violated.
 The smoothed SWC is intentionally written to eight decimal places and read
 back before meshing. This preserves the legacy file-interface behavior at
 layer-count boundaries.
+
+Junction clearance is based on physical arc length rather than a fixed number
+of source nodes. The smoother retains every source sample for its B-spline fit,
+then inserts ordinary ring positions at interpolated arc lengths outside the
+junction. The legacy lower bounds are one local diameter upstream and 1.5
+local diameters downstream. For two child arms separated by angle `theta`,
+both downstream clearances remain bounded by
+`collision_safety_factor * (r1 + r2) / (2*sin(theta/2))`.
+
+The parent and both children additionally receive independent pairwise
+clearances. For two outward arms `i` and `j` in the same half-space, arm `i`
+is bounded by
+`collision_safety_factor * (ri*cos(theta_ij) + rj) / sin(theta_ij)`. This is
+the useful geometric constraint from the earlier node-pruning implementation,
+but it is iterated with arc-length probes and never deletes or reconnects
+source nodes. Opposing arms use the diameter lower bounds, avoiding the
+straight-taper singularity of the old formula. Coincident outward directions
+are rejected. Consequently, each arm can respond to its own angle and radius,
+while adding collinear samples does not change the junction geometry. A
+section that cannot provide the resulting clearance is rejected instead of
+falling back to sample-index-dependent node deletion.
 
 MATLAB remains as an optional reference workflow. Install TREES separately,
 add both TREES and this repository recursively to the MATLAB path, set
@@ -109,21 +212,26 @@ It reads `controlmesh.vtk` and writes:
 
 - `bzmeshinfo.txt`: Bezier element connectivity;
 - `spline_cache.igacache`: versioned sparse coefficients and Bezier points;
-- `bzmesh.vtk`: legacy preprocessing visualization output (its element-local
-  points may repeat; production temporal visualization uses the packed
-  database and the extraction-signature registry instead);
 - `geometry_transform.json`: source origin and normalization scale.
+
+Pass `--legacy-vtk` to additionally write the historical eight-corner linear
+`bzmesh.vtk`. It is not used by the native packing or solver pipeline;
+production and preprocessing visualization use the packed database and the
+extraction-signature registry instead.
 
 ### Coordinate normalization
 
 Before extraction, the spline code subtracts the minimum coordinate on each
 axis and divides every coordinate by the smallest domain-axis extent. The
-Bezier mesh and packed `.ntiga` geometry therefore use translated, normalized
-coordinates rather than the original SWC coordinate units. The extractor writes
-the affine map to `geometry_transform.json`; version-5 `.ntiga` also stores it
-and the configured source length scale to metres. Transform flow, time,
-material, pressure, and transport parameters consistently. The public examples
-use internally consistent numerical values and are not presented as
+packed `.ntiga` geometry and all numerical assembly therefore use translated,
+normalized coordinates. The extractor writes the affine map to
+`geometry_transform.json`; version-5 `.ntiga` also stores it and the configured
+source length scale to metres. Both preprocessing and simulation VTKHDF output
+apply the inverse affine map, so their displayed points align with
+`controlmesh.vtk` in source coordinates. The optional legacy `bzmesh.vtk`
+retains its historical normalized-coordinate representation. Transform flow,
+time, material, pressure, and transport parameters consistently. The public
+examples use internally consistent numerical values and are not presented as
 patient-specific SI calibrations.
 
 Omit `--no-legacy-text` to additionally reproduce `cmat.txt` and `bzpt.txt`.
@@ -142,6 +250,7 @@ CPU rank count, METIS partition suffix, and `mpiexec -np` must agree.
 RANKS=8
 mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_pack "$CASE_DIR" "$RANKS" "$DATABASE"
+./solvers/cpu/iga_bezier_export "$DATABASE" "$CASE_DIR/bzmesh.vtkhdf"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
 
@@ -155,6 +264,13 @@ transform and configured length scale. Readers remain compatible with versions
 3 and 4; version 3 face labels are unavailable. Repack
 when changing the CPU rank count. CUDA ignores ownership records and may reuse
 any valid packed database.
+
+`iga_bezier_export` creates a solver-independent preview containing cubic
+`VTK_BEZIER_HEXAHEDRON` cells. It writes a geometry-only dataset to
+`bzmesh.vtkhdf` plus `bzmesh.bezier_geometry.json`. The example preparation
+script runs this export automatically, so the true spline geometry can be
+inspected in ParaView before solving. Its source-coordinate placement matches
+`controlmesh.vtk`; the normalized geometry in `.ntiga` remains unchanged.
 
 ## 4. Validate and solve
 

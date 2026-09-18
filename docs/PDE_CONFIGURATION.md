@@ -200,7 +200,8 @@ Transport point data contain every configured unknown plus requested derived
 physiology arrays. Legacy text, `.pressure`, and `.fields` outputs remain for
 validation and CPU/CUDA comparison.
 
-`iga_navier_stokes DATABASE CASE_DIR` reads the `navier_stokes` system and its
+`iga_navier_stokes DATABASE CASE_DIR --system NAME` reads the selected
+`navier_stokes` system and its
 velocity/pressure boundary values from the same file. `steady` performs one
 nonlinear solve; `backward_euler` performs `time.steps` solves with step size
 `time.dt` and writes the final state to the optional output path. For transition only, it

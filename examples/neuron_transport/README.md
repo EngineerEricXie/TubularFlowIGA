@@ -46,15 +46,17 @@ must not be interpreted as a positivity-preserving biological calibration.
 From the repository root:
 
 ```bash
-NEURON_WORK="$(mktemp -d /tmp/tubularflowiga-neuron.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  neuron_transport/straight_neurite "$NEURON_WORK"
-NEURON_DB="$NEURON_WORK/straight_neurite-2.ntiga"
+NEURON_SOURCE=examples/neuron_transport/straight_neurite
+./scripts/generate_case.sh "$NEURON_SOURCE" --ranks 2
+NEURON_WORK="$NEURON_SOURCE/generated"
+NEURON_CASE="$NEURON_WORK/preprocessing"
+NEURON_DB="$NEURON_WORK/database/straight_neurite-2.ntiga"
+NEURON_RESULTS="$NEURON_WORK/results"
 
 mpiexec -np 2 ./solvers/cpu/iga_solve \
-  "$NEURON_DB" "$NEURON_WORK" \
+  "$NEURON_DB" "$NEURON_CASE" \
   --system neuron_transport \
-  --output "$NEURON_WORK/neuron-cpu.txt" --output-every 1
+  --output "$NEURON_RESULTS/neuron-cpu.txt" --output-every 1
 ```
 
 Build the MPI/PETSc solver first if `solvers/cpu/iga_solve` is absent:
@@ -70,17 +72,19 @@ write `neuron-cpu.pvd`, its initialized step, and every solved VTU snapshot.
 Reproduce the branched-neurite GIF from the repository root with:
 
 ```bash
-BRANCHED_WORK="$(mktemp -d /tmp/tubularflowiga-neuron-branched.XXXXXX)"
-RANKS=8 ./scripts/prepare_example.sh \
-  neuron_transport/branched_neurite "$BRANCHED_WORK"
-BRANCHED_DB="$BRANCHED_WORK/branched_neurite-8.ntiga"
+BRANCHED_SOURCE=examples/neuron_transport/branched_neurite
+./scripts/generate_case.sh "$BRANCHED_SOURCE" --ranks 8
+BRANCHED_WORK="$BRANCHED_SOURCE/generated"
+BRANCHED_CASE="$BRANCHED_WORK/preprocessing"
+BRANCHED_DB="$BRANCHED_WORK/database/branched_neurite-8.ntiga"
+BRANCHED_RESULTS="$BRANCHED_WORK/results"
 
 mpiexec -np 8 ./solvers/cpu/iga_solve \
-  "$BRANCHED_DB" "$BRANCHED_WORK" --system neuron_transport \
-  --output "$BRANCHED_WORK/neuron-cpu.txt" --output-every 1
+  "$BRANCHED_DB" "$BRANCHED_CASE" --system neuron_transport \
+  --output "$BRANCHED_RESULTS/neuron-cpu.txt" --output-every 1
 
 pvbatch --force-offscreen-rendering scripts/render_transport_gif.py \
-  --input "$BRANCHED_WORK/neuron-cpu.pvd" --array Nplus \
+  --input "$BRANCHED_RESULTS/neuron-cpu.pvd" --array Nplus \
   --output docs/images/neuron-branched-transport.gif \
   --title "Branched neurite Nplus transport" --frames 13
 ```
@@ -89,9 +93,9 @@ pvbatch --force-offscreen-rendering scripts/render_transport_gif.py \
 
 ```bash
 ./solvers/cuda/iga_cuda solve \
-  "$NEURON_DB" "$NEURON_WORK" \
+  "$NEURON_DB" "$NEURON_CASE" \
   --system neuron_transport \
-  --output "$NEURON_WORK/neuron-cuda.txt"
+  --output "$NEURON_RESULTS/neuron-cuda.txt"
 ```
 
 Build with `make cuda CUDA_ARCHS=YOUR_GPU_ARCH` and verify

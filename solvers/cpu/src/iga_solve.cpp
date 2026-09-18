@@ -622,7 +622,7 @@ int main(int argc, char** argv)
 				if (options.parallel_output && fs::exists(iga::PvdPath(options.output)))
 					throw std::runtime_error("parallel output requires a new PVD path");
 				bezier_mesh = std::make_unique<iga::BezierVisualizationMesh>(
-					iga::BuildBezierVisualizationMesh(database, false));
+					iga::BuildSourceCoordinateBezierVisualizationMesh(database, false));
 				const auto report = iga::BezierGeometryReportPath(options.output);
 				RequireRegularOutput(report);
 				if (!options.parallel_output) RequireRegularOutput(iga::VtkHdfPath(options.output));

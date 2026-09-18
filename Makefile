@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline clean
+.PHONY: all mesh mesh-test cpu cpu-test cpu-petsc hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -77,6 +77,12 @@ one-d-petsc:
 one-d-test:
 	$(MAKE) -C solvers/one_d test
 
+zero-d-petsc:
+	$(MAKE) -C solvers/one_d zero-d
+
+zero-d-test:
+	$(MAKE) -C solvers/one_d test
+
 coupling:
 	$(MAKE) -C solvers/coupling petsc
 
@@ -124,6 +130,10 @@ cuda:
 
 spline:
 	$(MAKE) -C preprocessing/spline
+
+workflow-test: cpu
+	./scripts/tests/test_run_cases.sh
+	python3 ./scripts/tests/test_vtk_centerline_to_obj.py
 
 clean:
 	$(MAKE) -C preprocessing/mesh clean

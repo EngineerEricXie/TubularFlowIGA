@@ -43,7 +43,7 @@ struct Layer
 	FaceList alternate;
 	FaceList right;
 	Vec3 reference;
-	bool has_reference = false;
+	Vec3 tangent;
 };
 
 struct Bifurcation
@@ -224,6 +224,12 @@ Vec3 RotateIfNeeded(const Vec3& point, const Vec3& axis, double angle)
 	return RotateAroundAxis(point, axis, angle);
 }
 
+Vec3 FrameReference(const Vec3& tangent, const Vec3& candidate, const std::string& context)
+{
+	const Vec3 unit_tangent=Normalized(tangent,context+" tangent");
+	return Normalized(candidate-unit_tangent*Dot(candidate,unit_tangent),context+" reference");
+}
+
 Face ReorderFace(const Face& f)
 {
 	return {f[2],f[3],f[0],f[1]};
@@ -327,6 +333,8 @@ void TransportFrame(
 {
 	const Vec3 old_tangent=Normalized(tangent,context+" old tangent");
 	const Vec3 new_tangent=Normalized(new_direction,context+" new tangent");
+	if(std::abs(Dot(Normalized(reference,context+" old reference"),old_tangent))>1.0e-10)
+		throw std::runtime_error(context+": reference is not perpendicular to the old tangent");
 	reference=RotateSurface(reference,old_tangent,new_tangent);
 	reference-=new_tangent*Dot(reference,new_tangent);
 	reference=Normalized(reference,context+" transported reference");
@@ -420,17 +428,20 @@ ControlMesh GenerateControlMesh(
 		const Vec3 cpn=Normalized(Cross(spik-spkj,spij-spkj), "bifurcation plane");
 		std::cout << "bifurcation_node=" << branch+1 << " plane_normal=[" << cpn.x << "," << cpn.y << "," << cpn.z << "]\n";
 		const Vec3 cp1=cpn*average_radius;
-		const Vec3 w_parent=Normalized(Cross(sv_parent,cp1), "bifurcation parent frame");
-		const Vec3 w_child1=Normalized(Cross(sv_child1,cp1), "bifurcation child1 frame");
-		const Vec3 w_child2=Normalized(Cross(sv_child2,cp1), "bifurcation child2 frame");
+		const Vec3 ref_parent=FrameReference(sv_parent,cp1,"bifurcation parent frame");
+		const Vec3 ref_child1=FrameReference(sv_child1,cp1,"bifurcation child1 frame");
+		const Vec3 ref_child2=FrameReference(sv_child2,cp1,"bifurcation child2 frame");
+		const Vec3 w_parent=Normalized(Cross(sv_parent,ref_parent), "bifurcation parent frame");
+		const Vec3 w_child1=Normalized(Cross(sv_child1,ref_child1), "bifurcation child1 frame");
+		const Vec3 w_child2=Normalized(Cross(sv_child2,ref_child2), "bifurcation child2 frame");
 
 		auto parent_terminal=Scale(t.circle,ri);
 		auto child1_terminal=Scale(t.circle,rj);
 		auto child2_terminal=Scale(t.circle,rk);
 		for (std::size_t k=0;k<t.circle.size();++k) {
-			parent_terminal[k]=Normalized(cp1,"bifurcation cp1")*parent_terminal[k].x+w_parent*parent_terminal[k].y;
-			child1_terminal[k]=Normalized(cp1,"bifurcation cp1")*child1_terminal[k].x+w_child1*child1_terminal[k].y;
-			child2_terminal[k]=Normalized(cp1,"bifurcation cp1")*child2_terminal[k].x+w_child2*child2_terminal[k].y;
+			parent_terminal[k]=ref_parent*parent_terminal[k].x+w_parent*parent_terminal[k].y;
+			child1_terminal[k]=ref_child1*child1_terminal[k].x+w_child1*child1_terminal[k].y;
+			child2_terminal[k]=ref_child2*child2_terminal[k].x+w_child2*child2_terminal[k].y;
 		}
 
 		Vec3 ciji=w_parent*ri-sv_parent, ciki=-w_parent*ri-sv_parent;
@@ -480,7 +491,8 @@ ControlMesh GenerateControlMesh(
 		layers[branch].right=OffsetFaces(t.branch_right,central_offset);
 		branch_points[branch]={bottom,left,right};
 
-		auto add_terminal=[&](int node,std::vector<Vec3> points,const Vec3& direction,int arm) {
+		auto add_terminal=[&](int node,std::vector<Vec3> points,const Vec3& direction,
+			const Vec3& reference,const Vec3& tangent,int arm) {
 			int label=-1;
 			if ((node==root || skeleton.is_terminal(node))) label=tip_label++;
 			std::vector<Vec3> velocities(points.size());
@@ -493,13 +505,13 @@ ControlMesh GenerateControlMesh(
 			layers[node].points=std::move(points);
 			layers[node].primary=OffsetFaces(t.circle_faces,offset);
 			layers[node].alternate=layers[node].primary;
-			layers[node].reference=cp1;
-			layers[node].has_reference=true;
+			layers[node].reference=reference;
+			layers[node].tangent=Normalized(tangent,"bifurcation terminal tangent");
 			info.offsets[arm]=offset;
 		};
-		add_terminal(parent,std::move(parent_terminal),sv_parent_parent,1);
-		add_terminal(child1,std::move(child1_terminal),sv_child1,2);
-		add_terminal(child2,std::move(child2_terminal),sv_child2,3);
+		add_terminal(parent,std::move(parent_terminal),sv_parent_parent,ref_parent,sv_parent,1);
+		add_terminal(child1,std::move(child1_terminal),sv_child1,ref_child1,sv_child1,2);
+		add_terminal(child2,std::move(child2_terminal),sv_child2,ref_child2,sv_child2,3);
 		bifurcations.push_back(info);
 	}
 
@@ -539,7 +551,7 @@ ControlMesh GenerateControlMesh(
 			const auto trim=TrimSection(skeleton,section);
 			const int start=trim.front(), end=trim.back();
 			if(start==root) {
-				Vec3 direction_end=segment[end];
+				Vec3 direction_end=layers[end].tangent;
 				Vec3 reference=layers[end].reference;
 				Vec3 w=Normalized(Cross(direction_end,reference),"root-bifurcation frame");
 				reference=Normalized(reference,"root-bifurcation reference");
@@ -562,9 +574,9 @@ ControlMesh GenerateControlMesh(
 				}
 			} else if(skeleton.is_terminal(end)) {
 				Vec3 reference=layers[start].reference;
-				Vec3 w=Normalized(Cross(segment[start],reference),"bifurcation-terminal frame");
+				Vec3 w=Normalized(Cross(layers[start].tangent,reference),"bifurcation-terminal frame");
 				reference=Normalized(reference,"bifurcation-terminal reference");
-				Vec3 tangent=Normalized(segment[start],"bifurcation-terminal tangent");
+				Vec3 tangent=Normalized(layers[start].tangent,"bifurcation-terminal tangent");
 				for(std::size_t q=1;q<trim.size();++q) {
 					const int node=trim[q];
 					const Vec3 direction=segment[node];
@@ -582,12 +594,9 @@ ControlMesh GenerateControlMesh(
 					layers[node].alternate=layers[node].primary;
 				}
 			} else {
-				const Vec3 sec_start=segment[start];
-				const int end_branch=skeleton.nodes[end].children.front();
-				const Vec3 sec_end=segment[end_branch];
 				const Vec3 ref_start=layers[start].reference, ref_end=layers[end].reference;
-				const Vec3 n_start=Normalized(Cross(ref_start,Cross(sec_start,ref_start)),"bif-bif start normal");
-				const Vec3 n_end=Normalized(Cross(ref_end,Cross(sec_end,ref_end)),"bif-bif end normal");
+				const Vec3 n_start=Normalized(layers[start].tangent,"bif-bif start normal");
+				const Vec3 n_end=Normalized(layers[end].tangent,"bif-bif end normal");
 				const Vec3 mapped=RotateSurface(ref_start,n_start,n_end);
 				Vec3 rotation_axis=Cross(mapped,ref_end);
 				double angle=AngleBetween(mapped,ref_end);

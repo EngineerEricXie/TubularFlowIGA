@@ -4,6 +4,11 @@ These cases use schema version 3 and run directly from their committed SWC and
 `simulation_config.json`; they do not require the 3D mesh-generation or spline
 pipeline, Python, FEniCS, or HexSim.
 
+The canonical spatial example is `compliant_bifurcation`. Lumped R/RC/RLC
+circuits are classified as 0D and live under [`examples/zero_d`](../zero_d/README.md);
+older rigid and pressure-network cases remain here for compatibility and coupled
+transport regression.
+
 The native CLI checks execution controls, captured configuration bytes and visible
 PETSc options across ranks before solving. It also coordinates startup input and
 root output errors. Identical input copies may use different local directories.
@@ -42,7 +47,7 @@ oxygen-derived fields, and vasodilation.
 The example runs for `0.24 s` with mean inlet flow `4e-7 m3/s`, giving a mean
 cell velocity near `0.095 m/s`. This is long enough for the oxygen, glucose,
 and lactate inlet fronts to pass the junction and enter both outlet branches.
-Open `profile_1d.pvd` in ParaView for the time series.
+Open `profile_1d.vtkhdf` in ParaView for the default time series.
 
 ## Multispecies result
 

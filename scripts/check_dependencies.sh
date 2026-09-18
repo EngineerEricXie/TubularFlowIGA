@@ -115,12 +115,17 @@ check_one_d() {
 	else
 		fail "OpenMP compiler support"
 	fi
+	check_hdf5
 }
 
 case "$component" in
 	preprocessing)
 		check_base
 		check_preprocessing
+		;;
+	vtkhdf)
+		check_base
+		check_hdf5
 		;;
 	cpu)
 		check_base
@@ -146,7 +151,7 @@ case "$component" in
 		check_hdf5
 		;;
 	*)
-		printf 'usage: %s preprocessing|cpu|one-d|cuda|all\n' "$0" >&2
+		printf 'usage: %s preprocessing|vtkhdf|cpu|one-d|cuda|all\n' "$0" >&2
 		exit 2
 		;;
 esac

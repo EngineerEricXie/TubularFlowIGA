@@ -17,10 +17,11 @@ work directory so that `examples/` stays small and reproducible.
 | Vascular flow | `vascular_flow/iga_wordmark` | Connected IGA-letter showcase pipe | `blood_flow` |
 | Vascular flow | `vascular_flow/multispecies_pulse` | Pulsatile 3D Navier--Stokes and six-species physiology | `blood_flow` + `multispecies_physiology_3d` |
 | Vascular flow | `vascular_flow/vca_bifurcation` | CPU 3D VCA closed-loop bifurcation and restart smoke case | `blood_flow` + one VCA transport system |
-| Native 1D | `one_d/rigid_straight` | Analytic rigid Poiseuille pressure drop | `blood_flow_1d` |
+| Native 0D | `zero_d/steady_resistive_straight` | Analytic steady Poiseuille R network | `resistive_network` |
+| Native 0D | `zero_d/rc_rcr_bifurcation` | Transient RC network with RC/RCR terminal beds | `lumped_circuit` |
 | Native 1D | `one_d/compliant_bifurcation` | Pulsatile compliant A/Q flow, junction loss, and RCR | `blood_flow_1d` |
-| Native 1D | `one_d/multispecies_physiology` | Pulsatile six-species transport, physiology, and vasodilation | `blood_flow_1d` + `multispecies_physiology_1d` |
-| Native 1D | `one_d/liver_vein_obj_segment` | Radius-annotated OBJ skeleton input | `blood_flow_1d` |
+| Hybrid legacy | `one_d/multispecies_physiology` | 0D pressure flow with 1D six-species transport | `blood_flow_1d` + `multispecies_physiology_1d` |
+| 0D migration | `one_d/liver_vein_obj_segment` | Deprecated rigid alias and radius-annotated OBJ input | `blood_flow_1d` |
 | Vascular flow | `vascular_flow/liver_vein_obj_segment` | 3D mesh and flow from the same OBJ excerpt | `blood_flow` |
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
@@ -42,32 +43,42 @@ The preparation pipeline generates all downstream files, including
 `skeleton_normalized.swc`, ParaView-ready `skeleton.vtp`, geometry diagnostics,
 `controlmesh.vtk`, `mesh_quality.json`,
 `initial_velocityfield.txt`, `bzmeshinfo.txt`, the spline cache, METIS
-partitions, and the `.ntiga` database. Do not commit these generated artifacts.
+partitions, the `.ntiga` database, and a cubic `bzmesh.vtkhdf` geometry preview.
+Do not commit these generated artifacts.
 
-Native 1D directories instead contain only `skeleton_initial.swc` or
+Native network directories instead contain only `skeleton_initial.swc` or
 `skeleton_initial.obj` and a schema-v3 `simulation_config.json`. Run them
-directly with `iga_1d`; they do not use the 3D mesh block, the preparation
-pipeline, or a packed database. See the [1D example guide](one_d/README.md).
+directly with `iga_0d` or `iga_1d`; they do not use the 3D mesh block, the
+preparation pipeline, or a packed database. See the
+[1D example guide](one_d/README.md).
+Native 0D cases use the same source-only geometry contract with
+`dimension: "0d"`; see the [0D guide](../docs/ZERO_D.md).
 
 ## Prepare a case
 
-Run from the repository root and provide an empty work directory when a stable
-path is useful:
+Run from the repository root. Generated files stay below the source case but
+are ignored by Git:
 
 ```bash
-EXAMPLE_WORK="$(mktemp -d /tmp/tubularflowiga-example.XXXXXX)"
-RANKS=2 ./scripts/prepare_example.sh \
-  vascular_flow/straight_tube "$EXAMPLE_WORK"
+EXAMPLE_CASE=examples/vascular_flow/straight_tube
+./scripts/generate_case.sh "$EXAMPLE_CASE" --ranks 2
+EXAMPLE_WORK="$EXAMPLE_CASE/generated"
 ```
 
-The first argument must be the application-qualified case name. The script
-checks required dependencies, builds preprocessing tools, prepares and packs
-the geometry, validates the configuration and boundary labels, and prints only
-the solver commands appropriate for that application.
+The script checks dependencies, builds preprocessing tools, prepares and packs
+the geometry, validates configuration and boundary labels, and creates
+`examples/vascular_flow/straight_tube/generated/` from the outset. Add
+`--clean` to replace an existing generated tree. `prepare_example.sh` remains
+only as a compatibility wrapper for external work directories.
 
 The partition count controls the generated database filename and must equal the
 MPI process count used by the CPU solver. A database packed for multiple CPU
 ranks can also be read by the single-GPU CUDA backend.
+
+Each work directory contains `preprocessing/`, `database/`, `visualization/`,
+and `results/`, plus a root `manifest.json`. Pass `preprocessing/` as the
+runtime case directory, read the packed database from `database/`, and place
+solver outputs in `results/`.
 
 ## Run and inspect
 
@@ -95,9 +106,9 @@ GUI. For vascular flow:
 ```bash
 pvbatch --force-offscreen-rendering scripts/render_example.py \
   --kind flow \
-  --mesh "$VASCULAR_WORK/controlmesh.vtk" \
-  --result "$VASCULAR_WORK/velocity-cpu.txt" \
-  --output "$VASCULAR_WORK/vascular-flow.png" \
+  --mesh "$VASCULAR_WORK/preprocessing/controlmesh.vtk" \
+  --result "$VASCULAR_WORK/results/velocity-cpu.txt" \
+  --output "$VASCULAR_WORK/results/vascular-flow.png" \
   --title "Vascular flow" \
   --legend "Velocity magnitude"
 ```
@@ -107,10 +118,10 @@ For neuron transport:
 ```bash
 pvbatch --force-offscreen-rendering scripts/render_example.py \
   --kind transport \
-  --mesh "$NEURON_WORK/controlmesh.vtk" \
-  --result "$NEURON_WORK/neuron-cpu.txt" \
+  --mesh "$NEURON_WORK/preprocessing/controlmesh.vtk" \
+  --result "$NEURON_WORK/results/neuron-cpu.txt" \
   --array Nplus \
-  --output "$NEURON_WORK/neuron-transport.png" \
+  --output "$NEURON_WORK/results/neuron-transport.png" \
   --title "Neuron transport" \
   --legend "Nplus coefficient"
 ```
@@ -125,9 +136,9 @@ behind the visible lettering:
 ```bash
 pvbatch --force-offscreen-rendering scripts/render_example.py \
   --kind flow \
-  --mesh "$IGA_WORK/controlmesh.vtk" \
-  --result "$IGA_WORK/velocity-cpu.txt" \
-  --output "$IGA_WORK/iga-wordmark-flow.png" \
+  --mesh "$IGA_WORK/preprocessing/controlmesh.vtk" \
+  --result "$IGA_WORK/results/velocity-cpu.txt" \
+  --output "$IGA_WORK/results/iga-wordmark-flow.png" \
   --slice-z 0 \
   --title "TubularFlowIGA" \
   --legend "Velocity magnitude"

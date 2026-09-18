@@ -11,6 +11,7 @@
 /preprocessing/spline/spline
 /solvers/cpu/iga_pack
 /solvers/cpu/iga_inspect
+/solvers/cpu/iga_bezier_export
 /solvers/cpu/iga_mesh_check
 /solvers/cpu/iga_case_check
 /solvers/cpu/case_config_test
@@ -55,6 +56,7 @@
 /solvers/cpu/moving_immersed_flow_snapshot_publisher_test
 /solvers/cpu/phase7_lv_closure_test
 /solvers/one_d/iga_1d
+/solvers/one_d/iga_0d
 /solvers/one_d/one_d_core_test
 /solvers/one_d/one_d_coupling_test
 /solvers/one_d/one_d_runtime_test
@@ -107,6 +109,12 @@ core.*
 /outputs/
 /build/
 /cmake-build-*/
+/examples/**/generated/
+/examples/**/results/
+/Input/*
+!/Input/README.md
+# Ad hoc geometry attachments belong in cases or examples, not the repository root.
+/*.obj
 CMakeCache.txt
 CMakeFiles/
 compile_commands.json

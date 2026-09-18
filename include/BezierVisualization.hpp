@@ -48,12 +48,15 @@ struct BezierGeometryValidation {
 
 struct BezierVisualizationMesh {
 	std::vector<std::array<double, 3>> points;
+	std::vector<std::int32_t> point_boundary_labels;
 	std::vector<std::int64_t> connectivity;
 	std::vector<std::int64_t> offsets;
 	std::vector<std::uint8_t> types;
 	std::vector<std::array<std::int32_t, 3>> higher_order_degrees;
 	std::vector<std::uint64_t> element_ids;
 	std::vector<std::int32_t> element_owners;
+	std::vector<std::int32_t> element_boundary_labels;
+	std::vector<std::array<std::int32_t, 6>> element_boundary_face_labels;
 	std::vector<std::uint64_t> signature_offsets{0};
 	std::vector<std::int32_t> signature_nodes;
 	std::vector<double> signature_coefficients;
@@ -388,6 +391,47 @@ inline constexpr std::array<int, 64> VtkCubicHexTensorIndices()
 		21, 22, 25, 26, 37, 38, 41, 42}};
 }
 
+inline bool BezierPointOnFace(std::size_t point, std::size_t face)
+{
+	const auto i = point%4;
+	const auto j = (point/4)%4;
+	const auto k = point/16;
+	switch (face) {
+	case 0: return k == 0;
+	case 1: return j == 0;
+	case 2: return i == 3;
+	case 3: return j == 3;
+	case 4: return i == 0;
+	case 5: return k == 3;
+	default: throw std::out_of_range("Bezier boundary face index");
+	}
+}
+
+inline std::int32_t MergeBoundaryPointLabel(
+	std::int32_t current, std::int32_t candidate)
+{
+	if (candidate < 0) return current;
+	if (current < 0) return candidate;
+	if (current == candidate) return current;
+	// Wall labels own the rim where a cap meets the vessel wall, matching the
+	// control-mesh point-label convention.  Distinct non-wall labels are an
+	// explicitly mixed boundary junction.
+	if (current == 0 || candidate == 0) return 0;
+	return -2;
+}
+
+inline std::int32_t ElementBoundaryLabel(
+	const std::array<std::int32_t, 6>& labels)
+{
+	std::int32_t result = -1;
+	for (const auto label : labels) {
+		if (label < 0) continue;
+		if (result < 0) result = label;
+		else if (result != label) return -2;
+	}
+	return result;
+}
+
 } // namespace detail
 
 // The full key is the identity; SignatureHash is only a lookup accelerator.
@@ -458,6 +502,8 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 	mesh.higher_order_degrees.reserve(static_cast<std::size_t>(elements));
 	mesh.element_ids.reserve(static_cast<std::size_t>(elements));
 	mesh.element_owners.reserve(static_cast<std::size_t>(elements));
+	mesh.element_boundary_labels.reserve(static_cast<std::size_t>(elements));
+	mesh.element_boundary_face_labels.reserve(static_cast<std::size_t>(elements));
 	std::vector<detail::Bounds> element_bounds(static_cast<std::size_t>(elements));
 	std::vector<std::array<std::int64_t, 64>> tensor_connectivity(
 		static_cast<std::size_t>(elements));
@@ -585,6 +631,7 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 			registry[signature_hash].push_back(global);
 			coordinate_registry[bucket].push_back(global);
 			mesh.points.push_back(element.bezier_points[point]);
+			mesh.point_boundary_labels.push_back(-1);
 			point_elements.push_back(element.id);
 			for (const auto& entry : signature) {
 				mesh.signature_nodes.push_back(entry.first);
@@ -592,6 +639,16 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 			}
 			mesh.signature_offsets.push_back(mesh.signature_nodes.size());
 			local_ids[point] = global;
+		}
+		for (std::size_t face = 0; face < element.boundary_labels.size(); ++face) {
+			const auto label = element.boundary_labels[face];
+			if (label < 0) continue;
+			for (std::size_t point = 0; point < kBezierPointCount; ++point) {
+				if (!detail::BezierPointOnFace(point, face)) continue;
+				const auto global = static_cast<std::size_t>(local_ids[point]);
+				mesh.point_boundary_labels[global] = detail::MergeBoundaryPointLabel(
+					mesh.point_boundary_labels[global], label);
+			}
 		}
 		auto sorted = local_ids;
 		std::sort(sorted.begin(), sorted.end());
@@ -630,6 +687,9 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 		mesh.higher_order_degrees.push_back({{3, 3, 3}});
 		mesh.element_ids.push_back(element.id);
 		mesh.element_owners.push_back(element.owner);
+		mesh.element_boundary_labels.push_back(
+			detail::ElementBoundaryLabel(element.boundary_labels));
+		mesh.element_boundary_face_labels.push_back(element.boundary_labels);
 	}
 	mesh.validation.unique_points = mesh.points.size();
 	std::vector<std::uint64_t> order(static_cast<std::size_t>(elements));
@@ -673,6 +733,32 @@ inline BezierVisualizationMesh BuildBezierVisualizationMesh(
 			}
 		}
 	}
+	if (require_valid_geometry) RequireValidBezierGeometry(mesh.validation);
+	return mesh;
+}
+
+inline void TransformBezierVisualizationToSourceCoordinates(
+	BezierVisualizationMesh& mesh, const GeometryTransform& transform)
+{
+	const auto scale = transform.source_units_per_normalized_unit;
+	if (!(scale > 0.0) || !std::isfinite(scale)
+		|| !std::all_of(transform.source_origin.begin(), transform.source_origin.end(),
+			[](double value) { return std::isfinite(value); }))
+		throw std::runtime_error("invalid Bezier visualization geometry transform");
+	for (auto& point : mesh.points)
+		for (int direction = 0; direction < 3; ++direction)
+			point[direction] = transform.source_origin[direction]+scale*point[direction];
+	mesh.validation.maximum_signature_coordinate_difference *= scale;
+	if (std::isfinite(mesh.validation.minimum_jacobian))
+		mesh.validation.minimum_jacobian *= scale*scale*scale;
+}
+
+inline BezierVisualizationMesh BuildSourceCoordinateBezierVisualizationMesh(
+	Database& database, bool require_valid_geometry = true)
+{
+	auto mesh = BuildBezierVisualizationMesh(database, false);
+	TransformBezierVisualizationToSourceCoordinates(
+		mesh, database.header().geometry_transform);
 	if (require_valid_geometry) RequireValidBezierGeometry(mesh.validation);
 	return mesh;
 }

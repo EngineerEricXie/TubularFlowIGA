@@ -1,0 +1,100 @@
+{
+  "schema_version": 3,
+  "dimension": "0d",
+  "geometry": {
+    "kind": "swc_network",
+    "file": "skeleton_initial.swc",
+    "length_scale_to_m": 1.0
+  },
+  "fields": [
+    {"name": "area", "kind": "scalar"},
+    {"name": "flow_rate", "kind": "scalar"},
+    {"name": "pressure", "kind": "pressure"}
+  ],
+  "time": {"dt": 0.001, "steps": 200, "output_every": 10},
+  "temporal_functions": [
+    {
+      "name": "inlet_flow",
+      "kind": "sinusoid",
+      "units": "m3/s",
+      "mean": 1.0e-9,
+      "amplitude": 2.5e-10,
+      "period": 0.1,
+      "phase": 0.0
+    }
+  ],
+  "equation_systems": [
+    {
+      "name": "lumped_circuit",
+      "kind": "network_flow_0d",
+      "unknowns": ["area", "flow_rate", "pressure"],
+      "model": "lumped",
+      "scheme": "petsc",
+      "formulation": "transient_rc",
+      "dynamic_viscosity": 0.004,
+      "density": 1060.0,
+      "wall": {
+        "model": "linear",
+        "young_modulus": 1000000.0,
+        "thickness_ratio": 0.1,
+        "reference_pressure": 0.0
+      },
+      "discretization": {"cells_per_segment": 1},
+      "lumped_parameters": {
+        "resistance_scale": 1.0,
+        "compliance_scale": 0.0,
+        "segment_resistance": {
+          "2": 1.0e8,
+          "3": 2.0e8,
+          "4": 2.0e8
+        },
+        "segment_compliance": {
+          "2": 1.0e-10,
+          "3": 5.0e-11,
+          "4": 5.0e-11
+        }
+      }
+    }
+  ],
+  "boundaries": [
+    {
+      "name": "inlet",
+      "role": "inlet",
+      "node_ids": [1],
+      "conditions": [
+        {"field": "flow_rate", "type": "dirichlet", "quantity": "flow_rate", "waveform": "inlet_flow"}
+      ]
+    },
+    {
+      "name": "rc_terminal",
+      "role": "outlet",
+      "node_ids": [3],
+      "conditions": [
+        {
+          "field": "pressure",
+          "type": "windkessel_rc",
+          "resistance": 1.0e9,
+          "capacitance": 1.0e-10,
+          "reference_pressure": 0.0,
+          "initial_pressure": 0.0
+        }
+      ]
+    },
+    {
+      "name": "rcr_terminal",
+      "role": "outlet",
+      "node_ids": [4],
+      "conditions": [
+        {
+          "field": "pressure",
+          "type": "windkessel_rcr",
+          "proximal_resistance": 2.0e8,
+          "distal_resistance": 1.0e9,
+          "capacitance": 1.0e-10,
+          "reference_pressure": 0.0,
+          "initial_pressure": 0.0
+        }
+      ]
+    }
+  ]
+}

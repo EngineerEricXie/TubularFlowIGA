@@ -11,8 +11,10 @@
 int main(int argc, char** argv)
 {
 	try {
-		if (argc != 2)
-			throw std::runtime_error("usage: iga_config_check SIMULATION_CONFIG.json|-");
+		if (argc < 2 || argc > 3 || (argc == 3 && std::string(argv[2]) != "--execution-plan"))
+			throw std::runtime_error(
+				"usage: iga_config_check SIMULATION_CONFIG.json|- [--execution-plan]");
+		const bool execution_plan = argc == 3;
 		std::string text;
 		if (std::string(argv[1]) == "-") text = iga::ReadCheckedText(std::cin);
 		else {
@@ -27,6 +29,8 @@ int main(int argc, char** argv)
 		const int version = iga::config_detail::RequireInteger(*version_value, "schema_version");
 		if (version == 5 || version == 6) {
 			const auto configuration = iga::ParseMultidomainConfiguration(text);
+			if (execution_plan)
+				throw std::runtime_error("--execution-plan does not yet support multidomain schemas");
 			std::cout << "schema_version=" << version << " mode=multidomain"
 				<< " domains=" << configuration.graph.Domains().size()
 				<< " couplings=" << configuration.graph.Edges().size()
@@ -68,8 +72,23 @@ int main(int argc, char** argv)
 			const auto* dimension_value = iga::config_detail::Find(root, "dimension");
 			if (!dimension_value) throw std::runtime_error("schema_version 3 requires dimension");
 			const auto dimension = iga::config_detail::RequireString(*dimension_value, "dimension");
-			if (dimension == "1d") {
+			if (dimension == "1d" || dimension == "0d") {
 				const auto configuration = iga::ParseOneDConfiguration(text);
+				if (execution_plan) {
+					std::cout << "schema_version=3\ndimension=" << configuration.dimension
+						<< "\nrequires_mesh=false\ncoupling_mode="
+						<< iga::SimulationScopeModeName(configuration.coupling.mode)
+						<< "\nbackend=cpu\n";
+					for (const auto& system : configuration.flow_systems)
+						std::cout << "system=" << system.name << " kind=network_flow_"
+							<< configuration.dimension << '\n';
+					for (const auto& system : configuration.transport_systems)
+						std::cout << "system=" << system.name
+							<< " kind=network_transport_1d flow_system="
+							<< system.flow_system << '\n';
+					iga::FlushCheckedText(std::cout);
+					return 0;
+				}
 				std::cout << "schema_version=3 dimension=" << configuration.dimension
 					<< " fields=" << configuration.fields.size()
 					<< " flow_systems=" << configuration.flow_systems.size()
@@ -84,9 +103,25 @@ int main(int argc, char** argv)
 				iga::FlushCheckedText(std::cout);
 				return 0;
 			}
-			if (dimension != "3d") throw std::runtime_error("dimension must be '1d' or '3d'");
+			if (dimension != "3d") throw std::runtime_error("dimension must be '0d', '1d', or '3d'");
 		}
 		const auto configuration = iga::ParseSimulationConfiguration(text);
+		if (execution_plan) {
+			std::cout << "schema_version=" << configuration.schema_version
+				<< "\ndimension=3d\nrequires_mesh=true\ncoupling_mode="
+				<< iga::SimulationScopeModeName(configuration.coupling.mode) << '\n';
+			if (configuration.coupling.mode == iga::SimulationScopeMode::FlowOnly) {
+				std::cout << "backend=cpu\nbackend=cuda\n";
+			} else if (configuration.coupling.mode == iga::SimulationScopeMode::VcaClosedLoop) {
+				std::cout << "backend=cpu\n";
+			}
+			for (const auto& system : configuration.equation_systems)
+				std::cout << "system=" << system.name << " kind="
+					<< (system.kind == iga::EquationKind::LinearTransport
+						? "linear_transport" : "navier_stokes") << '\n';
+			iga::FlushCheckedText(std::cout);
+			return 0;
+		}
 		std::cout << "schema_version=" << configuration.schema_version
 			<< " dimension=" << configuration.dimension
 			<< " fields=" << configuration.fields.size()

@@ -80,8 +80,17 @@ int main(int argc, char** argv)
 		});
 		iga::OwnedRowAssembler::Assemble(matrix, PETSC_COMM_WORLD);
 		PetscBool missing = PETSC_FALSE;
+	#if PETSC_VERSION_LT(3, 25, 0)
 		PetscInt row = -1;
 		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke diagonal", MatMissingDiagonal(matrix, &missing, &row));
+	#else
+		IS zero_diagonals = nullptr;
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke diagonal", MatFindZeroDiagonals(matrix, &zero_diagonals));
+		PetscInt zero_diagonal_count = 0;
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke diagonal count", ISGetSize(zero_diagonals, &zero_diagonal_count));
+		missing = zero_diagonal_count > 0 ? PETSC_TRUE : PETSC_FALSE;
+		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke diagonal cleanup", ISDestroy(&zero_diagonals));
+	#endif
 		MatInfo info{};
 		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke matrix info", MatGetInfo(matrix, MAT_GLOBAL_SUM, &info));
 		iga::RequireCollectivePetscSuccess(PETSC_COMM_WORLD, "assembly smoke destroy", MatDestroy(&owner.value));

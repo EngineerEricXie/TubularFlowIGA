@@ -22,7 +22,7 @@ general-purpose CFD package.
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Native 1D rigid Poiseuille and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native 1D and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
+| Vascular flow | Native 0D R/RC/RLC circuits; native 1D rigid Poiseuille/inertance and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native network and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
 | Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer; optional disjoint MPI groups for independent domains | Executable graphs require supported acyclic topology. Grouped execution supports 0D, 1D, and body-fitted 3D; grouped checkpoint/restart and immersed domains use shared mode. 0D species and a full closed-loop 0D heart are deferred |
 | Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry | Moving geometry uses a fixed Eulerian background with distributed active-set/history transfer. ALE/remeshing and a native moving-domain graph CLI remain deferred |
 | Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark at 1/2/4 ranks, including a two-node 4-rank strong writer and 2-rank paired restart reader. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
@@ -89,7 +89,7 @@ pressure/flow and species ports, using SI units and outward-positive flow.
 
 | Configuration | Purpose | Entry point |
 |---|---|---|
-| Schema v3 | Standalone native 1D flow and transport | `iga_1d` |
+| Schema v3 | Standalone native 0D circuit or 1D flow and transport | `iga_0d`, `iga_1d` |
 | Schema v4 | Standalone body-fitted 3D geometry, mesh, flow, and transport | `prepare_example.sh`, then CPU or CUDA solver |
 | Schema v5 graph | Heterogeneous flow-only coupling, including supported 0D and steady/fixed-transient immersed domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
 | Schema v6 graph | Conservative species transport across native 1D and body-fitted 3D domains | `iga_multidomain_flow --graph-case ROOT --output-dir DIR` |
@@ -109,6 +109,8 @@ to a separate work directory.
 
 | Goal | Recommended case | Command |
 |---|---|---|
+| First native 0D run | Straight Poiseuille R network | `./solvers/one_d/iga_0d examples/zero_d/steady_resistive_straight --check` |
+| Native 0D RC/RCR | Lumped transient bifurcation | `./solvers/one_d/iga_0d examples/zero_d/rc_rcr_bifurcation --check` |
 | First vascular run | Straight rigid vessel | `./scripts/prepare_example.sh vascular_flow/straight_tube` |
 | Curved vascular geometry | Planar bend | `./scripts/prepare_example.sh vascular_flow/bent_tube` |
 | Branching vascular flow | Symmetric bifurcation | `./scripts/prepare_example.sh vascular_flow/y_bifurcation` |
@@ -448,6 +450,7 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Files produced at every pipeline stage | [Pipeline](docs/PIPELINE.md) |
 | Fields, operators, time stepping, and solver CLI | [PDE configuration](docs/PDE_CONFIGURATION.md) |
 | Native 1D schema, solvers, units, outputs, and Hex field map | [Native 1D guide](docs/ONE_D.md) |
+| Native 0D R/RC/RLC circuits, parameters, and outputs | [Native 0D guide](docs/ZERO_D.md) |
 | 0D/1D/3D graphs, ports, species routing, and runtime lifecycle | [Coupling architecture](docs/architecture/COUPLING_ARCHITECTURE.md) |
 | Prescribed moving immersed anatomy | [Moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md) |
 | Membrane coupling, traction transfer, and foundational FSI limits | [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
@@ -500,7 +503,7 @@ Current scope limits are important when interpreting results:
   multirate coupled clocks, and moving/FSI native graph restart remain deferred;
 - native 1D and CPU 3D `vca_closed_loop` coupling remain separate from generic
   domain coupling; CUDA VCA and 3D VCA replay/open-loop are unavailable;
-- 1D pressure/R/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
+- 0D/1D pressure/R/RC/RCR and 3D pressure/R/RC/RCR outlets are reduced terminal-bed
   models, not tissue-resolved circulation;
 - the 1D physiology layer is configurable and reduced, not automatically a
   patient-validated model;

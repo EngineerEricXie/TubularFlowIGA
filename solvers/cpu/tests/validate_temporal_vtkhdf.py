@@ -26,15 +26,28 @@ reader = OpenDataFile(str(path))
 require(reader is not None, f"ParaView could not open {path}")
 reader.UpdatePipeline()
 times = list(reader.TimestepValues)
-expected_times = [float(value) for value in args.times.split(",") if value]
+expected_times = [] if args.times == "none" else [
+    float(value) for value in args.times.split(",") if value]
 require(times == expected_times, f"unexpected timesteps: {times}")
-reader.UpdatePipeline(time=expected_times[-1])
+if expected_times:
+    reader.UpdatePipeline(time=expected_times[-1])
 data = reader.GetClientSideObject().GetOutputDataObject(0)
 require(data.GetNumberOfPoints() == args.points, "geometry point count changed")
 require(data.GetNumberOfCells() == args.cells, "geometry cell count changed")
 require(data.GetCellType(0) == 79, "cell is not VTK_BEZIER_HEXAHEDRON")
 point_data = data.GetPointData()
-for name in (value for value in args.arrays.split(",") if value):
+require(point_data.GetArray("boundary_label") is not None,
+        "missing static point boundary_label array")
+cell_data = data.GetCellData()
+require(cell_data.GetArray("boundary_label") is not None,
+        "missing static cell boundary_label array")
+face_labels = cell_data.GetArray("boundary_face_labels")
+require(face_labels is not None, "missing boundary_face_labels array")
+require(face_labels.GetNumberOfComponents() == 6,
+        "boundary_face_labels does not have six components")
+array_names = [] if args.arrays == "none" else [
+    value for value in args.arrays.split(",") if value]
+for name in array_names:
     require(point_data.GetArray(name) is not None, f"missing {name} array")
 if args.value and args.value != "none":
     name, expected = args.value.split(":", 1)

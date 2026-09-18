@@ -7,6 +7,8 @@ MPIEXEC ?= mpiexec
 MPI_TEST_RANKS ?= 2
 PETSC_DIR ?=
 PETSC_ARCH ?=
+HDF5_CFLAGS ?= $(shell pkg-config --cflags hdf5 2>/dev/null)
+HDF5_LIBS ?= $(shell pkg-config --libs hdf5 2>/dev/null)
 
 ifeq ($(strip $(PETSC_DIR)),)
 PETSC_CFLAGS ?= $(shell pkg-config --cflags PETSc 2>/dev/null)
@@ -19,7 +21,7 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all petsc core-test test clean
+.PHONY: all petsc zero-d core-test test vtkhdf-paraview-test clean
 
 all: one_d_core_test
 
@@ -33,12 +35,14 @@ iga_1d one_d_core_test one_d_coupling_test one_d_runtime_test one_d_petsc_test: 
 
 petsc: iga_1d
 
+zero-d: iga_0d
+
 iga_1d: ../cpu/include/CollectiveAssetInput.hpp ../cpu/include/Sha256.hpp
 
 iga_1d one_d_coupling_test: ../../include/CouplingHistory.hpp
 
-iga_1d: src/iga_1d.cpp ../cpu/include/CollectivePetscOptions.hpp ../cpu/include/CollectiveFailure.hpp ../../include/PhaseProfile.hpp include/OneDRuntime.hpp include/OneDCoupling.hpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/CouplingPort.hpp ../../include/CouplingConfig.hpp ../../include/CouplingReplay.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+iga_1d iga_0d: src/iga_1d.cpp ../cpu/include/CollectivePetscOptions.hpp ../cpu/include/CollectiveFailure.hpp ../../include/PhaseProfile.hpp include/OneDRuntime.hpp include/OneDCoupling.hpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/CouplingPort.hpp ../../include/CouplingConfig.hpp ../../include/CouplingReplay.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp ../../include/TemporalVtkHdf.hpp ../../include/BezierVisualization.hpp ../../include/VtkOutput.hpp
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIBS) $(HDF5_LIBS)
 
 one_d_core_test: tests/test_one_d_core.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp ../../include/CouplingConfig.hpp ../../include/OxygenCapacity.hpp ../../include/VascularCoupling.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
@@ -50,7 +54,10 @@ one_d_runtime_test: tests/test_one_d_runtime.cpp include/OneDRuntime.hpp include
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
 
 one_d_petsc_test: tests/test_one_d_petsc.cpp ../cpu/include/CollectiveFailure.hpp ../../include/PhaseProfile.hpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDImplicit.hpp include/OneDOutput.hpp include/OneDCheckpoint.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIBS) $(HDF5_LIBS)
+
+one_d_output_test: tests/test_one_d_output.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDOutput.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp ../../include/TemporalVtkHdf.hpp ../../include/BezierVisualization.hpp ../../include/VtkOutput.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(HDF5_CFLAGS) $< -o $@ $(HDF5_LIBS)
 
 core-test: one_d_core_test one_d_coupling_test one_d_runtime_test
 	./one_d_core_test
@@ -70,12 +77,18 @@ one_d_trial_failure_test: tests/test_one_d_trial_failure.cpp include/OneDRuntime
 subcommunicator-test: one_d_subcommunicator_test
 	OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PETSC_OPTIONS='-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps' timeout 90 $(MPIEXEC) -np 4 ./one_d_subcommunicator_test ../../examples/one_d/rigid_straight/skeleton_initial.swc
 
-test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_petsc_test
+test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_output_test one_d_petsc_test
 	./one_d_core_test
 	./one_d_coupling_test
 	./one_d_runtime_test
+	./one_d_output_test
 	./one_d_petsc_test
 	$(MPIEXEC) -np $(MPI_TEST_RANKS) ./one_d_petsc_test
+
+vtkhdf-paraview-test: one_d_output_test
+	TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./one_d_output_test
+	$(PVPYTHON) tests/validate_one_d_vtkhdf.py
+	./one_d_output_test
 
 clean:
 	$(RM) one_d_solver_options_test
@@ -87,7 +100,7 @@ clean:
 	$(RM) one_d_filename_failure_test
 	$(RM) one_d_stdout_failure_test
 	$(RM) one_d_subcommunicator_test
-	$(RM) one_d_core_test one_d_coupling_test one_d_runtime_test one_d_petsc_test iga_1d
+	$(RM) one_d_core_test one_d_coupling_test one_d_runtime_test one_d_output_test one_d_petsc_test iga_1d iga_0d
 
 one_d_implicit_failure_test: tests/test_one_d_implicit_failure.cpp include/OneDImplicit.hpp include/OneDCheckpoint.hpp include/OneDFlow.hpp include/OneDNetwork.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)

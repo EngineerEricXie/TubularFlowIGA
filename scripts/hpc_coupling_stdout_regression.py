@@ -34,7 +34,7 @@ def main():
         for check in (True, False):
             specs.append(dict(name=f'one-d-{ranks}-'+('check' if check else 'solve'), ranks=ranks,
                 folder='one_d', native='iga_1d', wrapper='one_d_stdout_failure_test', fixture=one_d,
-                check=check, target='schema_version=3 dimension=1d system=' if check else 'completed 1d system=',
+                check=check, target='schema_version=3 dimension=' if check else 'completed 1d system=',
                 stage='1d check output' if check else '1d final output'))
     for ranks, group in ((1, 'single'), (2, 'pair')):
         for kind in ('flow', 'species', 'zero-d', 'bifurcation'):

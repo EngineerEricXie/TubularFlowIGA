@@ -37,9 +37,24 @@ int main(int argc, char** argv)
 		state.outlets.push_back(outlet);
 	}
 	iga::InitializeCompliantOneDFromRigid(network, flow, state, 1.0e-9, 1.0e-3);
-	for (const auto formulation : {iga::OneDImplicitFormulation::PressureNetwork,
-		iga::OneDImplicitFormulation::LinearizedAQ,
-		iga::OneDImplicitFormulation::NonlinearAQ,
+	iga::OneDFlowState rigid_reference;
+	rigid_reference.outlets = state.outlets;
+	iga::SolveRigidOneD(network, flow, rigid_reference, 1.0e-9, 0.0);
+	iga::OneDFlowSystemDefinition steady = flow;
+	steady.model = iga::OneDFlowModel::Lumped;
+	steady.scheme = iga::OneDFlowScheme::Petsc;
+	steady.formulation = iga::OneDImplicitFormulation::SteadyR;
+	iga::OneDFlowState steady_state;
+	steady_state.outlets = state.outlets;
+	iga::InitializeLumpedOneD(network, steady, steady_state, 1.0e-9);
+	iga::AdvanceImplicitOneD(network, steady, steady_state, 1.0e-9, 1.0e-3);
+	for (std::size_t i = 0; i < steady_state.node_pressure.size(); ++i)
+		assert(std::abs(steady_state.node_pressure[i]-rigid_reference.node_pressure[i]) < 1.0e-10);
+	for (std::size_t i = 0; i < steady_state.segment_flow.size(); ++i)
+		assert(std::abs(steady_state.segment_flow[i]-rigid_reference.segment_flow[i]) < 1.0e-18);
+	for (const auto formulation : {iga::OneDImplicitFormulation::TransientRc,
+		iga::OneDImplicitFormulation::TransientRlc,
+		iga::OneDImplicitFormulation::NonlinearRlc,
 		iga::OneDImplicitFormulation::ImplicitPde}) {
 		flow.formulation = formulation;
 		iga::AdvanceImplicitOneD(network, flow, state, 1.0e-9, 1.0e-3);
@@ -50,6 +65,42 @@ int main(int argc, char** argv)
 			assert(std::isfinite(state.pressure[i]));
 		}
 	}
+	iga::OneDFlowSystemDefinition lumped = flow;
+	lumped.model = iga::OneDFlowModel::Lumped;
+	lumped.scheme = iga::OneDFlowScheme::Petsc;
+	lumped.formulation = iga::OneDImplicitFormulation::TransientRc;
+	lumped.lumped.compliance_scale = 0.0;
+	lumped.lumped.segment_resistance[2] = 1.0e8;
+	lumped.lumped.segment_resistance[3] = 2.0e8;
+	iga::OneDFlowState rc_state;
+	iga::OneDOutletState rc_outlet;
+	rc_outlet.node = network.outlet_nodes.front();
+	rc_outlet.kind = iga::OneDOutletKind::WindkesselRc;
+	rc_outlet.distal_resistance = 1.0e9;
+	rc_outlet.capacitance = 1.0e-10;
+	rc_state.outlets.push_back(rc_outlet);
+	iga::InitializeLumpedOneD(network, lumped, rc_state, 1.0e-9);
+	iga::AdvanceImplicitOneD(network, lumped, rc_state, 1.0e-9, 1.0e-2);
+	const double expected_capacitor_pressure = 0.1/1.1;
+	assert(std::abs(rc_state.outlets.front().capacitor_pressure
+		-expected_capacitor_pressure) < 1.0e-11);
+	assert(std::abs(rc_state.node_pressure.back()-expected_capacitor_pressure) < 1.0e-11);
+	assert(std::abs(rc_state.node_pressure.front()
+		-(expected_capacitor_pressure+0.3)) < 1.0e-11);
+
+	iga::OneDFlowState rcr_state;
+	iga::OneDOutletState rcr_outlet = rc_outlet;
+	rcr_outlet.kind = iga::OneDOutletKind::WindkesselRcr;
+	rcr_outlet.proximal_resistance = 2.0e8;
+	rcr_state.outlets.push_back(rcr_outlet);
+	iga::InitializeLumpedOneD(network, lumped, rcr_state, 1.0e-9);
+	iga::AdvanceImplicitOneD(network, lumped, rcr_state, 1.0e-9, 1.0e-2);
+	assert(std::abs(rcr_state.outlets.front().capacitor_pressure
+		-expected_capacitor_pressure) < 1.0e-11);
+	assert(std::abs(rcr_state.node_pressure.back()
+		-(expected_capacitor_pressure+0.2)) < 1.0e-11);
+	assert(std::abs(rcr_state.node_pressure.front()
+		-(expected_capacitor_pressure+0.5)) < 1.0e-11);
 	iga::OneDCheckpointMetadata metadata;
 	metadata.completed_step = 1;
 	metadata.internal_substeps = 3;

@@ -115,24 +115,30 @@ int main(int argc, char** argv)
 			if (argc != 8) throw std::runtime_error(
 				"usage: tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR controlmesh.vtk initial_velocityfield.txt MIN_SCALED_J");
 			const auto parameters = tubular::MeshParameters::Read(argv[3]);
+			const double minimum_scaled = std::stod(argv[7]);
 			const auto mesh = tubular::GenerateControlMesh(
-				tubular::SwcGraph::Read(argv[2]), parameters, argv[4], std::stod(argv[7]));
+				tubular::SwcGraph::Read(argv[2]), parameters, argv[4], minimum_scaled);
 			tubular::WriteControlMeshVtk(mesh, argv[5]);
+			tubular::WriteMeshQualityJson(
+				mesh, minimum_scaled, std::filesystem::path(argv[5]).parent_path()/"mesh_quality.json");
 			tubular::WriteVelocity(mesh, argv[6]);
 			PrintMesh(mesh);
 			return 0;
 		}
 		if (command == "pipeline") {
-			if (argc < 3 || argc > 5) throw std::runtime_error(
-				"usage: tubular_mesh pipeline CASE_DIR [TEMPLATE_DIR] [MIN_SCALED_J]");
+			const bool allow_preflight_failure = argc >= 3
+				&& std::string(argv[argc-1]) == "--allow-preflight-failure";
+			const int positional_argc = argc-(allow_preflight_failure ? 1 : 0);
+			if (positional_argc < 3 || positional_argc > 5) throw std::runtime_error(
+				"usage: tubular_mesh pipeline CASE_DIR [TEMPLATE_DIR] [MIN_SCALED_J] [--allow-preflight-failure]");
 			const std::filesystem::path directory = argv[2];
-			const std::filesystem::path templates = argc >= 4 ? argv[3] : "meshgeneration/template";
-			const double minimum_scaled = argc >= 5 ? std::stod(argv[4]) : 1.0e-3;
+			const std::filesystem::path templates = positional_argc >= 4 ? argv[3] : "meshgeneration/template";
+			const double minimum_scaled = positional_argc >= 5 ? std::stod(argv[4]) : 1.0e-3;
 			const auto pipeline = ReadPipelineInput(directory);
 			auto parameters = pipeline.parameters;
-			if (pipeline.modern && argc >= 5)
+			if (pipeline.modern && positional_argc >= 5)
 				throw std::runtime_error("MIN_SCALED_J override is not accepted with schema-v4 mesh.quality");
-			if (!pipeline.modern && argc >= 5) parameters.minimum_scaled_jacobian = minimum_scaled;
+			if (!pipeline.modern && positional_argc >= 5) parameters.minimum_scaled_jacobian = minimum_scaled;
 			const auto input = tubular::SwcGraph::Read(pipeline.skeleton);
 			const auto normalized_path = directory/"skeleton_normalized.swc";
 			input.WriteNormalized(normalized_path);
@@ -152,7 +158,11 @@ int main(int argc, char** argv)
 				<<" candidate_collisions="<<diagnostics.collisions.size()<<'\n';
 			for(const auto& warning:diagnostics.warnings)
 				std::cerr<<"tubular_mesh warning: "<<warning<<'\n';
-			tubular::RequireValidGeometry(diagnostics);
+			if (allow_preflight_failure && !diagnostics.valid())
+				std::cerr<<"tubular_mesh warning: continuing after geometry preflight failure because "
+					"--allow-preflight-failure was specified\n";
+			else
+				tubular::RequireValidGeometry(diagnostics);
 			const auto mesh = tubular::GenerateControlMesh(
 				quantized_smooth, parameters, templates, parameters.minimum_scaled_jacobian);
 			tubular::WriteControlMeshVtk(mesh, directory/"controlmesh.vtk");

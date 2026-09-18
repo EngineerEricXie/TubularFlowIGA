@@ -19,10 +19,19 @@
 
 namespace iga {
 
-enum class OneDFlowModel { Rigid, Compliant };
-enum class OneDFlowScheme { SteadyPoiseuille, RigidInertance, ExplicitRusanov, ImplicitPetsc };
-enum class OneDImplicitFormulation { PressureNetwork, LinearizedAQ, NonlinearAQ, ImplicitPde };
-enum class OneDOutletKind { Pressure, Resistance, WindkesselRcr };
+enum class OneDFlowModel { Rigid, Compliant, Lumped };
+enum class OneDFlowScheme { SteadyPoiseuille, RigidInertance, Petsc, ExplicitRusanov, ImplicitPetsc };
+enum class OneDImplicitFormulation {
+	SteadyR,
+	TransientRc,
+	PressureNetwork = TransientRc,
+	TransientRlc,
+	LinearizedAQ = TransientRlc,
+	NonlinearRlc,
+	NonlinearAQ = NonlinearRlc,
+	ImplicitPde
+};
+enum class OneDOutletKind { Pressure, Resistance, WindkesselRc, WindkesselRcr };
 enum class OneDWallModel { Linear, Olufsen };
 enum class OneDWallBoundaryKind { NoFlux, ConstantFlux, Robin };
 
@@ -65,17 +74,25 @@ struct OneDJunctionDefinition {
 	std::vector<std::pair<double, double>> angle_table;
 };
 
+struct OneDLumpedDefinition {
+	double resistance_scale = 1.0;
+	double compliance_scale = 1.0;
+	std::map<int, double> segment_resistance;
+	std::map<int, double> segment_compliance;
+};
+
 struct OneDFlowSystemDefinition {
 	std::string name;
 	std::vector<std::string> unknowns;
 	OneDFlowModel model = OneDFlowModel::Rigid;
 	OneDFlowScheme scheme = OneDFlowScheme::SteadyPoiseuille;
-	OneDImplicitFormulation formulation = OneDImplicitFormulation::PressureNetwork;
+	OneDImplicitFormulation formulation = OneDImplicitFormulation::TransientRc;
 	double dynamic_viscosity = 0.0;
 	double density = 1.0;
 	OneDWallDefinition wall;
 	OneDDiscretizationDefinition discretization;
 	OneDJunctionDefinition junctions;
+	OneDLumpedDefinition lumped;
 };
 
 struct OneDSpeciesDefinition {
@@ -146,7 +163,16 @@ struct OneDConfiguration {
 	std::vector<OneDBoundaryDefinition> boundaries;
 	OneDPhysiologyDefinition physiology;
 	CouplingDefinition coupling;
+	std::vector<std::string> warnings;
 };
+
+inline const char* NetworkFlowPhysicalDimension(const OneDFlowSystemDefinition& flow)
+{
+	if (flow.model == OneDFlowModel::Rigid || flow.model == OneDFlowModel::Lumped
+		|| flow.formulation != OneDImplicitFormulation::ImplicitPde)
+		return "0d";
+	return "1d";
+}
 
 namespace one_d_config_detail {
 
@@ -297,6 +323,48 @@ inline OneDJunctionDefinition ParseJunctions(const JsonValue* value,
 	return result;
 }
 
+inline std::map<int, double> ParseLumpedSegmentValues(const JsonValue* value,
+	const std::string& context, bool require_positive)
+{
+	std::map<int, double> result;
+	if (!value) return result;
+	const auto& items = RequireObject(*value, context);
+	for (const auto& item : items) {
+		std::size_t used = 0;
+		int child_node_id = -1;
+		try { child_node_id = std::stoi(item.first, &used); }
+		catch (const std::exception&) { used = 0; }
+		if (used != item.first.size() || child_node_id < 1)
+			throw std::runtime_error("simulation_config.json: " + context
+				+ " keys must be positive child node ids");
+		const double number = RequireNumber(item.second, context + "." + item.first);
+		if ((require_positive && !(number > 0.0)) || (!require_positive && number < 0.0))
+			throw std::runtime_error("simulation_config.json: " + context
+				+ " contains an invalid value");
+		result.emplace(child_node_id, number);
+	}
+	return result;
+}
+
+inline OneDLumpedDefinition ParseLumped(const JsonValue* value,
+	const std::string& context)
+{
+	OneDLumpedDefinition result;
+	if (!value) return result;
+	const auto& object = RequireObject(*value, context);
+	RequireKnownKeys(object, {"resistance_scale", "compliance_scale",
+		"segment_resistance", "segment_compliance"}, context);
+	result.resistance_scale = OptionalNumber(object, "resistance_scale", 1.0, context);
+	result.compliance_scale = OptionalNumber(object, "compliance_scale", 1.0, context);
+	if (!(result.resistance_scale > 0.0) || result.compliance_scale < 0.0)
+		throw std::runtime_error("simulation_config.json: lumped resistance_scale must be positive and compliance_scale nonnegative");
+	result.segment_resistance = ParseLumpedSegmentValues(Find(object,
+		"segment_resistance"), context + ".segment_resistance", true);
+	result.segment_compliance = ParseLumpedSegmentValues(Find(object,
+		"segment_compliance"), context + ".segment_compliance", false);
+	return result;
+}
+
 inline TemporalFunctionDefinition ParseTemporalFunction(const JsonValue& value,
 	const std::string& context)
 {
@@ -330,8 +398,12 @@ inline TemporalFunctionDefinition ParseTemporalFunction(const JsonValue& value,
 	parse_coefficients("sine", function.sine);
 	if (function.name.empty() || function.units.empty())
 		throw std::runtime_error("simulation_config.json: temporal name and units cannot be empty");
-	if (function.kind == TemporalFunctionKind::Sinusoid && !(function.period > 0.0))
-		throw std::runtime_error("simulation_config.json: sinusoid requires positive period");
+	if (function.kind == TemporalFunctionKind::Constant && !Find(object, "value"))
+		throw std::runtime_error("simulation_config.json: constant temporal function requires value");
+	if (function.kind == TemporalFunctionKind::Sinusoid
+		&& (!Find(object, "mean") || !Find(object, "amplitude")
+			|| !(function.period > 0.0)))
+		throw std::runtime_error("simulation_config.json: sinusoid requires mean, amplitude, and positive period");
 	if (function.kind == TemporalFunctionKind::PeriodicTable
 		&& (!(function.period > 0.0) || function.file.empty() || function.interpolation != "linear"))
 		throw std::runtime_error("simulation_config.json: periodic_table requires period, file, and linear interpolation");
@@ -355,8 +427,8 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 	OneDConfiguration result;
 	result.schema_version = RequireInteger(Required(root, "schema_version", "root"), "schema_version");
 	result.dimension = RequireString(Required(root, "dimension", "root"), "dimension");
-	if (result.schema_version != 3 || result.dimension != "1d")
-		throw std::runtime_error("simulation_config.json: 1d configuration requires schema_version 3 and dimension '1d'");
+	if (result.schema_version != 3 || (result.dimension != "1d" && result.dimension != "0d"))
+		throw std::runtime_error("simulation_config.json: network configuration requires schema_version 3 and dimension '0d' or '1d'");
 
 	const auto& geometry = RequireObject(Required(root, "geometry", "root"), "geometry");
 	RequireKnownKeys(geometry, {"kind", "file", "length_scale_to_m", "root_node_id"}, "geometry");
@@ -429,9 +501,12 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 				throw std::runtime_error("simulation_config.json: system unknowns must name unique declared fields");
 			unknowns.push_back(field);
 		}
-		if (kind == "network_flow_1d") {
+		if (kind == "network_flow_1d" || kind == "network_flow_0d") {
+			if ((result.dimension == "0d") != (kind == "network_flow_0d"))
+				throw std::runtime_error("simulation_config.json: flow-system kind must match the configured dimension");
 			RequireKnownKeys(object, {"name", "kind", "unknowns", "model", "scheme", "formulation",
-				"dynamic_viscosity", "density", "wall", "discretization", "junctions"}, context);
+				"dynamic_viscosity", "density", "wall", "discretization", "junctions",
+				"lumped_parameters"}, context);
 			OneDFlowSystemDefinition flow;
 			flow.name = name;
 			flow.unknowns = unknowns;
@@ -439,35 +514,80 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			const auto scheme = RequireString(Required(object, "scheme", context), context + ".scheme");
 			if (model == "rigid") flow.model = OneDFlowModel::Rigid;
 			else if (model == "compliant") flow.model = OneDFlowModel::Compliant;
-			else throw std::runtime_error("simulation_config.json: 1d flow model must be rigid or compliant");
+			else if (model == "lumped") flow.model = OneDFlowModel::Lumped;
+			else throw std::runtime_error("simulation_config.json: flow model must be rigid, compliant, or lumped");
 			if (scheme == "steady_poiseuille") flow.scheme = OneDFlowScheme::SteadyPoiseuille;
 			else if (scheme == "rigid_inertance") flow.scheme = OneDFlowScheme::RigidInertance;
+			else if (scheme == "petsc") flow.scheme = OneDFlowScheme::Petsc;
 			else if (scheme == "explicit_rusanov") flow.scheme = OneDFlowScheme::ExplicitRusanov;
 			else if (scheme == "implicit_petsc") flow.scheme = OneDFlowScheme::ImplicitPetsc;
-			else throw std::runtime_error("simulation_config.json: unsupported 1d flow scheme '" + scheme + "'");
-			const bool rigid_scheme = flow.scheme == OneDFlowScheme::SteadyPoiseuille
-				|| flow.scheme == OneDFlowScheme::RigidInertance;
-			if ((flow.model == OneDFlowModel::Rigid) != rigid_scheme)
-				throw std::runtime_error("simulation_config.json: rigid requires steady_poiseuille or rigid_inertance and compliant requires explicit_rusanov or implicit_petsc");
-			const auto formulation = OptionalString(object, "formulation", "pressure_network", context);
-			if (formulation == "pressure_network") flow.formulation = OneDImplicitFormulation::PressureNetwork;
-			else if (formulation == "linearized_aq") flow.formulation = OneDImplicitFormulation::LinearizedAQ;
-			else if (formulation == "nonlinear_aq") flow.formulation = OneDImplicitFormulation::NonlinearAQ;
+			else throw std::runtime_error("simulation_config.json: unsupported network flow scheme '" + scheme + "'");
+			const auto formulation = OptionalString(object, "formulation",
+				result.dimension == "0d" ? "transient_rc" : "implicit_1d_pde", context);
+			if (formulation == "steady_r") flow.formulation = OneDImplicitFormulation::SteadyR;
+			else if (formulation == "transient_rc") flow.formulation = OneDImplicitFormulation::TransientRc;
+			else if (formulation == "transient_rlc") flow.formulation = OneDImplicitFormulation::TransientRlc;
+			else if (formulation == "nonlinear_rlc") flow.formulation = OneDImplicitFormulation::NonlinearRlc;
 			else if (formulation == "implicit_1d_pde") flow.formulation = OneDImplicitFormulation::ImplicitPde;
-			else throw std::runtime_error("simulation_config.json: unsupported implicit 1d formulation '" + formulation + "'");
-			if (flow.scheme != OneDFlowScheme::ImplicitPetsc && Find(object, "formulation"))
-				throw std::runtime_error("simulation_config.json: formulation applies only to implicit_petsc");
+			else if (formulation == "pressure_network" || formulation == "lumped_rc") {
+				flow.formulation = OneDImplicitFormulation::TransientRc;
+				result.warnings.push_back(context + ": formulation '" + formulation
+					+ "' is deprecated; use dimension '0d' with 'transient_rc'");
+			} else if (formulation == "linearized_aq") {
+				flow.formulation = OneDImplicitFormulation::TransientRlc;
+				result.warnings.push_back(context
+					+ ": formulation 'linearized_aq' is a lumped 0D model; use 'transient_rlc'");
+			} else if (formulation == "nonlinear_aq") {
+				flow.formulation = OneDImplicitFormulation::NonlinearRlc;
+				result.warnings.push_back(context
+					+ ": formulation 'nonlinear_aq' is a lumped 0D model; use 'nonlinear_rlc'");
+			} else throw std::runtime_error("simulation_config.json: unsupported network formulation '" + formulation + "'");
+			if (result.dimension == "0d") {
+				if (flow.model != OneDFlowModel::Lumped)
+					throw std::runtime_error("simulation_config.json: dimension '0d' requires model 'lumped'");
+				if (flow.scheme == OneDFlowScheme::ImplicitPetsc) {
+					flow.scheme = OneDFlowScheme::Petsc;
+					result.warnings.push_back(context
+						+ ": 0D scheme 'implicit_petsc' is deprecated; use 'petsc'");
+				}
+				if (flow.scheme != OneDFlowScheme::Petsc
+					|| flow.formulation == OneDImplicitFormulation::ImplicitPde)
+					throw std::runtime_error("simulation_config.json: dimension '0d' requires scheme 'petsc' and a 0D formulation");
+			} else if (flow.model == OneDFlowModel::Rigid
+				&& flow.scheme == OneDFlowScheme::SteadyPoiseuille) {
+				flow.formulation = OneDImplicitFormulation::SteadyR;
+				result.warnings.push_back(context
+					+ ": rigid + steady_poiseuille is a deprecated 0D alias; migrate to dimension '0d', model 'lumped', scheme 'petsc', formulation 'steady_r'");
+			} else if (flow.model == OneDFlowModel::Rigid
+				&& flow.scheme == OneDFlowScheme::RigidInertance) {
+				flow.formulation = OneDImplicitFormulation::TransientRlc;
+			} else {
+				if (flow.model != OneDFlowModel::Compliant)
+					throw std::runtime_error("simulation_config.json: dimension '1d' requires model 'compliant'");
+				if (flow.scheme == OneDFlowScheme::ExplicitRusanov) {
+					if (Find(object, "formulation"))
+						throw std::runtime_error("simulation_config.json: explicit_rusanov does not use a formulation");
+					flow.formulation = OneDImplicitFormulation::ImplicitPde;
+				} else if (flow.scheme != OneDFlowScheme::ImplicitPetsc)
+					throw std::runtime_error("simulation_config.json: dimension '1d' requires explicit_rusanov or implicit_petsc");
+				else if (flow.formulation != OneDImplicitFormulation::ImplicitPde)
+					result.warnings.push_back(context
+						+ ": this formulation is physically 0D; migrate the system to dimension '0d'");
+			}
 			flow.dynamic_viscosity = RequireNumber(Required(object, "dynamic_viscosity", context), context + ".dynamic_viscosity");
 			flow.density = RequireNumber(Required(object, "density", context), context + ".density");
 			const std::set<std::string> required_flow_fields{"area", "flow_rate", "pressure"};
 			if (!(flow.dynamic_viscosity > 0.0) || !(flow.density > 0.0)
 				|| std::set<std::string>(flow.unknowns.begin(), flow.unknowns.end()) != required_flow_fields)
-				throw std::runtime_error("simulation_config.json: 1d flow requires positive fluid properties and area, flow_rate, pressure unknowns");
+				throw std::runtime_error("simulation_config.json: network flow requires positive fluid properties and area, flow_rate, pressure unknowns");
 			flow.wall = ParseWall(Find(object, "wall"), context + ".wall");
 			flow.discretization = ParseDiscretization(Find(object, "discretization"), context + ".discretization");
 			flow.junctions = ParseJunctions(Find(object, "junctions"), context + ".junctions");
+			flow.lumped = ParseLumped(Find(object, "lumped_parameters"), context + ".lumped_parameters");
 			result.flow_systems.push_back(std::move(flow));
 		} else if (kind == "network_transport_1d") {
+			if (result.dimension != "1d")
+				throw std::runtime_error("simulation_config.json: network transport is available only for dimension '1d'");
 			RequireKnownKeys(object, {"name", "kind", "unknowns", "flow_system", "species"}, context);
 			OneDTransportSystemDefinition transport;
 			transport.name = name;
@@ -493,10 +613,10 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 				throw std::runtime_error("simulation_config.json: every 1d transport unknown requires one species definition");
 			result.transport_systems.push_back(std::move(transport));
 		} else {
-			throw std::runtime_error("simulation_config.json: schema v3 1d supports network_flow_1d and network_transport_1d systems");
+			throw std::runtime_error("simulation_config.json: unsupported schema-v3 network equation system");
 		}
 	}
-	if (result.flow_systems.empty()) throw std::runtime_error("simulation_config.json: 1d configuration requires a flow system");
+	if (result.flow_systems.empty()) throw std::runtime_error("simulation_config.json: network configuration requires a flow system");
 	for (const auto& transport : result.transport_systems) {
 		const auto found = std::find_if(result.flow_systems.begin(), result.flow_systems.end(),
 			[&](const OneDFlowSystemDefinition& flow) { return flow.name == transport.flow_system; });
@@ -555,11 +675,14 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 			condition.exterior_value = OptionalNumber(item, "exterior_value", 0.0, item_context);
 			if (!condition.waveform.empty() && !temporal_names.count(condition.waveform))
 				throw std::runtime_error("simulation_config.json: boundary waveform names an unknown temporal function");
-			const std::set<std::string> types{"dirichlet", "pressure", "resistance", "windkessel_rcr",
+			const std::set<std::string> types{"dirichlet", "pressure", "resistance", "windkessel_rc", "windkessel_rcr",
 				"no_flux", "constant_flux", "robin"};
 			if (!types.count(condition.type)) throw std::runtime_error("simulation_config.json: unsupported 1d boundary type '" + condition.type + "'");
 			if (condition.type == "resistance" && !(condition.resistance > 0.0))
 				throw std::runtime_error("simulation_config.json: 1d resistance outlet requires positive resistance");
+			if (condition.type == "windkessel_rc" && (!(condition.resistance > 0.0)
+				|| !(condition.capacitance > 0.0)))
+				throw std::runtime_error("simulation_config.json: RC requires R>0 and C>0");
 			if (condition.type == "windkessel_rcr" && (condition.proximal_resistance < 0.0
 				|| !(condition.distal_resistance > 0.0) || !(condition.capacitance > 0.0)))
 				throw std::runtime_error("simulation_config.json: 1d RCR requires Rp>=0, Rd>0, and C>0");
@@ -588,6 +711,15 @@ inline OneDConfiguration ParseOneDConfiguration(const std::string& text)
 				throw std::runtime_error("simulation_config.json: inlet waveform units do not match quantity '"
 					+ quantity + "'");
 		}
+	if (result.dimension == "0d")
+		for (const auto& flow : result.flow_systems)
+			if (flow.formulation == OneDImplicitFormulation::SteadyR)
+				for (const auto& boundary : result.boundaries)
+					for (const auto& condition : boundary.conditions)
+						if (condition.type == "windkessel_rc"
+							|| condition.type == "windkessel_rcr")
+							throw std::runtime_error(
+								"simulation_config.json: steady_r cannot use capacitive RC/RCR outlets; use transient_rc");
 
 	if (const auto* physiology = Find(root, "physiology")) {
 		const auto& object = RequireObject(*physiology, "physiology");
@@ -722,9 +854,7 @@ inline OneDConfiguration ReadOneDConfiguration(const std::filesystem::path& path
 {
 	std::ifstream input(path);
 	if (!input) throw std::runtime_error("cannot open 1d simulation configuration: " + path.string());
-	const auto contents = iga::ReadCheckedText(input);
-	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read 1d simulation configuration: " + path.string());
-	return ParseOneDConfiguration(contents);
+	return ParseOneDConfiguration(ReadCheckedText(input));
 }
 
 inline const FieldDefinition& FindOneDField(const OneDConfiguration& configuration,

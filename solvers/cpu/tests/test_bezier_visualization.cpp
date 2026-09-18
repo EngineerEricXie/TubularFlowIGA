@@ -42,6 +42,8 @@ iga::Element MakeElement(std::uint64_t id, double x_offset,
 	iga::Element element;
 	element.id = id;
 	element.owner = 0;
+	element.boundary_labels[0] = 2;
+	element.boundary_labels[1] = 0;
 	element.connectivity.resize(64);
 	element.extraction.resize(64);
 	std::size_t point = 0;
@@ -61,7 +63,7 @@ iga::Element MakeElement(std::uint64_t id, double x_offset,
 }
 
 void WriteDatabase(const fs::path& path, const std::vector<iga::Element>& elements,
-	std::uint64_t nodes)
+	std::uint64_t nodes, const iga::GeometryTransform& transform = {})
 {
 	std::ofstream output(path, std::ios::binary | std::ios::trunc);
 	assert(output);
@@ -74,7 +76,9 @@ void WriteDatabase(const fs::path& path, const std::vector<iga::Element>& elemen
 	iga::Write(output, std::uint32_t{0});
 	const auto rank_index_position = output.tellp();
 	iga::Write(output, std::uint64_t{0});
-	for (double value : {0.0, 0.0, 0.0, 1.0, 1.0}) iga::Write(output, value);
+	for (const double value : transform.source_origin) iga::Write(output, value);
+	iga::Write(output, transform.source_units_per_normalized_unit);
+	iga::Write(output, transform.source_length_scale_to_m);
 	const auto offsets_position = output.tellp();
 	for (std::size_t index = 0; index <= elements.size(); ++index)
 		iga::Write(output, std::uint64_t{0});
@@ -125,7 +129,8 @@ int main()
 	fs::create_directories(directory);
 	const auto conforming_path = directory/"conforming.ntiga";
 	WriteDatabase(conforming_path,
-		{MakeElement(0, 0.0, 0, true), MakeElement(1, 1.0, 0, true)}, 112);
+		{MakeElement(0, 0.0, 0, true), MakeElement(1, 1.0, 0, true)}, 112,
+		{{{10.0, 20.0, 30.0}}, 2.5, 0.001});
 	iga::Database conforming_database(conforming_path.string());
 	const auto mesh = iga::BuildBezierVisualizationMesh(conforming_database);
 	assert(mesh.validation.local_points == 128);
@@ -139,6 +144,32 @@ int main()
 	assert(mesh.connectivity[0] == 0);
 	assert(mesh.connectivity[1] == 3);
 	assert(mesh.connectivity[2] == 15);
+	assert(mesh.element_boundary_labels == std::vector<std::int32_t>({-2, -2}));
+	assert(mesh.element_boundary_face_labels.size() == 2);
+	assert(mesh.element_boundary_face_labels[0][0] == 2);
+	assert(mesh.element_boundary_face_labels[0][1] == 0);
+	assert(mesh.point_boundary_labels[0] == 0);
+	assert(mesh.point_boundary_labels[17] == 0);
+	assert(mesh.point_boundary_labels[20] == -1);
+	assert(mesh.point_boundary_labels[5] == 2);
+	const auto source_mesh = iga::BuildSourceCoordinateBezierVisualizationMesh(
+		conforming_database);
+	assert(source_mesh.points.size() == mesh.points.size());
+	const std::array<double, 3> source_origin{{10.0, 20.0, 30.0}};
+	for (std::size_t point = 0; point < mesh.points.size(); ++point)
+		for (int direction = 0; direction < 3; ++direction)
+			assert(source_mesh.points[point][direction]
+				== source_origin[direction]
+					+2.5*mesh.points[point][direction]);
+	assert(source_mesh.connectivity == mesh.connectivity);
+	assert(source_mesh.point_boundary_labels == mesh.point_boundary_labels);
+	assert(source_mesh.element_boundary_labels == mesh.element_boundary_labels);
+	assert(source_mesh.element_boundary_face_labels
+		== mesh.element_boundary_face_labels);
+	const auto expected_source_jacobian
+		= mesh.validation.minimum_jacobian*2.5*2.5*2.5;
+	assert(std::abs(source_mesh.validation.minimum_jacobian-expected_source_jacobian)
+		<= 1.0e-14*std::abs(expected_source_jacobian));
 	const auto report_path = directory/"geometry.json";
 	iga::WriteBezierGeometryReport(report_path, mesh.validation);
 	std::ifstream report_input(report_path);

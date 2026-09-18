@@ -24,7 +24,7 @@ def main():
     root.mkdir(parents=True, exist_ok=False)
     binary = (args.binary or repo / "solvers/one_d/one_d_filename_failure_test").resolve()
     fixture = root / "fixture"
-    shutil.copytree(repo / "examples/one_d/rigid_straight", fixture)
+    shutil.copytree(repo / "examples/one_d/compliant_bifurcation", fixture)
     config_path = fixture / "simulation_config.json"
     config = json.loads(config_path.read_text())
     config["time"].update(steps=2, output_every=1)
@@ -43,7 +43,8 @@ def main():
         command = ["timeout", "--kill-after=5s", "90s", *shlex.split(args.launcher),
                    "-np", str(ranks), sys.executable, *wrapper,
                    "--output-dir", str(reports), "--", str(binary),
-                   str(mode), str(step), str(fixture), "--output-dir", str(output)]
+                   str(mode), str(step), str(fixture), "--output-dir", str(output),
+                   "--visualization-format", "vtp"]
         with (case / "launcher.log").open("x") as log:
             result = subprocess.run(command, cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT)
         entry = {"name": name, "command": command, "expected_exit": expected,

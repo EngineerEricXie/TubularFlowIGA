@@ -35,6 +35,8 @@ struct Options {
 	int checkpoint_every = 0;
 	fs::path restart;
 	int stop_after_step = 0;
+	iga::OneDVisualizationFormat visualization_format =
+		iga::OneDVisualizationFormat::VtkHdf;
 };
 
 int PositiveInteger(const std::string& text, const std::string& option)
@@ -50,9 +52,9 @@ int PositiveInteger(const std::string& text, const std::string& option)
 Options ParseOptions(int argc, char** argv)
 {
 	if (argc < 2) throw std::runtime_error(
-		"usage: iga_1d CASE_DIR [--system NAME] [--output-dir DIR] [--check] "
+		"usage: iga_1d|iga_0d CASE_DIR [--system NAME] [--output-dir DIR] [--check] "
 		"[--checkpoint PREFIX --checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [PETSc options]");
+		"[--stop-after-step N] [--visualization-format auto|vtkhdf|vtp] [PETSc options]");
 	Options options;
 	options.case_directory = argv[1];
 	for (int i = 2; i < argc; ++i) {
@@ -60,7 +62,8 @@ Options ParseOptions(int argc, char** argv)
 		if (argument == "--check") { options.check = true; continue; }
 		if (argument == "--system" || argument == "--output-dir"
 			|| argument == "--checkpoint" || argument == "--checkpoint-every"
-			|| argument == "--restart" || argument == "--stop-after-step") {
+			|| argument == "--restart" || argument == "--stop-after-step"
+			|| argument == "--visualization-format") {
 			if (++i >= argc) throw std::runtime_error(argument+" requires a value");
 			const std::string value(argv[i]);
 			if (argument == "--system") options.system = value;
@@ -68,7 +71,9 @@ Options ParseOptions(int argc, char** argv)
 			else if (argument == "--checkpoint") options.checkpoint = value;
 			else if (argument == "--checkpoint-every") options.checkpoint_every = PositiveInteger(value, argument);
 			else if (argument == "--restart") options.restart = value;
-			else options.stop_after_step = PositiveInteger(value, argument);
+			else if (argument == "--stop-after-step")
+				options.stop_after_step = PositiveInteger(value, argument);
+			else options.visualization_format = iga::ParseOneDVisualizationFormat(value);
 			continue;
 		}
 		if (!argument.empty() && argument[0] == '-') {
@@ -253,7 +258,8 @@ int main(int argc, char** argv)
 		const auto config_fingerprint = iga::OneDFingerprint(config_text);
 		if (options.check) {
 			iga::CollectiveLocalStage(communicator, "1d check output", [&] {
-				if (rank == 0) std::cout << "schema_version=3 dimension=1d system=" << flow.name
+				if (rank == 0) std::cout << "schema_version=3 dimension="
+					<< runtime.Configuration().dimension << " system=" << flow.name
 					<< " nodes=" << runtime.Network().nodes.size()
 					<< " segments=" << runtime.Network().segments.size()
 					<< " root_id=" << runtime.Network().nodes[
@@ -306,12 +312,14 @@ int main(int argc, char** argv)
 			if (options.stop_after_step > runtime.Configuration().time.steps)
 				throw std::runtime_error("--stop-after-step exceeds configured steps");
 			if (options.output_directory.empty())
-				options.output_directory = options.case_directory/"results"/"one_d"/flow.name;
+				options.output_directory = options.case_directory/"results"/
+					iga::NetworkFlowPhysicalDimension(flow)/flow.name;
 			if (rank == 0) {
 				iga::WriteOneDSkeletonFiles(options.output_directory, runtime.Network(),
 					runtime.Configuration().geometry.length_scale_to_m);
 				writer = std::make_unique<iga::OneDOutputWriter>(
-					options.output_directory, runtime.Network(), flow);
+					options.output_directory, runtime.Network(), flow,
+					options.visualization_format, !options.restart.empty());
 			}
 			if (rank == 0 && runtime.Configuration().coupling.mode != iga::SimulationScopeMode::FlowOnly)
 				coupling_writer = std::make_unique<iga::CouplingHistoryWriter>(

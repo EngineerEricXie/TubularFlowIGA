@@ -46,6 +46,9 @@ struct OneDFlowState {
 	double physical_time = 0.0;
 	long long internal_substeps = 0;
 	double inlet_flow = 0.0;
+	double storage_rate = 0.0;
+	double relative_continuity_residual = 0.0;
+	bool has_conservation_diagnostic = false;
 };
 
 inline double OneDWallStiffness(double radius0, const OneDWallDefinition& wall)
@@ -178,7 +181,8 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 		const OneDBoundaryCondition* selected = nullptr;
 		for (const auto& condition : boundary.conditions)
 			if (condition.field == "pressure" && (condition.type == "pressure"
-				|| condition.type == "resistance" || condition.type == "windkessel_rcr")) {
+				|| condition.type == "resistance" || condition.type == "windkessel_rc"
+				|| condition.type == "windkessel_rcr")) {
 				if (selected) throw std::runtime_error("an outlet boundary may define only one pressure closure");
 				selected = &condition;
 			}
@@ -197,7 +201,7 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 		const auto found = conditions.find(node);
 		if (found != conditions.end()) condition = found->second;
 		else if (default_condition) condition = *default_condition;
-		else throw std::runtime_error("every 1d outlet leaf requires a pressure, resistance, or RCR closure");
+		else throw std::runtime_error("every network outlet leaf requires a pressure, resistance, RC, or RCR closure");
 		OneDOutletState outlet;
 		outlet.node = node;
 		if (condition.type == "pressure") {
@@ -210,6 +214,13 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 			outlet.resistance = condition.resistance;
 			outlet.reference_pressure = condition.reference_pressure;
 			outlet.capacitor_pressure = condition.reference_pressure;
+		} else if (condition.type == "windkessel_rc") {
+			outlet.kind = OneDOutletKind::WindkesselRc;
+			outlet.distal_resistance = condition.resistance;
+			outlet.capacitance = condition.capacitance;
+			outlet.reference_pressure = condition.reference_pressure;
+			outlet.capacitor_pressure = condition.initial_pressure;
+			outlet.pressure = condition.initial_pressure;
 		} else {
 			outlet.kind = OneDOutletKind::WindkesselRcr;
 			outlet.proximal_resistance = condition.proximal_resistance;
@@ -217,6 +228,7 @@ inline std::vector<OneDOutletState> ResolveOneDOutlets(
 			outlet.capacitance = condition.capacitance;
 			outlet.reference_pressure = condition.reference_pressure;
 			outlet.capacitor_pressure = condition.initial_pressure;
+			outlet.pressure = condition.initial_pressure;
 		}
 		result.push_back(outlet);
 	}
@@ -248,6 +260,15 @@ inline double OutletEffectiveResistance(const OneDOutletState& outlet, double dt
 	if (outlet.kind == OneDOutletKind::Resistance) return outlet.resistance;
 	const double denominator = 1.0+dt/(outlet.distal_resistance*outlet.capacitance);
 	return outlet.proximal_resistance + dt/(outlet.capacitance*denominator);
+}
+
+inline double OneDLumpedSegmentResistance(const OneDNetwork& network,
+	const OneDFlowSystemDefinition& flow, const OneDSegment& segment)
+{
+	const int child_id = network.nodes[static_cast<std::size_t>(segment.child)].id;
+	const auto configured = flow.lumped.segment_resistance.find(child_id);
+	if (configured != flow.lumped.segment_resistance.end()) return configured->second;
+	return flow.lumped.resistance_scale*segment.resistance;
 }
 
 inline double OutletEffectivePressure(const OneDOutletState& outlet, double dt)
@@ -343,7 +364,87 @@ inline void SolveRigidOneDSystem(const OneDNetwork& network, const OneDFlowSyste
 inline void SolveRigidOneD(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
 	OneDFlowState& state, double inlet_flow, double dt)
 {
-	SolveRigidOneDSystem(network, flow, state, inlet_flow, dt, false);
+	state.inlet_flow = inlet_flow;
+	const std::size_t n = network.nodes.size();
+	std::vector<int> incoming_segment(n, -1);
+	for (const auto& segment : network.segments)
+		incoming_segment[static_cast<std::size_t>(segment.child)] = segment.index;
+	std::vector<int> outlet_at_node(n, -1);
+	for (std::size_t i = 0; i < state.outlets.size(); ++i)
+		outlet_at_node[static_cast<std::size_t>(state.outlets[i].node)] = static_cast<int>(i);
+	std::vector<double> equivalent_pressure(n, 0.0);
+	std::vector<double> equivalent_resistance(n, 0.0);
+	for (auto item = network.topological_nodes.rbegin();
+		item != network.topological_nodes.rend(); ++item) {
+		const int node = *item;
+		const auto& children = network.nodes[static_cast<std::size_t>(node)].children;
+		if (children.empty()) {
+			const int outlet_index = outlet_at_node[static_cast<std::size_t>(node)];
+			if (outlet_index < 0)
+				throw std::runtime_error("rigid 1d tree leaf has no outlet closure");
+			const auto& outlet = state.outlets[static_cast<std::size_t>(outlet_index)];
+			if (outlet.kind == OneDOutletKind::Pressure) {
+				equivalent_pressure[static_cast<std::size_t>(node)] = outlet.pressure;
+				equivalent_resistance[static_cast<std::size_t>(node)] = 0.0;
+			} else {
+				equivalent_pressure[static_cast<std::size_t>(node)] = OutletEffectivePressure(outlet, dt);
+				equivalent_resistance[static_cast<std::size_t>(node)] = OutletEffectiveResistance(outlet, dt);
+			}
+			continue;
+		}
+		double conductance_sum = 0.0;
+		double pressure_conductance_sum = 0.0;
+		for (const int child : children) {
+			const int segment_index = incoming_segment[static_cast<std::size_t>(child)];
+			if (segment_index < 0)
+				throw std::runtime_error("rigid 1d tree child has no incoming segment");
+			const auto& segment = network.segments[static_cast<std::size_t>(segment_index)];
+			const double branch_resistance = segment.resistance
+				+equivalent_resistance[static_cast<std::size_t>(child)];
+			const double conductance = 1.0/branch_resistance;
+			conductance_sum += conductance;
+			pressure_conductance_sum += conductance*equivalent_pressure[static_cast<std::size_t>(child)];
+		}
+		if (!(conductance_sum > 0.0) || !std::isfinite(conductance_sum))
+			throw std::runtime_error("rigid 1d subtree has invalid equivalent conductance");
+		equivalent_resistance[static_cast<std::size_t>(node)] = 1.0/conductance_sum;
+		equivalent_pressure[static_cast<std::size_t>(node)] = pressure_conductance_sum/conductance_sum;
+	}
+	state.node_pressure.assign(n, 0.0);
+	state.segment_flow.assign(network.segments.size(), 0.0);
+	state.node_pressure[static_cast<std::size_t>(network.root)] =
+		equivalent_pressure[static_cast<std::size_t>(network.root)]
+		+equivalent_resistance[static_cast<std::size_t>(network.root)]*inlet_flow;
+	for (const int parent : network.topological_nodes) {
+		const double parent_pressure = state.node_pressure[static_cast<std::size_t>(parent)];
+		for (const int child : network.nodes[static_cast<std::size_t>(parent)].children) {
+			const int segment_index = incoming_segment[static_cast<std::size_t>(child)];
+			const auto& segment = network.segments[static_cast<std::size_t>(segment_index)];
+			const double branch_resistance = segment.resistance
+				+equivalent_resistance[static_cast<std::size_t>(child)];
+			const double branch_flow = (parent_pressure
+				-equivalent_pressure[static_cast<std::size_t>(child)])/branch_resistance;
+			state.segment_flow[static_cast<std::size_t>(segment_index)] = branch_flow;
+			state.node_pressure[static_cast<std::size_t>(child)] = parent_pressure-segment.resistance*branch_flow;
+		}
+	}
+	for (auto& outlet : state.outlets) {
+		const int incoming = incoming_segment[static_cast<std::size_t>(outlet.node)];
+		AdvanceOutletState(outlet, state.segment_flow[static_cast<std::size_t>(incoming)], dt);
+	}
+	state.area.assign(static_cast<std::size_t>(network.cells), 0.0);
+	state.flow.assign(static_cast<std::size_t>(network.cells), 0.0);
+	state.pressure.assign(static_cast<std::size_t>(network.cells), 0.0);
+	for (const auto& segment : network.segments)
+		for (int cell = 0; cell < segment.cells; ++cell) {
+			const std::size_t index = static_cast<std::size_t>(segment.cell_offset+cell);
+			const double fraction = (static_cast<double>(cell)+0.5)/segment.cells;
+			state.area[index] = segment.area0;
+			state.flow[index] = state.segment_flow[static_cast<std::size_t>(segment.index)];
+			state.pressure[index] = (1.0-fraction)*state.node_pressure[static_cast<std::size_t>(segment.parent)]
+				+fraction*state.node_pressure[static_cast<std::size_t>(segment.child)];
+		}
+	(void)flow;
 }
 
 inline void SolveRigidInertanceOneD(const OneDNetwork& network, const OneDFlowSystemDefinition& flow,
@@ -419,6 +520,23 @@ inline void InitializeCompliantOneD(const OneDNetwork& network,
 	for (const auto& segment : network.segments)
 		std::fill(state.area.begin()+segment.cell_offset,
 			state.area.begin()+segment.cell_offset+segment.cells, segment.area0);
+}
+
+inline void InitializeLumpedOneD(const OneDNetwork& network,
+	const OneDFlowSystemDefinition& flow, OneDFlowState& state, double inlet_flow)
+{
+	InitializeCompliantOneD(network, flow, state);
+	state.inlet_flow = inlet_flow;
+	state.storage_rate = inlet_flow;
+	state.relative_continuity_residual = 0.0;
+	state.has_conservation_diagnostic = true;
+	for (auto& outlet : state.outlets) {
+		outlet.flow = 0.0;
+		if (outlet.kind == OneDOutletKind::Pressure) continue;
+		if (outlet.kind == OneDOutletKind::Resistance)
+			outlet.pressure = outlet.reference_pressure;
+		else outlet.pressure = outlet.capacitor_pressure;
+	}
 }
 
 inline void InitializeCompliantOneDFromRigid(const OneDNetwork& network,

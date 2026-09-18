@@ -214,7 +214,7 @@ $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
 runtime_cleanup_cli_test: tests/test_runtime_cleanup_cli.cpp src/iga_navier_stokes.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
-all: iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
+all: iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
 
 iga_inspect iga_flow_validate: ../../include/CheckedText.hpp
 
@@ -250,6 +250,9 @@ iga_pack: src/iga_pack.cpp include/IgaDatabase.hpp ../../include/IgaPreprocessCa
 
 iga_inspect: src/iga_inspect.cpp include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
+
+iga_bezier_export: src/iga_bezier_export.cpp include/IgaDatabase.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp ../../include/VtkOutput.hpp
+	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ $(HDF5_LIBS) $(LDLIBS)
 
 iga_case_check: src/iga_case_check.cpp include/IgaDatabase.hpp include/CaseInput.hpp include/GenericCaseInput.hpp ../../include/CaseConfig.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/OutletModel.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
@@ -601,6 +604,8 @@ vtkhdf-close-failure-test: vtkhdf_close_failure_test
 PVPYTHON ?= pvpython
 vtkhdf-paraview-test: temporal_vtkhdf_test
 	TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./temporal_vtkhdf_test
+	$(PVPYTHON) tests/validate_temporal_vtkhdf.py
+	$(PVPYTHON) tests/validate_temporal_vtkhdf.py /tmp/tubularflowiga-temporal-vtkhdf-test/geometry.vtkhdf --times none --arrays none --value none
 	$(PVPYTHON) tests/validate_temporal_vtkhdf.py --unit-cube-interpolation
 
 flow_checkpoint_test: tests/test_flow_checkpoint.cpp ../../include/FlowCheckpoint.hpp ../../include/CaseConfig.hpp
@@ -716,7 +721,7 @@ clean:
 	$(RM) collective_failure_test
 	$(RM) parallel_ownership_test
 	$(RM) phase_profile_test body_fitted_subcommunicator_test
-	$(RM) immersed_small_cut_solver_test legacy_transport_failure_test vtkhdf_close_failure_test flow_step_failure_test flow_output_failure_test text_output_failure_test iga_pack iga_inspect iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) immersed_small_cut_solver_test legacy_transport_failure_test vtkhdf_close_failure_test flow_step_failure_test flow_output_failure_test text_output_failure_test iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
 
 iga_transport: include/PetscSolverOptions.hpp include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/PetscGather.hpp include/PetscReadArray.hpp
 

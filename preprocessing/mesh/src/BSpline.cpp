@@ -104,6 +104,7 @@ std::vector<CurveSample> SampleBranch(
 	const std::vector<Vec3>& points,
 	const std::vector<double>& diameters,
 	const BranchSamplingOptions& options,
+	const BranchClearance& clearance,
 	int mode,
 	const std::string& context)
 {
@@ -118,8 +119,11 @@ std::vector<CurveSample> SampleBranch(
 		|| options.max_spacing_over_diameter <= 0.0
 		|| !std::isfinite(options.max_turn_degrees) || options.max_turn_degrees <= 0.0
 		|| !std::isfinite(options.max_diameter_change_fraction)
-		|| options.max_diameter_change_fraction <= 0.0)
-		throw std::runtime_error("SampleBranch requires positive curve and segment lengths");
+		|| options.max_diameter_change_fraction <= 0.0
+		|| !std::isfinite(clearance.start) || clearance.start < 0.0
+		|| !std::isfinite(clearance.end) || clearance.end < 0.0)
+		throw std::runtime_error(
+			"SampleBranch requires valid curve, sampling controls, and non-negative clearances");
 	for (double value : diameters)
 		if (!std::isfinite(value) || value <= 0.0) throw std::runtime_error("SampleBranch received an invalid diameter");
 	if (mode < 1 || mode > 4)
@@ -155,17 +159,16 @@ std::vector<CurveSample> SampleBranch(
 		return EvaluateCurve(spline,u);
 	};
 
-	const double start_clearance=(mode==1||mode==2)
-		? options.downstream_clearance_over_diameter*diameters.front():0.0;
-	const double end_clearance=(mode==1||mode==3)
-		? options.upstream_clearance_over_diameter*diameters.back():0.0;
+	const double start_clearance=clearance.start;
+	const double end_clearance=clearance.end;
 	const double usable_begin=start_clearance;
 	const double usable_end=length-end_clearance;
 	const double tolerance=1.0e-10*std::max(1.0,length);
 	if(usable_begin>=usable_end-tolerance) {
 		std::ostringstream message;
 		message<<context<<": insufficient bifurcation clearance; arc_length="<<length
-			<<" required_start="<<start_clearance<<" required_end="<<end_clearance;
+			<<" required_start="<<start_clearance<<" required_end="<<end_clearance
+			<<" shortfall="<<start_clearance+end_clearance-length;
 		throw std::runtime_error(message.str());
 	}
 
@@ -257,6 +260,23 @@ std::vector<CurveSample> SampleBranch(
 	result.reserve(arc_samples.size());
 	for(double s:arc_samples) result.push_back(at_arc(s));
 	return result;
+}
+
+std::vector<CurveSample> SampleBranch(
+	const std::vector<Vec3>& points,
+	const std::vector<double>& diameters,
+	const BranchSamplingOptions& options,
+	int mode,
+	const std::string& context)
+{
+	if(points.empty()||diameters.empty())
+		throw std::runtime_error("SampleBranch requires nonempty point and diameter arrays");
+	BranchClearance clearance;
+	if(mode==1||mode==2)
+		clearance.start=options.downstream_clearance_over_diameter*diameters.front();
+	if(mode==1||mode==3)
+		clearance.end=options.upstream_clearance_over_diameter*diameters.back();
+	return SampleBranch(points,diameters,options,clearance,mode,context);
 }
 
 std::vector<CurveSample> SampleBranch(
