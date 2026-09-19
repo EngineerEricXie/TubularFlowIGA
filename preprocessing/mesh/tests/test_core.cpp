@@ -2,6 +2,7 @@
 #include "GeometryDiagnostics.hpp"
 #include "HexMesh.hpp"
 #include "MeshGenerator.hpp"
+#include "CrossSectionTemplate.hpp"
 #include "SwcGraph.hpp"
 #include "MeshConfig.hpp"
 
@@ -414,6 +415,75 @@ int main(int argc, char** argv)
 	Require(mesh.points.size()==2211, "pipe integration point count mismatch");
 	Require(mesh.elements.size()==1800, "pipe integration element count mismatch");
 	Require(mesh.quality.bad_elements==0, "pipe integration generated invalid elements");
+
+	// Generated templates must work without any predefined template files.
+	for (double size : {1.0,0.5,0.25,0.125}) {
+		const auto generated=GenerateCircularTemplates(size);
+		const int n=generated.core_divisions;
+		const auto midpoint=generated.circle[n*(n+1)+n/2];
+		const auto corner=generated.circle[n*(n+1)+n];
+		Require(std::abs(midpoint.y-0.70)<1e-12 && std::abs(corner.x-0.55)<1e-12
+			&& std::abs(corner.y-0.55)<1e-12,"generated core did not bow its sides and pull in corners");
+		for(std::size_t k=0;k<generated.circle.size();++k) {
+			const auto& p=generated.circle[k];
+			const auto& rotated=generated.circle[generated.quarter_turn_nodes[1][k]];
+			Require(Norm(rotated-Vec3{-p.y,p.x,0})<1e-12,"bowed core lost quarter-turn symmetry");
+		}
+
+		for (int node:generated.boundary_circle)
+			Require(std::abs(Norm(generated.circle[node])-1.0)<1e-12,"generated disk boundary is not radius 1");
+		for (const auto& rotation:generated.quarter_turn_nodes)
+			Require(rotation.size()==generated.circle.size(),"generated disk rotation is incomplete");
+		const auto generated_pipe=[&] {
+			auto settings=parameters;settings.cross_section_size=size;
+			return GenerateControlMesh(pipe,settings,"/nonexistent/templates",settings.minimum_scaled_jacobian);
+		}();
+		Require(generated_pipe.elements.size()==10*generated.circle_faces.size(),"generated tube resolution mismatch");
+		Require(generated_pipe.quality.bad_elements==0,"generated tube contains invalid elements");
+		for (const auto* skeleton:{&y,&nonplanar_y}) {
+			auto settings=y_parameters;settings.cross_section_size=size;
+			const auto generated_y=GenerateControlMesh(*skeleton,settings,"/nonexistent/templates",settings.minimum_scaled_jacobian);
+			Require(generated_y.quality.bad_elements==0,"generated bifurcation contains invalid elements");
+			Require(generated_y.surface_intersections.intersections==0,"generated bifurcation self-intersects");
+		}
+	}
+	// Successive junctions exercise the node permutations used for large frame twists.
+	for(double degrees : {-120.0,-60.0,-20.0,0.0,20.0,60.0,120.0,180.0}) {
+		SwcGraph chain;
+		auto add=[&](int parent,Vec3 position,double diameter) {
+			SwcNode node;node.parent=parent;node.position=position;node.diameter=diameter;
+			chain.nodes.push_back(node);return static_cast<int>(chain.nodes.size())-1;
+		};
+		int root=add(-1,{-6,0,0},1.0);
+		int upstream=add(root,{-2,0,0},1.0);
+		int first=add(upstream,{0,0,0},1.0);
+		int arm=add(first,{2,2,0},0.8);
+		arm=add(arm,{6,6,0},0.8);
+		int second=add(arm,{8,8,0},0.8);
+		const double theta=degrees*std::acos(-1.0)/180.0;
+		const double c=std::sqrt(0.5);
+		const Vec3 tangent{c,c,0}, transverse{-c*std::cos(theta),c*std::cos(theta),std::sin(theta)};
+		for(double sign : {-1.0,1.0}) {
+			const Vec3 direction=tangent+transverse*sign;
+			int child=add(second,Vec3{8,8,0}+direction*2.0,0.6);
+			add(child,Vec3{8,8,0}+direction*6.0,0.6);
+		}
+		int other=add(first,{2,-2,0},0.8);
+		add(other,{6,-6,0},0.8);
+		chain.RebuildChildren();chain.Validate();
+		for(double size : {0.5,0.25}) {
+			auto settings=y_parameters;settings.cross_section_size=size;
+			const auto smooth_chain=SmoothSkeleton(chain,settings);
+			const auto generated_chain=GenerateControlMesh(smooth_chain,settings,"/nonexistent/templates",settings.minimum_scaled_jacobian);
+			Require(generated_chain.quality.bad_elements==0,"generated successive bifurcations contain invalid elements");
+			Require(generated_chain.surface_intersections.intersections==0,"generated successive bifurcations self-intersect");
+		}
+	}
+	Require(GenerateCircularTemplates(0.25).circle_faces.size()>GenerateCircularTemplates(0.5).circle_faces.size(),
+		"smaller requested size did not refine the disk");
+	RequireFailure([] { GenerateCircularTemplates(0.0); },"target size");
+	RequireFailure([] { GenerateCircularTemplates(1e-10); },"target size");
+	RequireFailure([] { GenerateCircularTemplates(std::nan("")); },"target size");
 
 	std::cout << "mesh_core_test: PASS\n";
 	return 0;

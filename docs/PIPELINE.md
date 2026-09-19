@@ -123,6 +123,19 @@ legacy v2/v3 cases; it may not coexist with schema v4.
 
 The excerpt omits the unchanged fields, systems, time, and boundary blocks.
 
+For automatic circular cross-section and bifurcation templates, add
+`"cross_section": {"kind": "circle", "target_size": 0.25}` to that `mesh` block.
+The size is an approximate quad edge length on a radius-1 reference disk, so
+local physical edges scale with vessel radius. The supported range is
+`[1/128, 1]`; smaller values refine the cross-section. Axial spacing remains
+controlled by the centerline and junction settings. To use the saved templates
+in `meshgeneration/template/`, specify `"cross_section": {"kind": "default"}`;
+omitting the entry also selects the defaults. `target_size` is only accepted in
+circle-generation mode. Both modes save `cross_section_template.vtk` and
+`merge_template.vtk` directly in `preprocessing/`, without a
+`generated_templates/` directory; see
+[automatic circular templates](../preprocessing/mesh/README.md#automatic-circular-templates).
+
 Build and test the standalone C++ generator from the repository root:
 
 ```bash
@@ -140,6 +153,11 @@ After strict parsing and topology validation, it writes
 `skeleton_normalized.swc` and `skeleton.vtp`. OBJ is thereby converted to an
 explicitly rooted SWC before smoothing continues. Valid SWC follows the same
 normalization path. The original input is never overwritten.
+
+Every run also writes `cross_section_template.vtk` and `merge_template.vtk`
+directly into the preprocessing directory, for both generated and predefined
+templates. These are radius-1 reference templates, and the manifest records
+both paths.
 
 The pipeline then writes `skeleton_smooth.swc`, `mesh_diagnostics.json`,
 `skeleton_diagnostics.vtp`, `controlmesh.vtk`, `mesh_quality.json`, and

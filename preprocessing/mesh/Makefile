@@ -4,7 +4,7 @@ CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
 LDLIBS ?= -lstdc++fs
 
 TARGET := tubular_mesh
-CORE := src/SwcGraph.cpp src/BSpline.cpp src/GeometryDiagnostics.cpp src/HexMesh.cpp src/MeshGenerator.cpp
+CORE := src/SwcGraph.cpp src/BSpline.cpp src/GeometryDiagnostics.cpp src/HexMesh.cpp src/CrossSectionTemplate.cpp src/MeshGenerator.cpp
 OBJECTS := $(CORE:.cpp=.o)
 TEST_TARGET := mesh_core_test
 
@@ -18,7 +18,9 @@ $(TARGET): $(OBJECTS) src/main.o
 $(TEST_TARGET): $(OBJECTS) tests/test_core.o
 	$(CXX) $^ -o $@ $(LDLIBS)
 
-src/SwcGraph.o: ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp
+src/SwcGraph.o: include/SwcGraph.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp
+$(OBJECTS) src/main.o tests/test_core.o: include/SwcGraph.hpp include/CrossSectionTemplate.hpp
+src/CrossSectionTemplate.o: ../../include/CheckedText.hpp
 src/main.o tests/test_core.o: ../../include/MeshConfig.hpp ../../include/CheckedText.hpp
 
 test: $(TEST_TARGET)

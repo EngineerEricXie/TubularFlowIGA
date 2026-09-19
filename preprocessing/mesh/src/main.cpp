@@ -1,4 +1,5 @@
 #include "MeshGenerator.hpp"
+#include "CrossSectionTemplate.hpp"
 #include "SwcGraph.hpp"
 #include "GeometryDiagnostics.hpp"
 #include "MeshConfig.hpp"
@@ -34,6 +35,7 @@ std::filesystem::path SkeletonPath(const std::filesystem::path& directory)
 tubular::MeshParameters ConvertParameters(const iga::MeshDefinition& input)
 {
 	tubular::MeshParameters result;
+	result.cross_section_size = input.cross_section.target_size;
 	result.noise_iterations = input.smoothing.iterations;
 	result.bifurcation_smoothing = input.smoothing.bifurcation_ratio;
 	result.noise_smoothing = input.smoothing.noise_ratio;
@@ -83,6 +85,22 @@ PipelineInput ReadPipelineInput(const std::filesystem::path& directory)
 	return {SkeletonPath(directory), tubular::MeshParameters::Read(legacy), false};
 }
 
+void SaveTemplatePreviews(const tubular::MeshParameters& parameters,
+	const std::filesystem::path& template_directory, const std::filesystem::path& output_directory)
+{
+	const auto templates = parameters.cross_section_size > 0.0
+		? tubular::GenerateCircularTemplates(parameters.cross_section_size)
+		: tubular::ReadCrossSectionTemplates(template_directory);
+	if (templates.generated) {
+		std::cout << "cross_section_target_size=" << parameters.cross_section_size
+			<< " circle_points=" << templates.circle.size()
+			<< " circle_quads=" << templates.circle_faces.size()
+			<< " merge_points=" << templates.merge.size()
+			<< " merge_quads=" << templates.merge_faces.size() << '\n';
+	}
+	tubular::WriteCrossSectionTemplatePreviews(templates,output_directory);
+}
+
 void PrintMesh(const tubular::ControlMesh& mesh)
 {
 	std::cout << "points=" << mesh.points.size()
@@ -116,6 +134,7 @@ int main(int argc, char** argv)
 				"usage: tubular_mesh generate SMOOTH.swc mesh_parameter.txt TEMPLATE_DIR controlmesh.vtk initial_velocityfield.txt MIN_SCALED_J");
 			const auto parameters = tubular::MeshParameters::Read(argv[3]);
 			const double minimum_scaled = std::stod(argv[7]);
+			SaveTemplatePreviews(parameters,argv[4],std::filesystem::path(argv[5]).parent_path());
 			const auto mesh = tubular::GenerateControlMesh(
 				tubular::SwcGraph::Read(argv[2]), parameters, argv[4], minimum_scaled);
 			tubular::WriteControlMeshVtk(mesh, argv[5]);
@@ -163,6 +182,7 @@ int main(int argc, char** argv)
 					"--allow-preflight-failure was specified\n";
 			else
 				tubular::RequireValidGeometry(diagnostics);
+			SaveTemplatePreviews(parameters,templates,directory);
 			const auto mesh = tubular::GenerateControlMesh(
 				quantized_smooth, parameters, templates, parameters.minimum_scaled_jacobian);
 			tubular::WriteControlMeshVtk(mesh, directory/"controlmesh.vtk");
