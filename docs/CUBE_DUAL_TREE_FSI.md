@@ -174,9 +174,22 @@ python3 scripts/run_idealized_cube_dual_tree_fixed_flow.py \
 The geometry-only check produces five conforming regions and all 12 matching
 interfaces while retaining the native FEM minimum scaled-Jacobian gate of
 `0.001`. Gmsh 4.8.4 produced `273,393` first-order tetrahedra with a measured
-minimum of `0.00475043`. This variant has not replaced the recorded flow and
-FSI evidence above; use the refined case when
-reproducing those numerical values.
+minimum of `0.00475043`. An eight-rank run on this mesh recorded:
+
+| Quantity | Result |
+|---|---:|
+| Artery to Darcy flow | `8.150082928394136×10⁻⁹ m³/s` |
+| Darcy to vein flow | `8.150082928394728×10⁻⁹ m³/s` |
+| Venous outlet flow | `8.150082928394728×10⁻⁹ m³/s` |
+| Maximum Darcy cell-balance defect | `5.71×10⁻²³ m³/s` |
+| FSI displacement residual | `1.44×10⁻⁵` |
+| Minimum deformed-fluid Jacobian ratio | `0.999990` |
+| Maximum arterial/venous wall displacement | `6.09×10⁻⁹ / 4.92×10⁻⁹ m` |
+
+A [ParaView multiblock export](../artifacts/paraview/idealized_cube_dual_tree_smooth/coupledflow_smooth_regions.vtm)
+provides the same five-region mesh for inspection. Its split manifest records
+source mesh SHA-256
+`204368cee3368ba5231dd1d75232a6ad29c290120634a61a0e2b8d161bce89ae`.
 
 ## ParaView output
 

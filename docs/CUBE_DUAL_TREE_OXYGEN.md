@@ -2,7 +2,8 @@
 
 This case advances a passive concentration tracer through the arterial lumen,
 fixed Darcy region, and venous lumen of the
-[refined dual-tree FSI case](CUBE_DUAL_TREE_FSI.md). The converged post-FSI
+[smooth dual-tree FSI case](CUBE_DUAL_TREE_FSI.md#template-free-smooth-tree-variant).
+The converged post-FSI
 geometry, fluid velocity, and Darcy RT0 face fluxes remain fixed during
 transport. Vessel walls are impermeable; transfer occurs only at the four
 arterial and four venous terminal interfaces.
@@ -36,13 +37,13 @@ The lower vascular coefficient limits physical axial back-diffusion between
 sibling branches. Monotone graph diffusion remains active as the numerical
 stabilization that enforces nonnegative concentration.
 
-First produce the refined flow run described in the FSI guide, then execute:
+First produce the smooth-tree flow run described in the FSI guide, then execute:
 
 ```bash
 make -C solvers/cpu native_tet_cube_oxygen \
   PETSC_DIR=/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real
 python3 scripts/run_idealized_cube_dual_tree_oxygen.py \
-  /tmp/idealized-cube-refined-fsi-r8 \
+  /tmp/idealized-cube-smooth-fsi-r8 \
   /tmp/idealized-cube-oxygen \
   --case cases/idealized_cube_dual_tree_oxygen.json --ranks 8
 ```
@@ -70,7 +71,7 @@ pvpython scripts/render_transport_gif.py \
   --input /tmp/idealized-cube-oxygen/transport/tissue_oxygen.pvd \
   --overlay-input /tmp/idealized-cube-oxygen/transport/artery_oxygen.pvd \
   --overlay-input /tmp/idealized-cube-oxygen/transport/vein_oxygen.pvd \
-  --flow-tree-case cases/idealized_cube_dual_tree_refined.json \
+  --flow-tree-case cases/idealized_cube_dual_tree_smooth.json \
   --array concentration_mol_m3 --cutaway --range 0.0001 1 --log-scale \
   --title "Artery–tissue–vein concentration and flow" \
   --frames 13 --duration-ms 180 --width 1200 --height 720 \
@@ -86,16 +87,17 @@ and solver by SHA-256.
 
 ## Recorded validation
 
-Independent two- and eight-rank WSL runs completed 12 steps (`t=0` through
-`60 s`, 13 states total). Both reached a mean venous outlet concentration of
-approximately `0.01072950137 mol/m³`, or `1.0730%` of the inlet value.
+Independent two- and eight-rank WSL transport runs on the same frozen smooth
+flow field completed 12 steps (`t=0` through `60 s`, 13 states total). Both
+reached a mean venous outlet concentration of approximately
+`0.01029393584 mol/m³`, or `1.0294%` of the inlet value.
 
 | Quantity | Result |
 |---|---:|
-| Tissue tetrahedra per state | `101,716` |
-| Maximum global balance defect, 8 ranks | `5.73×10⁻²⁰ mol/s` |
-| Final tissue nodal concentration range | `0.00154–0.342 mol/m³` |
-| Maximum two-/eight-rank field difference | `7.1094×10⁻¹² mol/m³` |
+| Tissue tetrahedra per state | `101,854` |
+| Maximum global balance defect, 8 ranks | `4.54×10⁻²⁰ mol/s` |
+| Final tissue nodal concentration range | `0.00145–0.373 mol/m³` |
+| Maximum two-/eight-rank field difference | `4.5859×10⁻¹² mol/m³` |
 
 All 39 field arrays were compared by global node ID. A negative test limited
 to two steps with a 90% breakthrough target exited with status 2 and did not
@@ -103,8 +105,8 @@ publish a successful PVD time index.
 
 ```bash
 python3 scripts/compare_idealized_cube_oxygen.py \
-  /tmp/idealized-cube-oxygen-verified-r2 \
-  /tmp/idealized-cube-oxygen-verified-r8
+  /tmp/idealized-cube-smooth-oxygen-r2-from-r8 \
+  /tmp/idealized-cube-smooth-oxygen-r8
 python3 -m unittest scripts.tests.test_idealized_cube_oxygen
 make -C solvers/cpu native-tet-moving-species-transport-test
 ```

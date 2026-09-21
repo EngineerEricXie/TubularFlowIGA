@@ -2,7 +2,7 @@
   "schema_version": 2,
   "kind": "idealized_cube_passive_oxygen_functional_only",
   "physiological_validation": false,
-  "flow_case_file": "idealized_cube_dual_tree_refined.json",
+  "flow_case_file": "idealized_cube_dual_tree_smooth.json",
   "frozen_post_fsi_velocity": true,
   "tissue_porosity_assumed": 1.0,
   "tissue_consumption_mol_m3_s": 0.0,
