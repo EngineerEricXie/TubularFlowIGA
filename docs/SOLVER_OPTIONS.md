@@ -81,7 +81,7 @@ factor workspace 裕量，不改變方程、Jacobian 或 KSP／Newton tolerances
 本機 1／2／4 ranks 與 split communicator 測試直接讀取 MUMPS factor，確認
 兩個同時存在的 private snapshots 分別採用 ICNTL(14)=37／81，優先於
 unprefixed 5，且來源後續改動不影響快照；線性解保持正確。證據位於
-`outputs/hpc04/matrix-options-v1/audit.json`。此測試驗證選項隔離，並非大型
+`artifacts/benchmarks/hpc04/matrix-options-v1/audit.json`。此測試驗證選項隔離，並非大型
 factor 記憶體效能結論。共用 immersed Newton 的 KSP 失敗訊息也會附上
 PC failure reason，區分 structural／numerical zero pivot 與 factor memory
 exhaustion，透過同一個 collective failure stage 傳回。

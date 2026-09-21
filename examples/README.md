@@ -56,20 +56,19 @@ Native 0D cases use the same source-only geometry contract with
 
 ## Prepare a case
 
-Run from the repository root. Generated files stay below the source case but
-are ignored by Git:
+Run from the repository root. Put generated files under the ignored artifact
+root:
 
 ```bash
 EXAMPLE_CASE=examples/vascular_flow/straight_tube
-./scripts/generate_case.sh "$EXAMPLE_CASE" --ranks 2
-EXAMPLE_WORK="$EXAMPLE_CASE/generated"
+EXAMPLE_WORK=artifacts/examples/vascular-flow/straight-tube
+./scripts/generate_case.sh "$EXAMPLE_CASE" --output "$EXAMPLE_WORK" --ranks 2
 ```
 
 The script checks dependencies, builds preprocessing tools, prepares and packs
-the geometry, validates configuration and boundary labels, and creates
-`examples/vascular_flow/straight_tube/generated/` from the outset. Add
-`--clean` to replace an existing generated tree. `prepare_example.sh` remains
-only as a compatibility wrapper for external work directories.
+the geometry, and validates configuration and boundary labels. Add `--clean`
+to replace an existing generated tree. `prepare_example.sh` remains a wrapper
+for explicit work directories.
 
 The partition count controls the generated database filename and must equal the
 MPI process count used by the CPU solver. A database packed for multiple CPU

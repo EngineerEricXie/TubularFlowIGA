@@ -22,7 +22,7 @@ def require_rank_success(rows, label):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--evidence-root', type=Path, default=Path('outputs/hpc06'))
+    parser.add_argument('--evidence-root', type=Path, default=Path('artifacts/benchmarks/hpc06'))
     parser.add_argument('--output-dir', type=Path, required=True)
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[1]

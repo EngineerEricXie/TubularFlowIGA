@@ -351,7 +351,7 @@ moving-immersed-transient-flow-fsi-runtime-test:
 compliant-channel-fsi-test:
 	$(MAKE) -C solvers/cpu compliant-channel-fsi-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 
-PHASE8_PARAVIEW_DIR ?= $(CURDIR)/results/phase8_compliant_channel_fsi_paraview
+PHASE8_PARAVIEW_DIR ?= $(CURDIR)/artifacts/visualization/compliant-channel-fsi
 phase8-compliant-channel-fsi-paraview:
 	$(MAKE) -C solvers/cpu phase8-compliant-channel-fsi-paraview PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH)) PHASE8_PARAVIEW_DIR=$(abspath $(PHASE8_PARAVIEW_DIR))
 

@@ -339,7 +339,7 @@ mpiexec -np "$RANKS" ./solvers/cpu/iga_mesh_check \
 mpiexec -np "$RANKS" ./solvers/cpu/iga_navier_stokes \
   "$PROJECT_ROOT/cases/tubular-straight/database/straight_tube-$RANKS.ntiga" \
   "$PROJECT_ROOT/cases/tubular-straight/preprocessing" \
-  --output "$PROJECT_ROOT/cases/tubular-straight/results/velocity.txt"
+  --output "$PROJECT_ROOT/artifacts/runs/tubular-straight/velocity.txt"
 ```
 
 The generator preserves a nonempty target directory. Choose another path or

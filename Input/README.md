@@ -11,9 +11,8 @@ Input/
 
 The geometry may instead be a radius-annotated line OBJ named by
 `simulation_config.json`. Do not place generated mesh, database, or simulation
-files in the source directory manually. Three-dimensional cases use the full
-mesh/database layout; native 1D cases write their solver products below
-`MyCase/generated/results/`.
+files in the source directory manually. The repository execution profile writes
+generated case workspaces below `artifacts/cases/`.
 
 Configure machine and launch settings in the repository-level
 [`execution.conf`](../execution.conf), then run one or more case names:

@@ -396,7 +396,7 @@ after every run:
 
 ```bash
 python3 scripts/hpc_openmp_matrix.py \
-  --reference outputs/hpc00/reference-states/fsi-reference \
+  --reference artifacts/benchmarks/hpc00/reference-states/fsi-reference \
   --output-dir NEW_ISOLATED_MATRIX --threads 1 4 --cpus 0 2 4 6 \
   --repetitions 3 --timeout 1800
 ```

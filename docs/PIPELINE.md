@@ -32,7 +32,7 @@ geometry gates.
 
 [`run_cases.sh`](../scripts/run_cases.sh) is a thin orchestration layer over the
 native 1D solver and the 3D `generate_case.sh` pipeline. It can check, solve,
-and validate several cases while preserving a per-case `generated/` layout:
+and validate several cases while keeping each run in its own workspace:
 
 ```bash
 ./scripts/run_cases.sh --config execution.conf CaseA CaseB
@@ -46,11 +46,11 @@ commands without generating or solving anything. A fresh checkout must first
 build the dependency-free config checker with `make cpu` before automatic
 solver selection can be inspected in dry-run mode.
 
-`OUTPUT_ROOT` may place generated cases below a separate root. In
-`OUTPUT_MODE=atomic`, each output uses `CASE/generated` and replaces it only
-after hidden staging succeeds. In `OUTPUT_MODE=versioned`, the runner
-atomically claims fresh `generated_1`, `generated_2`, ... directories and never
-replaces an earlier run. By default, three-dimensional preprocessing still
+The repository execution profile sets `OUTPUT_ROOT=artifacts/cases`. In
+`OUTPUT_MODE=atomic`, each output uses `OUTPUT_ROOT/CASE`; when `OUTPUT_ROOT` is
+empty it uses `CASE/generated`. The runner replaces it only after hidden staging
+succeeds. In `OUTPUT_MODE=versioned`, the runner appends `_1`, `_2`, ... to that
+output path and never replaces an earlier run. By default, three-dimensional preprocessing still
 uses hidden staging; after it is published, the solver writes directly to the
 final versioned `results/` directory so in-progress visualization files remain
 visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is

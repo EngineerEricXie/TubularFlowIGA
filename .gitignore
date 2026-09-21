@@ -106,7 +106,7 @@
 *.err
 *.log
 *.nsys-rep
-/results/phase8_compliant_channel_fsi_paraview/
+/artifacts/
 *.qdrep
 *.btr
 core
@@ -117,7 +117,6 @@ core.*
 !/cases/idealized_cube_dual_tree_refined.json
 !/cases/idealized_cube_dual_tree_oxygen.json
 !/cases/liver_roi_functional.json
-/outputs/
 /build/
 /cmake-build-*/
 /examples/**/generated/

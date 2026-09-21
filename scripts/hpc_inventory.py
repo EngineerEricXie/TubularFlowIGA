@@ -107,7 +107,7 @@ def collect(root, catalog_path, ranks, threads, petsc_prefix=None, nvcc=None, co
     suffixes = {".cpp", ".hpp", ".h", ".cu", ".cuh", ".py", ".sh", ".json", ".md"}
     added_sources = [name for name in untracked if name and
                      (Path(name).suffix in suffixes or Path(name).name in ("Makefile", "makefile"))
-                     and not name.startswith(("results/", "outputs/"))]
+                     and not name.startswith("artifacts/")]
     source = file_records(root, [name for name in tracked if name] + added_sources)
     fixtures = []
     for case in catalog["cases"]:

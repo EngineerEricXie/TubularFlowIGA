@@ -453,6 +453,8 @@ physically.
   patient-derived data remain ignored.
 - `benchmarks/`: compact validation contracts and numerical evidence; raw runs
   and solver output remain ignored.
+- `artifacts/`: ignored local workspaces grouped into `cases/`, `examples/`,
+  `benchmarks/`, `visualization/`, `evidence/`, and `profiles/`.
 - `include/`: shared configuration, I/O, physiology, domain adapters, and coupling contracts.
 - `preprocessing/mesh/`: dependency-free C++ SWC smoothing and control meshes.
 - `meshgeneration/`: legacy MATLAB reference and template assets.
@@ -465,9 +467,10 @@ physically.
   rendering tools; Python regression tests are under `scripts/tests/`.
 - `docs/`: installation, pipeline, configuration, architecture, and validation reports.
 
-Large generated meshes, databases, caches, partitions, and results are
-intentionally not versioned. The source-only NMO_06840 regression is committed
-under `examples/`, but preparing it creates hundreds of MiB of work files.
+Large generated meshes, databases, caches, partitions, and results belong under
+`artifacts/` and are intentionally not versioned. The source-only NMO_06840
+regression is committed under `examples/`, but preparing it creates hundreds of
+MiB of work files.
 
 ## Documentation map
 
