@@ -187,10 +187,13 @@ depending on the backend. See [Visualization](docs/VISUALIZATION.md).
 |---|---|
 | ![Velocity magnitude in a Y-bifurcation](docs/images/vascular-y-bifurcation-velocity.png) | ![Nplus transport through a branched neurite](docs/images/neuron-branched-transport.gif) |
 
-| Artery–Darcy–vein coupling | Darcy-driven tissue transport |
-|---|---|
-| ![Idealized arterial and venous trees coupled through a Darcy region with vessel-wall feedback](docs/images/idealized-darcy-fsi.png) | ![Passive tracer transported through a tetrahedral Darcy tissue region](docs/images/darcy-tissue-tracer.gif) |
-| Conservative terminal-flux transfer through a porous region with quasi-steady vessel-wall feedback. | Passive tracer advection and diffusion on the fixed Darcy flux field. |
+### Coupled vessel–tissue transport
+
+![Three-dimensional cutaway of synchronized transport through arterial, Darcy tissue, and venous domains](docs/images/darcy-tissue-tracer.gif)
+
+The tissue cutaway is perpendicular to the vessel inflow and outflow direction.
+The complete arterial and venous meshes remain intact across the cut plane and
+surround the animated passive-tracer field on the fixed Darcy flux.
 
 Reproduction commands are listed in the [examples catalog](examples/README.md).
 The coupled Darcy examples are documented in the
