@@ -73,6 +73,17 @@ def normalized(a):
 	return scale(a, 1./math.sqrt(dot(a, a)))
 
 
+def tree_node_radii(tree):
+	return [max(radius for start, stop, radius in tree["segments"]
+		if index in (start, stop)) for index in range(len(tree["nodes_m"]))]
+
+
+def branch_transition_radius(junction_radius, segment_radius, distance, length):
+	u = min(1., distance/length)
+	weight = u*u*(3.-2.*u)
+	return (1.-weight)*junction_radius+weight*segment_radius
+
+
 def spline_capsule_paths(tree, subsegments, tension):
 	"""Sample template-free cubic centerlines for every directed tree edge."""
 	nodes = tree["nodes_m"]
@@ -169,12 +180,14 @@ def validate(data):
 		cleanup = vascular.get("join_cleanup_tolerance_m", .3*wall)
 		smoothing = vascular.get("surface_smoothing_iterations", 0)
 		pass_band = vascular.get("surface_smoothing_pass_band", .01)
+		transition = vascular.get("radius_transition_fraction", 0.)
 		require(isinstance(subsegments, int) and not isinstance(subsegments, bool)
 			and 2 <= subsegments <= 8 and math.isfinite(tension) and 0 < tension <= .5
 			and math.isfinite(cleanup) and 0 < cleanup < .5*wall
 			and isinstance(smoothing, int) and not isinstance(smoothing, bool)
 			and 0 <= smoothing <= 200 and math.isfinite(pass_band)
-			and 0 < pass_band <= 1.,
+			and 0 < pass_band <= 1. and math.isfinite(transition)
+			and 0 <= transition <= 1.,
 			"spline capsule controls are invalid")
 	for key in ("arterial_tree", "venous_tree"):
 		tree = data[key]
@@ -331,6 +344,63 @@ def clean_surface_triangles(nodes, triangles, tolerance):
 	return points, cleaned, len(nodes)-len(points), dropped
 
 
+def surface_boundary_nodes(triangles):
+	edge_use = {}
+	for triangle in triangles:
+		for first, second in ((triangle[0], triangle[1]),
+			(triangle[1], triangle[2]), (triangle[2], triangle[0])):
+			edge = tuple(sorted((first, second)))
+			edge_use[edge] = edge_use.get(edge, 0)+1
+	return {tag for edge, count in edge_use.items() if count == 1 for tag in edge}
+
+
+def blend_branch_radii(points, triangles, tree, surface, radius_add, geometry):
+	"""Expand child surfaces into a smooth junction-to-segment radius taper."""
+	paths = spline_capsule_paths(tree, geometry.get("subsegments_per_edge", 2),
+		geometry.get("tangent_scale", .25))
+	node_radii = tree_node_radii(tree)
+	centerline = []
+	for start, _, radius, path in paths:
+		lengths = [math.dist(path[index], path[index+1])
+			for index in range(len(path)-1)]
+		total = sum(lengths)
+		arc = 0.
+		for index, length in enumerate(lengths):
+			centerline.append((path[index], path[index+1], arc, length, total,
+				radius, node_radii[start]))
+			arc += length
+	boundary = surface_boundary_nodes(triangles[surface])
+	tags = {tag for triangle in triangles[surface] for tag in triangle}
+	fraction = geometry["radius_transition_fraction"]
+	moved = 0
+	maximum_displacement = 0.
+	for tag in tags-boundary:
+		point = points[tag]
+		closest = None
+		for first, last, arc, length, total, radius, junction_radius in centerline:
+			direction = sub(last, first)
+			position = min(1., max(0., dot(sub(point, first), direction)/
+				dot(direction, direction)))
+			axis_point = tuple(first[axis]+position*direction[axis]
+				for axis in range(3))
+			distance = math.dist(point, axis_point)
+			candidate = (distance, axis_point, arc+position*length, total,
+				radius, junction_radius)
+			if closest is None or distance < closest[0]:
+				closest = candidate
+		distance, axis_point, arc, total, radius, junction_radius = closest
+		transition_length = fraction*total
+		if junction_radius > radius and arc < transition_length:
+			target = branch_transition_radius(junction_radius+radius_add,
+				radius+radius_add, arc, transition_length)
+			if target > distance:
+				points[tag] = tuple(axis_point[axis]+
+					(point[axis]-axis_point[axis])*target/distance for axis in range(3))
+				moved += 1
+				maximum_displacement = max(maximum_displacement, target-distance)
+	return moved, maximum_displacement
+
+
 def smooth_vessel_surfaces(points, triangles, iterations, pass_band):
 	try:
 		import vtk
@@ -341,14 +411,7 @@ def smooth_vessel_surfaces(points, triangles, iterations, pass_band):
 		group = triangles[name]
 		tags = sorted({tag for triangle in group for tag in triangle})
 		local = {tag: index for index, tag in enumerate(tags)}
-		edge_use = {}
-		for triangle in group:
-			for first, second in ((triangle[0], triangle[1]),
-				(triangle[1], triangle[2]), (triangle[2], triangle[0])):
-				edge = tuple(sorted((first, second)))
-				edge_use[edge] = edge_use.get(edge, 0)+1
-		boundary = {tag for edge, count in edge_use.items() if count == 1
-			for tag in edge}
+		boundary = surface_boundary_nodes(group)
 		vtk_points = vtk.vtkPoints()
 		for tag in tags:
 			vtk_points.InsertNextPoint(points[tag])
@@ -376,8 +439,10 @@ def smooth_vessel_surfaces(points, triangles, iterations, pass_band):
 	return points
 
 
-def rebuild_discrete_geometry(gmsh, surface_groups, geometry, wall_thickness):
+def rebuild_discrete_geometry(gmsh, surface_groups, data):
 	"""Replace sliver-prone OCC seams with a conforming discrete surface complex."""
+	geometry = data["vascular_geometry"]
+	wall_thickness = data["wall_thickness_m"]
 	node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
 	nodes = {int(tag): tuple(coordinates[3*index:3*index+3])
 		for index, tag in enumerate(node_tags)}
@@ -391,6 +456,18 @@ def rebuild_discrete_geometry(gmsh, surface_groups, geometry, wall_thickness):
 					for start in range(0, len(flat), 3))
 	points, triangles, collapsed, dropped = clean_surface_triangles(nodes,
 		triangles, geometry.get("join_cleanup_tolerance_m", .3*wall_thickness))
+	blended_nodes = 0
+	maximum_blend = 0.
+	if geometry.get("radius_transition_fraction", 0.):
+		for tree_name, surface, radius_add in (
+			("arterial_tree", "arterial_fluid_wall", 0.),
+			("arterial_tree", "arterial_wall_tissue", wall_thickness),
+			("venous_tree", "venous_fluid_wall", 0.),
+			("venous_tree", "venous_wall_tissue", wall_thickness)):
+			moved, displacement = blend_branch_radii(points, triangles,
+				data[tree_name], surface, radius_add, geometry)
+			blended_nodes += moved
+			maximum_blend = max(maximum_blend, displacement)
 	iterations = geometry.get("surface_smoothing_iterations", 0)
 	if iterations:
 		points = smooth_vessel_surfaces(points, triangles, iterations,
@@ -422,7 +499,7 @@ def rebuild_discrete_geometry(gmsh, surface_groups, geometry, wall_thickness):
 	for name, tags in regions.items():
 		group = gmsh.model.addPhysicalGroup(3, list(tags), REGIONS[name])
 		gmsh.model.setPhysicalName(3, group, name)
-	return regions, discrete_surfaces, collapsed, dropped
+	return regions, discrete_surfaces, collapsed, dropped, blended_nodes, maximum_blend
 
 
 def generate(data, output_prefix):
@@ -538,10 +615,12 @@ def generate(data, output_prefix):
 		gmsh.model.mesh.generate(2)
 		collapsed_nodes = 0
 		dropped_triangles = 0
+		blended_nodes = 0
+		maximum_radius_blend = 0.
 		if vascular["kind"] == "spline_capsules":
-			regions, surface_groups, collapsed_nodes, dropped_triangles = \
-				rebuild_discrete_geometry(gmsh, surface_groups, vascular,
-					data["wall_thickness_m"])
+			regions, surface_groups, collapsed_nodes, dropped_triangles, \
+				blended_nodes, maximum_radius_blend = \
+				rebuild_discrete_geometry(gmsh, surface_groups, data)
 		with tempfile.TemporaryDirectory(prefix="dual-tree-", dir=output_prefix.parent) as temporary:
 			base = Path(temporary)
 			surface_file = base/"surface.msh"
@@ -614,6 +693,8 @@ def generate(data, output_prefix):
 				"region_volume_m3": region_volumes,
 				"collapsed_surface_nodes": collapsed_nodes,
 				"dropped_surface_triangles": dropped_triangles,
+				"radius_blended_surface_nodes": blended_nodes,
+				"maximum_radius_blend_displacement_m": maximum_radius_blend,
 				"tetra_count": len(tags[0]),
 				"minimum_scaled_jacobian": min_scaled,
 				"surface_sha256": hashlib.sha256(surface_file.read_bytes()).hexdigest(),

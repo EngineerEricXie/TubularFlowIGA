@@ -18,6 +18,7 @@
     "subsegments_per_edge": 2,
     "tangent_scale": 0.25,
     "join_cleanup_tolerance_m": 0.00003,
+    "radius_transition_fraction": 0.5,
     "surface_smoothing_iterations": 80,
     "surface_smoothing_pass_band": 0.01
   },

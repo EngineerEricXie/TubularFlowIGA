@@ -7,7 +7,8 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from generate_idealized_cube_dual_tree import spline_capsule_paths, validate
+from generate_idealized_cube_dual_tree import (branch_transition_radius,
+	spline_capsule_paths, tree_node_radii, validate)
 
 
 CASE = Path(__file__).resolve().parents[2] / "cases/idealized_cube_dual_tree.json"
@@ -35,6 +36,7 @@ class IdealizedCubeDualTreeCaseTest(unittest.TestCase):
 		smooth = json.loads(SMOOTH_CASE.read_text(encoding="utf-8"))
 		self.assertEqual(validate(smooth), smooth)
 		self.assertEqual(smooth["vascular_geometry"]["kind"], "spline_capsules")
+		self.assertEqual(smooth["vascular_geometry"]["radius_transition_fraction"], .5)
 		self.assertEqual(smooth["vascular_geometry"]["surface_smoothing_iterations"], 80)
 
 	def test_spline_capsules_accept_a_trifurcation(self):
@@ -48,6 +50,12 @@ class IdealizedCubeDualTreeCaseTest(unittest.TestCase):
 		self.assertEqual(len(paths), len(tree["segments"]))
 		self.assertEqual(sum(start == 1 for start, _, _, _ in paths), 3)
 		self.assertTrue(all(len(points) == 3 for _, _, _, points in paths))
+		radii = tree_node_radii(tree)
+		self.assertEqual(radii[1], 1.)
+		self.assertEqual(radii[4], .8)
+		self.assertEqual(branch_transition_radius(1., .8, 0., 2.), 1.)
+		self.assertEqual(branch_transition_radius(1., .8, 1., 2.), .9)
+		self.assertEqual(branch_transition_radius(1., .8, 2., 2.), .8)
 
 	def test_reject_invalid_refined_mesh_controls(self):
 		refined = json.loads(REFINED_CASE.read_text(encoding="utf-8"))
