@@ -7,8 +7,7 @@
 # CoupledFlow
 
 CoupledFlow is a C++ framework for coupled flow and transport across 0D, 1D,
-and 3D domains. The project began as TubularFlowIGA; the repository URL keeps
-that original name for compatibility with existing citations and links.
+and 3D domains.
 
 The framework combines lumped circuits, vascular network models,
 tetrahedral finite elements, and isogeometric analysis (IGA). CPU solvers use
@@ -17,8 +16,8 @@ GPU. The same runtime infrastructure supports named-domain coupling,
 checkpoint/restart, conservative species transfer, moving domains, and
 selected fluid--structure interaction workflows.
 
-CoupledFlow is research software. The supported numerical models and their
-validation evidence are documented in [Benchmarks](docs/BENCHMARKS.md) and the
+Implementation coverage and numerical verification are documented in
+[Benchmarks](docs/BENCHMARKS.md) and the
 [technology matrix](TECHNOLOGY_MATRIX.md).
 
 ## Capabilities
@@ -188,7 +187,15 @@ depending on the backend. See [Visualization](docs/VISUALIZATION.md).
 |---|---|
 | ![Velocity magnitude in a Y-bifurcation](docs/images/vascular-y-bifurcation-velocity.png) | ![Nplus transport through a branched neurite](docs/images/neuron-branched-transport.gif) |
 
+| Artery–Darcy–vein coupling | Darcy-driven tissue transport |
+|---|---|
+| ![Idealized arterial and venous trees coupled through a Darcy region with vessel-wall feedback](docs/images/idealized-darcy-fsi.png) | ![Passive tracer transported through a tetrahedral Darcy tissue region](docs/images/darcy-tissue-tracer.gif) |
+| Conservative terminal-flux transfer through a porous region with quasi-steady vessel-wall feedback. | Passive tracer advection and diffusion on the fixed Darcy flux field. |
+
 Reproduction commands are listed in the [examples catalog](examples/README.md).
+The coupled Darcy examples are documented in the
+[dual-tree FSI](docs/CUBE_DUAL_TREE_FSI.md) and
+[passive tracer](docs/CUBE_DUAL_TREE_OXYGEN.md) guides.
 
 ## Repository layout
 

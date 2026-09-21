@@ -123,10 +123,9 @@ def main():
 		f"shown ×{args.magnification:g}; actual max: A {maximum['arterial']*1e6:.3g} µm, "
 		f"V {maximum['venous']*1e6:.3g} µm")
 	flow = summary["flow"]
-	fig.suptitle("Artificial cube functional FSI — not liver anatomy or physiology\n"
-		f"artery → Darcy → vein: {flow['fsi_artery_to_tissue_m3_s']:.3e} → "
-		f"{flow['fsi_tissue_to_vein_m3_s']:.3e} m³/s; "
-		"hydraulic pressure continuity not yet coupled", fontsize=11)
+	fig.suptitle("Idealized artery–Darcy–vein coupling with quasi-steady wall feedback\n"
+		f"conservative flow transfer: {flow['fsi_artery_to_tissue_m3_s']:.3e} → "
+		f"{flow['fsi_tissue_to_vein_m3_s']:.3e} m³/s", fontsize=11)
 	target = args.output.resolve() if args.output else output / "overview.png"
 	if target.exists():
 		raise ValueError(f"refusing to overwrite {target}")

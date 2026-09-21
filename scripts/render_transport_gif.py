@@ -14,6 +14,7 @@ from paraview.simple import (
     CreateView,
     GetAnimationScene,
     GetColorTransferFunction,
+    GetScalarBar,
     OpenDataFile,
     Render,
     SaveScreenshot,
@@ -86,6 +87,9 @@ def main() -> None:
     except AttributeError:
         shown.RescaleTransferFunctionToDataRange(True, False)
     shown.SetScalarBarVisibility(view, True)
+    legend = GetScalarBar(lookup, view)
+    legend.TitleColor = [0.96, 0.97, 1.0]
+    legend.LabelColor = [0.96, 0.97, 1.0]
 
     title = Text(Text=args.title)
     title_display = Show(title, view)
