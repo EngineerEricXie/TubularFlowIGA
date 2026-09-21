@@ -115,6 +115,7 @@ core.*
 /cases/*
 !/cases/idealized_cube_dual_tree.json
 !/cases/idealized_cube_dual_tree_refined.json
+!/cases/idealized_cube_dual_tree_smooth.json
 !/cases/idealized_cube_dual_tree_oxygen.json
 !/cases/liver_roi_functional.json
 /build/

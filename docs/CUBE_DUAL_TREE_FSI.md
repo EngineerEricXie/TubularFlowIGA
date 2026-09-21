@@ -5,7 +5,7 @@ region and applies quasi-steady vessel-wall feedback. The geometry and all
 parameters are defined in
 [`cases/idealized_cube_dual_tree.json`](../cases/idealized_cube_dual_tree.json).
 
-Each tree contains seven cylindrical segments and four terminals. The arterial
+The baseline tree contains seven cylindrical segments and four terminals. The arterial
 tree enters at `x=0`; the venous tree exits at `x=0.03 m`. Gmsh OCC Boolean
 operations create five disjoint, conforming tetrahedral regions:
 
@@ -147,6 +147,33 @@ recorded:
 The two runs used identical case, solver, geometry, and partition hashes. Their
 wall-clock times are not treated as a scaling benchmark because they partly
 overlapped on the same machine.
+
+## Template-free smooth-tree variant
+
+[`cases/idealized_cube_dual_tree_smooth.json`](../cases/idealized_cube_dual_tree_smooth.json)
+keeps the refined thin wall and replaces each centerline edge with a cubic
+Hermite path sampled into overlapping capsules. Short Boolean seam edges are
+collapsed before a conforming discrete-surface remesh. Node tangents combine the
+incoming direction with the mean outgoing direction, so the construction does
+not depend on bifurcation templates and accepts branch nodes with two, three,
+or more children. The fixed-flow reference executable still requires four
+arterial and four venous terminal caps.
+
+```bash
+python3 scripts/generate_idealized_cube_dual_tree.py \
+  /tmp/idealized-cube-smooth \
+  --case cases/idealized_cube_dual_tree_smooth.json
+python3 scripts/run_idealized_cube_dual_tree_fixed_flow.py \
+  /tmp/idealized-cube-smooth-run \
+  --case cases/idealized_cube_dual_tree_smooth.json --ranks 8
+```
+
+The geometry-only check produces five conforming regions and all 12 matching
+interfaces while retaining the native FEM minimum scaled-Jacobian gate of
+`0.001`. Gmsh 4.8.4 produced `275,454` first-order tetrahedra with a measured
+minimum of `0.00160734`. This variant has not replaced the recorded flow and
+FSI evidence above; use the refined case when
+reproducing those numerical values.
 
 ## ParaView output
 

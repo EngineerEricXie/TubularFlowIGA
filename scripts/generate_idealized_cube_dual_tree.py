@@ -29,6 +29,18 @@ INTERFACES = {
 		for index in range(4)},
 	**{f"venous_terminal_{index}": ("venous_lumen", "fixed_darcy_tissue")
 		for index in range(4)}}
+REGION_SURFACES = {
+	"arterial_lumen": ["arterial_fluid_wall", "arterial_inlet"]+
+		[f"arterial_terminal_{index}" for index in range(4)],
+	"arterial_wall": ["arterial_fluid_wall", "arterial_wall_tissue",
+		"arterial_wall_root_exterior"],
+	"venous_lumen": ["venous_fluid_wall", "venous_outlet"]+
+		[f"venous_terminal_{index}" for index in range(4)],
+	"venous_wall": ["venous_fluid_wall", "venous_wall_tissue",
+		"venous_wall_root_exterior"],
+	"fixed_darcy_tissue": ["tissue_exterior", "arterial_wall_tissue",
+		"venous_wall_tissue"]+[f"arterial_terminal_{index}" for index in range(4)]+
+		[f"venous_terminal_{index}" for index in range(4)]}
 
 
 def require(condition, message):
@@ -42,6 +54,65 @@ def dot(a, b):
 
 def sub(a, b):
 	return [x-y for x, y in zip(a, b)]
+
+
+def cross(a, b):
+	return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+		a[0]*b[1]-a[1]*b[0])
+
+
+def add(a, b):
+	return [x+y for x, y in zip(a, b)]
+
+
+def scale(a, factor):
+	return [factor*x for x in a]
+
+
+def normalized(a):
+	return scale(a, 1./math.sqrt(dot(a, a)))
+
+
+def spline_capsule_paths(tree, subsegments, tension):
+	"""Sample template-free cubic centerlines for every directed tree edge."""
+	nodes = tree["nodes_m"]
+	parents = [None]*len(nodes)
+	children = [[] for _ in nodes]
+	for start, stop, _ in tree["segments"]:
+		parents[stop] = start
+		children[start].append(stop)
+	tangents = []
+	for index, parent in enumerate(parents):
+		incoming = None if parent is None else normalized(sub(nodes[index], nodes[parent]))
+		outgoing = [normalized(sub(nodes[child], nodes[index]))
+			for child in children[index]]
+		if incoming is None:
+			tangent = normalized([sum(direction[axis] for direction in outgoing)
+				for axis in range(3)])
+		elif not outgoing:
+			tangent = incoming
+		else:
+			mean_outgoing = normalized([sum(direction[axis] for direction in outgoing)
+				for axis in range(3)])
+			tangent = normalized(add(incoming, mean_outgoing))
+		tangents.append(tangent)
+	paths = []
+	for start, stop, radius in tree["segments"]:
+		first, last = nodes[start], nodes[stop]
+		length = math.dist(first, last)
+		first_tangent = scale(tangents[start], tension*length)
+		last_tangent = scale(tangents[stop], tension*length)
+		points = []
+		for sample in range(subsegments+1):
+			u = sample/subsegments
+			h00 = 2*u**3-3*u**2+1
+			h10 = u**3-2*u**2+u
+			h01 = -2*u**3+3*u**2
+			h11 = u**3-u**2
+			points.append([h00*first[axis]+h10*first_tangent[axis]+
+				h01*last[axis]+h11*last_tangent[axis] for axis in range(3)])
+		paths.append((start, stop, radius, points))
+	return paths
 
 
 def segment_distance(a, b, c, d):
@@ -58,9 +129,6 @@ def segment_distance(a, b, c, d):
 
 
 def tet_quality(points):
-	def cross(a, b):
-		return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
-			a[0]*b[1]-a[1]*b[0])
 	def corner(a, b, c, d):
 		u, v, w = sub(b, a), sub(c, a), sub(d, a)
 		denom = math.sqrt(dot(u, u)*dot(v, v)*dot(w, w))
@@ -86,12 +154,23 @@ def validate(data):
 		data["target_mesh_size_m"] > 0, "mesh controls are invalid")
 	minimum_size = data.get("minimum_mesh_size_m", .3*data["target_mesh_size_m"])
 	curvature = data.get("mesh_curvature_divisions", 8)
+	vascular = data.get("vascular_geometry", {"kind": "piecewise_cylinders"})
 	require(math.isfinite(minimum_size) and 0 < minimum_size <=
 		data["target_mesh_size_m"] and isinstance(curvature, int) and
 		not isinstance(curvature, bool) and 8 <= curvature <= 128 and
 		isinstance(data.get("mesh_size_extend_from_boundary", True), bool) and
 		isinstance(data.get("arterial_outer_reverse", True), bool),
 		"minimum size, curvature divisions or boundary extension is invalid")
+	require(vascular.get("kind") in ("piecewise_cylinders", "spline_capsules"),
+		"vascular geometry kind is invalid")
+	if vascular["kind"] == "spline_capsules":
+		subsegments = vascular.get("subsegments_per_edge", 2)
+		tension = vascular.get("tangent_scale", .25)
+		cleanup = vascular.get("join_cleanup_tolerance_m", .3*wall)
+		require(isinstance(subsegments, int) and not isinstance(subsegments, bool)
+			and 2 <= subsegments <= 8 and math.isfinite(tension) and 0 < tension <= .5
+			and math.isfinite(cleanup) and 0 < cleanup < .5*wall,
+			"spline capsule controls are invalid")
 	for key in ("arterial_tree", "venous_tree"):
 		tree = data[key]
 		nodes, segments = tree["nodes_m"], tree["segments"]
@@ -157,13 +236,26 @@ def validate(data):
 	return data
 
 
-def add_tree(gmsh, tree, radius_add, reverse=False):
+def add_tree(gmsh, tree, radius_add, reverse=False, geometry=None):
 	nodes = tree["nodes_m"]
 	parts = []
-	for i, j, radius in tree["segments"]:
-		start, end = (nodes[j], nodes[i]) if reverse else (nodes[i], nodes[j])
-		delta = sub(end, start)
-		parts.append((3, gmsh.model.occ.addCylinder(*start, *delta, radius+radius_add)))
+	geometry = geometry or {"kind": "piecewise_cylinders"}
+	if geometry["kind"] == "spline_capsules":
+		paths = spline_capsule_paths(tree, geometry.get("subsegments_per_edge", 2),
+			geometry.get("tangent_scale", .25))
+		for _, _, radius, points in paths:
+			for index in range(len(points)-1):
+				delta = sub(points[index+1], points[index])
+				parts.append((3, gmsh.model.occ.addCylinder(*points[index], *delta,
+					radius+radius_add)))
+			for point in points[1:-1]:
+				parts.append((3, gmsh.model.occ.addSphere(*point, radius+radius_add)))
+	else:
+		for i, j, radius in tree["segments"]:
+			start, end = (nodes[j], nodes[i]) if reverse else (nodes[i], nodes[j])
+			delta = sub(end, start)
+			parts.append((3, gmsh.model.occ.addCylinder(*start, *delta,
+				radius+radius_add)))
 	for index in range(1, len(nodes)):
 		if index in tree["terminals"]:
 			continue
@@ -176,6 +268,109 @@ def add_tree(gmsh, tree, radius_add, reverse=False):
 	return fused[0]
 
 
+def clean_surface_triangles(nodes, triangles, tolerance):
+	"""Collapse short Boolean-seam edges without changing closed-shell topology."""
+	parent = {tag: tag for tag in nodes}
+
+	def find(tag):
+		while parent[tag] != tag:
+			parent[tag] = parent[parent[tag]]
+			tag = parent[tag]
+		return tag
+
+	def union(first, second):
+		first, second = find(first), find(second)
+		if first != second:
+			parent[max(first, second)] = min(first, second)
+
+	edges = set()
+	for group in triangles.values():
+		for triangle in group:
+			for first, second in ((triangle[0], triangle[1]),
+				(triangle[1], triangle[2]), (triangle[2], triangle[0])):
+				edge = tuple(sorted((first, second)))
+				if edge not in edges:
+					edges.add(edge)
+					if math.dist(nodes[first], nodes[second]) < tolerance:
+						union(first, second)
+	for tag in parent:
+		parent[tag] = find(tag)
+	members = {}
+	for tag, representative in parent.items():
+		members.setdefault(representative, []).append(tag)
+	points = {representative: tuple(sum(nodes[tag][axis] for tag in group)/len(group)
+		for axis in range(3)) for representative, group in members.items()}
+	cleaned = {}
+	dropped = 0
+	for name, group in triangles.items():
+		unique = set()
+		cleaned[name] = []
+		for triangle in group:
+			mapped = tuple(parent[tag] for tag in triangle)
+			key = tuple(sorted(mapped))
+			if len(set(mapped)) < 3 or key in unique:
+				dropped += 1
+				continue
+			unique.add(key)
+			cleaned[name].append(mapped)
+	for name, labels in REGION_SURFACES.items():
+		usage = {}
+		for label in labels:
+			for triangle in cleaned[label]:
+				for first, second in ((triangle[0], triangle[1]),
+					(triangle[1], triangle[2]), (triangle[2], triangle[0])):
+					edge = tuple(sorted((first, second)))
+					usage[edge] = usage.get(edge, 0)+1
+		require(usage and all(count == 2 for count in usage.values()),
+			f"surface cleanup opened the {name} shell")
+	return points, cleaned, len(nodes)-len(points), dropped
+
+
+def rebuild_discrete_geometry(gmsh, surface_groups, tolerance):
+	"""Replace sliver-prone OCC seams with a conforming discrete surface complex."""
+	node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+	nodes = {int(tag): tuple(coordinates[3*index:3*index+3])
+		for index, tag in enumerate(node_tags)}
+	triangles = {name: [] for name in SURFACES}
+	for name, surfaces in surface_groups.items():
+		for surface in surfaces:
+			types, _, connectivity = gmsh.model.mesh.getElements(2, surface)
+			for element_type, flat in zip(types, connectivity):
+				require(element_type == 2, "surface mesh is not first-order triangular")
+				triangles[name].extend(tuple(int(tag) for tag in flat[start:start+3])
+					for start in range(0, len(flat), 3))
+	points, triangles, collapsed, dropped = clean_surface_triangles(nodes,
+		triangles, tolerance)
+	gmsh.clear()
+	gmsh.model.add("idealized-cube-dual-tree-discrete")
+	discrete_surfaces = {}
+	for name, entity in SURFACES.items():
+		gmsh.model.addDiscreteEntity(2, entity)
+		discrete_surfaces[name] = [entity]
+	tags = sorted(points)
+	gmsh.model.mesh.addNodes(2, next(iter(SURFACES.values())), tags,
+		[value for tag in tags for value in points[tag]])
+	element = 1
+	for name, entity in SURFACES.items():
+		count = len(triangles[name])
+		gmsh.model.mesh.addElementsByType(entity, 2,
+			list(range(element, element+count)),
+			[tag for triangle in triangles[name] for tag in triangle])
+		element += count
+		group = gmsh.model.addPhysicalGroup(2, [entity], SURFACES[name])
+		gmsh.model.setPhysicalName(2, group, name)
+	regions = {}
+	for name, labels in REGION_SURFACES.items():
+		loop = gmsh.model.geo.addSurfaceLoop([SURFACES[label] for label in labels])
+		volume = gmsh.model.geo.addVolume([loop], REGIONS[name])
+		regions[name] = {volume}
+	gmsh.model.geo.synchronize()
+	for name, tags in regions.items():
+		group = gmsh.model.addPhysicalGroup(3, list(tags), REGIONS[name])
+		gmsh.model.setPhysicalName(3, group, name)
+	return regions, discrete_surfaces, collapsed, dropped
+
+
 def generate(data, output_prefix):
 	try:
 		import gmsh
@@ -186,14 +381,16 @@ def generate(data, output_prefix):
 		gmsh.option.setNumber("General.Terminal", 0)
 		gmsh.model.add("idealized-cube-dual-tree")
 		origin, size = data["cube_origin_m"], data["cube_size_m"]
+		vascular = data.get("vascular_geometry", {"kind": "piecewise_cylinders"})
 		cube = (3, gmsh.model.occ.addBox(*origin, *size))
-		artery = add_tree(gmsh, data["arterial_tree"], 0., reverse=True)
+		artery = add_tree(gmsh, data["arterial_tree"], 0., reverse=True,
+			geometry=vascular)
 		artery_outer = add_tree(gmsh, data["arterial_tree"],
 			data["wall_thickness_m"],
-			reverse=data.get("arterial_outer_reverse", True))
-		vein = add_tree(gmsh, data["venous_tree"], 0.)
+			reverse=data.get("arterial_outer_reverse", True), geometry=vascular)
+		vein = add_tree(gmsh, data["venous_tree"], 0., geometry=vascular)
 		vein_outer = add_tree(gmsh, data["venous_tree"],
-			data["wall_thickness_m"])
+			data["wall_thickness_m"], geometry=vascular)
 		tissue_shape, _ = gmsh.model.occ.cut([cube],
 			[artery_outer, vein_outer], removeTool=False)
 		artery_wall_shape, _ = gmsh.model.occ.cut([artery_outer],
@@ -285,6 +482,13 @@ def generate(data, output_prefix):
 			int(data.get("mesh_size_extend_from_boundary", True)))
 		gmsh.option.setNumber("Mesh.Algorithm3D", 1)
 		gmsh.model.mesh.generate(2)
+		collapsed_nodes = 0
+		dropped_triangles = 0
+		if vascular["kind"] == "spline_capsules":
+			regions, surface_groups, collapsed_nodes, dropped_triangles = \
+				rebuild_discrete_geometry(gmsh, surface_groups,
+					vascular.get("join_cleanup_tolerance_m",
+						.3*data["wall_thickness_m"]))
 		with tempfile.TemporaryDirectory(prefix="dual-tree-", dir=output_prefix.parent) as temporary:
 			base = Path(temporary)
 			surface_file = base/"surface.msh"
@@ -307,9 +511,19 @@ def generate(data, output_prefix):
 				min_scaled = min(min_scaled, scaled)
 			require(min_scaled >= data["minimum_scaled_jacobian"],
 				f"minimum scaled Jacobian {min_scaled:.6g} below gate")
-			for name, region in regions.items():
-				require(gmsh.model.occ.getMass(3, next(iter(region))) > 0,
-					f"{name} has nonpositive volume")
+			region_volumes = {}
+			for name, entities in regions.items():
+				volume = 0.
+				for entity in entities:
+					types, _, blocks = gmsh.model.mesh.getElements(3, entity)
+					require(len(types) == 1 and types[0] == 4,
+						f"{name} is not first-order tetrahedral")
+					for start in range(0, len(blocks[0]), 4):
+						points = [coords[int(tag)] for tag in blocks[0][start:start+4]]
+						volume += dot(sub(points[1], points[0]),
+							cross(sub(points[2], points[0]), sub(points[3], points[0])))/6.
+				require(volume > 0., f"{name} has nonpositive volume")
+				region_volumes[name] = volume
 			gmsh.write(str(volume_file))
 			contract = {"schema_version": 1, "length_unit": "m",
 				"regions": [{"physical_name": name,
@@ -340,11 +554,13 @@ def generate(data, output_prefix):
 				"case_sha256": hashlib.sha256(json.dumps(data, sort_keys=True,
 					separators=(",", ":")).encode()).hexdigest(),
 				"gmsh_version": gmsh.option.getString("General.Version"),
+				"vascular_geometry": vascular,
 				"regions": REGIONS, "surfaces": SURFACES,
 				"surface_count": {name: len(surfaces)
 					for name, surfaces in surface_groups.items()},
-				"region_volume_m3": {name: gmsh.model.occ.getMass(3,
-					next(iter(tags))) for name, tags in regions.items()},
+				"region_volume_m3": region_volumes,
+				"collapsed_surface_nodes": collapsed_nodes,
+				"dropped_surface_triangles": dropped_triangles,
 				"tetra_count": len(tags[0]),
 				"minimum_scaled_jacobian": min_scaled,
 				"surface_sha256": hashlib.sha256(surface_file.read_bytes()).hexdigest(),
