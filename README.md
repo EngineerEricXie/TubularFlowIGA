@@ -192,8 +192,9 @@ depending on the backend. See [Visualization](docs/VISUALIZATION.md).
 ![Three-dimensional cutaway of synchronized transport through arterial, Darcy tissue, and venous domains](docs/images/darcy-tissue-tracer.gif)
 
 The tissue cutaway is perpendicular to the vessel inflow and outflow direction.
-The complete arterial and venous meshes remain intact across the cut plane and
-surround the animated passive-tracer field on the fixed Darcy flux.
+The complete arterial and venous meshes remain intact across the cut plane.
+All three domains share one logarithmic concentration scale, showing tracer
+transfer from the arterial tree through porous tissue and into the venous tree.
 
 Reproduction commands are listed in the [examples catalog](examples/README.md).
 The coupled Darcy examples are documented in the
