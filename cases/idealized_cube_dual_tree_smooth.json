@@ -17,7 +17,9 @@
     "kind": "spline_capsules",
     "subsegments_per_edge": 2,
     "tangent_scale": 0.25,
-    "join_cleanup_tolerance_m": 0.00003
+    "join_cleanup_tolerance_m": 0.00003,
+    "surface_smoothing_iterations": 80,
+    "surface_smoothing_pass_band": 0.01
   },
   "arterial_tree": {
     "nodes_m": [[0.0, -0.003, -0.005], [0.007, -0.003, -0.005], [0.012, -0.006, -0.005], [0.012, 0.0, -0.005], [0.017, -0.009, -0.008], [0.017, -0.006, -0.001], [0.017, -0.002, -0.008], [0.017, 0.003, -0.003]],

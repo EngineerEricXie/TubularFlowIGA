@@ -167,9 +167,14 @@ def validate(data):
 		subsegments = vascular.get("subsegments_per_edge", 2)
 		tension = vascular.get("tangent_scale", .25)
 		cleanup = vascular.get("join_cleanup_tolerance_m", .3*wall)
+		smoothing = vascular.get("surface_smoothing_iterations", 0)
+		pass_band = vascular.get("surface_smoothing_pass_band", .01)
 		require(isinstance(subsegments, int) and not isinstance(subsegments, bool)
 			and 2 <= subsegments <= 8 and math.isfinite(tension) and 0 < tension <= .5
-			and math.isfinite(cleanup) and 0 < cleanup < .5*wall,
+			and math.isfinite(cleanup) and 0 < cleanup < .5*wall
+			and isinstance(smoothing, int) and not isinstance(smoothing, bool)
+			and 0 <= smoothing <= 200 and math.isfinite(pass_band)
+			and 0 < pass_band <= 1.,
 			"spline capsule controls are invalid")
 	for key in ("arterial_tree", "venous_tree"):
 		tree = data[key]
@@ -326,7 +331,52 @@ def clean_surface_triangles(nodes, triangles, tolerance):
 	return points, cleaned, len(nodes)-len(points), dropped
 
 
-def rebuild_discrete_geometry(gmsh, surface_groups, tolerance):
+def smooth_vessel_surfaces(points, triangles, iterations, pass_band):
+	try:
+		import vtk
+	except ImportError as error:
+		raise ValueError(f"VTK Python module unavailable: {error}") from error
+	for name in ("arterial_fluid_wall", "arterial_wall_tissue",
+		"venous_fluid_wall", "venous_wall_tissue"):
+		group = triangles[name]
+		tags = sorted({tag for triangle in group for tag in triangle})
+		local = {tag: index for index, tag in enumerate(tags)}
+		edge_use = {}
+		for triangle in group:
+			for first, second in ((triangle[0], triangle[1]),
+				(triangle[1], triangle[2]), (triangle[2], triangle[0])):
+				edge = tuple(sorted((first, second)))
+				edge_use[edge] = edge_use.get(edge, 0)+1
+		boundary = {tag for edge, count in edge_use.items() if count == 1
+			for tag in edge}
+		vtk_points = vtk.vtkPoints()
+		for tag in tags:
+			vtk_points.InsertNextPoint(points[tag])
+		polygons = vtk.vtkCellArray()
+		for triangle in group:
+			polygons.InsertNextCell(3)
+			for tag in triangle:
+				polygons.InsertCellPoint(local[tag])
+		polydata = vtk.vtkPolyData()
+		polydata.SetPoints(vtk_points)
+		polydata.SetPolys(polygons)
+		smoother = vtk.vtkWindowedSincPolyDataFilter()
+		smoother.SetInputData(polydata)
+		smoother.SetNumberOfIterations(iterations)
+		smoother.SetPassBand(pass_band)
+		smoother.BoundarySmoothingOff()
+		smoother.FeatureEdgeSmoothingOff()
+		smoother.NonManifoldSmoothingOn()
+		smoother.NormalizeCoordinatesOn()
+		smoother.Update()
+		output = smoother.GetOutput().GetPoints()
+		for index, tag in enumerate(tags):
+			if tag not in boundary:
+				points[tag] = output.GetPoint(index)
+	return points
+
+
+def rebuild_discrete_geometry(gmsh, surface_groups, geometry, wall_thickness):
 	"""Replace sliver-prone OCC seams with a conforming discrete surface complex."""
 	node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
 	nodes = {int(tag): tuple(coordinates[3*index:3*index+3])
@@ -340,7 +390,11 @@ def rebuild_discrete_geometry(gmsh, surface_groups, tolerance):
 				triangles[name].extend(tuple(int(tag) for tag in flat[start:start+3])
 					for start in range(0, len(flat), 3))
 	points, triangles, collapsed, dropped = clean_surface_triangles(nodes,
-		triangles, tolerance)
+		triangles, geometry.get("join_cleanup_tolerance_m", .3*wall_thickness))
+	iterations = geometry.get("surface_smoothing_iterations", 0)
+	if iterations:
+		points = smooth_vessel_surfaces(points, triangles, iterations,
+			geometry.get("surface_smoothing_pass_band", .01))
 	gmsh.clear()
 	gmsh.model.add("idealized-cube-dual-tree-discrete")
 	discrete_surfaces = {}
@@ -486,9 +540,8 @@ def generate(data, output_prefix):
 		dropped_triangles = 0
 		if vascular["kind"] == "spline_capsules":
 			regions, surface_groups, collapsed_nodes, dropped_triangles = \
-				rebuild_discrete_geometry(gmsh, surface_groups,
-					vascular.get("join_cleanup_tolerance_m",
-						.3*data["wall_thickness_m"]))
+				rebuild_discrete_geometry(gmsh, surface_groups, vascular,
+					data["wall_thickness_m"])
 		with tempfile.TemporaryDirectory(prefix="dual-tree-", dir=output_prefix.parent) as temporary:
 			base = Path(temporary)
 			surface_file = base/"surface.msh"

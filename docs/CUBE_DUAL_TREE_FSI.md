@@ -153,7 +153,9 @@ overlapped on the same machine.
 [`cases/idealized_cube_dual_tree_smooth.json`](../cases/idealized_cube_dual_tree_smooth.json)
 keeps the refined thin wall and replaces each centerline edge with a cubic
 Hermite path sampled into overlapping capsules. Short Boolean seam edges are
-collapsed before a conforming discrete-surface remesh. Node tangents combine the
+collapsed, then a windowed-sinc pass rounds the vessel walls and junctions
+without moving inlet or terminal boundary rings. A conforming discrete-surface
+remesh creates the tetrahedra. Node tangents combine the
 incoming direction with the mean outgoing direction, so the construction does
 not depend on bifurcation templates and accepts branch nodes with two, three,
 or more children. The fixed-flow reference executable still requires four
@@ -170,8 +172,8 @@ python3 scripts/run_idealized_cube_dual_tree_fixed_flow.py \
 
 The geometry-only check produces five conforming regions and all 12 matching
 interfaces while retaining the native FEM minimum scaled-Jacobian gate of
-`0.001`. Gmsh 4.8.4 produced `275,454` first-order tetrahedra with a measured
-minimum of `0.00160734`. This variant has not replaced the recorded flow and
+`0.001`. Gmsh 4.8.4 produced `272,751` first-order tetrahedra with a measured
+minimum of `0.00499229`. This variant has not replaced the recorded flow and
 FSI evidence above; use the refined case when
 reproducing those numerical values.
 

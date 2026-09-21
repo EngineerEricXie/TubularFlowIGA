@@ -35,6 +35,7 @@ class IdealizedCubeDualTreeCaseTest(unittest.TestCase):
 		smooth = json.loads(SMOOTH_CASE.read_text(encoding="utf-8"))
 		self.assertEqual(validate(smooth), smooth)
 		self.assertEqual(smooth["vascular_geometry"]["kind"], "spline_capsules")
+		self.assertEqual(smooth["vascular_geometry"]["surface_smoothing_iterations"], 80)
 
 	def test_spline_capsules_accept_a_trifurcation(self):
 		tree = {
