@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import tempfile
 from pathlib import Path
 
 from PIL import Image
+import vtk
 from paraview.simple import (
     Clip,
     ColorBy,
@@ -16,12 +19,14 @@ from paraview.simple import (
     GetAnimationScene,
     GetColorTransferFunction,
     GetScalarBar,
+    Glyph,
     OpenDataFile,
     Render,
     SaveScreenshot,
     Show,
     Slice,
     Text,
+    TrivialProducer,
     UpdatePipeline,
     _DisableFirstRenderCameraReset,
 )
@@ -46,6 +51,12 @@ def arguments() -> argparse.Namespace:
         metavar=("R", "G", "B"),
         help="solid RGB color for the corresponding overlay domain",
     )
+    parser.add_argument(
+        "--flow-tree-case",
+        type=Path,
+        help="dual-tree case used to draw schematic segment flow arrows",
+    )
+    parser.add_argument("--overlay-opacity", type=float, default=1.0)
     parser.add_argument("--array", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--title", required=True)
@@ -85,6 +96,43 @@ def selected_times(source: object, maximum: int) -> list[float]:
     ]
 
 
+def flow_arrow_source(case_path: Path, camera_direction: list[float]) -> object:
+    case = json.loads(case_path.read_text(encoding="utf-8"))
+    norm = math.sqrt(sum(component * component for component in camera_direction))
+    camera = [component / norm for component in camera_direction]
+    points = vtk.vtkPoints()
+    vectors = vtk.vtkDoubleArray()
+    vectors.SetName("flow_direction")
+    vectors.SetNumberOfComponents(3)
+    for name, sign in (("arterial_tree", 1.0), ("venous_tree", -1.0)):
+        tree = case[name]
+        nodes = tree["nodes_m"]
+        for start, stop, radius in tree["segments"]:
+            first, last = nodes[start], nodes[stop]
+            segment = [last[axis] - first[axis] for axis in range(3)]
+            length = math.sqrt(sum(component * component for component in segment))
+            direction = [sign * component / length for component in segment]
+            projection = sum(camera[axis] * direction[axis] for axis in range(3))
+            offset = [camera[axis] - projection * direction[axis] for axis in range(3)]
+            offset_norm = math.sqrt(sum(component * component for component in offset))
+            if offset_norm <= 1.0e-12:
+                offset = [0.0, 0.0, 1.0]
+                offset_norm = 1.0
+            midpoint = [0.5 * (first[axis] + last[axis])
+                + 1.2 * radius * offset[axis] / offset_norm for axis in range(3)]
+            arrow_length = min(0.0024, 0.42 * length)
+            points.InsertNextPoint(*midpoint)
+            vectors.InsertNextTuple3(*(arrow_length * component
+                for component in direction))
+    polydata = vtk.vtkPolyData()
+    polydata.SetPoints(points)
+    polydata.GetPointData().AddArray(vectors)
+    polydata.GetPointData().SetActiveVectors("flow_direction")
+    producer = TrivialProducer()
+    producer.GetClientSideObject().SetOutput(polydata)
+    return producer
+
+
 def main() -> None:
     args = arguments()
     if args.frames < 1 or args.duration_ms < 1:
@@ -98,6 +146,10 @@ def main() -> None:
     if any(component < 0.0 or component > 1.0
            for color in args.overlay_color for component in color):
         raise ValueError("overlay-color components must be between zero and one")
+    if args.flow_tree_case and not args.cutaway:
+        raise ValueError("flow-tree-case requires the cutaway view")
+    if not 0.0 < args.overlay_opacity <= 1.0:
+        raise ValueError("overlay-opacity must be in (0, 1]")
 
     _DisableFirstRenderCameraReset()
     source = OpenDataFile(str(args.input))
@@ -149,12 +201,31 @@ def main() -> None:
     for index, overlay in enumerate(overlays):
         overlay_display = Show(overlay, view)
         overlay_display.Representation = "Surface"
+        overlay_display.Opacity = args.overlay_opacity
         if args.overlay_color:
             overlay_display.AmbientColor = args.overlay_color[index]
             overlay_display.DiffuseColor = args.overlay_color[index]
             overlay_display.Specular = 0.25
         else:
             ColorBy(overlay_display, ("POINTS", args.array))
+    camera_direction = [2.8, 2.0, 1.8]
+    if args.flow_tree_case:
+        arrow_source = flow_arrow_source(args.flow_tree_case, camera_direction)
+        glyph = Glyph(Input=arrow_source, GlyphType="Arrow")
+        glyph.OrientationArray = ["POINTS", "flow_direction"]
+        glyph.ScaleArray = ["POINTS", "flow_direction"]
+        glyph.VectorScaleMode = "Scale by Magnitude"
+        glyph.ScaleFactor = 1.0
+        glyph.GlyphMode = "All Points"
+        glyph.GlyphType.TipResolution = 16
+        glyph.GlyphType.ShaftResolution = 16
+        glyph.GlyphType.TipLength = 0.35
+        glyph.GlyphType.TipRadius = 0.12
+        glyph.GlyphType.ShaftRadius = 0.04
+        glyph_display = Show(glyph, view)
+        glyph_display.ColorArrayName = [None, ""]
+        glyph_display.AmbientColor = [0.96, 0.97, 1.0]
+        glyph_display.DiffuseColor = [0.96, 0.97, 1.0]
     if args.range:
         lookup.RescaleTransferFunction(*args.range)
     else:
@@ -166,7 +237,7 @@ def main() -> None:
         lookup.MapControlPointsToLogSpace()
         lookup.UseLogScale = 1
     if args.cutaway:
-        shown.Opacity = 0.78
+        shown.Opacity = 0.58
     shown.SetScalarBarVisibility(view, True)
     legend = GetScalarBar(lookup, view)
     legend.TitleColor = [0.96, 0.97, 1.0]
@@ -184,13 +255,18 @@ def main() -> None:
     time_display.FontSize = 16
     time_display.WindowLocation = "Upper Left Corner"
 
+    if args.flow_tree_case:
+        arrow_key = Text(Text="white arrows: flow direction, not magnitude")
+        arrow_key_display = Show(arrow_key, view)
+        arrow_key_display.Color = [0.96, 0.97, 1.0]
+        arrow_key_display.FontSize = 14
+        arrow_key_display.WindowLocation = "Lower Left Corner"
+
     view.CameraFocalPoint = center
     span = max(bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
     if args.cutaway:
         view.CameraPosition = [
-            center[0] + 2.8 * span,
-            center[1] + 2.0 * span,
-            center[2] + 1.8 * span,
+            center[axis] + camera_direction[axis] * span for axis in range(3)
         ]
         view.CameraViewUp = [0.0, 0.0, 1.0]
     else:

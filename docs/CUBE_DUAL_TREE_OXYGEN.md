@@ -26,10 +26,15 @@ defines:
 | Parameter | Value |
 |---|---:|
 | Arterial inlet concentration | `1 mol/m³` |
-| Diffusion coefficient | `10⁻⁶ m²/s` |
+| Vascular diffusion coefficient | `10⁻⁸ m²/s` |
+| Tissue diffusion coefficient | `10⁻⁶ m²/s` |
 | Time step | `5 s` |
 | Step range | 10 to 60 steps |
 | Stop condition | Mean venous outlet concentration reaches 1% of inlet |
+
+The lower vascular coefficient limits physical axial back-diffusion between
+sibling branches. Monotone graph diffusion remains active as the numerical
+stabilization that enforces nonnegative concentration.
 
 First produce the refined flow run described in the FSI guide, then execute:
 
@@ -56,6 +61,22 @@ interior tetrahedra. `transport/artery_oxygen.pvd` and
 `transport/vein_oxygen.pvd` share the same time axis. Fix a common color range
 when comparing regions or time steps.
 
+The README animation uses a translucent tissue cutaway and one logarithmic
+concentration scale for all three domains. White centerline arrows indicate
+flow direction, not velocity magnitude. Generate it with:
+
+```bash
+pvpython scripts/render_transport_gif.py \
+  --input /tmp/idealized-cube-oxygen/transport/tissue_oxygen.pvd \
+  --overlay-input /tmp/idealized-cube-oxygen/transport/artery_oxygen.pvd \
+  --overlay-input /tmp/idealized-cube-oxygen/transport/vein_oxygen.pvd \
+  --flow-tree-case cases/idealized_cube_dual_tree_refined.json \
+  --array concentration_mol_m3 --cutaway --range 0.0001 1 --log-scale \
+  --title "Artery–tissue–vein concentration and flow" \
+  --frames 13 --duration-ms 180 --width 1200 --height 720 \
+  --output docs/images/darcy-tissue-tracer.gif
+```
+
 The tissue coordinates do not move during the sequence, and both vessel
 regions use their fixed post-FSI geometry. The animation shows concentration
 transport, not additional wall motion. `ledger.csv` records inventories,
@@ -67,14 +88,14 @@ and solver by SHA-256.
 
 Independent two- and eight-rank WSL runs completed 12 steps (`t=0` through
 `60 s`, 13 states total). Both reached a mean venous outlet concentration of
-approximately `0.01071475877 mol/m³`, or `1.0715%` of the inlet value.
+approximately `0.01072950137 mol/m³`, or `1.0730%` of the inlet value.
 
 | Quantity | Result |
 |---|---:|
 | Tissue tetrahedra per state | `101,716` |
-| Maximum global balance defect, 8 ranks | `5.84×10⁻²⁰ mol/s` |
-| Final tissue nodal concentration range | `0.00155–0.342 mol/m³` |
-| Maximum two-/eight-rank field difference | `9.9067×10⁻¹² mol/m³` |
+| Maximum global balance defect, 8 ranks | `5.73×10⁻²⁰ mol/s` |
+| Final tissue nodal concentration range | `0.00154–0.342 mol/m³` |
+| Maximum two-/eight-rank field difference | `7.1094×10⁻¹² mol/m³` |
 
 All 39 field arrays were compared by global node ID. A negative test limited
 to two steps with a 90% breakthrough target exited with status 2 and did not

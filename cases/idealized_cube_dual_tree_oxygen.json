@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "kind": "idealized_cube_passive_oxygen_functional_only",
   "physiological_validation": false,
   "flow_case_file": "idealized_cube_dual_tree_refined.json",
@@ -7,7 +7,8 @@
   "tissue_porosity_assumed": 1.0,
   "tissue_consumption_mol_m3_s": 0.0,
   "inlet_concentration_mol_m3": 1.0,
-  "diffusivity_m2_s": 1e-6,
+  "vascular_diffusivity_m2_s": 1e-8,
+  "tissue_diffusivity_m2_s": 1e-6,
   "time_step_s": 5.0,
   "minimum_steps": 10,
   "maximum_steps": 60,

@@ -31,21 +31,25 @@ def validate(case, path):
 	required = {"schema_version", "kind", "physiological_validation",
 		"flow_case_file", "frozen_post_fsi_velocity", "tissue_porosity_assumed",
 		"tissue_consumption_mol_m3_s", "inlet_concentration_mol_m3",
-		"diffusivity_m2_s", "time_step_s", "minimum_steps", "maximum_steps",
-		"venous_breakthrough_fraction", "limitations"}
-	require(set(case) == required and case["schema_version"] == 1 and
+		"vascular_diffusivity_m2_s", "tissue_diffusivity_m2_s", "time_step_s",
+		"minimum_steps", "maximum_steps", "venous_breakthrough_fraction",
+		"limitations"}
+	require(set(case) == required and case["schema_version"] == 2 and
 		case["kind"] == "idealized_cube_passive_oxygen_functional_only" and
 		case["physiological_validation"] is False and
 		case["frozen_post_fsi_velocity"] is True and
 		case["tissue_porosity_assumed"] == 1.0 and
 		case["tissue_consumption_mol_m3_s"] == 0.0,
 		"oxygen case schema or functional-only assumptions differ")
-	for key in ("inlet_concentration_mol_m3", "diffusivity_m2_s",
-		"time_step_s", "venous_breakthrough_fraction"):
+	for key in ("inlet_concentration_mol_m3", "vascular_diffusivity_m2_s",
+		"tissue_diffusivity_m2_s", "time_step_s",
+		"venous_breakthrough_fraction"):
 		require(type(case[key]) in (int, float) and math.isfinite(case[key]),
 			f"oxygen {key} is invalid")
 	require(case["inlet_concentration_mol_m3"] > 0 and
-		case["diffusivity_m2_s"] >= 0 and case["time_step_s"] > 0 and
+		0 <= case["vascular_diffusivity_m2_s"] <
+			case["tissue_diffusivity_m2_s"] and
+		case["time_step_s"] > 0 and
 		0 < case["venous_breakthrough_fraction"] < 1 and
 		type(case["minimum_steps"]) is int and
 		type(case["maximum_steps"]) is int and
@@ -163,7 +167,8 @@ def main():
 				str(fields/"venous_fsi_state.txt"), "207",
 				*[str(labels[f"arterial_terminal_{i}"]) for i in range(4)],
 				*[str(labels[f"venous_terminal_{i}"]) for i in range(4)],
-				"208", str(case["diffusivity_m2_s"]),
+				"208", str(case["vascular_diffusivity_m2_s"]),
+				str(case["tissue_diffusivity_m2_s"]),
 				str(case["inlet_concentration_mol_m3"]), str(case["time_step_s"]),
 				str(case["minimum_steps"]), str(case["maximum_steps"]),
 				str(case["venous_breakthrough_fraction"]),
@@ -180,7 +185,10 @@ def main():
 				summary.get("ranks") == args.ranks and
 				summary.get("inlet_concentration_mol_m3") ==
 					case["inlet_concentration_mol_m3"] and
-				summary.get("diffusivity_m2_s") == case["diffusivity_m2_s"],
+				summary.get("vascular_diffusivity_m2_s") ==
+					case["vascular_diffusivity_m2_s"] and
+				summary.get("tissue_diffusivity_m2_s") ==
+					case["tissue_diffusivity_m2_s"],
 				"oxygen native summary differs from input")
 			rows = check_ledger(stage/"transport"/"ledger.csv", summary, case)
 			(stage/"provenance.json").write_text(json.dumps({

@@ -19,6 +19,8 @@ class ArtificialOxygenCaseTest(unittest.TestCase):
 
 	def test_valid_artificial_contract(self):
 		self.assertTrue(validate(self.case, CASE).is_file())
+		self.assertLess(self.case["vascular_diffusivity_m2_s"],
+			self.case["tissue_diffusivity_m2_s"])
 
 	def test_rejects_claim_of_physiology(self):
 		case = copy.deepcopy(self.case)
@@ -40,6 +42,12 @@ class ArtificialOxygenCaseTest(unittest.TestCase):
 				case[key] = value
 				with self.assertRaisesRegex(ValueError, "contract"):
 					validate(case, CASE)
+
+	def test_rejects_unsplit_diffusivity(self):
+		case = copy.deepcopy(self.case)
+		case["vascular_diffusivity_m2_s"] = case["tissue_diffusivity_m2_s"]
+		with self.assertRaisesRegex(ValueError, "contract"):
+			validate(case, CASE)
 
 
 if __name__ == "__main__":

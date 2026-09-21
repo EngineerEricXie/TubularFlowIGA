@@ -206,10 +206,11 @@ int main(int argc,char** argv)
 	MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 	MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
 	try{
-		if(argc!=24)throw std::invalid_argument(
+		if(argc!=25)throw std::invalid_argument(
 			"usage: native_tet_cube_oxygen artery.msh tissue.msh vein.msh "
 			"artery_state.txt tissue_rt0.txt vein_state.txt artery_inlet "
-			"artery_tip0..3 vein_tip0..3 vein_outlet diffusivity_m2_s "
+			"artery_tip0..3 vein_tip0..3 vein_outlet vascular_diffusivity_m2_s "
+			"tissue_diffusivity_m2_s "
 			"inlet_concentration_mol_m3 dt_s min_steps max_steps "
 			"breakthrough_fraction output_dir");
 		const auto artery=ReadMesh(argv[1]),tissue=ReadMesh(argv[2]),vein=ReadMesh(argv[3]);
@@ -229,17 +230,19 @@ int main(int argc,char** argv)
 		for(int label:vein_tips)distinct.insert(label);
 		if(distinct.size()!=10)
 			throw std::invalid_argument("oxygen port labels are not distinct");
-		const double diffusion=Number(argv[17],"diffusivity");
-		const double inlet_concentration=Number(argv[18],"inlet concentration");
-		const double dt=Number(argv[19],"time step");
-		const int min_steps=Integer(argv[20],"minimum steps");
-		const int max_steps=Integer(argv[21],"maximum steps");
-		const double breakthrough=Number(argv[22],"breakthrough fraction");
-		if(diffusion<0.||!(inlet_concentration>0.)||!(dt>0.)||min_steps<2
+		const double vascular_diffusion=Number(argv[17],"vascular diffusivity");
+		const double tissue_diffusion=Number(argv[18],"tissue diffusivity");
+		const double inlet_concentration=Number(argv[19],"inlet concentration");
+		const double dt=Number(argv[20],"time step");
+		const int min_steps=Integer(argv[21],"minimum steps");
+		const int max_steps=Integer(argv[22],"maximum steps");
+		const double breakthrough=Number(argv[23],"breakthrough fraction");
+		if(vascular_diffusion<0.||tissue_diffusion<0.
+			||!(inlet_concentration>0.)||!(dt>0.)||min_steps<2
 			||max_steps<min_steps||max_steps>1000
 			||!(breakthrough>0.&&breakthrough<1.))
 			throw std::invalid_argument("oxygen functional material/time contract is invalid");
-		const std::filesystem::path output(argv[23]);
+		const std::filesystem::path output(argv[24]);
 		const std::vector<Point> artery_grid(artery.points.size(),Point{{0,0,0}});
 		const std::vector<Point> tissue_grid(tissue.points.size(),Point{{0,0,0}});
 		const std::vector<Point> vein_grid(vein.points.size(),Point{{0,0,0}});
@@ -312,7 +315,7 @@ int main(int argc,char** argv)
 		for(int step=1;step<=max_steps;++step){
 			const auto arterial=iga::SolveNativeTetMovingSpeciesPetscStep(
 				a.current,a.current,a.velocity_m_s,artery_grid,artery_concentration,
-				{{artery_inlet,inlet_concentration}},diffusion,0.,dt,true);
+				{{artery_inlet,inlet_concentration}},vascular_diffusion,0.,dt,true);
 			GateStep(arterial,"arterial",inlet_water*inlet_concentration);
 			std::array<double,4> artery_mol{};
 			for(int i=0;i<4;++i){
@@ -333,7 +336,7 @@ int main(int argc,char** argv)
 			}
 			const auto tissue_step=iga::SolveNativeTetMovingSpeciesPetscStep(
 				tissue,tissue,{},tissue_grid,tissue_concentration,{},
-				diffusion,0.,dt,true,0.,{},face_flow,cell_source);
+				tissue_diffusion,0.,dt,true,0.,{},face_flow,cell_source);
 			GateStep(tissue_step,"tissue",inlet_water*inlet_concentration);
 			double artery_transfer=0.,tissue_transfer=0.;
 			std::map<int,double> vein_donor;
@@ -349,7 +352,7 @@ int main(int argc,char** argv)
 				inlet_water*inlet_concentration,"oxygen artery/tissue species");
 			const auto venous=iga::SolveNativeTetMovingSpeciesPetscStep(
 				v.current,v.current,v.velocity_m_s,vein_grid,vein_concentration,
-				vein_donor,diffusion,0.,dt,true);
+				vein_donor,vascular_diffusion,0.,dt,true);
 			GateStep(venous,"venous",inlet_water*inlet_concentration);
 			double vein_inward=0.;
 			for(int label:vein_tips)vein_inward-=LabelFlux(venous.step,label);
@@ -408,7 +411,8 @@ int main(int argc,char** argv)
 				<<"  \"accepted_steps\": "<<accepted<<",\n"
 				<<"  \"final_time_s\": "<<accepted*dt<<",\n"
 				<<"  \"inlet_concentration_mol_m3\": "<<inlet_concentration<<",\n"
-				<<"  \"diffusivity_m2_s\": "<<diffusion<<",\n"
+				<<"  \"vascular_diffusivity_m2_s\": "<<vascular_diffusion<<",\n"
+				<<"  \"tissue_diffusivity_m2_s\": "<<tissue_diffusion<<",\n"
 				<<"  \"venous_outlet_concentration_mol_m3\": "
 				<<final_outlet_concentration<<",\n"
 				<<"  \"breakthrough_fraction\": "<<breakthrough<<"\n}\n";
