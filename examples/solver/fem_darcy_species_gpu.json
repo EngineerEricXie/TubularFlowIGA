@@ -1,0 +1,22 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.1, "steps": 2},
+  "waveforms": [],
+  "domains": [
+    {
+      "id": "tissue", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "physics": ["darcy"], "backend": "native_tet_darcy_cuda",
+      "case_file": "fem_darcy_case.json", "ports": {"rt0": {}}
+    },
+    {
+      "id": "tracer", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "physics": ["species"], "backend": "native_tet_species_cuda",
+      "case_file": "fem_darcy_species_gpu_case.json",
+      "ports": {"advection": {}}
+    }
+  ],
+  "connections": [{"from": "tissue:rt0", "to": "tracer:advection",
+    "exchange": ["flow_rate"], "scheme": "sequential"}],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/fem_darcy_species_gpu", "every_steps": 1}
+}

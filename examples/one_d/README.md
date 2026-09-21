@@ -12,9 +12,8 @@ transport regression.
 The native CLI checks execution controls, captured configuration bytes and visible
 PETSc options across ranks before solving. It also coordinates startup input and
 root output errors. Identical input copies may use different local directories.
-Checkpoint and later runtime failure coverage remain in progress; see the
-[MPI failure regression report](../../docs/progress/HPC_01C_ONE_D_CLI_PROGRESS.md)
-for tested cases, commands and limits.
+Checkpoint and later runtime failures are covered by the native MPI regression
+targets and the [MPI failure-boundary guide](../../docs/architecture/MPI_FAILURE_BOUNDARIES.md).
 
 ```bash
 make one-d-petsc

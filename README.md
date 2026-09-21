@@ -4,47 +4,70 @@
        width="100%">
 </p>
 
-# TubularFlowIGA
+# CoupledFlow
 
-TubularFlowIGA is a native C++ toolkit for multiscale vascular flow and
-transport in tubular and branching networks. It combines direct centerline-to-1D
-models with three-dimensional isogeometric analysis (IGA) on MPI/PETSc CPUs
-or one CUDA GPU. The body-fitted 3D pipeline generates hexahedral control
-meshes, constructs splines and Bezier extraction, and packs a partition-aware
-database. CPU extensions provide 0D/1D/3D domain coupling, immersed flow on a
-Cartesian spline background, prescribed moving anatomy, and foundational
-two-way fluid--structure interaction (FSI).
+**CoupledFlow** was originally developed as **TubularFlowIGA**. The repository
+URL remains unchanged so existing links in CVs and application materials keep
+their original context.
 
-This is research software specialized for tube-like networks. It is not a
-general-purpose CFD package.
+The [shared solver entry](docs/SOLVER_ENTRY.md) runs existing 0D, 1D, IGA,
+and native tetra FEM cases with `python3 scripts/solver.py CONFIG.json`.
+Editable outer-config examples are in [examples/solver](examples/solver).
+
+CoupledFlow is a native C++ framework for coupled flow and multiphysics
+simulation across 0D, 1D, and 3D domains. It combines lumped circuits and
+line-network models with tetrahedral finite elements and three-dimensional
+isogeometric analysis (IGA) on MPI/PETSc CPUs or one CUDA GPU. The body-fitted
+3D pipeline generates hexahedral control meshes, constructs splines and Bezier
+extraction, and packs a partition-aware database. Additional solvers provide
+Darcy flow, species transport, immersed and moving domains, solid mechanics,
+and fluid--structure interaction (FSI).
+
+This is research software for mixed-dimensional coupled simulation. It is not
+a general-purpose CFD package.
+
+The [artificial cube dual-tree FSI case](docs/CUBE_DUAL_TREE_FSI.md) now builds
+two centerline/radius trees, five conforming tetra regions, conservative
+artery-to-Darcy-to-vein flow, and a small-strain vessel-wall feedback example.
+An optional [refined artificial input](cases/idealized_cube_dual_tree_refined.json)
+uses a 0.10 mm test wall and denser pipe circumference; independent 2/8-rank
+functional reruns pass, but mesh convergence and physiology are not claimed.
+The [multi-step passive-oxygen functional case](docs/CUBE_DUAL_TREE_OXYGEN.md)
+then uses the frozen post-FSI flow to transport a project-owned FEM tracer
+through artery, fixed Darcy tissue, and vein, with full tissue-mesh ParaView
+time series and a conservative venous-outlet breakthrough check. Its artificial
+porosity-one, zero-consumption concentration is not physiological oxygenation.
+Its hydraulic coupling currently transfers terminal flux one way; vessel–tissue
+pressure continuity, transient FSI accounting, and physiological validation
+are not claimed.
+The [geometry audit](docs/LIVER_GEOMETRY_CANDIDATES.md) and
+[versioned functional case](cases/liver_roi_functional.json) record provenance,
+labels, hashes, limits, and the raw-SEG-to-result local rerun command. DOLFIN is not used as the FEM core;
+PETSc supplies algebra/MPI and fTetWild may generate tetrahedra.
 
 ## What can it simulate?
 
 | Application | Available now | Important boundary |
 |---|---|---|
-| Vascular flow | Native 0D R/RC/RLC circuits; native 1D rigid Poiseuille/inertance and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall steady/transient Navier--Stokes; native network and CPU 3D `vca_closed_loop` vascular coupling | 3D VCA requires backward-Euler CPU flow; species-coupled VCA runs support one in-memory transport system. CUDA VCA and 3D VCA replay/open-loop are unavailable |
-| Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer; optional disjoint MPI groups for independent domains | Executable graphs require supported acyclic topology. Grouped execution supports 0D, 1D, and body-fitted 3D; grouped checkpoint/restart and immersed domains use shared mode. 0D species and a full closed-loop 0D heart are deferred |
-| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry | Moving geometry uses a fixed Eulerian background with distributed active-set/history transfer. ALE/remeshing and a native moving-domain graph CLI remain deferred |
-| Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation | Validated for a small-displacement compliant-channel benchmark at 1/2/4 ranks, including a two-node 4-rank strong writer and 2-rank paired restart reader. The membrane matrix solve remains centralized; nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
+| Vascular flow | Native 0D R/RC/RLC circuits; native 1D rigid Poiseuille/inertance and compliant A/Q networks; CPU/CUDA body-fitted 3D rigid-wall Navier--Stokes; native C++/PETSc tetrahedral P2/P1 fixed-wall FEM vertical slice with manufactured temporal and spatial convergence; native network and CPU 3D `vca_closed_loop` vascular coupling | The tetrahedral FEM route has local idealized tube/Y evidence but not a general production case schema, scalable large-mesh Schur solver, completed fine Poiseuille gate, or physiological validation. 3D VCA requires backward-Euler CPU flow; CUDA VCA and 3D VCA replay/open-loop are unavailable |
+| Multiscale circulation | CPU 0D/1D/3D pressure/flow graphs with explicit or strong coupling; conservative 1D/body-fitted-3D species transfer; native tetra ALE FEM functional graph tests with 1D and generic 0D source/terminal RCR species; a configured surface/volume→native tetra hydraulic workflow with explicit or fixed-point coupling, separate outlet RCRs, and file restart; optional disjoint MPI groups for independent domains | Executable graphs require supported acyclic topology. The native hydraulic workflow is one 0D source→tetra→one or more RCRs, not the general IGA graph runner or physiological validation. A local two-outlet Y example passes on Gmsh/fTetWild with bounded loads; high-impedance Newton robustness remains open. Native source→FEM→RCR species has only a fixed-case five-shard file-restart coordinator, not an arbitrary production graph restart; a full closed-loop 0D heart is deferred |
+| Immersed and moving flow | CPU closed-surface immersed IGA with cut-cell integration, Nitsche wall conditions, ghost stabilization, distributed PETSc fields, and prescribed moving geometry; native tetrahedral ALE operator, mesh-motion, rollback, and prescribed-motion runtime vertical slice | Immersed motion uses a fixed Eulerian background. The idealized LV has shared-geometry/motion parity and 16-step functional cycles for native ALE (96, 384, and 672 tetrahedra) and single-process immersed with the same optional backflow port model. Full-cycle common-point velocity L2 peaks at 71.37%/58.15%/54.22% across the three ALE meshes, with every point in the shared domain; the errors remain large and the mesh series is not asymptotically converged. Native ALE pressure–volume and kinetic-energy QoI are recorded; an additional second geometry cycle leaves a 27.40%/37.22% velocity-field return error on the 96/384 meshes, so the fluid state is not yet periodic. Spatial/time convergence, full energy balance, wall-enforcement attribution, distributed immersed backflow, remeshing, physiological validation, and a production moving-domain graph CLI remain deferred |
+| Thin structures | Native single-patch NURBS Kirchhoff--Love shell element/static vertical slice with membrane, bending, tangent, convergence, traction, constraint, and patch-interface rejection tests; legacy pre-tensioned P1 membrane | The current shell runtime is a small dense reference implementation with isotropic St. Venant--Kirchhoff material; multipatch coupling, anisotropic artery/myocardium material, distributed algebra, contact, and fluid coupling remain deferred |
+| Solid mechanics | Native total-Lagrangian tetrahedral compressible neo-Hookean and stabilized mixed P1/P1 displacement-pressure formulations; explicit inverse-elastostatics prestress initialization | Element tangents, dense global Newton, near-incompressible bending/Poisson-sweep locking gates, and loaded-to-unloaded reference reconstruction are verified locally. These are bounded dense reference runtimes; distributed mixed algebra, fibres, active contraction, parameter identification, contact, and patient-specific validation remain deferred |
+| Foundational FSI | Distributed moving immersed flow coupled to a bounded single-owner pre-tensioned membrane with owned surface transfer, global strong Dirichlet--Neumann convergence, and dynamic Aitken relaxation; native matching tetra ALE–solid adapters | Immersed route is validated for a small-displacement compliant-channel benchmark at 1/2/4 ranks, including paired restart. The autonomous native ALE-flow/solid path passes transfer conservation, zero-state invariant, nonzero traction-driven response, an idealized one-step compliant-channel functional smoke, independent acceptance gates, rollback, paired commit, single-partition paired restart, and coordinator/Aitken tests. It still lacks a native compliant-channel/elastic-tube physics benchmark, production PETSc fluid adapter, and distributed interface ownership. Nonmatching transfer, monolithic FSI, and valve/contact models are deferred |
 | Neuron transport | Configurable two-field `N0`/`Nplus` axonal transport on straight and branching neurites | This is material transport, not membrane voltage, action potentials, synapses, or network electrophysiology |
-| Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields | The physiology layer is a configurable reduced model; 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
+| Generic biological transport | Config-selected 1D and 3D multispecies transport with reaction, source, wall exchange, metabolism, oxygen capacity, and blood-gas derived fields; a separate native moving-tetra P1 species weak form with `u−w`, previous/current inventories, and a prescribed-velocity external-mesh CLI; native well-mixed 0D species balance with source/RCR staged graph adapters | The physiology layer is a configurable reduced model. Native moving-tetra scalar transport has dense/PETSc-MPI tests, a configurable prescribed-velocity CLI with P1 VTU output, and controlled source→FEM→RCR moving-graph and five-shard restart tests. The CLI does not solve fluid flow or couple graph ports; the fixed-case graph restart is not a generic production coordinator. High-Péclet positivity for arbitrary data and physiological validation remain open. 3D physiology-driven vasodilation is disabled in the rigid-wall transport path |
 
 Immersed transient, moving-flow and FSI runtimes distribute PETSc rows and
 cell work across MPI ranks, and also have optional OpenMP volume assembly
 within each rank. Body-fitted flow has an optional MPI/OpenMP volume assembly
-CLI. Thread configuration, actual worker evidence
-and remaining performance validation are documented in the
-[CPU guide](solvers/cpu/README.md#optional-openmp-volume-assembly),
-[immersed progress](docs/progress/HPC_02_VOLUME_PROGRESS.md) and
-[body-fitted progress](docs/progress/HPC_02_HYBRID_PROGRESS.md).
+CLI. Thread configuration and worker validation are documented in the
+[CPU guide](solvers/cpu/README.md#optional-openmp-volume-assembly).
 
 Standalone body-fitted CPU and CUDA solvers share the configuration format
 and packed `.ntiga` database within their supported feature sets. CUDA
 configured transport supports one through eight scalar fields. Multidomain,
 immersed, moving-domain, and FSI execution use CPU runtimes.
-
-The [foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md)
-collects the completed Phases 0--9 and their numerical evidence and limitations.
 
 ## Example results
 
@@ -348,10 +371,10 @@ Add `PETSC_ARCH` when required by your installation. These are numerical
 validation workloads; use an appropriate compute allocation. The depth-2
 aneurysm target checks the local immersed Jacobian and conservation; the full
 chain has a separate closure target. See the
-[moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md),
-[FSI architecture](docs/architecture/FSI_ARCHITECTURE.md), and
-[phase reports](docs/progress/FINAL_ROADMAP_REPORT.md) for exact scope,
-prerequisites, and recorded results.
+	[moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md),
+	[FSI architecture](docs/architecture/FSI_ARCHITECTURE.md), and
+	[benchmark summary](docs/BENCHMARKS.md) for scope, prerequisites, and recorded
+	results.
 
 ## Build and test targets
 
@@ -425,7 +448,11 @@ physically.
 
 ## Repository layout
 
-- `examples/`: source-only neuron, vascular, and validation cases.
+- `examples/`: source-only applications and editable shared-solver configurations.
+- `cases/`: small versioned cross-domain case definitions; local geometry and
+  patient-derived data remain ignored.
+- `benchmarks/`: compact validation contracts and numerical evidence; raw runs
+  and solver output remain ignored.
 - `include/`: shared configuration, I/O, physiology, domain adapters, and coupling contracts.
 - `preprocessing/mesh/`: dependency-free C++ SWC smoothing and control meshes.
 - `meshgeneration/`: legacy MATLAB reference and template assets.
@@ -434,14 +461,47 @@ physically.
 - `solvers/one_d/`: native C++17 SWC-network flow, transport, physiology, and PETSc solvers.
 - `solvers/coupling/`: PETSc multidomain runners and coupling validation harnesses.
 - `solvers/cuda/`: FP64 single-GPU backend using the CPU database format.
-- `scripts/`: dependency checks, example preparation, validation, and rendering helpers.
-- `docs/`: installation, pipeline, configuration, architecture, and phase validation reports.
+- `scripts/`: the shared solver entry plus geometry, workflow, validation, and
+  rendering tools; Python regression tests are under `scripts/tests/`.
+- `docs/`: installation, pipeline, configuration, architecture, and validation reports.
 
 Large generated meshes, databases, caches, partitions, and results are
 intentionally not versioned. The source-only NMO_06840 regression is committed
 under `examples/`, but preparing it creates hundreds of MiB of work files.
 
 ## Documentation map
+
+- [T1 surface-to-FEM volume mesh](docs/T1_FEM_VOLUME_MESH.md): bounded Gmsh
+  baseline plus the fTetWild robust tetrahedralization adapter,
+  label/quality/provenance contract, and local regression.
+- [T6 native vessel–0D wall reservoir exchange](docs/T6_NATIVE_WALL_RESERVOIR_EXCHANGE.md):
+  conservative, fixed-volume tissue-storage computation coupled to native
+  tetra species wall labels; one or multiple regions are exposed through the
+  standalone CLI with paired restart. This is not a 3D perfusion model.
+- [T6 native tetra Darcy foundation](docs/T6_NATIVE_TET_DARCY.md):
+  autonomous 3D P1 pressure/flux FEM, standalone labelled-mesh CLI and
+  surface/volume fTetWild/Gmsh workflow with functional gates; not yet a
+  coupled or calibrated organ-perfusion model.
+- [T9 native tetra hydraulic workflow](docs/T9_NATIVE_TET_WORKFLOW.md):
+  explicit surface/volume and mesher selection, source→native FEM→RCR graph execution
+  with explicit or fixed-point coupling, provenance, safe output policy, and current
+  functional-only scope.
+- [T9 native tetra prescribed-velocity species route](docs/T9_NATIVE_TET_SPECIES_CLI.md):
+  versioned surface/volume workflow and standalone external-mesh P1 ALE transport with explicit diffusion, source, optional implicit first-order decay, labelled wall exchange and finite 0D wall storage,
+  inflow donors, conservative budgets, rank-owned concentration VTU, and
+  standalone per-step checkpoint/restart;
+  this separate route does not solve flow or graph coupling.
+- [Generic 0D species reservoir contract](docs/T7_GENERIC_ZERO_D_SPECIES.md):
+  autonomous well-mixed multi-species balance and reverse-flow unit tests;
+  source/terminal RCR staged graph coupling and a bounded native tetra species
+  chain with fixed-test five-shard restart; arbitrary-case production restart
+  remains open.
+- [Geometry data contract](docs/GEOMETRY_DATA_CONTRACT.md): shared
+  reference/current, unit, stable-ID, region-role, and boundary-label semantics.
+- [T2 fixed-wall validation contract](docs/T2_FIXED_FLOW_VALIDATION.md): frozen
+  Poiseuille physics, signs, analytic QoI, convergence series, and result schema.
+- [T3 native IGA shell](docs/T3_NATIVE_IGA_SHELL.md): frozen autonomous
+  Kirchhoff--Love contract and the native NURBS/kinematics/patch-system status.
 
 | Need | Document |
 |---|---|
@@ -455,8 +515,6 @@ under `examples/`, but preparing it creates hundreds of MiB of work files.
 | Prescribed moving immersed anatomy | [Moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md) |
 | Membrane coupling, traction transfer, and foundational FSI limits | [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
 | Immersed aneurysm inputs and focused validation | [Immersed aneurysm chain](examples/vascular_flow/immersed_aneurysm_chain/README.md) |
-| Completed multiscale milestones and phase-specific evidence | [Foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md) |
-| Workstation multicore and HPC development tasks, dependencies, and goal templates | [Workstation and HPC checklist](docs/WORKSTATION_HPC_TODO.md) |
 | Repeat CPU MPI, serial fixture, and single-GPU timing, memory, and field comparisons | [HPC benchmark guide](docs/HPC_BENCHMARKS.md) |
 | Reproducible builds, test tiers, scheduler staging/requeue, and cross-node scaling | [HPC deployment](docs/HPC_DEPLOYMENT.md) |
 | Run and validate native CPU 3D VCA | [VCA bifurcation case](examples/vascular_flow/vca_bifurcation/README.md) |
@@ -477,13 +535,6 @@ mass-balance results, restart checks, and a rigid straight-tube Womersley gate
 are recorded in the [vascular example validation](examples/vascular_flow/VALIDATION.md),
 [CPU validation](solvers/cpu/VALIDATION.md), and
 [CUDA validation](solvers/cuda/VALIDATION.md).
-
-The [foundational roadmap final report](docs/progress/FINAL_ROADMAP_REPORT.md)
-records completion of Phases 0--9, including coupled conservation and
-rollback/retry checks, immersed-flow verification, prescribed motion, bounded
-two-way FSI, and 0D/1D/3D integration. Its linked reports identify which
-targets passed and any partial or environment-blocked checks; phase closure
-does not imply that every test target passed in one full-suite run.
 
 Current scope limits are important when interpreting results:
 
@@ -515,11 +566,10 @@ Current scope limits are important when interpreting results:
 
 For shared clusters, run simulations on allocated compute resources rather
 than login nodes and follow the local scheduler policy.
-Bridges-2 cross-node Graph checkpoint/requeue/restart, strong FSI paired restart,
-and the formal 1/64/128/256-rank scaling matrix passed at the recorded clean source
-revision. All 38 HPC TODO items are complete; see the
-[acceptance report](docs/progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
-for job IDs, numerical checks, timings, and scope limits.
+The Bridges-2 workflow supports cross-node graph checkpoint/requeue/restart,
+strong FSI paired restart, and 1/64/128/256-rank scaling runs. Reproduce these
+checks with the commands in the [HPC benchmark guide](docs/HPC_BENCHMARKS.md)
+and [deployment guide](docs/HPC_DEPLOYMENT.md).
 
 ## Performance evidence
 
@@ -535,4 +585,4 @@ and interpretation limits.
 
 ## License
 
-TubularFlowIGA is distributed under the [BSD 3-Clause License](LICENSE).
+CoupledFlow is distributed under the [BSD 3-Clause License](LICENSE).

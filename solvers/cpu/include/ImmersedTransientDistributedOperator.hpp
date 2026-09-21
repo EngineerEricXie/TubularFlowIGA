@@ -25,6 +25,8 @@ public:
 		std::string signature;
 		CollectiveLocalStage(communicator_,"transient operator setup",[&] {
 			options_ = options; options_.parameters.dt = 0;
+			if (!options.pressure_port_backflow_beta.empty())
+				throw std::invalid_argument("distributed immersed pressure-port backflow is not implemented");
 			if (!std::isfinite(options.wall_inertial_gamma0) || options.wall_inertial_gamma0 < 0
 				|| !(options.flow_controller_absolute_tolerance_m3_s > 0))
 				throw std::invalid_argument("invalid transient wall impedance or flow tolerance");

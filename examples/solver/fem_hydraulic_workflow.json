@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "backend": "native_tet_p2p1_ale_hydraulic",
+  "input_route": "volume",
+  "input_file": "../../solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
+  "case_file": "../../solvers/cpu/tests/data/native_tet_hydraulic_star.json",
+  "output_directory": "results/fem_hydraulic_workflow",
+  "mpi_ranks": 1
+}

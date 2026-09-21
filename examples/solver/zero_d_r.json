@@ -1,0 +1,12 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "steady"},
+  "waveforms": [],
+  "domains": [{
+    "id": "circuit", "dimension": "0d", "solver": "network_0d",
+    "device": "CPU", "case_dir": "../zero_d/steady_resistive_straight",
+    "ports": {}
+  }],
+  "connections": [],
+  "output": {"directory": "results/zero_d_r"}
+}

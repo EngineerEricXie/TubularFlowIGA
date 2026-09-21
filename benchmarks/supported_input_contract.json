@@ -1,0 +1,220 @@
+{
+  "schema_version": 1,
+  "effective_date": "2026-09-18",
+  "scope": "Locally implemented geometry routes and native solver interfaces; this is a capability contract, not a claim of clinical validation.",
+  "global_conventions": {
+    "solver_length_unit": "m",
+    "time_unit": "s",
+    "pressure_unit": "Pa",
+    "velocity_unit": "m/s",
+    "flow_rate_unit": "m3/s",
+    "density_unit": "kg/m3",
+    "dynamic_viscosity_unit": "Pa*s",
+    "labels_are_nonnegative_integers": true,
+    "label_semantics_must_be_explicit": true,
+    "organ_name_inference_for_route_or_labels": false,
+    "negative_one_is_internal_or_unlabelled_only": true
+  },
+  "routes": [
+    {
+      "id": "centerline_to_iga_volume",
+      "status": "implemented",
+      "minimum_case_inputs": [
+        "simulation_config.json schema v4 with geometry and mesh blocks",
+        "one geometry.file in the same case directory"
+      ],
+      "accepted_geometry": [
+        {
+          "extension": ".swc",
+          "kind": "swc_network",
+          "contract": "Exactly seven columns: id type x y z radius parent_id; one root, connected acyclic tree, finite coordinates, positive radius."
+        },
+        {
+          "extension": ".obj",
+          "kind": "obj_network",
+          "contract": "Radius-annotated line OBJ containing only v and l records; each vertex is x y z radius auxiliary0 auxiliary1; no faces."
+        }
+      ],
+      "source_units": "Coordinates and radii are multiplied by geometry.length_scale_to_m; mesh.centerline.target_spacing remains in source-coordinate units.",
+      "labels": "Generated control-mesh point label 0 is wall, positive terminal labels start at 1, and -1 is interior. Boundary physics is still declared explicitly in simulation_config.json.",
+      "generated_runtime_inputs": [
+        "controlmesh.vtk",
+        "bzmeshinfo.txt",
+        "spline_cache.igacache",
+        "initial_velocityfield.txt",
+        "partition file",
+        "packed .ntiga database"
+      ],
+      "limitations": [
+        "The 3D control-mesh route accepts rooted trees with at most two children per node.",
+        "It is not a general surface-to-volume mesher.",
+        "Template assets are installed program resources, not user case inputs."
+      ],
+      "implementation_evidence": [
+        "preprocessing/mesh/src/main.cpp",
+        "preprocessing/mesh/src/SwcGraph.cpp",
+        "preprocessing/mesh/src/MeshGenerator.cpp",
+        "docs/SKELETON_FORMATS.md",
+        "docs/PIPELINE.md"
+      ]
+    },
+    {
+      "id": "surface_to_fem_volume",
+      "status": "implemented",
+      "minimum_case_inputs": [
+        "one closed triangular .vtp or .stl surface",
+        "an explicit positive length scale to metres when source coordinates are not metres",
+        "a target tetrahedral edge length"
+      ],
+      "accepted_geometry": [
+        {
+          "extension": ".vtp",
+          "kind": "closed_triangle_surface",
+          "contract": "Bounded uncompressed XML PolyData subset with one piece, triangular Polys, and one nonnegative integer boundary_id (or explicitly named boundary array) per triangle; ASCII, inline base64, and appended base64 arrays are accepted."
+        },
+        {
+          "extension": ".stl",
+          "kind": "closed_triangle_surface",
+          "contract": "ASCII or binary STL; because STL has no labels, every triangle receives the explicitly configured default boundary ID."
+        }
+      ],
+      "source_units": "Coordinates are multiplied by --length-scale-to-m and thereafter stored in metres.",
+      "labels": "Every source boundary ID becomes Gmsh physical surface boundary_label_<integer>; the only supported volume physical name is fluid. Wall/inlet/outlet meaning is assigned by solver case configuration, never by numeric order.",
+      "meshers": [
+        "Gmsh reference adapter with exact input-facet preservation",
+        "separately installed fTetWild adapter with envelope-constrained remeshing and source-label projection"
+      ],
+      "external_ftetwild_cli_formats_not_project_inputs": [
+        ".off",
+        ".obj",
+        ".stl",
+        ".ply"
+      ],
+      "generated_runtime_inputs": [
+        "ASCII Gmsh 4.1 .msh containing first-order type-2 boundary triangles and type-4 tetrahedra",
+        "preflight/provenance JSON manifest"
+      ],
+      "limitations": [
+        "One fluid region only; no internal material interface.",
+        "No implicit capping, repair, smoothing, or unit inference.",
+        "OFF, OBJ, and PLY are not accepted by the shared project surface preflight even though the external fTetWild executable supports them."
+      ],
+      "implementation_evidence": [
+        "solvers/cpu/src/surface_fem_preflight.cpp",
+        "solvers/cpu/include/SurfaceReaders.hpp",
+        "scripts/surface_to_fem_volume.py",
+        "scripts/ftetwild_to_fem_volume.py",
+        "docs/T1_FEM_VOLUME_MESH.md"
+      ]
+    },
+    {
+      "id": "surface_to_immersed_background",
+      "status": "implemented",
+      "minimum_case_inputs": [
+        "simulation_config.json",
+        "immersed_geometry.json",
+        "one closed triangular VTP reference surface named by immersed_geometry.json.surface",
+        "matching graph port metadata when open ports are used"
+      ],
+      "accepted_geometry": [
+        {
+          "extension": ".vtp",
+          "kind": "closed_triangle_surface",
+          "contract": "Same bounded VTP subset and per-cell nonnegative integer boundary array as SurfaceReaders; production ImmersedFlowCase always uses the VTP reader."
+        }
+      ],
+      "source_units": "Production immersed surfaces and grid bounds are already in metres; there is no runtime scale or unit inference. Prescribed material frames also require metre coordinates and prohibit welding.",
+      "labels": "wall_labels and positive graph/runtime port boundary labels must be unique, disjoint, and exactly partition all VTP boundary IDs; port IDs and control modes must agree between graph metadata and immersed_geometry.json.",
+      "optional_inputs": [
+        "prescribed_motion frames, each a topology-compatible material VTP with time_s"
+      ],
+      "limitations": [
+        "STL is supported by the reusable surface reader but not by the production ImmersedFlowCase entry point.",
+        "Paths must remain inside the case directory.",
+        "Topology-changing prescribed motion is not accepted."
+      ],
+      "implementation_evidence": [
+        "include/ImmersedFlowCase.hpp",
+        "solvers/cpu/include/SurfaceReaders.hpp",
+        "solvers/cpu/include/PrescribedSurfaceMotion.hpp",
+        "examples/vascular_flow/immersed_aneurysm_chain/immersed/immersed_geometry.json"
+      ]
+    },
+    {
+      "id": "network_1d",
+      "status": "implemented",
+      "minimum_case_inputs": [
+        "simulation_config.json schema v3 with dimension 1d, geometry, fields, time, equation_systems, and boundaries",
+        "one geometry.file in the same case directory",
+        "every temporal table or replay asset referenced by the active configuration"
+      ],
+      "accepted_geometry": [
+        {
+          "extension": ".swc",
+          "kind": "swc_network",
+          "contract": "The strict seven-column rooted SWC contract."
+        },
+        {
+          "extension": ".obj",
+          "kind": "obj_network",
+          "contract": "The strict radius-annotated line OBJ contract; root_node_id may select the root."
+        }
+      ],
+      "source_units": "Coordinates and radius are multiplied by geometry.length_scale_to_m; all solver-facing flow quantities use the global SI units.",
+      "labels": "Boundaries use explicit roles inlet, outlet, or wall plus optional geometry node_ids; they do not use 3D mesh-face labels. Omitted outlet node_ids means all leaf nodes.",
+      "limitations": [
+        "Cyclic OBJ graphs are restricted to the documented implicit flow-only subset.",
+        "Species concentration units are user-selected and must be internally consistent."
+      ],
+      "implementation_evidence": [
+        "docs/ONE_D.md",
+        "docs/SKELETON_FORMATS.md",
+        "solvers/one_d/src/iga_1d.cpp"
+      ]
+    }
+  ],
+  "runtime_interfaces": [
+    {
+      "id": "native_tetrahedral_fem",
+      "minimum_inputs": [
+        "one ASCII Gmsh 4.1 .msh in metres",
+        "one fluid volume physical group",
+        "a complete labelled triangular exterior boundary"
+      ],
+      "format": "Gmsh 4.1 ASCII, 8-byte real declaration; type-2 triangles and type-4 tetrahedra are consumed.",
+      "labels": "Surface physical names are boundary_label_<integer>; the volume physical name is exactly fluid. Every exterior tetrahedron face must occur exactly once in the labelled triangle set.",
+      "discretization": "Repository-owned Taylor-Hood P2 velocity/P1 pressure; PETSc supplies distributed algebra and nonlinear/linear solver services only.",
+      "implementation_evidence": [
+        "solvers/cpu/include/NativeTetFem.hpp",
+        "solvers/cpu/src/native_tet_flow.cpp",
+        "solvers/cpu/include/NativeTetAlePetscRuntime.hpp"
+      ]
+    },
+    {
+      "id": "packed_body_fitted_iga",
+      "minimum_inputs": [
+        "a rank-compatible packed .ntiga database",
+        "simulation_config.json",
+        "controlmesh.vtk for point labels",
+        "every actively referenced profile or temporal asset"
+      ],
+      "format": "Versioned repository .ntiga binary interface produced by iga_pack; legacy text extraction files are preprocessing fallback inputs, not solver runtime replacements.",
+      "labels": "controlmesh.vtk point labels and packed boundary-face labels must agree with explicit simulation_config.json boundary rules.",
+      "discretization": "Repository-owned Bezier-extracted IGA assembly.",
+      "implementation_evidence": [
+        "solvers/cpu/include/IgaDatabase.hpp",
+        "solvers/cpu/src/iga_pack.cpp",
+        "solvers/cpu/src/iga_case_check.cpp",
+        "docs/PIPELINE.md"
+      ]
+    }
+  ],
+  "explicit_rejections": [
+    "Unknown file extensions or schema keys.",
+    "Missing or inferred length units.",
+    "Missing VTP triangle labels unless an explicit default is part of the selected reader path.",
+    "Compressed or multi-piece VTP, non-triangular polygons, nonfinite coordinates, open/nonmanifold/self-intersecting surfaces, and ambiguous fTetWild label projection.",
+    "Boundary semantics inferred from organ name, label order, file order, partition owner, or geometric direction.",
+    "Binary or higher-order Gmsh input to the native tetrahedral reader."
+  ]
+}

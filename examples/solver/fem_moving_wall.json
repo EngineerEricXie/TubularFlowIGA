@@ -1,0 +1,17 @@
+{
+  "schema_version": "solver-v1",
+  "domains": [
+    {
+      "id": "dual_tree_wall",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "backend": "idealized_cube_dual_tree",
+      "physics": ["flow", "darcy", "solid"],
+      "case_file": "../../cases/idealized_cube_dual_tree.json"
+    }
+  ],
+  "connections": [],
+  "resources": {"mpi_ranks": 2},
+  "output": {"directory": "results/fem_moving_wall"}
+}

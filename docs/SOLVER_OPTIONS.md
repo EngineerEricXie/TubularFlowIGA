@@ -139,7 +139,7 @@ PETSc 自行解讀數值的語義；CLI 不另外保證所有負 tolerance 都�
 `solver_configuration prefix=... ksp=... pc=... factor_backend=... step=... iterations=... reason=...`
 記錄每步實際設定與最後一次 KSP 結果。一般 transport CLI 在後續步使用非零 initial
 guess；保留其既有 GMRES 策略，PREONLY 不接受這個 warm start。VCA transport 的既有
-呼叫方式不變。小案例驗收與限制見 [standalone 進度](progress/HPC_04A_STANDALONE_OPTIONS_PROGRESS.md)。
+呼叫方式不變。對應的小案例 regression 覆蓋這些設定與限制。
 
 ## 1D implicit 與 SNES
 
@@ -170,8 +170,7 @@ context 建構包含 collective agreement，不得置於僅允許本地工作的
 graph 各 runtime 持有一份 immutable snapshot。省略 context 時保留無前綴介面，
 在當次 advance 建立暫時 snapshot。使用者提供的自訂 callback 簽名不變。
 
-驗收見 [1D 進度](progress/HPC_04A_ONE_D_OPTIONS_PROGRESS.md)。immersed／moving／FSI 進度見 [immersed 報告](progress/HPC_04A_IMMERSED_OPTIONS_PROGRESS.md)。
-貼體基礎驗收見 [原報告](progress/HPC_04A_BODY_FITTED_OPTIONS_PROGRESS.md)。
+1D、immersed／moving／FSI 與貼體路線都有對應的 options regression。
 既有 `.ntiga`、場輸出與 checkpoint payload 格式不變；新的 source identity 會讓舊建置的
 checkpoint 明確不相容，續跑須保留相同建置與數值選項。
 
@@ -194,8 +193,7 @@ mpiexec -np 3 solvers/coupling/iga_multidomain_flow \
 ```
 
 此範例需要含 `junction` 與 nonlinear implicit `source` 的 graph。
-Viewer 失敗會回傳錯誤，須檢查 process exit status。驗證與本機 factor capability
-矩陣見 [診斷報告](progress/HPC_04A_BACKEND_DIAGNOSTICS_PROGRESS.md)；該矩陣只代表
+Viewer 失敗會回傳錯誤，須檢查 process exit status。本機 factor capability 矩陣只代表
 目前 PETSc build 對測試 AIJ 矩陣註冊的介面，不代表各 PDE 的效能或適用性。
 
 
@@ -211,11 +209,10 @@ mpiexec -np 2 solvers/cpu/iga_transport DATABASE.ntiga CASE_DIR 2 result.txt
 
 既有 GMRES／block-Jacobi 預設不變，後續步仍使用非零初始猜測。新的每步
 `solver_configuration` 記錄有效 prefix、KSP／PC、backend、iterations／reason。
-範例的較嚴格 tolerance 是候選配置驗收所得，並非普遍效能建議；詳見
-[legacy 驗收](progress/HPC_04A_LEGACY_OPTIONS_PROGRESS.md)。
+範例的較嚴格 tolerance 是小案例測試設定，並非普遍效能建議。
 
 
 多層 GAMG 的 smoother 使用 `..._mg_levels_` 選項，實際 view 的 level prefix
 會含層編號；coarse 使用 `..._mg_coarse_`。更改 coarse KSP type 時須一併檢查
 norm 等繼承配置，例如測試中的 coarse GMRES 明確指定 `ksp_norm_type preconditioned`。
-三／四層的實測範圍與限制見 [multilevel 驗收](progress/HPC_04A_MULTILEVEL_OPTIONS_PROGRESS.md)。
+三／四層配置由 multilevel regression 覆蓋。

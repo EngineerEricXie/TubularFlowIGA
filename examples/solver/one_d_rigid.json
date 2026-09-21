@@ -1,0 +1,12 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.01, "steps": 10},
+  "waveforms": [],
+  "domains": [{
+    "id": "artery", "dimension": "1d", "solver": "network_1d",
+    "device": "CPU", "case_dir": "../one_d/rigid_straight",
+    "ports": {}
+  }],
+  "connections": [],
+  "output": {"directory": "results/one_d_rigid"}
+}

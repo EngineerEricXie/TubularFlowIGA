@@ -39,7 +39,8 @@ Registry 擁有的貼體 adapters 借用這些 runtime，析構不呼叫其求�
 
 CPU flow 的既有 accepted checkpoint／field 可能早於清理失敗寫出；
 它們表示已接受的步狀態，不是整個作業成功標記。原子 checkpoint bundle、
-最後完整 epoch 與 job restart 契約繼續由 HPC-05 定義。
+最後完整 epoch 與 job restart 行為遵循
+[coupled checkpoint contract](COUPLED_CHECKPOINT_CONTRACT.md)。
 
 ## 失敗範圍
 
@@ -52,5 +53,4 @@ CPU flow 的既有 accepted checkpoint／field 可能早於清理失敗寫出；
 程序死亡或已毀損 PETSc 內部物件；不宣稱能恢復這些故障或保證其無洩漏。
 
 其他 CLI 的成功路徑已有個別明確清理，例如 configured／legacy transport、
-assembly smoke、四種 1D implicit 方法。它們仍需在 HPC-01C F06 的整體
-入口覆蓋稽核中逐項簽核；此文件不是整項 HPC-01C 的完成宣告。
+assembly smoke、四種 1D implicit 方法。各入口仍須由對應 regression 驗證。

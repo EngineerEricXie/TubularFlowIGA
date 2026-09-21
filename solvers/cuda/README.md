@@ -43,7 +43,8 @@ three-component velocity arrays use integer indices. Configured transport
 supports 1–8 fields. Block IDs remain integer indices while block-value offsets
 use `size_t`; allocation byte overflow is checked without restricting those
 offsets to `INT_MAX`. These checks precede large solver allocations.
-See the [CUDA resource validation](../../docs/progress/HPC_01D_CUDA_PROGRESS.md).
+Resource validation commands are documented in the
+[HPC benchmark guide](../../docs/HPC_BENCHMARKS.md).
 
 ## GPU-specific optimizations
 

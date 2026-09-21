@@ -1,12 +1,11 @@
 # Coupling Architecture
 
-Status: foundational roadmap Phases 0--9 complete; PR9.4 is the accepted bounded multiscale closure. The verified 1D--3D--1D
-lifecycle and coupling algorithms now consume the PR 2.1 in-memory multidomain
-topology. PR 2.3 provides runtime-owned sequential graph execution, and PR 2.2
-provides the strict schema-v5 graph manifest and its production runner binding.
-Branch execution and multiple 3D islands remain subsequent Phase 2 work.
+The verified 1D--3D--1D lifecycle and coupling algorithms use an in-memory
+multidomain topology, runtime-owned sequential graph execution, and a strict
+schema-v5 graph manifest. Branch execution and multiple 3D islands are not
+supported by the current executor.
 
-## PR9.4 candidate: bounded real multiscale closure
+## Bounded real multiscale closure
 
 `phase9-multiscale-closure-test` drives the shared schema-v5 production runner,
 `iga_multidomain_flow`, through a five-domain, four-edge tree: compliant source
@@ -51,7 +50,7 @@ the `dt/4` solution is the reference. Serial/two-rank accepted pressures,
 flows, 0D states, 3D balances, and complete per-edge iteration diagnostics
 (including residuals, relaxation, and convergence flags) are compared
 numerically. Newton/KSP counts are observed in the production solver output,
-but are not harness-gated because the PR9.4 CSV contract does not expose those
+but are not harness-gated because the closure CSV contract does not expose those
 counts. Four ranks are deliberately not claimed: the two-element root would add
 empty partitions, not a meaningful scaling point.
 
@@ -60,9 +59,9 @@ This document fixes the runtime and interface contracts that precede direct
 executables continue to own configuration and output while reusable subsystem
 objects acquire explicit trial, rollback, and commit semantics.
 
-## PR9.1: dependency-free 0D flow contracts
+## Dependency-free 0D flow contracts
 
-PR9.1 adds a first-class `ZeroDFlow` graph kind (topology and embedding
+The graph provides a first-class `ZeroDFlow` kind (topology and embedding
 dimension zero) and a one-port, SI-only kernel in `ZeroDFlowDomain.hpp`.  It
 introduces no executor or transactional runtime integration.  A source
 reservoir accepts interface pressure and reports pressure/flow; its backward
@@ -80,7 +79,7 @@ the coefficient/state configuration; schema v6 rejects 0D domains because the
 species layer has no 0D transport contract yet.  Graph planning accepts 0D--1D
 and 0D--3D heterogeneous edges, but explicitly rejects 0D--0D edges.
 
-## PR9.2: transactional 0D flow runtime
+## Transactional 0D flow runtime
 
 `ZeroDFlowDomainRuntime` is the production owner for a single configured 0D
 source reservoir or terminal RCR model.  It binds immutable model and one-port
@@ -98,10 +97,9 @@ finalize is idempotent and advances time/index exactly once.  The runtime also
 returns trial step-accounting snapshots by value (initial/final stored volume,
 source amount, distal sink amount, outward graph-port amount, and residual) and deterministic model,
 state, and accounting identities.  It is compatible with the runtime registry
-for in-memory graph tests, but generic runner/executor materialization remains
-PR9.3.
+for in-memory graph tests and the generic runner/executor.
 
-## PR9.3 candidate: generic schema-v5 0D runner integration
+## Generic schema-v5 0D runner integration
 
 The schema-v5 flow runner now owns and registers `ZeroDFlowDomainRuntime`
 objects alongside 1D and 3D runtimes. Its shared pressure-flow sweep accepts
@@ -114,16 +112,16 @@ source's committed compliant pressure and edge pressure without publishing a
 trial state. 0D areas remain absent, and machine-readable output includes
 model identity/role plus committed pressure and storage-balance history.
 
-Schema-v6/species execution continues to reject 0D domains. Restart,
-multirate, valves, 0D species, distributed moving-geometry execution, and the full
-closure benchmark remain follow-on work.
+Schema-v6/species execution continues to reject 0D domains. Restart, multirate,
+valves, 0D species, and distributed moving-geometry execution are outside this
+path's supported scope.
 
 Fixed stationary immersed flow now supports MPI through `ImmersedFlowCase`,
 including steady and backward-Euler schema-v5 graphs. The transient backend owns
 committed velocity history and accepted time; its graph adapter discards trial
 history and restores controls on coupling rollback. Domain and graph dt/step
-counts must match. Moving geometry and immersed species are still rejected by
-this case path. See the [HPC-03C acceptance](../progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md).
+counts must match. Moving geometry and immersed species are rejected by this
+case path.
 
 ## Current runtime boundaries
 
@@ -168,9 +166,8 @@ the runtime does not duplicate a solver. Its implicit advance is injected by
 the PETSc CLI, preserving a dependency-free common lifecycle header/test.
 
 The native 1D inlet is flow-controlled. Outlet leaves use pressure,
-resistance, or RCR closures. Direct 1D--3D coupling will eventually require
-explicit per-port boundary overrides, but Phase 0 must not introduce a new
-case schema or silently reinterpret existing boundaries.
+resistance, or RCR closures. Direct 1D--3D coupling requires explicit per-port
+boundary overrides and cannot silently reinterpret existing boundaries.
 
 ### Existing VCA path
 
@@ -179,7 +176,7 @@ The common implementation should reuse its SI validation and measurement
 logic while keeping the generic port layer independent of reservoir-specific
 types and the fixed inlet/outlet layout.
 
-## Phase 1 explicit straight-chain prototype
+## Explicit straight-chain execution
 
 `iga_1d_3d_explicit` is a deliberately narrow flow-only prototype for one
 upstream native 1D terminal, one body-fitted 3D inlet/outlet pair, and one
@@ -215,10 +212,10 @@ to both measurements and reference-profile scaling. It publishes
 `graph_binding_manifest.json` by same-filesystem rename as the final completion
 marker, recording the canonical cases, database, graph IDs, and execution kind
 used. A graph output directory must not preexist, so a failed rerun cannot
-retain an older success marker. The positional Phase 1 CLI remains supported
+retain an older success marker. The positional CLI remains supported
 for compatibility.
 
-## Phase 2 bifurcation runner
+## Bifurcation runner
 
 `iga_1d_3d_bifurcation` is the schema-v5 production path for one native 1D
 source, one body-fitted 3D junction, and two or more coupled-root 1D leaves.
@@ -501,8 +498,7 @@ traction weak form; outward normal traction uses `pressure = -traction`.
 Prescribed flow, total pressure, species values, and flow profiles are rejected:
 the current solver has no scientifically defined way to derive a velocity
 profile from one scalar flow value. A trial pressure override also cannot
-replace an active resistance/RC/RCR outlet model. This narrow interface is
-intentional until Phase 1 defines those models.
+replace an active resistance/RC/RCR outlet model.
 
 For a configured runtime, `SetTrialBoundaryConfiguration` must precede
 `SetPortInput` so pressure-Dirichlet and outlet-model conflicts are checked
@@ -542,7 +538,7 @@ runtime extraction.
 
 ## Straight-vessel benchmark definition
 
-Phase 1 will compare two physically equivalent cases:
+The benchmark compares two physically equivalent cases:
 
 ```text
 reference: upstream 1D segment -> replacement 1D segment -> downstream 1D segment
@@ -588,7 +584,7 @@ claiming compliant-wave behavior.
 
 ## Compatibility matrix
 
-| Interface | Phase 0 requirement |
+| Interface | Compatibility requirement |
 |---|---|
 | 1D schema v3 | Parse and execute unchanged. |
 | 3D schema v2/v3/v4 accepted by current readers | Parse and execute unchanged. |
@@ -596,13 +592,13 @@ claiming compliant-wave behavior.
 | standalone `iga_1d` | Same CLI, numerical path, checkpoints, and output. |
 | standalone `iga_navier_stokes` | Same CLI, numerical path, checkpoints, and output. |
 | VCA replay/closed loop | Same signs, SI values, histories, and reservoir advancement. |
-| CUDA | No Phase 0 behavior change; common interfaces remain backend-neutral. |
+| CUDA | No behavior change; common interfaces remain backend-neutral. |
 
 Schema v5 now describes connected multidomain graphs and produces the same
 validated topology consumed by the runtime registry. It does not alter the
 standalone schema-v3/schema-v4 dispatch paths or the `.ntiga` format.
 
-## Phase 2 PR 2.1 topology boundary
+## Topology boundary
 
 `SimulationGraph` is initially an immutable, dependency-free topology object.
 It owns copied `DomainNode` and `CouplingEdge` metadata, not solver runtimes.
@@ -615,14 +611,14 @@ available independently of which boundary value each side accepts.
 The existing production driver now constructs the in-memory
 `upstream 1D -- body-fitted 3D -- downstream 1D` graph after its established
 backend preflight. It obtains the runtime port locators and unified 3D inlet and
-outlet descriptors from that graph, then retains the verified Phase 1 solve,
+outlet descriptors from that graph, then retains the verified sequential solve,
 rollback, commit, diagnostics, and output sequence unchanged. A sequential
 plan requires an explicit start domain and accepts only one connected,
 heterogeneous, acyclic chain. The core graph itself permits branches and
-disconnected components so PR 2.4 and PR 2.5 do not require a topology rewrite;
-their executors will add the corresponding execution plans.
+disconnected components even though the current sequential executor rejects
+unsupported topologies.
 
-PR 2.3 now owns each native backend behind a typed domain adapter and binds one
+The runtime registry owns each native backend behind a typed domain adapter and binds one
 runtime per graph domain. The adapters share dependency-free metadata
 validators with the v5 parser, so a manifest accepted by `iga_config_check`
 cannot defer locator, orientation, or 1D inlet-policy errors until runtime
@@ -693,28 +689,3 @@ Configuration checks after building `iga_1d`:
 The two-rank 3D VCA regression follows
 `examples/vascular_flow/vca_bifurcation/README.md` on an allocated compute
 resource. Large numerical cases do not run on a shared cluster login node.
-
-## Planned Phase 0 touch list
-
-PR 0.2 is limited to common value types and dependency-free tests:
-
-- `include/CouplingPort.hpp` (new)
-- `solvers/cpu/tests/test_coupling_port.cpp` (new shared test location)
-- `solvers/cpu/Makefile`
-
-Later 3D lifecycle/measurement work is expected to touch:
-
-- `solvers/cpu/include/TransientFlowRuntime.hpp`
-- `solvers/cpu/src/iga_navier_stokes.cpp`
-- `include/ThreeDVcaCoupling.hpp`
-- focused CPU/PETSc tests and Makefile dependencies
-
-Later 1D runtime extraction is expected to touch:
-
-- `solvers/one_d/include/OneDRuntime.hpp` (new)
-- `solvers/one_d/src/iga_1d.cpp`
-- `solvers/one_d/include/OneDCoupling.hpp`
-- focused 1D tests and Makefile dependencies
-
-Changes outside these boundaries require a documented reason and renewed
-compatibility review.

@@ -90,6 +90,49 @@ int main(int argc, char** argv)
 		const iga::ImmersedSurfaceQuadratureCatalog surface(domain);
 		const iga::CutCellGhostPenaltyCatalog expanded_ghost(domain, expanded);
 		const iga::CutCellGhostPenaltyCatalog compact_ghost(domain, compact);
+		// The optional pressure-port backflow term uses the same relative
+		// normal velocity and analytic Jacobian as native ALE. Keep this an
+		// element-level check so no nonlinear tolerance masks a sign error.
+		bool checked_backflow = false;
+		for (std::uint64_t cell = 0; cell < domain.Cells().size() && !checked_backflow; ++cell) {
+			if (domain.Cells()[cell].classification != iga::CellClassification::Cut
+				|| !expanded.Cell(cell).usable) continue;
+			const auto& rule = surface.UsableRule(domain, cell);
+			if (!HasLabel(rule, 1)) continue;
+			const auto element = domain.Background().MaterializeElement(cell);
+			std::vector<std::array<double, 4>> inward(element.connectivity.size());
+			for (auto& state : inward) state[2] = 1.0;
+			std::vector<std::array<double, 3>> material(rule.Points().size());
+			for (auto& velocity : material) velocity[2] = 0.25;
+			const auto backflow = iga::BuildImmersedPressurePortBackflowElement(
+				element, rule, 1, inward, material, 1050.0, 0.5);
+			double energy = 0.0;
+			for (std::size_t node = 0; node < inward.size(); ++node)
+				energy -= PetscRealPart(backflow.negative_residual[4*node+2])*inward[node][2];
+			assert(energy > 0.0);
+			const double step = 1e-6;
+			auto perturbed = inward;
+			perturbed[0][2] += step;
+			const auto changed = iga::BuildImmersedPressurePortBackflowElement(
+				element, rule, 1, perturbed, material, 1050.0, 0.5,
+				iga::NavierStokesAssemblyRequest::ResidualOnly);
+			const std::size_t ndof = 4*inward.size();
+			for (std::size_t row = 0; row < ndof; ++row) {
+				const double finite_difference = -(PetscRealPart(changed.negative_residual[row])
+					-PetscRealPart(backflow.negative_residual[row]))/step;
+				const double analytic = PetscRealPart(backflow.jacobian[row*ndof+2]);
+				assert(std::abs(finite_difference-analytic) < 1e-5*std::max(1.0,std::abs(analytic)));
+			}
+			for (auto& state : inward) state[2] = -1.0;
+			const auto outward = iga::BuildImmersedPressurePortBackflowElement(
+				element, rule, 1, inward, material, 1050.0, 0.5);
+			assert(std::all_of(outward.negative_residual.begin(), outward.negative_residual.end(),
+				[](PetscScalar value) { return PetscRealPart(value) == 0.0; }));
+			Reject([&] { (void)iga::BuildImmersedPressurePortBackflowElement(
+				element, rule, 1, inward, material, 1050.0, -0.5); });
+			checked_backflow = true;
+		}
+		assert(checked_backflow);
 		iga::ImmersedStaticFlowOptions base; base.parameters = {1.0, 1.0, 0.0}; base.wall_labels = {0};
 
 		// Zero is a valid port label when it does not overlap a wall.  Assemble a
@@ -110,7 +153,8 @@ int main(int argc, char** argv)
 		assert(zero_port.assembled_surface_points > 0 && zero_port.area_m2 > 0.0);
 		assert(std::abs(zero_port.measurement.area_m2-zero_port.area_m2) < 2e-12);
 		assert(std::abs(zero_port.measurement.mean_pressure_pa) < 2e-12);
-		assert(std::any_of(zero_port_runtime.AssembledNegativeResidual().begin(), zero_port_runtime.AssembledNegativeResidual().end(),
+		const auto zero_port_residual = zero_port_runtime.AssembledNegativeResidual();
+		assert(std::any_of(zero_port_residual.begin(), zero_port_residual.end(),
 			[](PetscScalar value) { return PetscRealPart(value) != 0.0; }));
 
 		// A cap-only cut cell is legal: its open patch has no selected Nitsche

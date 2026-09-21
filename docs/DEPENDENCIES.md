@@ -20,6 +20,20 @@ required only by the MPI CPU solvers. CUDA does not use PETSc.
 The CPU and CUDA solvers consume the same packed `.ntiga` database. Preparing
 that database requires Eigen and `mpmetis`, regardless of the selected solver.
 
+For the optional liver DICOM SEG geometry workflow, the project-owned
+`dicom_seg_to_surface.py`, `audit_dicom_seg_region_overlap.py`, and
+`dicom_seg_to_multiregion_tet.py` additionally
+need Python `pydicom`, NumPy, and SciPy; surface extraction also needs VTK.
+`surface_to_fem_volume.py` and `dicom_seg_to_multiregion_tet.py` need the
+Gmsh Python module, while the fTetWild
+route invokes a separately installed [fTetWild](https://github.com/wildmeshing/fTetWild)
+binary. These tools generate or audit geometry only—none supplies FEM elements,
+weak forms, assembly, or physical coupling. The WSL patient-label checks used
+`pydicom 3.0.1`, NumPy 1.21.5, SciPy 1.8.0, and VTK 9.3.20240617; pydicom was
+installed only in a case-specific `/tmp` directory, not as a repository
+dependency. See `docs/LIVER_GEOMETRY_CANDIDATES.md` for source and license
+checks before processing medical images.
+
 ## Automatic dependency check
 
 Run the checker from the repository root:
@@ -252,8 +266,8 @@ that must be supported by the resulting binary.
 
 Login nodes are coordination hosts for editing, inspection, and Slurm job
 submission. Run builds, tests, MPI simulations, and GPU commands on allocated
-compute resources. If Codex or VS Code is already inside an allocation, load
-the modules there for lightweight validation; use `sbatch` for large, long,
+compute resources. If your development session or IDE is already inside an
+allocation, load the modules there for lightweight validation; use `sbatch` for large, long,
 GPU, benchmark, or parallel job sets. Do not request a nested allocation.
 
 ### Base environment

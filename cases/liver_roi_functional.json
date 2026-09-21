@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "patient_derived_liver_roi_functional_only",
+  "full_liver_case": false,
+  "physiological_validation": false,
+  "source": {
+    "collection": "TCIA Colorectal-Liver-Metastases",
+    "case_id": "CRLM-CT-1072",
+    "license": "CC BY 4.0",
+    "provenance_document": "docs/LIVER_GEOMETRY_CANDIDATES.md",
+    "roi_zyx_half_open": [[10, 20], [210, 226], [101, 117]]
+  },
+  "files_relative_to_data_dir": {
+    "source_seg": {
+      "path": "seg.dcm",
+      "sha256": "afe7a2bdf63cb65a5f4cea53cde8f2271bac51f5f53369b2c47a028b083c1654"
+    },
+    "geometry_manifest": {
+      "path": "roi-portal-connected.manifest.json",
+      "sha256": "bc4b4e00b6399bfda5182e254da3801fc1c31317bcf0258d2b231172482e08dd"
+    },
+    "multiregion_mesh": {
+      "path": "roi-portal-connected.msh",
+      "sha256": "75201bd15c126d5fd8ab71162e4f7f8b242972cc65f502dfb431951ee02acd94"
+    },
+    "multiregion_contract": {
+      "path": "roi-portal-connected.contract.json",
+      "sha256": "3453960c6540698c98b8727eb9b88148f4f3ea9c0309fd6ff33cdca8dde7d3dd"
+    },
+    "split_manifest": {
+      "path": "roi-native-connected-split/manifest.json",
+      "sha256": "d8b46494e36d9d9f0bf697d500573bfd3dc20d7b6adda0a2a10236c1be3a872a"
+    }
+  },
+  "regions": {
+    "vessel": "seg_4_portal",
+    "tissue": "tissue_candidate",
+    "matching_interface": "interface_seg_4_portal_tissue_candidate"
+  },
+  "boundary_labels": {
+    "artificial_roi_cut_fluid_inlet": 1,
+    "artificial_tissue_pressure_exits": [2, 3],
+    "matching_interface": 4
+  },
+  "explicit_functional_inputs": {
+    "inlet_velocity_m_s": [0.0, 0.0, -0.01],
+    "density_kg_m3": 1000.0,
+    "viscosity_pa_s": 0.004,
+    "mobility_m2_pa_s": 1.0,
+    "interface_pressure_pa": 0.0,
+    "tissue_exit_pressure_pa": 0.0
+  },
+  "input_origin": "All boundary and material values above are deliberately chosen numerical smoke-test inputs, not measured or sourced patient physiology.",
+  "limitations": "ROI cut has no clinically established flow-port meaning. The specimen is not a full liver perfusion model."
+}

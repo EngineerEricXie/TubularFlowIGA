@@ -31,6 +31,9 @@ template <class Runtime> struct HasCommittedFluidDisplacement<Runtime,
 template <class Runtime, class = void> struct HasTrialFlowDiagnostics : std::false_type {};
 template <class Runtime> struct HasTrialFlowDiagnostics<Runtime,
 	std::void_t<decltype(std::declval<const Runtime&>().TrialFlowDiagnostics())>> : std::true_type {};
+template <class Runtime, class = void> struct HasTrialCouplingAcceptanceDiagnostics : std::false_type {};
+template <class Runtime> struct HasTrialCouplingAcceptanceDiagnostics<Runtime,
+	std::void_t<decltype(std::declval<const Runtime&>().TrialCouplingAcceptanceDiagnostics())>> : std::true_type {};
 }
 
 class StrongFluidStructureCouplingAccess {
@@ -58,11 +61,23 @@ struct StrongCouplingStructureSnapshot {
 	std::string model_identity_sha256;
 };
 
+struct StrongCouplingAcceptanceDiagnostics {
+	double residual = 0.0;
+	double interface_power_defect_w = 0.0;
+};
+
 struct StrongFluidStructureCouplingOptions {
 	std::uint64_t maximum_iterations = 32;
 	double absolute_displacement_tolerance_m = 1.e-10;
 	double relative_displacement_tolerance = 1.e-6;
 	double reference_displacement_scale_m = 1.e-6;
+	// Infinity preserves legacy displacement-only behavior. Finite values make
+	// each quantity an independent acceptance gate.
+	double absolute_nodal_force_residual_tolerance_n = std::numeric_limits<double>::infinity();
+	double absolute_traction_residual_tolerance_pa = std::numeric_limits<double>::infinity();
+	double fluid_residual_tolerance = std::numeric_limits<double>::infinity();
+	double structure_residual_tolerance_n = std::numeric_limits<double>::infinity();
+	double interface_power_defect_tolerance_w = std::numeric_limits<double>::infinity();
 	AitkenRelaxationControls aitken_controls{};
 	// This is intentionally a narrow test seam: it runs after every allocating
 	// result/preparation operation and before either runtime can commit.
@@ -76,6 +91,17 @@ struct StrongFluidStructureIterationDiagnostics {
 	double displacement_scale_m = 0.0;
 	double convergence_threshold_m = 0.0;
 	bool converged = false;
+	std::optional<double> nodal_force_residual_n;
+	std::optional<double> traction_residual_pa;
+	std::optional<double> fluid_acceptance_residual;
+	std::optional<double> structure_acceptance_residual_n;
+	std::optional<double> interface_power_defect_w;
+	bool displacement_gate_passed = false;
+	bool traction_gate_passed = false;
+	bool nodal_force_gate_passed = false;
+	bool fluid_gate_passed = false;
+	bool structure_gate_passed = false;
+	bool interface_power_gate_passed = false;
 	bool aitken_proposal_applied = false;
 	std::optional<double> relaxation;
 	std::optional<double> unclamped_relaxation;
@@ -152,6 +178,7 @@ public:
 		aitken_.Reset();
 		try {
 			StrongFluidStructureCouplingResult result;
+			std::optional<SurfaceTraction> previous_traction;
 			const StrongCouplingStructureSnapshot committed = structure_.StrongCouplingCommittedSnapshot();
 			ValidateSnapshot(committed);
 			SurfaceKinematics current = BuildPredictor(step, committed);
@@ -175,6 +202,42 @@ public:
 				diagnostic.max_residual_m = maximum; diagnostic.displacement_scale_m = scale;
 				diagnostic.convergence_threshold_m = options_.absolute_displacement_tolerance_m
 					+options_.relative_displacement_tolerance*scale;
+				diagnostic.displacement_gate_passed = rms <= diagnostic.convergence_threshold_m;
+				if (std::isinf(options_.absolute_nodal_force_residual_tolerance_n)) {
+					diagnostic.nodal_force_gate_passed = true;
+				} else if (previous_traction) {
+					diagnostic.nodal_force_residual_n = NodalForceResidual(traction,*previous_traction);
+					diagnostic.nodal_force_gate_passed = *diagnostic.nodal_force_residual_n
+						<= options_.absolute_nodal_force_residual_tolerance_n;
+				}
+				if(std::isinf(options_.absolute_traction_residual_tolerance_pa)){
+					diagnostic.traction_gate_passed=true;
+				}else if(previous_traction){
+					diagnostic.traction_residual_pa=TractionResidual(traction,*previous_traction);
+					diagnostic.traction_gate_passed=*diagnostic.traction_residual_pa
+						<=options_.absolute_traction_residual_tolerance_pa;
+				}
+				diagnostic.fluid_gate_passed = std::isinf(options_.fluid_residual_tolerance);
+				diagnostic.structure_gate_passed = std::isinf(options_.structure_residual_tolerance_n);
+				diagnostic.interface_power_gate_passed = std::isinf(options_.interface_power_defect_tolerance_w);
+				if constexpr (strong_fsi_detail::HasTrialCouplingAcceptanceDiagnostics<FluidRuntime>::value) {
+					const auto gates=fluid_.TrialCouplingAcceptanceDiagnostics();
+					if(!std::isfinite(gates.residual)||gates.residual<0.0
+						||!std::isfinite(gates.interface_power_defect_w)||gates.interface_power_defect_w<0.0)
+						throw std::runtime_error("strong FSI fluid acceptance diagnostics are invalid");
+					diagnostic.fluid_acceptance_residual=gates.residual;
+					diagnostic.interface_power_defect_w=gates.interface_power_defect_w;
+					diagnostic.fluid_gate_passed=gates.residual<=options_.fluid_residual_tolerance;
+					diagnostic.interface_power_gate_passed=gates.interface_power_defect_w
+						<=options_.interface_power_defect_tolerance_w;
+				}
+				if constexpr (strong_fsi_detail::HasTrialCouplingAcceptanceDiagnostics<StructureRuntime>::value) {
+					const auto gates=structure_.TrialCouplingAcceptanceDiagnostics();
+					if(!std::isfinite(gates.residual)||gates.residual<0.0)
+						throw std::runtime_error("strong FSI structure acceptance diagnostics are invalid");
+					diagnostic.structure_acceptance_residual_n=gates.residual;
+					diagnostic.structure_gate_passed=gates.residual<=options_.structure_residual_tolerance_n;
+				}
 				diagnostic.fluid_traction_identity_sha256 = BuildSurfaceTractionIdentitySha256(traction, layout_);
 				diagnostic.raw_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(raw, layout_);
 				diagnostic.current_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(current, layout_);
@@ -188,10 +251,17 @@ public:
                 if(CurrentPhaseProfile().Enabled()) {
                     std::printf("strong_fsi_iteration step=%llu iteration=%llu residual_rms_m=%.17g threshold_m=%.17g converged=%d\n",
                         static_cast<unsigned long long>(step.step_index),static_cast<unsigned long long>(iteration),
-                        rms,diagnostic.convergence_threshold_m,rms<=diagnostic.convergence_threshold_m ? 1 : 0);
+                        rms,diagnostic.convergence_threshold_m,
+						diagnostic.displacement_gate_passed&&diagnostic.traction_gate_passed
+						&&diagnostic.nodal_force_gate_passed
+						&&diagnostic.fluid_gate_passed&&diagnostic.structure_gate_passed
+						&&diagnostic.interface_power_gate_passed ? 1 : 0);
                     std::fflush(stdout);
                 }
-				if (rms <= diagnostic.convergence_threshold_m) {
+				if (diagnostic.displacement_gate_passed&&diagnostic.traction_gate_passed
+					&&diagnostic.nodal_force_gate_passed
+					&&diagnostic.fluid_gate_passed&&diagnostic.structure_gate_passed
+					&&diagnostic.interface_power_gate_passed) {
 					diagnostic.relaxed_kinematics_identity_sha256 = BuildSurfaceKinematicsIdentitySha256(current, layout_);
 					diagnostic.converged = true; result.history.push_back(std::move(diagnostic));
 					result.converged = true; result.iterations = iteration+1; result.status = "converged";
@@ -203,6 +273,7 @@ public:
 					active_ = false;
 					return result;
 				}
+				previous_traction=traction;
 				fluid_.RejectCouplingIteration(); structure_.RejectCouplingIteration();
 				const auto proposal = aitken_.Propose(ScalarDisplacement(current, committed.immutable_reference_normals),
 					residual, options_.reference_displacement_scale_m, partition_identity_sha256_);
@@ -244,8 +315,22 @@ private:
 			|| !(options_.reference_displacement_scale_m > 0.0)
 			|| !std::isfinite(options_.absolute_displacement_tolerance_m)
 			|| !std::isfinite(options_.relative_displacement_tolerance)
-			|| !std::isfinite(options_.reference_displacement_scale_m))
+			|| !std::isfinite(options_.reference_displacement_scale_m)
+			|| !(options_.absolute_nodal_force_residual_tolerance_n>=0.0)
+			|| !(options_.absolute_traction_residual_tolerance_pa>=0.0)
+			|| !(options_.fluid_residual_tolerance>=0.0)
+			|| !(options_.structure_residual_tolerance_n>=0.0)
+			|| !(options_.interface_power_defect_tolerance_w>=0.0))
 			throw std::runtime_error("strong FSI convergence options are invalid");
+		if(!std::isinf(options_.fluid_residual_tolerance)
+			&&!strong_fsi_detail::HasTrialCouplingAcceptanceDiagnostics<FluidRuntime>::value)
+			throw std::runtime_error("strong FSI finite fluid gate requires runtime diagnostics");
+		if(!std::isinf(options_.interface_power_defect_tolerance_w)
+			&&!strong_fsi_detail::HasTrialCouplingAcceptanceDiagnostics<FluidRuntime>::value)
+			throw std::runtime_error("strong FSI finite power gate requires fluid diagnostics");
+		if(!std::isinf(options_.structure_residual_tolerance_n)
+			&&!strong_fsi_detail::HasTrialCouplingAcceptanceDiagnostics<StructureRuntime>::value)
+			throw std::runtime_error("strong FSI finite structure gate requires runtime diagnostics");
 	}
 	void ValidateSnapshot(const StrongCouplingStructureSnapshot& snapshot) const
 	{
@@ -318,6 +403,26 @@ private:
 	{ double r=0.; for(const double x:ScalarDisplacement(value,normals)) r=std::max(r,std::abs(x)); return r; }
 	double WeightedRms(const std::vector<double>& values) const
 	{ double sum=0.; for(std::size_t i=0;i<values.size();++i) sum+=layout_.owned_reference_lumped_areas_m2[i]*values[i]*values[i]; return std::sqrt(sum/AreaTotal()); }
+	double NodalForceResidual(const SurfaceTraction& first,const SurfaceTraction& second)const
+	{
+		ValidateSurfaceTraction(first,layout_);ValidateSurfaceTraction(second,layout_);
+		double sum=0.0;const std::size_t count=first.consistent_nodal_force_n.size();
+		for(std::size_t node=0;node<count;++node)for(int component=0;component<3;++component){
+			const double difference=first.consistent_nodal_force_n[node][component]
+				-second.consistent_nodal_force_n[node][component];sum+=difference*difference;}
+		return std::sqrt(sum/static_cast<double>(count));
+	}
+	double TractionResidual(const SurfaceTraction& first,const SurfaceTraction& second)const
+	{
+		ValidateSurfaceTraction(first,layout_);ValidateSurfaceTraction(second,layout_);
+		double sum=0.0;
+		for(std::size_t node=0;node<first.traction_on_structure_pa.size();++node){
+			double squared=0.0;for(int component=0;component<3;++component){
+				const double difference=first.traction_on_structure_pa[node][component]
+					-second.traction_on_structure_pa[node][component];squared+=difference*difference;}
+			sum+=layout_.owned_reference_lumped_areas_m2[node]*squared;}
+		return std::sqrt(sum/AreaTotal());
+	}
 	static double MaxMagnitude(const std::vector<double>& values) { double r=0.; for(double x:values) r=std::max(r,std::abs(x)); return r; }
 	SurfaceKinematics BuildRelaxed(const DomainStepContext& step, std::uint64_t iteration, const StrongCouplingStructureSnapshot& state,
 		const SurfaceKinematics& raw, const DynamicWeightedAitkenProposal& proposal) const
@@ -353,17 +458,24 @@ private:
 	}
 	std::string OptionsIdentity() const
 	{
-		Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingOptions/v2");
+		Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingOptions/v3");
 		hash.AppendLittleEndian64(options_.maximum_iterations); hash.AppendNormalizedDouble(options_.absolute_displacement_tolerance_m);
 		hash.AppendNormalizedDouble(options_.relative_displacement_tolerance); hash.AppendNormalizedDouble(options_.reference_displacement_scale_m);
+		AppendGate(hash,options_.absolute_nodal_force_residual_tolerance_n);
+		AppendGate(hash,options_.absolute_traction_residual_tolerance_pa);
+		AppendGate(hash,options_.fluid_residual_tolerance);
+		AppendGate(hash,options_.structure_residual_tolerance_n);
+		AppendGate(hash,options_.interface_power_defect_tolerance_w);
 		hash.AppendNormalizedDouble(options_.aitken_controls.initial_relaxation); hash.AppendNormalizedDouble(options_.aitken_controls.minimum_relaxation);
 		hash.AppendNormalizedDouble(options_.aitken_controls.maximum_relaxation); hash.AppendNormalizedDouble(options_.aitken_controls.scaled_difference_threshold);
 		return hash.Hex();
 	}
 	std::string ResultIdentity(const DomainStepContext& step, const StrongFluidStructureCouplingResult& result) const
-	{ Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingResult/v3"); distributed_surface_detail::AppendString(hash,BuildFsiCouplingEdgeIdentitySha256(edge_)); distributed_surface_detail::AppendString(hash,partition_identity_sha256_); distributed_surface_detail::AppendString(hash,result.options_identity_sha256); hash.AppendLittleEndian64(static_cast<std::uint64_t>(step.step_index)); hash.AppendNormalizedDouble(step.start_time_s); hash.AppendNormalizedDouble(step.dt_s); hash.AppendLittleEndian64(result.iterations); hash.AppendLittleEndian32(result.converged ? 1U : 0U); distributed_surface_detail::AppendString(hash,result.status); for(const auto& d:result.history){hash.AppendLittleEndian64(d.iteration);hash.AppendNormalizedDouble(d.area_weighted_rms_residual_m);hash.AppendNormalizedDouble(d.max_residual_m);hash.AppendNormalizedDouble(d.displacement_scale_m);hash.AppendNormalizedDouble(d.convergence_threshold_m);hash.AppendLittleEndian32(d.converged ? 1U : 0U);hash.AppendLittleEndian32(d.aitken_proposal_applied ? 1U : 0U); AppendOptional(hash,d.relaxation);AppendOptional(hash,d.unclamped_relaxation);AppendOptionalStatus(hash,d.aitken_status);AppendOptional(hash,d.aitken_global_numerator);AppendOptional(hash,d.aitken_global_denominator);AppendOptional(hash,d.aitken_residual_scale);hash.AppendLittleEndian32(d.aitken_had_previous_residual ? 1U : 0U); AppendOptionalUint64(hash,d.fluid_nonlinear_iterations);AppendOptionalUint64(hash,d.fluid_ksp_iterations);AppendOptional(hash,d.fluid_residual_norm);AppendOptional(hash,d.fluid_linear_relative_residual);distributed_surface_detail::AppendString(hash,d.fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,d.raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.current_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_proposal_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_control_state_identity_sha256);} distributed_surface_detail::AppendString(hash,result.accepted_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_state_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_composition_identity_sha256); return hash.Hex(); }
+	{ Sha256 hash; distributed_surface_detail::AppendString(hash,"StrongFluidStructureCouplingResult/v5"); distributed_surface_detail::AppendString(hash,BuildFsiCouplingEdgeIdentitySha256(edge_)); distributed_surface_detail::AppendString(hash,partition_identity_sha256_); distributed_surface_detail::AppendString(hash,result.options_identity_sha256); hash.AppendLittleEndian64(static_cast<std::uint64_t>(step.step_index)); hash.AppendNormalizedDouble(step.start_time_s); hash.AppendNormalizedDouble(step.dt_s); hash.AppendLittleEndian64(result.iterations); hash.AppendLittleEndian32(result.converged ? 1U : 0U); distributed_surface_detail::AppendString(hash,result.status); for(const auto& d:result.history){hash.AppendLittleEndian64(d.iteration);hash.AppendNormalizedDouble(d.area_weighted_rms_residual_m);hash.AppendNormalizedDouble(d.max_residual_m);hash.AppendNormalizedDouble(d.displacement_scale_m);hash.AppendNormalizedDouble(d.convergence_threshold_m);AppendOptional(hash,d.nodal_force_residual_n);AppendOptional(hash,d.traction_residual_pa);AppendOptional(hash,d.fluid_acceptance_residual);AppendOptional(hash,d.structure_acceptance_residual_n);AppendOptional(hash,d.interface_power_defect_w);hash.AppendLittleEndian32(d.displacement_gate_passed?1U:0U);hash.AppendLittleEndian32(d.traction_gate_passed?1U:0U);hash.AppendLittleEndian32(d.nodal_force_gate_passed?1U:0U);hash.AppendLittleEndian32(d.fluid_gate_passed?1U:0U);hash.AppendLittleEndian32(d.structure_gate_passed?1U:0U);hash.AppendLittleEndian32(d.interface_power_gate_passed?1U:0U);hash.AppendLittleEndian32(d.converged ? 1U : 0U);hash.AppendLittleEndian32(d.aitken_proposal_applied ? 1U : 0U); AppendOptional(hash,d.relaxation);AppendOptional(hash,d.unclamped_relaxation);AppendOptionalStatus(hash,d.aitken_status);AppendOptional(hash,d.aitken_global_numerator);AppendOptional(hash,d.aitken_global_denominator);AppendOptional(hash,d.aitken_residual_scale);hash.AppendLittleEndian32(d.aitken_had_previous_residual ? 1U : 0U); AppendOptionalUint64(hash,d.fluid_nonlinear_iterations);AppendOptionalUint64(hash,d.fluid_ksp_iterations);AppendOptional(hash,d.fluid_residual_norm);AppendOptional(hash,d.fluid_linear_relative_residual);distributed_surface_detail::AppendString(hash,d.fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,d.raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.current_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_proposal_identity_sha256);distributed_surface_detail::AppendString(hash,d.aitken_control_state_identity_sha256);} distributed_surface_detail::AppendString(hash,result.accepted_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_raw_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.accepted_relaxed_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_traction_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_kinematics_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_structure_state_identity_sha256);distributed_surface_detail::AppendString(hash,result.final_committed_fluid_composition_identity_sha256); return hash.Hex(); }
 	static void AppendOptional(Sha256& hash, const std::optional<double>& value)
 	{ hash.AppendLittleEndian32(value ? 1U : 0U); if (value) hash.AppendNormalizedDouble(*value); }
+	static void AppendGate(Sha256& hash,double value)
+	{hash.AppendLittleEndian32(std::isinf(value)?0U:1U);if(!std::isinf(value))hash.AppendNormalizedDouble(value);}
 	static void AppendOptionalUint64(Sha256& hash, const std::optional<std::uint64_t>& value)
 	{ hash.AppendLittleEndian32(value ? 1U : 0U); if (value) hash.AppendLittleEndian64(*value); }
 	static void AppendOptionalStatus(Sha256& hash, const std::optional<AitkenRelaxationStatus>& value)

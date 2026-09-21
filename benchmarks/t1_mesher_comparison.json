@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "kind": "local_wsl_mesher_comparison_evidence",
+  "recorded_on": "2026-09-18",
+  "platform": {
+    "kernel": "Linux 6.18.33.1-microsoft-standard-WSL2 x86_64",
+    "cpu": "Intel Core i9-14900KF",
+    "logical_cpus_available": 16
+  },
+  "meshers": {
+    "gmsh": {"version": "4.8.4"},
+    "ftetwild": {
+      "upstream_commit": "d7d99bb4387a07895b9adce058dc7305f6b6e5ab",
+      "license": "MPL-2.0",
+      "executable_sha256": "3d6c83af382e701ad8ded51c3b3a78a2875835ff57f8b020c807f4fe094b350d"
+    }
+  },
+  "policy": {
+    "shared_surface_preflight": "solvers/cpu/surface_fem_preflight",
+    "gmsh_adapter": "scripts/surface_to_fem_volume.py",
+    "ftetwild_adapter": "scripts/ftetwild_to_fem_volume.py",
+    "ftetwild_stop_energy": 12.0,
+    "ftetwild_max_optimization_passes": 40,
+    "ftetwild_max_threads": 2,
+    "required_minimum_scaled_jacobian": 0.0001,
+    "maximum_relative_volume_error": 0.05
+  },
+  "valid_cases": [
+    {
+      "id": "straight_pipe",
+      "generator": "scripts/generate_circular_pipe_surface.py",
+      "source_sha256": "58654f07dda6067c4d8fa35cfd45e0459924872d52c055478c712a7abb7c4eaa",
+      "canonical_surface_sha256": "ce517326aa6b19dc6d1fb0c6914a2aaa516d262c96dd2a2f57cb6af1fa5f8404",
+      "target_size_m": 0.003,
+      "ftetwild_envelope_m": 0.0001,
+      "results": {
+        "gmsh": {"nodes": 322, "tetrahedra": 1176, "minimum_scaled_jacobian": 0.0010157614215909048, "relative_volume_error": 1.3157069743185165e-15, "maximum_source_surface_distance_m": 0.0, "boundary_labels": {"0": 400, "1": 60, "2": 60}, "mesher_wall_s": 0.06346346298232675, "pipeline_wall_s": 0.7775216709997039, "peak_rss_bytes": 99164160, "mesh_sha256": "40fdf8542b82e57a01f71b6d1a4134f3e7a7e6c3c431b9434c559183140d6e0b", "native_reader_passed": true},
+        "ftetwild": {"nodes": 1021, "tetrahedra": 3691, "minimum_scaled_jacobian": 0.07517409833740372, "relative_volume_error": 0.003318129219225195, "maximum_source_surface_distance_m": 4.211250156387346e-05, "boundary_labels": {"0": 1370, "1": 26, "2": 28}, "mesher_wall_s": 0.8918660790077411, "pipeline_wall_s": 2.5361973390099593, "peak_rss_bytes": 25174016, "mesh_sha256": "cf870b41be6b4704afd786aa44610eac98ac6810765943b944360a6f3cc198ef", "native_reader_passed": true}
+      }
+    },
+    {
+      "id": "bent_pipe_90_degree",
+      "generator": "scripts/generate_bent_pipe_surface.py",
+      "source_sha256": "adb801a6a0f927ca02b28679e64763bf011385ac820fbab12f197ee5b0f2a07b",
+      "canonical_surface_sha256": "5a8b2587f51d85a058339169f682e49c681605477e1e074e919c0776b9f30d74",
+      "target_size_m": 0.003,
+      "ftetwild_envelope_m": 0.0001,
+      "results": {
+        "gmsh": {"nodes": 557, "tetrahedra": 1858, "minimum_scaled_jacobian": 0.07840618809150522, "relative_volume_error": 8.734029404331115e-16, "maximum_source_surface_distance_m": 0.0, "boundary_labels": {"0": 800, "1": 60, "2": 60}, "mesher_wall_s": 0.09742946899496019, "pipeline_wall_s": 1.9221680559858214, "peak_rss_bytes": 99090432, "mesh_sha256": "f9956ca35460c696098d4cb555e495289271419ae516cff5c3a3571646070c31", "native_reader_passed": true},
+        "ftetwild": {"nodes": 622, "tetrahedra": 2237, "minimum_scaled_jacobian": 0.06322424739199593, "relative_volume_error": 0.001333047953661016, "maximum_source_surface_distance_m": 3.4712347241190794e-05, "boundary_labels": {"0": 820, "1": 30, "2": 28}, "mesher_wall_s": 0.3160119070089422, "pipeline_wall_s": 2.660462733008899, "peak_rss_bytes": 22245376, "mesh_sha256": "214c9bb0f3beb75202a8a55ed7b84fba41c4bee1b4058b6e5275aefab164e299", "native_reader_passed": true}
+      }
+    },
+    {
+      "id": "y_bifurcation",
+      "generator": "scripts/generate_y_pipe_surface.py",
+      "source_sha256": "21c91541443251ac04130696e58048e0282a9fc89081e3e2ea16d690393bde93",
+      "canonical_surface_sha256": "06c16d59e86d13848af18a0b2fd2fc556678933333a7da3e3d8cae2af4b26f6a",
+      "target_size_m": 0.004,
+      "ftetwild_envelope_m": 0.00015,
+      "results": {
+        "gmsh": {"nodes": 822, "tetrahedra": 2536, "minimum_scaled_jacobian": 0.01693625222698712, "relative_volume_error": 4.908864711205367e-16, "maximum_source_surface_distance_m": 0.0, "boundary_labels": {"0": 1325, "1": 25, "2": 25, "3": 25}, "mesher_wall_s": 0.08113963200594299, "pipeline_wall_s": 3.6617821370018646, "peak_rss_bytes": 99602432, "mesh_sha256": "c4eb0383c1ef8099c9626a176410bad54a4e53485b83bd70f204cb12bd5b0b2f", "native_reader_passed": true},
+        "ftetwild": {"nodes": 732, "tetrahedra": 2337, "minimum_scaled_jacobian": 0.10339652221311232, "relative_volume_error": 0.00291092285459445, "maximum_source_surface_distance_m": 3.1980946940971086e-05, "boundary_labels": {"0": 1105, "1": 11, "2": 15, "3": 13}, "mesher_wall_s": 0.5666395720036235, "pipeline_wall_s": 5.168929498002399, "peak_rss_bytes": 29200384, "mesh_sha256": "daec6c98ee72e70fd262273732e9d16efaa4e84fed7c5f9230d751c16e34171d", "native_reader_passed": true}
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "id": "tetrahedral_surface_missing_one_triangle",
+      "expected_failure_class": "shared_surface_preflight_not_closed",
+      "gmsh_rejected": true,
+      "ftetwild_rejected": true,
+      "diagnostic": "surface edge is not used by exactly two faces"
+    }
+  ],
+  "conclusion": "No universal winner: preserve both adapters and select per geometry under identical gates."
+}

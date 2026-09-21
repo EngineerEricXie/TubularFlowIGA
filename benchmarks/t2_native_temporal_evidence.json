@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "native_fixed_domain_temporal_manufactured_validation",
+  "recorded_on": "2026-09-18",
+  "backend": "native_cpp_dense_reference_tetrahedral_P2_P1",
+  "external_fem_framework": false,
+  "source_files_sha256": "b1d5fd9b9b03451a9183dda913bf29238d3edf614be03703b0b2f83690ecc3cb",
+  "manufactured_solution": {
+    "domain": "fixed four-tetrahedron unit reference domain",
+    "velocity_m_s": "u_x(t)=0.01*sin(2*t), spatially uniform",
+    "pressure_gradient_pa_m": "dp/dx=-rho*du_x/dt",
+    "density_kg_m3": 1000.0,
+    "dynamic_viscosity_pa_s": 0.004,
+    "time_integrator": "backward_Euler",
+    "final_time_s": 0.4
+  },
+  "convergence": {
+    "time_steps_s": [0.1, 0.05, 0.025, 0.0125],
+    "absolute_pressure_gradient_errors_pa_m": [1.33723, 0.693547, 0.352798, 0.177878],
+    "observed_orders": [0.9471820675574035, 0.9751512714806821, 0.987954293610208],
+    "required_order_interval": [0.85, 1.15],
+    "status": "passed"
+  },
+  "classification": "fixed_geometry_temporal_validation_not_spatial_or_physiological_validation"
+}

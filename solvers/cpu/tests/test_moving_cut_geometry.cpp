@@ -1,3 +1,4 @@
+#include "GeometryContractManifest.hpp"
 #include "MovingCutGeometry.hpp"
 #include "PrescribedSurfaceMotion.hpp"
 
@@ -201,6 +202,13 @@ int main()
 	MovingCutGeometryOptions changed_surface_options = options;
 	++changed_surface_options.surface.max_candidates;
 	auto changed_options = MovingCutGeometry::Build(grid, motion.Evaluate(1.0, 0.0, 1.0), changed_surface_options, initial.get());
+	const auto manifest = ImmersedGeometryContractJson(*forward, "fluid");
+	assert(manifest.find("\"route\": \"surface_to_immersed_background\"") != std::string::npos);
+	assert(manifest.find(forward->GeometryIdentitySha256()) != std::string::npos);
+	assert(manifest.find(forward->Kinematics().MaterialIdentitySha256()) != std::string::npos);
+	assert(manifest.find(forward->Kinematics().Surface().CanonicalSha256()) != std::string::npos);
+	assert(manifest.find("\"kind\": \"evaluated\"") != std::string::npos);
+	Rejected([&] { (void)ImmersedGeometryContractJson(*forward, "organ"); });
 	assert(forward->IdentitySha256() == repeat->IdentitySha256());
 	assert(forward->GeometryIdentitySha256() == repeat->GeometryIdentitySha256());
 	assert(forward->PublicationIdentitySha256() == repeat->PublicationIdentitySha256());

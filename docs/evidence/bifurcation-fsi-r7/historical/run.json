@@ -1,1 +1,0 @@
-{"status":"visualization_only","conservation_failed_steps":17,"pulse_amplitude_pa":30,"period_s":1,"display_scale":100,"cut_depth":1,"steps":20,"dt_s":0.050000000000000003,"grid_xy":16,"inlet_pressure_pa":5,"density_kg_m3":1060,"viscosity_pa_s":0.0035,"wall_gamma0":2,"wall_inertial_gamma0":1,"model":"small-displacement pretensioned membrane"}

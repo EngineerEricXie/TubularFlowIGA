@@ -2,9 +2,8 @@
 
 The MPI case owner accepts `prescribed_motion` in `immersed_geometry.json` for
 backward-Euler flow. The ordinary fixed-geometry configuration remains valid.
-Full moving FSI and moving checkpoint/repartition restart are still separate
-unfinished HPC tasks. Validation status is tracked in
-[HPC-03D progress](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md).
+Full moving FSI and moving checkpoint/repartition restart are outside this case
+owner's supported scope.
 
 Keep the Cartesian grid fixed. Every VTP frame must preserve the reference
 file's vertex order, directed triangle connectivity, and boundary labels.
@@ -96,9 +95,7 @@ wall inertial penalty 1. Its files reproduce the validated two-rank input
 byte-for-byte. The one- and four-rank full graph comparisons remain pending.
 `--steps 2` reproduces the documented coarse-step probe that fails Newton
 backtracking on its second step; it is provided for reproducing that failure,
-not as an accepted baseline. See the
-[moving-flow progress report](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)
-for the numerical gates, evidence and limitations.
+not as an accepted baseline.
 
 Validate the saved rank reports and accepted history after the run finishes:
 

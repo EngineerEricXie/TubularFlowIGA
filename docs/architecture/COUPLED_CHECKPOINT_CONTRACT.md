@@ -1,16 +1,9 @@
 # 耦合 checkpoint 狀態契約
 
-狀態：HPC-05A 已完成的介面與狀態稽核。下文缺口盤點保留原始程式基準
-`70b1715992912871eebb4a6458634bedb1b9a542`，2026-09-09。
-實作與驗收分別由 [HPC-05B／C／D](../WORKSTATION_HPC_TODO.md) 承接。
-更新：05B 已交付 [bundle v1 發布／載入元件](COUPLED_CHECKPOINT_BUNDLE.md)；
-05C 已接入 0D／1D／貼體 3D payload、完整 graph histories、native CLI 與新的 MPI
-作業恢復。最新實作及 1／2／4-rank、split、fault／SIGUSR1 驗收見
-[native graph 進度](../progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md) 與
-[使用說明](../COUPLED_RESTART.md)。大型／跨節點驗收未完成，05C 保持部分完成；
-moving／FSI library runtime 與跨 rank 重分區已由
-[05D](../progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md) 完成。正式 moving／FSI
-native graph CLI 及跨節點排程仍待完成。不能將下文原始缺口當作目前完成狀態。
+目前 bundle v1 支援 0D／1D／貼體 3D payload、完整 graph histories、native CLI
+與 MPI 作業恢復；moving／FSI library runtime 也支援跨 rank 重分區。正式
+moving／FSI native graph CLI 尚未提供。使用方式見
+[native graph checkpoint／restart](../COUPLED_RESTART.md)。
 
 ## 1. 唯一可保存的邊界
 
@@ -91,8 +84,8 @@ wall time、MPI 時間與 RSS 是每次執行的量測，分開記錄，不能�
 `ZeroDFlowStepAccounting`。帳目包含初／末儲存量、source、distal sink、graph-port
 積分量與 residual；不是只保存 pressure。模型、role、port 身分及 model digest
 須一致。`base_state_`、input、trial、staged records 在 idle 恢復為 inactive。
-目前 constructor 的 initial pressure／time 不能恢復 index、count 與 publication，
-05C 需加入完整、驗證後的恢復入口。
+恢復入口必須同時驗證並恢復 index、count 與 publication，不能只設定 constructor
+的 initial pressure／time。
 
 [OutletCheckpoint](../../include/OutletCheckpoint.hpp) 已保存 outlet label／kind、
 flow、pressure、capacitor pressure。新 payload 延續這些狀態，並驗證全部 resistance、
@@ -128,17 +121,16 @@ capacitance、reference／distal pressure 與 boundary mapping 的配置身分�
 [OneDCheckpoint v2](../../solvers/one_d/include/OneDCheckpoint.hpp) 已涵蓋 hydraulic
 陣列、outlet 三個動態值、radius 與濃度，但沒有完整 `LastInlet()`／物種通量帳目。
 `RestoreCommittedState(flow, transports, network)` 也未恢復 `last_inlet_`。
-05C 必須補齊這些欄位及驗證，不能把 standalone checkpoint 直接包成 graph checkpoint。
+Graph checkpoint 必須補齊這些欄位及驗證，不能把 standalone checkpoint 直接包裝後使用。
 staged species adapter 目前拒絕 dynamic vasodilation；restart 不擴大它的物理支援範圍。
 
-05C 已補上 `OneDFlowCheckpointState`、Ready accepted capture／fresh-candidate restore，
+目前提供 `OneDFlowCheckpointState`、Ready accepted capture／fresh-candidate restore，
 以及 [metadata／field codec](../../solvers/one_d/include/OneDAcceptedCheckpoint.hpp)。
 只支援本契約的固定 macro dt：保存 accepted macro count、最後 start／dt，並核對
 configured step count 的整數倍關係。provider 必須傳入涵蓋完整配置、selected system、
 network 與外部輸入的已驗證 SHA-256 identity；省略 identity 的 legacy owner 不能使用
 新 checkpoint API。metadata 與 fields 必須同屬一個完整 bundle，通過所有分片校驗、
 consumer Finish、runtime validation 與群組 agreement 後才發布候選 owners。
-詳見 [1D 狀態與串流驗收](../progress/HPC_05C_ONE_D_STATE_PROGRESS.md)。
 
 ### 4.3 貼體 3D hydraulic 與 transport
 
@@ -158,23 +150,22 @@ Backward Euler 的下一次 `BeginStep` 會把 `state_` 複製到 `committed_sta
 **Mat**，每次 SolveTrial 重新組裝，不能誤認為需要另一份 concentration history。
 `committed_` 由當前場重建，next／rhs／forcing／KSP／matrix／scatter 重建。
 現有 `ReadState()` 只把 `steps_` 設為 1；它足以打開原有 warm-start 分支，仍不符合
-graph clock／完整診斷契約，05C 需提供帶正確 counter 的 validated restore。
+graph clock／完整診斷契約；graph restore 必須使用正確 counter。
 
 [FlowCheckpoint v1](../../include/FlowCheckpoint.hpp) 與
 [TransportCheckpoint v1](../../include/TransportCheckpoint.hpp) 的 PETSc vector
 可以是新 shard 的承載方式，但舊 metadata＋state 兩檔不具備跨 domain 原子發布。
 相同 rank 數也須核對 `.ntiga` 分區、node IDs、field 順序與 ownership，不能只比 vector 長度。
 
-05C 已加入 flow／transport 的 typed accepted capture／fresh candidate restore：
+Flow／transport 提供 typed accepted capture／fresh candidate restore：
 flow 的 graph macro dt 與 steady kernel dt=0 分開保存／驗證；transport 使用真實
 accepted step count，舊 ReadState 的 steps=1 行為只留在 legacy API。場按 owned rows
 保存，replicated boundaries／outlets 經 SHA agreement；clock、iteration count 與
-snapshot／BE history 一起恢復。詳見 [貼體 3D 狀態進度](../progress/HPC_05C_BODY_FITTED_STATE_PROGRESS.md)。
+snapshot／BE history 一起恢復。
 3D 磁碟 codec 與 local bundle producer／loader 已加入：metadata、replicated boundary
 arrays 每 domain 保存一次，owned fields 按 bundle world rank 分片，stream buffer 上限
 64 KiB。decoder 的形狀取自 verified fresh runtime；全部 payload／SHA 與群組 agreement
-通過後才 typed restore。三種模式已由新 MPI 作業恢復，詳見
-[3D 分片進度](../progress/HPC_05C_BODY_FITTED_BUNDLE_PROGRESS.md)。全作業 provider
+通過後才 typed restore。三種模式均支援由新 MPI 作業恢復。全作業 provider
 publication 尚未接入 native graph，不能把 typed restore 當作 live graph 的跨 domain 原子替換。
 
 ### 4.4 VCA／外部 circuit
@@ -211,7 +202,7 @@ vector、ghost、matrix／KSP 不保存，載入 idle runtime 後重建。
 
 現有 `SetCommittedOwnedState` 可設場與 clock，未恢復 graph adapter clocks／accepted
 ports／commit count；[transient lifecycle](../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp)
-constructor 還要求 fresh index 0。05D 必須一起處理，不能繞過 clock guard。
+constructor 還要求 fresh index 0。驗證後的恢復流程必須一起處理，不能繞過 clock guard。
 穩態／暫態共有 adapter 的 committed boundary controls、port publications 和 graph
 time／index／count 也屬於 payload；其 trial inputs 與 rollback copies 不屬於 payload。
 legacy serial [ThreeDImmersedFlowDomain](../../include/ThreeDImmersedFlowDomain.hpp)
@@ -243,7 +234,7 @@ trial PETSc objects 或所有歷史 epoch 的完整 mesh。
 [MovingCutGeometry::HashPublicationState](../../solvers/cpu/include/MovingCutGeometry.hpp)
 包含當前 geometry digest、上一個 geometry digest、unchanged-cell count、transition
 counts 與逐 cell old／new classifications。須保存這份有限的 predecessor provenance
-及 publication digest。05D 的 verified restore builder 必須檢查 cell ID／分類、完整計數、
+及 publication digest。Verified restore builder 必須檢查 cell ID／分類、完整計數、
 當前 geometry 一致性並重算 digest；不能用一般 constructor 的 genesis publication
 冒充原 publication，也不能提供未驗證的任意 hash override。
 目前 moving distributed runtime 以 `CaptureAcceptedCheckpoint()` 保存 owned field、
@@ -279,18 +270,17 @@ traction publications 已按 owned surface nodes 分散；全域 Aitken、收斂
 均為 collective。`MovingFsiCheckpointBundle` 將 moving flow、各 source rank traction slice
 與 owner-only membrane payload 發布於同一 manifest；fresh-pair restore 在全部候選與時鐘
 驗證成功後才回傳。不同 rank 數時依 stable surface node ID 重分配並建立新的 target
-partition provenance，不沿用舊 stamp。單機數值驗收記錄在 HPC-07 進度；native graph CLI
-整合、較大資源與跨節點仍是後續項目。
+partition provenance，不沿用舊 stamp。Native graph CLI 整合與跨節點規模仍未支援。
 
 ## 5. 實作邊界與 restore 順序
 
 [CoupledDomainRuntime](../../include/CoupledDomainRuntime.hpp) 現在只有 trial／commit
-介面，沒有 checkpoint capability。05B／C 新增的 provider 應明確區分：local metadata
+介面，沒有 checkpoint capability。Checkpoint provider 必須明確區分：local metadata
 擷取、需要 communicator 的分散式場 I/O、candidate 驗證，以及不丟例外的 publish。
 名稱與 wire format 由實作確定；本文件不是已存在的 C++ API 宣告。
 
 1. 讀取完成 manifest，驗證版本、所有檔案 checksum／大小／epoch 與配置相容性。
-   不先修改 live runtime 或輸出；05B 定義暫存 shard、sync、完成 manifest 最後發布。
+   不先修改 live runtime 或輸出；使用暫存 shard、sync，最後發布完成 manifest。
 2. 以相容的 domain membership 建立模型、目標 ownership、geometry、PETSc objects；
    檢查所有穩定 ID 覆蓋，不允許缺片、重複 owned rows 或以零補洞。仍依賴 `.ntiga`
    rank-specific partition 的 native graph 先保持原 rank 數；moving field 與 bounded FSI
@@ -302,7 +292,7 @@ partition provenance，不沿用舊 stamp。單機數值驗收記錄在 HPC-07 �
    candidate，保留原 bundle 與輸出。重新建立 trial scratch／ghost，而非執行一個假 step。
 5. 第一次續跑從 `N+1` 的人類可讀步號開始，輸出 prefix 與新紀錄不重複、不漏步。
 
-05C 已交付既有 0D／1D／貼體 3D graph 的相同 rank 恢復；05D 已加入 moving flow 與
+目前支援既有 0D／1D／貼體 3D graph 的相同 rank 恢復，以及 moving flow 與
 bounded FSI pair 的 global-ID ownership 搬移。尚未支援的 runtime／版本／rank 變動須在
 開始寫 shard 前拒絕，尤其 `.ntiga` 分區相依 native graph 仍不可只改啟動參數。surface
 重分配會驗證來源完整覆蓋並產生新 partition stamp，不直接沿用舊 stamp。
@@ -310,19 +300,19 @@ bounded FSI pair 的 global-ID ownership 搬移。尚未支援的 runtime／版�
 CUDA 的 standalone raw-state checkpoint 保留其 backend／format 身分；目前沒有
 CUDA graph provider，不能將其位元組當成 PETSc vector 載入。新增 provider 時仍須遵守
 相同 accepted field／outlet／species／clock 契約並通過 backend 對照驗收。
-[Phase 7 visualization snapshots](../POST_PHASE_7_IO_HARDENING.md) 仍是視覺化格式。
+Visualization snapshots 仍是視覺化格式，不能作為 checkpoint bundle。
 
-## 6. 後續必須通過的驗收
+## 6. 驗證要求
 
-| 驗收 | 判定與對應任務 |
+| 驗收 | 判定方式 |
 |---|---|
-| 拒絕非 accepted 邊界 | 所有 trial／prepare／部分 domain finalize／species staged／FSI active 狀態拒絕擷取，不發布 manifest（05B–D） |
-| 完整歷史續跑 | 獨立 MPI job 載入非零 `N` 後完成；對照不中斷作業的所有 accepted records、0D/outlet state、1D internal counters、3D fields／species；IDs／時鐘／presence 精確一致，後續場使用既定 relative L2 及守恆 gate（05C） |
-| Coupling 記憶辨識 | explicit／fixed／Aitken 的兩個以上 accepted steps；pressure initial guess 不能碰巧與 last measured 相同；near-zero species step 接在有確定 donor 的非零 step 後，另含 donor 反轉；比較迭代歷史（05C） |
-| History 辨識 | 非零 transient history、RCR capacitor、物種通量帳目及 reservoir composition；FSI 非零 displacement／velocity，moving 有真實 active-cell transition；不能只測零場／stationary 重啟（05C／D） |
-| 故障發布與全作業重啟 | commit 前、分片寫入中、manifest 發布前終止；新 job 只恢復最後完整 epoch。截斷、byte corruption、缺片、混 epoch、錯配置／rank／field order 全部拒絕（05B／C） |
-| Publication 恢復 | 舊→新 conservation、geometry predecessor provenance、FSI committed stamp 與後續 predictor 重現；禁止新建 genesis identity 冒充（05D） |
-| 規模與資源 | rank 1／2／4 與 split communicator；assembly／solve、I/O／sync／通訊時間及每 rank peak RSS 分開記錄；large／cross-node 經 scheduler（05C／D） |
+| 拒絕非 accepted 邊界 | 所有 trial／prepare／部分 domain finalize／species staged／FSI active 狀態拒絕擷取，不發布 manifest |
+| 完整歷史續跑 | 獨立 MPI job 載入非零 `N` 後完成；對照不中斷作業的所有 accepted records、0D/outlet state、1D internal counters、3D fields／species；IDs／時鐘／presence 精確一致，後續場使用既定 relative L2 及守恆 gate |
+| Coupling 記憶辨識 | explicit／fixed／Aitken 的兩個以上 accepted steps；pressure initial guess 不能碰巧與 last measured 相同；near-zero species step 接在有確定 donor 的非零 step 後，另含 donor 反轉；比較迭代歷史 |
+| History 辨識 | 非零 transient history、RCR capacitor、物種通量帳目及 reservoir composition；FSI 非零 displacement／velocity，moving 有真實 active-cell transition；不能只測零場／stationary 重啟 |
+| 故障發布與全作業重啟 | commit 前、分片寫入中、manifest 發布前終止；新 job 只恢復最後完整 epoch。截斷、byte corruption、缺片、混 epoch、錯配置／rank／field order 全部拒絕 |
+| Publication 恢復 | 舊→新 conservation、geometry predecessor provenance、FSI committed stamp 與後續 predictor 重現；禁止新建 genesis identity 冒充 |
+| 規模與資源 | rank 1／2／4 與 split communicator；assembly／solve、I/O／sync／通訊時間及每 rank peak RSS 分開記錄；large／cross-node 經 scheduler |
 
-這些是 05B／C／D 的待執行 gates，並非本次 05A 稽核的數值通過紀錄。
-05A 的證據、目前缺口與文件檢查見 [驗收報告](../progress/HPC_05A_CHECKPOINT_CONTRACT_REPORT.md)。
+這些 gates 定義 checkpoint 實作的驗證範圍；通過與否以對應 regression target
+及其輸出為準。

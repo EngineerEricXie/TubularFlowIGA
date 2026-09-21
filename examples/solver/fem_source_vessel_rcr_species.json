@@ -1,0 +1,138 @@
+{
+  "schema_version": "solver-v1",
+  "time": {
+    "mode": "transient",
+    "dt_s": 0.05,
+    "steps": 2
+  },
+  "waveforms": [],
+  "domains": [
+    {
+      "id": "source",
+      "dimension": "0d",
+      "solver": "source",
+      "device": "CPU",
+      "materials": {
+        "capacitance_m3_pa": 1e-09,
+        "resistance_pa_s_m3": 500.0,
+        "prescribed_flow_m3_s": 0.1,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {
+        "outlet": {
+          "role": "outlet"
+        }
+      }
+    },
+    {
+      "id": "vessel",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "geometry": "../../solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
+      "physics": [
+        "flow",
+        "species"
+      ],
+      "materials": {
+        "density_kg_m3": 1000.0,
+        "dynamic_viscosity_pa_s": 0.004,
+        "initial_velocity_x_m_s": -0.2,
+        "nonlinear_tolerance": 1e-08,
+        "maximum_iterations": 12
+      },
+      "boundaries": {
+        "wall_labels": []
+      },
+      "motion": {
+        "kind": "rigid_translation_x",
+        "speed_x_m_s": 0.001
+      },
+      "coupling": {
+        "method": "fixed",
+        "maximum_iterations": 20,
+        "pressure_relative_tolerance": 0.0001,
+        "flow_relative_tolerance": 1e-06,
+        "relaxation_factor": 0.5
+      },
+      "ports": {
+        "inlet": {
+          "role": "inlet",
+          "label": 1
+        },
+        "outlet": {
+          "role": "outlet",
+          "label": 2
+        }
+      },
+      "species": [
+        {
+          "id": "tracer",
+          "initial_concentration_mol_m3": 0.0,
+          "diffusivity_m2_s": 1e-06,
+          "source_mol_m3_s": 0.0,
+          "monotone": true,
+          "inflow_concentration_by_label_mol_m3": {
+            "1": 1.0,
+            "2": 0.0
+          }
+        },
+        {
+          "id": "second_tracer",
+          "initial_concentration_mol_m3": 0.0,
+          "diffusivity_m2_s": 2e-06,
+          "source_mol_m3_s": 0.0,
+          "monotone": true,
+          "inflow_concentration_by_label_mol_m3": {
+            "1": 0.5,
+            "2": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "id": "terminal",
+      "dimension": "0d",
+      "solver": "rcr",
+      "device": "CPU",
+      "materials": {
+        "proximal_resistance_pa_s_m3": 10.0,
+        "distal_resistance_pa_s_m3": 50.0,
+        "capacitance_m3_pa": 1e-09,
+        "distal_pressure_pa": 0.0,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {
+        "inlet": {
+          "role": "inlet"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "source:outlet",
+      "to": "vessel:inlet",
+      "exchange": [
+        "pressure",
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "vessel:outlet",
+      "to": "terminal:inlet",
+      "exchange": [
+        "pressure",
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    }
+  ],
+  "resources": {
+    "mpi_ranks": 1
+  },
+  "output": {
+    "directory": "results/fem_source_vessel_rcr_species"
+  }
+}

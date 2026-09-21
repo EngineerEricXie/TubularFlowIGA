@@ -1,9 +1,6 @@
 # Moving immersed-domain geometry
 
-Phase 7 is complete; the authoritative gate disposition and numerical evidence
-are recorded in [Phase 7 Closure Report](../progress/PHASE_7_REPORT.md).
-
-Phase 7 keeps the Cartesian background fixed in space: this is an Eulerian
+The moving immersed path keeps the Cartesian background fixed in space: this is an Eulerian
 immersed method, not ALE.  Every evaluated prescribed-surface time owns a new,
 immutable full-rebuild chain (surface, spatial classification, cut volume,
 immersed surface, ghost penalty).  Prepared/trial states are owned separately
@@ -12,7 +9,7 @@ published states are never mutated.
 
 Immersed surface quadrature records canonical material-triangle and
 barycentric provenance, so a prescribed wall velocity is evaluated from the
-same material point that created each quadrature point.  The Phase 6 static
+same material point that created each quadrature point. The existing static
 path remains unchanged and `.ntiga` is unchanged.
 
 Clipping propagates those canonical barycentrics from the original triangle
@@ -22,7 +19,7 @@ its evaluated time.  `GeometryIdentitySha256()` names only current immutable
 geometry, while `PublicationIdentitySha256()` additionally names compatible
 predecessor and transition context used for publication/retry decisions.
 
-S7-A is GO for the fixed-geometry backward-Euler runtime (PR7.3b): it consumes
+The fixed-geometry backward-Euler runtime consumes
 one immutable `MovingCutGeometry`, requires its exact current identity/layout
 at both ends of a step, uses current velocity for convection and an
 identity-only velocity history keyed by global Cartesian node ID.  Geometry
@@ -37,7 +34,7 @@ publication remains `ImmersedGlobalFlowState`.
 
 ## Transient immersed-wall impedance
 
-The bounded Phase 7 wall keeps the existing symmetric Nitsche traction,
+The moving-wall formulation keeps the existing symmetric Nitsche traction,
 adjoint-consistency, pressure-gap, and velocity-pressure blocks unchanged. It
 only replaces the coefficient in the existing penalty residual and tangent:
 
@@ -60,8 +57,8 @@ This is impedance stabilization only: it adds no ALE or space-time term, mesh
 motion, convective penalty, changed traction, FSI coupling, or snapshot-schema
 change.
 
-PR7.4a is committed as a standalone, non-integrated immersed velocity/history
-extension.  It admits only exact positive-cell layouts on a fixed Cartesian
+The standalone immersed velocity/history extension admits only exact
+positive-cell layouts on a fixed Cartesian
 grid, grows a deterministic six-face time-slab band from the old positive
 cells, and uses that forward-only containment check as its sole acceptance
 gate.  A deterministic sorted-level, six-neighbor multi-source reverse BFS
@@ -77,16 +74,16 @@ energy on interior band faces, preserves old-layout anchor values bitwise, and
 uses one bounded dense scaled-Cholesky factor for all velocity components and
 optional scalar warm starts.  It publishes only a fully covered target
 `ImmersedVelocityHistory`, with deterministic operator/reduced/extension
-hashes and residual/pivot/coverage gates.  PR7.4b slice 1 adds only a
-target-geometry runtime entry accepting an exact PR7.4a history, target-layout
+hashes and residual/pivot/coverage gates. The target-geometry runtime accepts
+an exact compatible history, target-layout
 warm-start seed, and immutable map identity.  The outer moving runtime,
 publication orchestration, output/washout, and FSI remain out of scope.
-Independent PR7.4a continuation, long-double LDLT, deterministic-storage,
-directionality/cap, and fail-closed evidence is passing.
+Continuation, long-double LDLT, deterministic-storage, directionality/cap,
+and fail-closed cases are covered by regression tests.
 
 ## Endpoint moving-domain conservation diagnostics
 
-PR7.4b keeps the accepted PDE exactly as a fixed-grid Eulerian endpoint
+The accepted PDE remains a fixed-grid Eulerian endpoint
 backward-Euler solve on \(\Omega^{n+1}\): the old velocity is extended to the
 target layout, spatial terms use the conservative mixed form with
 current-velocity convection, and the material-velocity Nitsche wall term is
@@ -126,7 +123,7 @@ exchange without exposing a trial as committed.
 
 ## Pure moving immersed field snapshots
 
-The Phase 7 field-snapshot sampler is a pure, immutable post-processing
+The field-snapshot sampler is a pure, immutable post-processing
 operation over one exact `MovingCutGeometry`, `ImmersedActiveLayout`, and
 `ImmersedGlobalFlowState`, including matching gauge topology.  It neither
 captures runtime state nor writes VTU/JSON/PVD output.  It samples usable volume
@@ -178,8 +175,8 @@ zero flows, and no-port snapshots remain distinct during recovery and
 idempotent retry. A complete orphaned epoch is recoverable after a crash
 between the directory and PVD renames; schema or request-semantic mismatches
 are rejected while rebuilding the unchanged PVD collection. This is the
-limited schema-v3 Phase 7 contract; broader artifact-integrity and recovery
-hardening is deferred as documented in `POST_PHASE_7_IO_HARDENING.md`.
+current schema-v3 contract; it does not provide a broader artifact-integrity or
+recovery protocol.
 Static geometry remains on the Bézier VTKHDF visualization path.
 
 Wall mismatch reports area, maximum and RMS relative velocity in m/s, plus

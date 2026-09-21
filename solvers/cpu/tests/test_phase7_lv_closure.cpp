@@ -1,6 +1,11 @@
 #include "IdealizedLeftVentricleFixture.hpp"
 #include "MovingImmersedFlowSnapshotCapture.hpp"
 #include "MovingImmersedFlowSnapshotPublisher.hpp"
+#include "NativeTetAleKinematics.hpp"
+#include "NativeTetAleMeshMotion.hpp"
+#include "NativeTetAlePetscRuntime.hpp"
+#include "NativeTetStarRadialRefinement.hpp"
+#include "NativeTetVelocityField.hpp"
 
 #include <algorithm>
 #include <array>
@@ -123,16 +128,46 @@ void GeometryOnly(const iga::PrescribedSurfaceMotion& motion)
 	const double ratio=es.Diagnostics().volume_m3/ed.Diagnostics().volume_m3;
 	Require(std::abs(ratio-iga::IdealizedLeftVentricleFixture::EndSystolicVolumeRatio)<=5e-13*iga::IdealizedLeftVentricleFixture::EndSystolicVolumeRatio,"LV ES/ED triangulated-volume ratio changed");
 }
-enum class RunMode { FullCycle, GeometryOnly, GeometrySweep, OneStep, TimeLattice };
-struct CommandLine { RunMode mode=RunMode::FullCycle; fs::path output_root; bool retain_output=false; };
+enum class RunMode { FullCycle, GeometryOnly, GeometrySweep, OneStep, TimeLattice, MatchedBackflowProbe, MatchedVolumeProbe, MatchedFieldProbe };
+struct CommandLine { RunMode mode=RunMode::FullCycle; fs::path output_root; bool retain_output=false; std::uint64_t probe_steps=0; std::uint32_t probe_depth=2; std::uint32_t radial_shells=0; };
 CommandLine ParseCommandLine(int argc,char** argv)
 {
-	const auto usage=[] { throw std::invalid_argument("usage: phase7_lv_closure_test [output-directory] | --geometry-only | --geometry-sweep | --one-step [output-directory] | --time-lattice"); };
+	const auto usage=[] { throw std::invalid_argument("usage: phase7_lv_closure_test [output-directory] | --geometry-only | --geometry-sweep | --one-step [output-directory] | --time-lattice | --matched-backflow-probe <1..16> [depth 2|3] | --matched-field-probe <1..16> [depth 2|3] [radial-ale|two-shell-ale] | --matched-volume-probe <2..3>"); };
 	if(argc==1)return {};
 	const std::string first(argv[1]);
 	if(first=="--geometry-only"){if(argc!=2)usage();return {RunMode::GeometryOnly,{ },false};}
 	if(first=="--geometry-sweep"){if(argc!=2)usage();return {RunMode::GeometrySweep,{ },false};}
 	if(first=="--time-lattice"){if(argc!=2)usage();return {RunMode::TimeLattice,{ },false};}
+	if(first=="--matched-backflow-probe"){
+		if(argc!=3&&argc!=4)usage();
+		const std::string requested(argv[2]);
+		if(requested.empty()||!std::all_of(requested.begin(),requested.end(),[](char c){return c>='0'&&c<='9';}))usage();
+		const auto steps=static_cast<std::uint64_t>(std::stoull(requested));
+		if(steps==0||steps>kCycleSteps)usage();
+		const std::string depth=argc==4?std::string(argv[3]):"2";
+		if(depth!="2"&&depth!="3")usage();
+		return {RunMode::MatchedBackflowProbe,{ },false,steps,static_cast<std::uint32_t>(depth[0]-'0')};
+	}
+	if(first=="--matched-volume-probe"){
+		if(argc!=3)usage();
+		const std::string requested(argv[2]);
+		if(requested!="2"&&requested!="3")usage();
+		return {RunMode::MatchedVolumeProbe,{ },false,static_cast<std::uint64_t>(requested[0]-'0')};
+	}
+	if(first=="--matched-field-probe"){
+		if(argc<3||argc>5)usage();
+		const std::string requested(argv[2]);
+		if(requested.empty()||!std::all_of(requested.begin(),requested.end(),[](char c){return c>='0'&&c<='9';}))usage();
+		const auto steps=static_cast<std::uint64_t>(std::stoull(requested));
+		if(steps==0||steps>kCycleSteps)usage();
+		const std::string selected_depth=argc>=4?std::string(argv[3]):"2";
+		if(selected_depth!="2"&&selected_depth!="3")usage();
+		const std::string refinement=argc==5?std::string(argv[4]):"";
+		if(!refinement.empty()&&refinement!="radial-ale"&&refinement!="two-shell-ale")usage();
+		return {RunMode::MatchedFieldProbe,{ },false,steps,
+			static_cast<std::uint32_t>(selected_depth[0]-'0'),
+			refinement=="two-shell-ale"?2u:(refinement=="radial-ale"?1u:0u)};
+	}
 	if(first=="--one-step"){if(argc==2)return {RunMode::OneStep,{ },false};if(argc==3)return {RunMode::OneStep,fs::path(argv[2]),true};usage();}
 	if(first.rfind("--",0)==0||argc!=2)usage();
 	return {RunMode::FullCycle,fs::path(argv[1]),true};
@@ -349,6 +384,230 @@ void OneStepProbe(const iga::PrescribedSurfaceMotion& motion,const CommandLine& 
 	std::cout<<"phase7_one_step_summary grid=6x6x7 depth=2 logical_points="<<runtime.CommittedGeometry().Diagnostics().volume.logical_output_points<<" max_linear="<<max_linear<<" max_controller="<<max_controller<<" max_discrete_continuity="<<conservation.normalized_discrete_moving_wall_continuity_defect<<" max_divergence_quadrature_defect="<<conservation.normalized_divergence_theorem_defect<<" max_reynolds="<<conservation.normalized_reynolds_defect<<" max_moving_mass="<<conservation.normalized_moving_mass_defect<<" max_wall_leakage="<<conservation.normalized_wall_relative_leakage<<" wall_ratio="<<wall_ratio<<" initial_runtime_s="<<initial_runtime_s<<" initial_snapshot_publish_s="<<initial_snapshot_s<<" begin_s="<<begin_s<<" solve_s="<<solve_s<<" rollback_replay_s="<<replay_s<<" commit_s="<<commit_s<<" snapshot_publish_s="<<snapshot_publish_s<<" elapsed_s="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count()<<std::endl;
 	if(temporary){std::error_code ignored;fs::remove_all(root,ignored);}
 }
+
+void MatchedBackflowProbe(const iga::PrescribedSurfaceMotion& motion,std::uint64_t steps,std::uint32_t depth)
+{
+	std::cout<<std::unitbuf;
+	std::cout.precision(17);
+	auto options=Options();
+	options.geometry.volume.max_depth=depth;
+	options.flow.wall_inertial_gamma0=0.0;
+	options.flow.pressure_port_backflow_beta[2]=0.5;
+	iga::MovingImmersedTransientFlowRuntime runtime(LatticeEvaluation(motion,0),options);
+	runtime.InitializeCommittedGlobalState(InitialRotationalState(runtime,options.grid));
+	for(std::uint64_t step=1;step<=steps;++step){
+		const auto lattice=NextTimeLatticeStep(step,runtime.CommittedGlobalState().TimeS());
+		std::cerr<<"matched immersed LV attempting step="<<step<<'\n';
+		runtime.BeginTrial(motion.Evaluate(lattice.target,lattice.source,lattice.target),step,lattice.dt);
+		Require(runtime.SolveTrial(),"matched immersed LV step did not converge");
+		const auto diagnostics=runtime.TrialDiagnostics();
+		const auto conservation=runtime.ConservationDiagnostics();
+		Require(std::isfinite(diagnostics.residual_norm)
+			&&std::isfinite(conservation.normalized_discrete_moving_wall_continuity_defect),
+			"matched immersed LV diagnostic is nonfinite");
+		runtime.PrepareCommit();runtime.FinalizeCommit();
+		const auto& ports=runtime.CommittedDiagnostics().ports;
+		const auto outlet=std::find_if(ports.begin(),ports.end(),[](const auto& port){return port.boundary_label==2;});
+		const auto inlet=std::find_if(ports.begin(),ports.end(),[](const auto& port){return port.boundary_label==1;});
+		Require(outlet!=ports.end()&&inlet!=ports.end()&&outlet->measurement_valid&&inlet->measurement_valid,
+			"matched immersed LV committed port measurement is absent");
+		iga::MovingImmersedFlowSnapshotOptions snapshot_options;
+		snapshot_options.maximum_points=2000000;
+		snapshot_options.maximum_output_bytes=500000000;
+		const auto snapshot=iga::BuildCommittedMovingImmersedFlowSnapshot(runtime,snapshot_options);
+		long double speed_squared_volume_integral=0.0L;
+		for(const auto& point:snapshot.Points())
+			speed_squared_volume_integral+=static_cast<long double>(point.speed_m_per_s)
+				*point.speed_m_per_s*point.physical_integration_weight_m3;
+		const double rms_speed=std::sqrt(static_cast<double>(speed_squared_volume_integral
+			/snapshot.Metrics().quadrature_volume_m3));
+		Require(std::isfinite(rms_speed),"matched immersed LV RMS speed is nonfinite");
+		std::cout<<"matched_immersed_lv_step="<<step<<" depth="<<depth
+			<<" time_s="<<lattice.target
+			<<" nonlinear_iterations="<<diagnostics.nonlinear_iterations
+			<<" residual="<<diagnostics.residual_norm
+			<<" inlet_outward_m3_s="<<inlet->measurement.outward_flow_m3_s
+			<<" outlet_outward_m3_s="<<outlet->measurement.outward_flow_m3_s
+			<<" rms_speed_m_s="<<rms_speed
+			<<" quadrature_volume_m3="<<snapshot.Metrics().quadrature_volume_m3
+			<<" moving_continuity="<<conservation.normalized_discrete_moving_wall_continuity_defect
+			<<" wall_leakage="<<conservation.normalized_wall_relative_leakage
+			<<'\n';
+	}
+	std::cout<<"matched immersed LV accepted_steps="<<steps<<" depth="<<depth<<" beta=0.5 wall_inertial_gamma0=0\n";
+}
+
+iga::NativeTetMesh MatchedStarMesh(const iga::RawSurfaceSoup& surface)
+{
+	iga::NativeTetMesh mesh;
+	mesh.points=surface.vertices;
+	const auto center=static_cast<std::uint32_t>(mesh.points.size());
+	mesh.points.push_back({{0.,0.,.045}});
+	std::uint64_t id=1;
+	for(const auto& triangle:surface.triangles){
+		auto nodes=std::array<std::uint32_t,4>{{center,
+			static_cast<std::uint32_t>(triangle.indices[0]),
+			static_cast<std::uint32_t>(triangle.indices[1]),
+			static_cast<std::uint32_t>(triangle.indices[2])}};
+		if(iga::NativeAleDeterminant(mesh.points[nodes[0]],mesh.points[nodes[1]],
+			mesh.points[nodes[2]],mesh.points[nodes[3]])<0.)std::swap(nodes[2],nodes[3]);
+		mesh.cells.push_back({id,nodes});
+		mesh.boundary_triangles.push_back({id,{{
+			static_cast<std::uint32_t>(triangle.indices[0]),
+			static_cast<std::uint32_t>(triangle.indices[1]),
+			static_cast<std::uint32_t>(triangle.indices[2])}},
+			static_cast<int>(triangle.boundary_id)});
+		++id;
+	}
+	return mesh;
+}
+
+std::array<double,3> MatchedEdgeMean(const std::vector<std::array<double,3>>& values,
+	const std::array<std::uint32_t,2>& edge)
+{
+	std::array<double,3> result{};
+	for(int component=0;component<3;++component)
+		result[component]=.5*(values[edge[0]][component]+values[edge[1]][component]);
+	return result;
+}
+
+void MatchedFieldProbe(const iga::PrescribedSurfaceMotion& motion,std::uint64_t steps,std::uint32_t depth,std::uint32_t radial_shells)
+{
+	int ranks=0;
+	MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
+	Require(ranks==1,"matched field probe requires exactly one MPI rank");
+	std::cout<<std::unitbuf;
+	std::cout.precision(17);
+	auto options=Options();
+	options.geometry.volume.max_depth=depth;
+	options.flow.wall_inertial_gamma0=0.0;
+	options.flow.pressure_port_backflow_beta[2]=0.5;
+	iga::MovingImmersedTransientFlowRuntime immersed(LatticeEvaluation(motion,0),options);
+	immersed.InitializeCommittedGlobalState(InitialRotationalState(immersed,options.grid));
+	auto reference=MatchedStarMesh(motion.Frames().front().surface);
+	if(radial_shells==1)reference=iga::RefineNativeTetStarRadially(reference,
+		static_cast<std::uint32_t>(reference.points.size()-1),0.5);
+	else if(radial_shells==2)reference=iga::RefineNativeTetStarRadialLayers(reference,
+		static_cast<std::uint32_t>(reference.points.size()-1),{1./3.,2./3.});
+	else Require(radial_shells==0,"matched field radial shell count is unsupported");
+	const auto topology=iga::BuildNativeTaylorHoodTopology(reference);
+	const auto velocity_nodes=reference.points.size()+topology.edges.size();
+	std::vector<double> ale_state(3*velocity_nodes+reference.points.size(),0.0);
+	constexpr double omega=.35;
+	for(std::size_t node=0;node<velocity_nodes;++node){
+		const auto coordinate=node<reference.points.size()?reference.points[node]:
+			MatchedEdgeMean(reference.points,topology.edges[node-reference.points.size()]);
+		ale_state[3*node]=-omega*coordinate[1];
+		ale_state[3*node+1]=omega*coordinate[0];
+	}
+	iga::NativeTetAleKinematics kinematics(reference.points,reference.cells);
+	iga::NativeTetAleBoundaryConditions ports;
+	ports.prescribed_pressure_pa[2]=0.0;
+	ports.flow_rate_controls.push_back({1,-kFlowM3S});
+	ports.backflow_stabilization_beta[2]=0.5;
+	for(std::uint64_t step=1;step<=steps;++step){
+		std::cerr<<"matched field LV attempting step="<<step<<'\n';
+		const auto lattice=NextTimeLatticeStep(step,immersed.CommittedGlobalState().TimeS());
+		const auto evaluated=motion.Evaluate(lattice.target,lattice.source,lattice.target);
+		std::map<std::uint32_t,std::array<double,3>> displacement;
+		for(std::uint32_t node=0;node<motion.Frames().front().surface.vertices.size();++node)
+			for(int component=0;component<3;++component)
+				displacement[node][component]=evaluated.SourceVerticesM()[node][component]
+					-reference.points[node][component];
+		const auto harmonic=iga::SolveNativeTetAleHarmonicMotion(reference,displacement);
+		const auto& trial_geometry=kinematics.BeginTrial(harmonic.displacement_m,lattice.target);
+		const auto current=iga::BuildNativeTetAleCurrentMesh(reference,trial_geometry);
+		std::map<std::uint32_t,std::array<double,3>> wall_velocity;
+		for(const auto node:topology.boundary_velocity_nodes.at(0))
+			wall_velocity[node]=node<reference.points.size()
+				?evaluated.SourceVertexVelocitiesMPerS()[node]
+				:MatchedEdgeMean(evaluated.SourceVertexVelocitiesMPerS(),
+					topology.edges[node-reference.points.size()]);
+		const auto ale=iga::SolveNativeTetAlePetscTransient(current,
+			trial_geometry.mesh_velocity_m_s,ale_state,ale_state,wall_velocity,
+			std::numeric_limits<std::uint32_t>::max(),{1050.,.012},lattice.dt,
+			1e-12,40,ports);
+		Require(ale.final_residual_l2<1e-9,"matched field ALE step did not converge");
+		immersed.BeginTrial(evaluated,step,lattice.dt);
+		Require(immersed.SolveTrial(),"matched field immersed step did not converge");
+		immersed.PrepareCommit();immersed.FinalizeCommit();
+		iga::MovingImmersedFlowSnapshotOptions snapshot_options;
+		snapshot_options.maximum_points=2000000;
+		snapshot_options.maximum_output_bytes=500000000;
+		const auto snapshot=iga::BuildCommittedMovingImmersedFlowSnapshot(immersed,snapshot_options);
+		const iga::NativeTetVelocityField field(current,topology,ale.replicated_state);
+		long double inside_volume=0.,outside_volume=0.,difference_squared=0.;
+		long double immersed_squared=0.,ale_squared=0.;
+		std::array<long double,2> kind_volume{},kind_difference_squared{},kind_immersed_squared{};
+		std::array<std::uint64_t,2> kind_points{};
+		std::uint64_t inside_count=0,outside_count=0;
+		for(const auto& point:snapshot.Points()){
+			const auto velocity=field.At(point.physical_m);
+			const auto weight=static_cast<long double>(point.physical_integration_weight_m3);
+			if(!velocity){outside_volume+=weight;++outside_count;continue;}
+			inside_volume+=weight;++inside_count;
+			const std::size_t kind=point.cell_kind==iga::MovingImmersedFieldCellKind::Cut?1:0;
+			kind_volume[kind]+=weight;
+			++kind_points[kind];
+			for(int component=0;component<3;++component){
+				const auto difference=static_cast<long double>((*velocity)[component])
+					-point.velocity_m_per_s[component];
+				difference_squared+=weight*difference*difference;
+				kind_difference_squared[kind]+=weight*difference*difference;
+				immersed_squared+=weight*point.velocity_m_per_s[component]
+					*point.velocity_m_per_s[component];
+				kind_immersed_squared[kind]+=weight*point.velocity_m_per_s[component]
+					*point.velocity_m_per_s[component];
+				ale_squared+=weight*(*velocity)[component]*(*velocity)[component];
+			}
+		}
+		Require(inside_count>0&&immersed_squared>0.&&std::isfinite(static_cast<double>(difference_squared)),
+			"matched field overlap is empty or nonfinite");
+		const double overlap_fraction=static_cast<double>(inside_volume/(inside_volume+outside_volume));
+		const double relative_l2=std::sqrt(static_cast<double>(difference_squared/immersed_squared));
+		const auto kind_l2=[&](std::size_t kind){return kind_immersed_squared[kind]>0.
+			?std::sqrt(static_cast<double>(kind_difference_squared[kind]/kind_immersed_squared[kind])):0.;};
+		std::cout<<"matched_lv_field step="<<step<<" depth="<<depth
+			<<" ale_cells="<<reference.cells.size()<<" time_s="<<lattice.target
+			<<" relative_l2_immersed="<<relative_l2
+			<<" overlap_volume_fraction="<<overlap_fraction
+			<<" overlap_volume_m3="<<static_cast<double>(inside_volume)
+			<<" excluded_volume_m3="<<static_cast<double>(outside_volume)
+			<<" overlap_points="<<inside_count<<" excluded_points="<<outside_count
+			<<" immersed_overlap_rms_m_s="<<std::sqrt(static_cast<double>(immersed_squared/inside_volume))
+			<<" ale_overlap_rms_m_s="<<std::sqrt(static_cast<double>(ale_squared/inside_volume))
+			<<" interior_relative_l2="<<kind_l2(0)
+			<<" cut_relative_l2="<<kind_l2(1)
+			<<" interior_points="<<kind_points[0]<<" cut_points="<<kind_points[1]
+			<<" cut_volume_fraction="<<static_cast<double>(kind_volume[1]/inside_volume)
+			<<" cut_difference_energy_fraction="<<static_cast<double>(kind_difference_squared[1]/difference_squared)
+			<<" ale_residual="<<ale.final_residual_l2<<'\n';
+		ale_state=ale.replicated_state;
+		kinematics.CommitTrial();
+	}
+	std::cout<<"matched LV field accepted_steps="<<steps<<" depth="<<depth
+		<<" ale_cells="<<reference.cells.size()<<" beta=0.5 wall_inertial_gamma0=0\n";
+}
+
+void MatchedVolumeProbe(const iga::PrescribedSurfaceMotion& motion,std::uint32_t depth)
+{
+	auto options=Options();
+	options.geometry.volume.max_depth=depth;
+	std::cout<<std::unitbuf;
+	std::cout.precision(17);
+	for(const std::uint64_t index:{std::uint64_t{0},std::uint64_t{8}}){
+		const auto geometry=iga::MovingCutGeometry::Build(options.grid,LatticeEvaluation(motion,index),options.geometry);
+		const auto& diagnostics=geometry->Diagnostics();
+		const double relative=(diagnostics.catalog_estimated_physical_volume_m3
+			-diagnostics.closed_surface_physical_volume_m3)/diagnostics.closed_surface_physical_volume_m3;
+		Require(std::isfinite(relative),"matched LV volume-probe relative error is nonfinite");
+		std::cout<<"matched_lv_volume_probe depth="<<depth<<" step="<<index
+			<<" closed_volume_m3="<<diagnostics.closed_surface_physical_volume_m3
+			<<" quadrature_volume_m3="<<diagnostics.catalog_estimated_physical_volume_m3
+			<<" relative_excess="<<relative
+			<<" logical_points="<<diagnostics.volume.logical_output_points<<'\n';
+	}
+}
 }
 
 int main(int argc,char** argv)
@@ -356,11 +615,23 @@ int main(int argc,char** argv)
 	int status=0;bool petsc_initialized=false;
 	try {
 		const auto command=ParseCommandLine(argc,argv); const auto started=std::chrono::steady_clock::now(); const auto motion=iga::IdealizedLeftVentricleFixture::Motion(); GeometryOnly(motion);
-		if(command.mode==RunMode::GeometryOnly){std::cout<<"phase7_geometry ed_es_ratio="<<iga::IdealizedLeftVentricleFixture::EndSystolicVolumeRatio<<" sectors=12 rings=4 labels=84,6,6\n";return 0;}
+		if(command.mode==RunMode::GeometryOnly){
+			const auto ed=iga::ClosedTriangulatedSurface::Build(motion.Frames().front().surface);
+			const auto es=iga::ClosedTriangulatedSurface::Build(motion.Frames()[1].surface);
+			std::cout.precision(17);
+			std::cout<<"phase7_geometry ed_es_ratio="<<iga::IdealizedLeftVentricleFixture::EndSystolicVolumeRatio
+				<<" ed_volume_m3="<<ed.Diagnostics().volume_m3
+				<<" es_volume_m3="<<es.Diagnostics().volume_m3
+				<<" sectors=12 rings=4 labels=84,6,6\n";
+			return 0;
+		}
 		if(command.mode==RunMode::GeometrySweep){GeometrySweep(motion);return 0;}
 		if(command.mode==RunMode::TimeLattice){TimeLatticeProbe(motion);return 0;}
+		if(command.mode==RunMode::MatchedVolumeProbe){MatchedVolumeProbe(motion,static_cast<std::uint32_t>(command.probe_steps));return 0;}
 		int petsc_argc=1; char** petsc_argv=argv;
 		if(PetscInitialize(&petsc_argc,&petsc_argv,nullptr,nullptr)!=0){std::cerr<<"phase7_lv_closure: PetscInitialize failed\n";return 1;}petsc_initialized=true;
+		if(command.mode==RunMode::MatchedBackflowProbe){MatchedBackflowProbe(motion,command.probe_steps,command.probe_depth);if(PetscFinalize()!=0){std::cerr<<"phase7_lv_closure: PetscFinalize failed\n";return 1;}petsc_initialized=false;return 0;}
+		if(command.mode==RunMode::MatchedFieldProbe){MatchedFieldProbe(motion,command.probe_steps,command.probe_depth,command.radial_shells);if(PetscFinalize()!=0){std::cerr<<"phase7_lv_closure: PetscFinalize failed\n";return 1;}petsc_initialized=false;return 0;}
 		if(command.mode==RunMode::OneStep){OneStepProbe(motion,command);if(PetscFinalize()!=0){std::cerr<<"phase7_lv_closure: PetscFinalize failed\n";return 1;}petsc_initialized=false;return 0;}
 		{
 		const bool temporary=!command.retain_output; const fs::path root=temporary ? fs::temp_directory_path()/"tubularflowiga-phase7-lv-closure" : command.output_root; if(temporary){std::error_code ignored;fs::remove_all(root,ignored);} fs::create_directories(root); const auto stem=root/"lv_cycle";

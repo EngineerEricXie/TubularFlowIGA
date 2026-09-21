@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "conventions": {
+    "length_unit": "m",
+    "region_roles": ["fluid", "solid", "shell", "porous", "network", "lumped"],
+    "reference_current_contract": "docs/GEOMETRY_DATA_CONTRACT.md"
+  },
+  "cases": [
+    {
+      "id": "labelled-tube-surface-fem",
+      "geometry_class": "tube",
+      "route": "surface_to_fem_volume",
+      "inputs": ["examples/vascular_flow/immersed_aneurysm_chain/immersed/surface.vtp"],
+      "implementation": ["solvers/cpu/src/surface_fem_preflight.cpp", "scripts/surface_to_fem_volume.py", "scripts/ftetwild_to_fem_volume.py", "solvers/cpu/include/NativeTetFem.hpp", "solvers/cpu/src/native_tet_flow.cpp"],
+      "evidence": ["docs/T1_FEM_VOLUME_MESH.md", "benchmarks/t1_mesher_comparison.json", "scripts/tests/test_surface_to_fem_volume.py", "scripts/tests/test_ftetwild_to_fem_volume.py", "scripts/tests/test_native_t2_result_pipeline.py"],
+      "local_command": "make t1-audit",
+      "gates": ["shared closed-surface preflight", "positive tetrahedron determinants", "minimum scaled Jacobian", "exact labelled boundary facet set", "source-volume agreement"],
+      "limitations": "Fixed single fluid region and first-order geometry; no automatic repair; straight, bent, and Y comparisons are local idealized cases rather than patient anatomy."
+    },
+    {
+      "id": "y-bifurcation-centerline-iga",
+      "geometry_class": "bifurcation",
+      "route": "centerline_to_iga_volume",
+      "inputs": ["examples/vascular_flow/y_bifurcation/skeleton_initial.swc", "examples/vascular_flow/y_bifurcation/simulation_config.json"],
+      "implementation": ["preprocessing/mesh/src/MeshGenerator.cpp", "preprocessing/spline/main.cpp", "solvers/cpu/src/iga_inspect.cpp"],
+      "evidence": ["preprocessing/mesh/tests/test_core.cpp", "scripts/tests/test_iga_geometry_manifest.py", "docs/MESH_CPP_VALIDATION.md"],
+      "local_command": "make mesh-test",
+      "gates": ["centerline topology and radius preflight", "positive hexahedron determinants", "minimum scaled Jacobian", "no exterior surface intersections", "partition-invariant geometry identity"],
+      "limitations": "Supported rooted tubular/binary-branch subset; not a general anatomical volume mesher."
+    },
+    {
+      "id": "idealized-moving-lv-chamber",
+      "geometry_class": "chamber",
+      "route": "surface_to_immersed_background",
+      "inputs": ["solvers/cpu/include/IdealizedLeftVentricleFixture.hpp"],
+      "implementation": ["solvers/cpu/include/MovingCutGeometry.hpp", "solvers/cpu/include/PrescribedSurfaceMotion.hpp", "solvers/cpu/include/GeometryContractManifest.hpp"],
+      "evidence": ["solvers/cpu/tests/test_moving_cut_geometry.cpp", "solvers/cpu/tests/test_phase7_lv_closure.cpp", "docs/T6_NATIVE_LV_QOI.md"],
+      "local_command": "make phase7-lv-closure-test PETSC_DIR=/path/to/petsc",
+      "gates": ["closed labelled chamber", "reference/current/background manifest", "ED-ES-ED periodic reference identity", "cut-volume bracket", "active-set transition coverage", "moving-domain conservation"],
+      "limitations": "Idealized prescribed motion; not ALE, active myocardium, or patient-specific anatomy."
+    }
+  ]
+}

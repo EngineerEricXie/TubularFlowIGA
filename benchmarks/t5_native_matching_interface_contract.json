@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "card_id": "T5-native-matching-ALE-solid-interface-v1",
+  "contract_status": "frozen",
+  "source_files_sha256": "0797d41002ef540c6b6b7eaac522c29d8bdfb02379ed847c57b06a05cc798c74",
+  "implementation_status": "matching_transfer_native_ALE_fluid_native_solid_and_idealized_compliant_channel_functional_vertical_slice_verified",
+  "external_coupling_framework": false,
+  "geometry": {
+    "matching_definition": "fluid ALE vertex and solid reference vertex share the same stable node ID and labelled triangle connectivity",
+    "configuration_for_force_and_power": "current accepted-or-trial interface configuration",
+    "topology_change": false
+  },
+  "kinematics": {
+    "displacement": "solid current position minus shared reference position, m",
+    "solid_velocity": "time derivative of solid displacement, m/s",
+    "mesh_velocity": "solid velocity copied to matching ALE boundary vertices, m/s",
+    "fluid_wall_velocity": "no-slip value interpolated to native P2 boundary nodes; edge midpoint is endpoint average",
+    "fluid_velocity_is_not_mesh_velocity_away_from_the_no_slip_interface": true
+  },
+  "dynamics": {
+    "traction_input": "traction_on_structure_pa",
+    "sign": "force exerted by fluid on structure; caller converts from sigma_times_fluid_outward_normal by negation",
+    "nodal_force": "current triangle area times constant triangle traction divided equally among its three P1 solid nodes",
+    "force_unit": "N",
+    "traction_unit": "Pa",
+    "native_fluid_projection": "area-average sigma*n_fluid on each current P2/P1 boundary triangle, then negate to traction_on_structure"
+  },
+  "conservation_gates": {
+    "total_force_exact_for_constant_triangle_traction": true,
+    "total_moment_exact_for_constant_triangle_traction": true,
+    "discrete_power_identity": "sum nodal_force dot nodal_velocity equals sum triangle area times traction dot centroid_interpolated_velocity",
+    "maximum_relative_roundoff_error": 1e-12
+  },
+  "strong_coupling_lifecycle": {
+    "state_machine": "shared FsiTrialLifecycle used by existing partitioned coordinator",
+    "structure_adapter": "NativeTetSolidFsiRuntime",
+    "fluid_input": "exact stamped SurfaceTraction consistent_nodal_force_n is assembled directly into the native tetrahedral solid external-force vector",
+    "solid_output": "exact stamped interface displacement and backward-Euler velocity",
+    "rejected_iteration_changes_committed_state": false,
+    "abort_after_prepare_changes_committed_state": false,
+    "finalization": "prevalidate numerical and publication owners, then paired noexcept swaps",
+    "existing_dynamic_aitken_coordinator_instantiated": true,
+    "coordinator_test": "constant-load test fluid plus real native solid converges in two iterations after one reject and unit Aitken relaxation; injected pre-finalize failure preserves committed solid state",
+    "native_end_to_end_invariant_smoke": "zero-state closed domain executes harmonic ALE motion, native P2/P1 transient flow, current-configuration fluid traction, consistent solid nodal force, native hyperelastic solid solve, and paired commit",
+    "native_end_to_end_invariant_smoke_is_not_a_physics_benchmark": true,
+    "native_nonzero_functional_smoke": {
+      "case": "closed tetrahedral domain with decaying internal P2 velocity pulse loading a supported hyperelastic solid",
+      "classification": "nonzero coupled operator and transaction smoke, not compliant-channel or added-mass validation",
+      "coupling_iterations": 2,
+      "committed_solid_displacement_l2_m": 3.01552e-7,
+      "accepted_displacement_residual_m": 8.33843e-9,
+      "accepted_traction_residual_pa": 0.016315,
+      "accepted_fluid_residual": 1.97091e-9,
+      "accepted_solid_residual_n": 8.71882e-11,
+      "accepted_interface_power_defect_w": 3.30872e-24,
+      "all_independent_gates_passed": true
+    },
+    "native_compliant_channel_functional_smoke": {
+      "case": "20 x 4 x 4 mm channel with parabolic P2 inlet, natural outlet, fixed noninterface walls, and matching supported hyperelastic top wall",
+      "classification": "idealized five-step functional smoke, not physical, added-mass, spatial, or temporal validation",
+      "time_step_s": 0.01,
+      "accepted_steps": 5,
+      "final_time_s": 0.05,
+      "coupling_iterations": 2,
+      "maximum_committed_displacement_m": 2.89519e-9,
+      "accepted_displacement_residual_m": 2.89216e-10,
+      "accepted_traction_residual_pa": 3.26841e-4,
+      "accepted_nodal_force_residual_n": 3.29236e-9,
+      "accepted_fluid_residual": 2.0769e-9,
+      "accepted_solid_residual_n": 1.55224e-11,
+      "accepted_interface_power_defect_w": 8.07794e-28,
+      "all_independent_gates_passed": true
+    },
+    "paired_checkpoint": {
+      "scope": "single-partition native ALE-fluid plus native solid accepted-step state",
+      "payload": "one deterministic bounded binary payload with fluid, ALE, interface, solid displacement and solid velocity state plus both model/state identities",
+      "capture_during_active_step_rejected": true,
+      "checksum_corruption_rejected": true,
+      "uninterrupted_vs_restarted_next_step_identical_committed_identities": true,
+      "uninterrupted_vs_restarted_steps_2_through_5_identical_committed_identities": true,
+      "distributed_rank_ownership": false
+    },
+    "native_ale_adapter": "NativeTetAleFsiRuntime dense small-case reference; production PETSc adapter remains separate",
+    "independent_acceptance_gates": [
+      "area-weighted displacement residual, m",
+      "area-weighted traction residual, Pa",
+      "RMS consistent nodal-force residual, N",
+      "native fluid nonlinear residual",
+      "native solid free-DOF residual, N",
+      "interface nodal-versus-quadrature power defect, W"
+    ],
+    "legacy_gate_compatibility": "new gates default disabled via infinity; native invariant smoke enables finite tolerances",
+    "current_partition_scope": "single partition"
+  },
+  "fail_closed": [
+    "missing interface triangles",
+    "state size mismatch",
+    "nonfinite displacement velocity or traction",
+    "duplicate or missing triangle traction",
+    "nonpositive current interface area",
+    "P2 edge absent from fluid topology"
+  ],
+  "deferred": [
+    "nonmatching projection_or_mortar",
+    "IGA_shell_parametric_to_ALE_surface_map",
+    "distributed interface ownership",
+    "physically calibrated native ALE fluid plus native solid coupled benchmark",
+    "traction varying within one triangle"
+  ]
+}

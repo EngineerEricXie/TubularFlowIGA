@@ -1,0 +1,45 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.05, "steps": 2},
+  "waveforms": [],
+  "domains": [
+    {
+      "id": "source", "dimension": "0d", "solver": "source", "device": "CPU",
+      "materials": {
+        "capacitance_m3_pa": 1e-09,
+        "resistance_pa_s_m3": 500.0,
+        "prescribed_flow_m3_s": 0.1,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {"outlet": {"role": "outlet"}}
+    },
+    {
+      "id": "vessel", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "backend": "native_tet_flow_cuda", "physics": ["flow"],
+      "case_file": "fem_flow_gpu_case.json",
+      "ports": {
+        "inlet": {"role": "inlet", "label": 1},
+        "outlet": {"role": "outlet", "label": 2}
+      }
+    },
+    {
+      "id": "terminal", "dimension": "0d", "solver": "rcr", "device": "CPU",
+      "materials": {
+        "proximal_resistance_pa_s_m3": 10.0,
+        "distal_resistance_pa_s_m3": 50.0,
+        "capacitance_m3_pa": 1e-09,
+        "distal_pressure_pa": 0.0,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {"inlet": {"role": "inlet"}}
+    }
+  ],
+  "connections": [
+    {"from": "source:outlet", "to": "vessel:inlet",
+      "exchange": ["pressure", "flow_rate"], "scheme": "sequential"},
+    {"from": "vessel:outlet", "to": "terminal:inlet",
+      "exchange": ["pressure", "flow_rate"], "scheme": "sequential"}
+  ],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/zero_d_fem_gpu_rcr", "every_steps": 1}
+}

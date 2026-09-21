@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "card_id": "T3-B-native-tetrahedral-solid-v1",
+  "contract_status": "frozen",
+  "implementation_status": "native_small_dense_compressible_and_stabilized_mixed_static_plus_inverse_prestress_vertical_slice",
+  "source_files_sha256": "06580070439dd9c0e7d9992833a9d782007ce85af762d7904511768c5f438c06",
+  "backend": "native_cpp_total_lagrangian_tetrahedral_solid",
+  "external_discretization_or_assembly_framework": false,
+  "algebra_backend": "PETSc_optional_for_future_global_runtime",
+  "discretization": {
+    "element": "four_node_linear_tetrahedron",
+    "configuration": "total_Lagrangian",
+    "unknowns": "three_displacement_components_per_reference_node",
+    "quadrature": "constant_strain_exact_reference_volume",
+    "initial_material": "compressible_isotropic_neo_Hookean"
+  },
+  "material": {
+    "parameters": ["Young_modulus_Pa", "Poisson_ratio", "density_kg_m3"],
+    "strain_energy": "mu/2*(trace(F^T F)-3)-mu*ln(J)+lambda/2*ln(J)^2",
+    "first_piola": "mu*(F-F^-T)+lambda*ln(J)*F^-T",
+    "near_incompressible_policy": "displacement P1 remains limited to nu<=0.45; near incompressibility uses the separate stabilized mixed u-p formulation"
+  },
+  "near_incompressible_mixed_formulation": {
+    "status": "verified_small_dense_reference",
+    "element": "equal-order tetrahedral P1 displacement and P1 pressure",
+    "finite_strain_model": "total-Lagrangian isochoric neo-Hookean plus pressure-volume constraint and finite bulk compliance",
+    "stabilization": "element-length-scaled pressure-gradient stabilization",
+    "analytic_consistent_tangent_relative_fd_error": 6.02681e-10,
+    "poisson_ratio_maximum_tested": 0.4999,
+    "locking_case": "4 x 1 x 1 cantilever under transverse end load",
+    "locking_refinement_levels": 6,
+    "mean_tip_displacement_m": [-0.000562069, -0.00129221, -0.00170307, -0.0019478, -0.00210452, -0.0022098],
+    "last_refinement_relative_change": 0.0476423,
+    "poisson_sweep": [0.49, 0.499, 0.4999],
+    "poisson_sweep_mean_tip_displacement_m": [-0.00170589, -0.00170334, -0.00170307],
+    "maximum_poisson_sweep_relative_displacement_change": 0.00165525,
+    "maximum_absolute_volume_change": 0.000119747,
+    "classification": "near-incompressible locking verification, not a patient-specific tissue benchmark"
+  },
+  "reference_configuration_policy": {
+    "input_geometry_meaning": "explicit unloaded reference, or loaded image passed through the inverse-elastostatics initializer",
+    "loaded_image_geometry_is_not_stress_free_by_default": true,
+    "inverse_elastostatics": "implemented for known material, dead nodal loads, and explicit zero-displacement supports",
+    "silent_zero_prestress_for_loaded_images": false
+  },
+  "inverse_prestress_scope": {
+    "algorithm": "relaxed fixed-point update of unloaded nodal coordinates with a full native nonlinear forward equilibrium solve at every inverse iteration",
+    "required_inputs": ["loaded tetrahedral mesh", "material", "dead nodal loads", "explicit zero-displacement supports"],
+    "outputs": ["estimated unloaded reference mesh", "loaded displacement", "loaded first Piola prestress per tetrahedron", "equilibrating internal nodal force"],
+    "loaded_geometry_reconstruction_status": "passed",
+    "inverse_iterations": 16,
+    "maximum_reconstruction_error_m": 9.26933e-11,
+    "maximum_reference_coordinate_error_m": 9.20868e-11,
+    "silent_unknown_load_inference": false,
+    "classification": "small-deformation single-tetra inverse-elastostatics verification, not patient-specific parameter identification"
+  },
+  "verification_cards": [
+    "zero_state",
+    "rigid_translation_and_rotation_objectivity",
+    "homogeneous_deformation_energy_and_first_Piola",
+    "analytic_tangent_against_centered_finite_difference",
+    "internal_force_and_moment_balance",
+    "consistent_mass",
+    "inverted_deformation_rejection",
+    "manufactured_homogeneous_global_Newton_solution",
+    "constraint_reaction_force_balance",
+    "loaded_geometry_inverse_reference_reconstruction_and_prestress",
+    "mixed_u_p_analytic_tangent_against_centered_finite_difference",
+    "mixed_global_nearly_incompressible_Newton_solution",
+    "near_incompressible_bending_refinement_and_poisson_sweep"
+  ],
+  "failure_classes": [
+    "invalid_material",
+    "nonpositive_reference_Jacobian",
+    "nonpositive_deformation_Jacobian",
+    "nonfinite_state",
+    "unsupported_near_incompressible_displacement_only_use",
+    "global_Newton_or_linear_nonconvergence"
+  ],
+  "local_resource_budget": {
+    "element_tests_maximum_wall_s": 60,
+    "maximum_peak_rss_bytes": 1073741824
+  },
+  "global_runtime_scope": {
+    "assembly": "repository_owned_dense_reference_assembly",
+    "loads": "explicit_global_nodal_dead_forces",
+    "constraints": "explicit_displacement_DOF_map",
+    "nonlinear_solver": "pivoted_dense_Newton_with_backtracking",
+    "outputs": [
+      "displacement",
+      "constraint_reaction",
+      "free_residual",
+      "strain_energy",
+      "load_potential",
+      "minimum_deformation_Jacobian"
+    ],
+    "not_production_scalable": true
+  },
+  "deferred_explicit_options": [
+    "hexahedral_solid_element",
+    "anisotropic_fibre_material",
+    "active_contraction",
+    "volume_IGA",
+    "higher_order_mixed_solid_elements",
+    "distributed_mixed_solid_solver"
+  ]
+}

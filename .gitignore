@@ -17,6 +17,9 @@
 /solvers/cpu/case_config_test
 /solvers/cpu/iga_config_check
 /solvers/cpu/iga_solve
+# Native tetra command-line executables are built beside the source tree.
+/solvers/cpu/native_tet_*
+/solvers/cpu/surface_fem_preflight
 /solvers/cpu/simulation_config_test
 /solvers/cpu/vtk_output_test
 /solvers/cpu/generic_transport_test
@@ -62,6 +65,10 @@
 /solvers/one_d/one_d_runtime_test
 /solvers/one_d/one_d_petsc_test
 /solvers/cuda/iga_cuda
+/solvers/cuda/native_tet_flow_cuda
+/solvers/cuda/native_tet_darcy_cuda
+/solvers/cuda/native_tet_species_cuda
+/solvers/cuda/native_tet_fsi_cuda
 /solvers/cuda/device_allocation_test
 /solvers/cpu/phase_profile_test
 /solvers/one_d/one_d_subcommunicator_test
@@ -105,7 +112,11 @@
 core
 core.*
 /.nsvms_diagnostics/
-/cases/
+/cases/*
+!/cases/idealized_cube_dual_tree.json
+!/cases/idealized_cube_dual_tree_refined.json
+!/cases/idealized_cube_dual_tree_oxygen.json
+!/cases/liver_roi_functional.json
 /outputs/
 /build/
 /cmake-build-*/
@@ -133,10 +144,6 @@ geometry_transform.json
 initial_velocityfield.txt
 cmat.txt
 bzpt.txt
-
-# Local planning and agent instructions
-/AGENTS.md
-/docs/ROADMAP.md
 
 # Editor and MATLAB artifacts
 *.asv
@@ -243,28 +250,3 @@ solvers/one_d/one_d_filename_failure_test
 /benchmarks/heartbeat-optimized-*/
 /benchmarks/heartbeat-optimized-*.out
 /benchmarks/heartbeat-optimized-*.err
-
-# PSC FSI optimization run evidence. Keep small STATE/state summaries visible.
-# Raw job trees also contain irreplaceable inputs/evidence: ignored != disposable.
-# Curated exact copies of required small R7 inputs, manifests and checksums live
-# in docs/evidence/bifurcation-fsi-r7/; keep that directory trackable.
-# Large archives/binaries stay outside Git and require separate verified backup.
-/benchmarks/fsi-time-opt/*T*Z/job-*/
-/benchmarks/fsi-time-opt/*T*Z/*-source.tar
-/benchmarks/fsi-time-opt/*T*Z/*.sha256
-/benchmarks/fsi-time-opt/*T*Z/*-files.txt
-/benchmarks/fsi-time-opt/*T*Z/*-git-status.txt
-/benchmarks/fsi-time-opt/*T*Z/*-head.txt
-/benchmarks/fsi-time-opt/*T*Z/*-worktree.patch
-/benchmarks/fsi-time-opt/*T*Z/*.tar.gz
-/benchmarks/fsi-time-opt/*T*Z/*.patch
-/benchmarks/fsi-time-opt/*T*Z/*.txt
-/benchmarks/fsi-time-opt/*T*Z/cases-*.json
-/benchmarks/fsi-time-opt/*T*Z/monitor-*
-/benchmarks/fsi-time-opt/*T*Z/runner-*.sh
-
-# Curated evidence contains text/JSON/CSV inputs and provenance, not bulk archives.
-/docs/evidence/**/*.tar
-/docs/evidence/**/*.tar.gz
-/docs/evidence/**/*.zip
-/docs/evidence/**/binaries/

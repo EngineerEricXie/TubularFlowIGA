@@ -3,17 +3,14 @@
 `iga_multidomain_flow` 與 `iga_1d_3d_bifurcation` 已接入 accepted-step checkpoint。
 目前支援原生 0D／1D／貼體 3D flow graph，以及 1D／貼體 3D species graph；
 恢復使用相同 rank 數與 communicator membership。浸入式、移動、FSI、CUDA graph
-及重分區恢復尚未接到這兩個 native CLI。單機驗收見
-[native graph 報告](progress/HPC_05C_NATIVE_GRAPH_PROGRESS.md)。
+及重分區恢復尚未接到這兩個 native CLI。
 
 這項限制描述上述兩個 native graph CLI。CPU library 端另已提供 moving-flow 與
 bounded moving-FSI pair 的版本化 bundle／fresh-candidate restore，包含 port controls、
 geometry predecessor、conservation、分散式 traction publication 與 owner membrane
 state；moving field 可跨 rank 數串流，FSI surface 依 stable node ID 重分配並建立新
 partition provenance。其正式 native graph CLI 接線與排程操作尚未完成，不能把測試
-fixture 的 `-moving_fsi_checkpoint_*` PETSc options 當成使用者 CLI。驗收範圍見
-[HPC-05D 完成報告](progress/HPC_05D_MOVING_FSI_RESTART_REPORT.md)與
-[HPC-07 進度](progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md)。
+fixture 的 `-moving_fsi_checkpoint_*` PETSc options 當成使用者 CLI。
 
 ## 保存與新的作業續跑
 
@@ -63,7 +60,7 @@ guess、species donor hysteresis 與 accepted history；owned 3D fields 由各 r
 任何一個參與 rank 收到訊號都會觸發這個行為。預警須送到實際 solver rank，並留足
 一個完整 macro-step 加保存時間；若下一步失敗或遭強制終止，只能恢復先前完整世代。
 launcher／batch shell 的訊號轉送依 scheduler 配置而異，不能假定只通知 shell 即有效。
-實際站點整合與多節點排程仍依 [HPC-09](WORKSTATION_HPC_TODO.md) 驗收。
+實際站點整合與多節點排程方式見 [HPC deployment](HPC_DEPLOYMENT.md)。
 
 ## 相容性與失敗處理
 
@@ -81,4 +78,4 @@ graph 輸出。每份 graph 候選失敗後須丟棄，這不是已運行 graph 
 格式與耐久性條件見 [bundle v1](architecture/COUPLED_CHECKPOINT_BUNDLE.md)。目前為
 共享 POSIX 檔案系統；尚未宣稱大型／跨節點檔案系統的數值、耐久性或吞吐驗收。
 history 按 record 串流，每筆 metadata 上限 16 MiB，完整 prefix 可超過該上限；
-既有記憶體內 history 與每代完整 prefix 的成長成本仍由 HPC-06 處理。
+既有記憶體內 history 與每代完整 prefix 會隨模擬長度成長。

@@ -2,6 +2,15 @@
 
 ## Recommended case-level command
 
+The following `generate_case.sh` command is the established centerline→IGA
+route. For the separately implemented surface/volume→native tetra FEM
+source–RCR route, use the explicit
+[native tetra workflow](T9_NATIVE_TET_WORKFLOW.md); it does not call DOLFIN.
+For prescribed-velocity P1 species transport, select the separate native
+species backend in the same explicit workflow or use its
+[standalone CLI](T9_NATIVE_TET_SPECIES_CLI.md). Neither uses DOLFIN or solves
+fluid equations as part of the species route.
+
 Run the complete 3D workflow through one command:
 
 ```bash
@@ -271,6 +280,19 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_bezier_export "$DATABASE" "$CASE_DIR/bzmesh.vtkhdf"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
+
+To publish the partition-invariant body-fitted geometry contract as JSON, add
+an explicit region role:
+
+```bash
+./solvers/cpu/iga_inspect "$DATABASE" \
+  --geometry-manifest geometry-contract.json --region-role fluid
+```
+
+The geometry identity excludes rank ownership and the partition index; the
+manifest separately records the exact `.ntiga` artifact SHA-256. Legacy
+version-3/4 databases are rejected for manifest output because they do not
+carry an explicit source transform; repack them as version 5 first.
 
 The packer prefers `spline_cache.igacache` and falls back to legacy text when
 the cache is absent. Pass `--legacy-text` after the output path to force that

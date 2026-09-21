@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "mesh_file": "../../solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
+  "fluid": {
+    "density_kg_m3": 1000.0,
+    "dynamic_viscosity_pa_s": 0.004,
+    "initial_velocity_m_s": [-0.2, 0.0, 0.0],
+    "nonlinear_tolerance": 1e-08,
+    "maximum_iterations": 12
+  },
+  "boundaries": {
+    "velocity_by_label_m_s": {
+      "1": [-0.2, 0.0, 0.0]
+    },
+    "pressure_by_label_pa": {
+      "2": 0.0
+    }
+  },
+  "time": {"dt_s": 0.05, "steps": 2}
+}

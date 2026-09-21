@@ -45,7 +45,7 @@
       "run": "make -C solvers/cpu phase6-aneurysm-depth2-regression PETSC_DIR=PETSC_PREFIX",
       "generated_inputs": ["isolated depth-2 immersed_geometry.json"],
       "native_gate_sources": ["solvers/cpu/tests/test_immersed_aneurysm_jacobian.cpp"],
-      "reference_evidence": ["docs/progress/PHASE_6_REPORT.md", "docs/progress/PHASE_9_REPORT.md"],
+      "reference_evidence": ["docs/BENCHMARKS.md", "examples/vascular_flow/immersed_aneurysm_chain/README.md"],
       "modes": {"mpi": "N/A until HPC-03", "openmp": "N/A until HPC-02", "cuda": "unsupported"},
       "gates": {"centered_fd_relative_defect_max": 1e-8, "newton_residual_max": 1e-11},
       "note": "Build and fixture preparation time must be separate from numerical work; this gate includes FD assembly and is not solve-only timing."
@@ -58,7 +58,7 @@
       "run": "./solvers/cpu/compliant_channel_fsi_test",
       "generated_inputs": ["in-memory material geometry and runtime state"],
       "native_gate_sources": ["solvers/cpu/tests/test_compliant_channel_fsi.cpp", "solvers/cpu/tests/CompliantChannelFsiFixture.hpp"],
-      "reference_evidence": ["docs/progress/PHASE_8_REPORT.md"],
+      "reference_evidence": ["docs/BENCHMARKS.md", "docs/architecture/FSI_ARCHITECTURE.md"],
       "modes": {"mpi": "N/A until HPC-07", "openmp": "N/A until HPC-02", "cuda": "unsupported"},
       "gates": {"traction_resultant_component_absolute_max_n": 1e-11, "traction_moment_component_absolute_max_n_m": 1e-11, "normalized_moving_mass_defect_strict_max": 0.03, "normalized_wall_leakage_strict_max": 0.03, "normalized_discrete_continuity_strict_max": 1e-8},
       "note": "Native fixture convergence thresholds and all other assertions remain authoritative; this is one accepted macro-step with strong trials."

@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "kind": "patient_derived_liver_roi_functional_not_physiological",
+  "source_files_sha256": "9fb3e94e5e28116e8defea9913127feec9c086782420976fc83880981a4fbf54",
+  "component_roi_audit_sha256": "866efff60a36aaafb9e1fc730a8706f3ffa0c0021c7b9bbba1b180edd2718dfa",
+  "case_file_sha256": "0027687c0d8f952f459a37496b3e1d3878a99da9d6af0f3349355eab877c939a",
+  "solver_binary_sha256_for_field_evidence": "0d50c91a851960155d97b0fb3884eba80e4e42e0859828c4fe566cdba1406b20",
+  "rank_owned_field_bundle_sha256_by_rank": {
+    "1": "03090c1b73a439924664cbc445966f228461aeb52949725c1dd2ea324cbc218c",
+    "2": "0279be7d8e27f2c9705486216d6d9de3949c53a7db6faae0280cf39ccb17db7a",
+    "4": "960fbd5a723c2dbab747b9e02b0222b4ce1444b640c56d1a14221effc75706dc"
+  },
+  "source_collection": "TCIA Colorectal-Liver-Metastases, CRLM-CT-1072, CC BY 4.0; see docs/LIVER_GEOMETRY_CANDIDATES.md for exact UID and license evidence",
+  "source_seg_sha256": "afe7a2bdf63cb65a5f4cea53cde8f2271bac51f5f53369b2c47a028b083c1654",
+  "multiregion_mesh_sha256": "75201bd15c126d5fd8ab71162e4f7f8b242972cc65f502dfb431951ee02acd94",
+  "multiregion_contract_sha256": "3453960c6540698c98b8727eb9b88148f4f3ea9c0309fd6ff33cdca8dde7d3dd",
+  "vessel_mesh_sha256": "6cec8db10f064c01b13d02e2478da2f655e0f86417b33b640ae663740a573a59",
+  "tissue_mesh_sha256": "9af3cc058de3de3df0fa0ea2f0d848146765c25dc2fbc3da1698e0bc39fcf1f5",
+  "roi_zyx_half_open": [[10, 20], [210, 226], [101, 117]],
+  "tissue_candidate_tetrahedra": 13128,
+  "portal_tetrahedra": 192,
+  "interface_facets": 158,
+  "mpi_ranks_tested": [1, 2, 4],
+  "explicit_functional_inputs": {
+    "inlet_velocity_m_s": [0, 0, -0.01],
+    "density_kg_m3": 1000,
+    "viscosity_pa_s": 0.004,
+    "mobility_m2_pa_s": 1,
+    "interface_pressure_pa": 0,
+    "tissue_exit_pressure_pa": 0
+  },
+  "labels": {
+    "portal_roi_cut_inlet_for_smoke": 1,
+    "matching_interface": 4,
+    "tissue_artificial_pressure_exits": [2, 3]
+  },
+  "metrics_by_rank": {
+    "1": {
+      "facets": 158,
+      "fluid_inlet_m3_s": -1.5751746086430047e-08,
+      "interface_source_m3_s": 1.5751746086430044e-08,
+      "darcy_outward_m3_s": 1.575174608651208e-08,
+      "fluid_newton_iterations": 4,
+      "fluid_linear_reason": 4,
+      "darcy_linear_reason": 3,
+      "darcy_max_cell_defect_m3_s": 5.01914454886424e-22
+    },
+    "2": {
+      "facets": 158,
+      "fluid_inlet_m3_s": -1.5751746086430047e-08,
+      "interface_source_m3_s": 1.5751746086430044e-08,
+      "darcy_outward_m3_s": 1.575174608651207e-08,
+      "fluid_newton_iterations": 4,
+      "fluid_linear_reason": 4,
+      "darcy_linear_reason": 3,
+      "darcy_max_cell_defect_m3_s": 5.0194999780336968e-22
+    },
+    "4": {
+      "facets": 158,
+      "fluid_inlet_m3_s": -1.5751746086430047e-08,
+      "interface_source_m3_s": 1.5751746086430044e-08,
+      "darcy_outward_m3_s": 1.5751746086512054e-08,
+      "fluid_newton_iterations": 4,
+      "fluid_linear_reason": 4,
+      "darcy_linear_reason": 3,
+      "darcy_max_cell_defect_m3_s": 5.0193384193203075e-22
+    }
+  },
+  "full_liver_case": false,
+  "physiological_validation": false,
+  "limitations": "Original SEG-derived local ROI only; artificial inlet and pressure/material values; rank-owned field and signed facet ledger are functional evidence, not clinical perfusion, a full-organ model, or a justified component policy."
+}

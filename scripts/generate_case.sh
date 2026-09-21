@@ -9,10 +9,11 @@ clean=false
 legacy_vtk=false
 allow_preflight_failure=false
 direct_output=false
+template_directory=$repo_dir/meshgeneration/template
 
 usage()
 {
-	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--clean] [--direct-output] [--legacy-vtk] [--allow-preflight-failure]\n' "$0" >&2
+	printf 'usage: %s CASE_DIR [--output DIR] [--ranks N] [--template-dir DIR] [--clean] [--direct-output] [--legacy-vtk] [--allow-preflight-failure]\n' "$0" >&2
 }
 
 if [[ $# -lt 1 ]]; then
@@ -31,6 +32,11 @@ while (( $# > 0 )); do
 		--ranks)
 			if (( $# < 2 )); then usage; exit 2; fi
 			ranks=$2
+			shift 2
+			;;
+		--template-dir)
+			if (( $# < 2 )); then usage; exit 2; fi
+			template_directory=$2
 			shift 2
 			;;
 		--clean)
@@ -156,7 +162,7 @@ cp "${geometry_sources[@]}" "$preprocessing_dir/"
 make -C "$repo_dir" mesh spline cpu
 pipeline_command=(
 	"$repo_dir/preprocessing/mesh/tubular_mesh" pipeline
-	"$preprocessing_dir" "$repo_dir/meshgeneration/template"
+	"$preprocessing_dir" "$template_directory"
 )
 if [[ $allow_preflight_failure == true ]]; then
 	pipeline_command+=(--allow-preflight-failure)

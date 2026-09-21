@@ -1,0 +1,13 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.05, "steps": 2},
+  "waveforms": [],
+  "domains": [{
+    "id": "vessel", "dimension": "3d", "method": "FEM", "device": "CPU",
+    "physics": ["flow"], "workflow_file": "fem_hydraulic_workflow.json",
+    "ports": {}
+  }],
+  "connections": [],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/fem_flow"}
+}

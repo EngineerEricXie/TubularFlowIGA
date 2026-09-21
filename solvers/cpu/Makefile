@@ -23,9 +23,43 @@ HDF5_LIBS ?= $(if $(HDF5_CONDA_PREFIX),$(HDF5_CONDA_LIBS),\
 
 PETSC_DIR ?=
 PETSC_ARCH ?=
-PETSC_TARGETS := immersed_transient_preallocation_test bifurcation_fsi moving_checkpoint_bundle_test moving_checkpoint_metadata_test material_surface_checkpoint_test immersed_moving_distributed_fsi_runtime_test immersed_fitted_wall_diagnostics_test immersed_moving_distributed_domain_test immersed_moving_distributed_runtime_test immersed_moving_distributed_operator_test distributed_immersed_extension_test distributed-immersed-extension-test body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-sliver phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
+PETSC_TARGETS := immersed_transient_preallocation_test bifurcation_fsi moving_checkpoint_bundle_test moving_checkpoint_metadata_test material_surface_checkpoint_test immersed_moving_distributed_fsi_runtime_test immersed_fitted_wall_diagnostics_test immersed_moving_distributed_domain_test immersed_moving_distributed_runtime_test immersed_moving_distributed_operator_test distributed_immersed_extension_test distributed-immersed-extension-test body_fitted_subcommunicator_test petsc petsc-test phase5-closure-test phase5-closure-manufactured phase5-closure-manufactured-triplet phase5-closure-all phase5_closure_test phase6-aneurysm-depth2-regression phase6-aneurysm-runtime-closure-test phase6_aneurysm_runtime_closure_test phase7-focused-test phase7-lv-closure-test phase7_lv_closure_test phase8-compliant-channel-fsi-paraview phase8_compliant_channel_fsi_paraview quadrature_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed-transient-state-test immersed_velocity_extension_test immersed-velocity-extension-test immersed_static_flow_test immersed_transient_flow_test immersed-transient-flow-test moving_immersed_transient_flow_test moving-immersed-transient-flow-test moving_immersed_flow_snapshot_test moving-immersed-flow-snapshot-test moving_immersed_flow_snapshot_publisher_test moving-immersed-flow-snapshot-publisher-test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check moving_cut_geometry_test moving-cut-geometry-test fluid_surface_traction_test fluid-surface-traction-test moving_immersed_transient_flow_fsi_runtime_test moving-immersed-transient-flow-fsi-runtime-test compliant_channel_fsi_test compliant-channel-fsi-test
 
 PETSC_TARGETS += parallel_ownership_test parallel-ownership-test
+PETSC_TARGETS += native_tet_flow
+PETSC_TARGETS += immersed-transient-backflow-test
+PETSC_TARGETS += phase7-lv-matched-backflow-probe
+PETSC_TARGETS += phase7-lv-matched-field-probe
+PETSC_TARGETS += phase7-lv-matched-volume-probe
+PETSC_TARGETS += native_tet_ale_petsc_assembly_test native-tet-ale-petsc-assembly-test
+PETSC_TARGETS += native_tet_ale_petsc_runtime_test native-tet-ale-petsc-runtime-test
+PETSC_TARGETS += native_tet_ale_idealized_lv_flow_test native-tet-ale-idealized-lv-flow-test native_tet_ale_idealized_lv_radial_flow_test native-tet-ale-idealized-lv-radial-flow-test native_tet_ale_idealized_lv_backflow_flow_test native-tet-ale-idealized-lv-backflow-flow-test
+PETSC_TARGETS += native_tet_ale_idealized_lv_radial_backflow_flow_test native-tet-ale-idealized-lv-radial-backflow-flow-test
+PETSC_TARGETS += native_tet_ale_idealized_lv_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test
+PETSC_TARGETS += native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test
+PETSC_TARGETS += native_tet_ale_idealized_lv_two_shell_backflow_flow_test
+PETSC_TARGETS += native_tet_moving_species_petsc_runtime_test
+PETSC_TARGETS += native_tet_wall_reservoir_exchange_test
+PETSC_TARGETS += native_tet_darcy_petsc_test
+PETSC_TARGETS += native_tet_darcy
+PETSC_TARGETS += native_tet_matching_darcy_smoke
+PETSC_TARGETS += native_tet_matching_solved_roi_smoke
+PETSC_TARGETS += native_tet_cube_dual_tree_fixed_flow
+PETSC_TARGETS += native_tet_cube_oxygen
+PETSC_TARGETS += native_tet_flow_darcy_chain
+PETSC_TARGETS += native_tet_fsi_steps
+PETSC_TARGETS += native_tet_moving_species_spatial_convergence_test
+PETSC_TARGETS += native_tet_moving_species_checkpoint_test
+PETSC_TARGETS += native_tet_ale_graph_petsc_runtime_test
+PETSC_TARGETS += native_tet_ale_flow_transport_domain_adapter_test
+PETSC_TARGETS += native_tet_ale_species_graph_1d_test
+PETSC_TARGETS += native_tet_ale_flow_0d_graph_test
+PETSC_TARGETS += native_tet_hydraulic_graph
+PETSC_TARGETS += native_tet_species_transport
+PETSC_TARGETS += native-tet-ale-petsc-fieldsplit-test
+PETSC_TARGETS += native_tet_ale_petsc_prescribed_runtime_test native-tet-ale-petsc-prescribed-runtime-test
+PETSC_TARGETS += native_tet_ale_petsc_mesh_runtime_test native-tet-ale-petsc-mesh-runtime-test
+PETSC_TARGETS += native_tet_bifurcation_runtime_test native-tet-bifurcation-runtime-test
 PETSC_TARGETS += parallel_vtk_output_test
 PETSC_TARGETS += distributed_point_identity_test distributed_material_surface_patch_test
 PETSC_TARGETS += parallel_bezier_visualization_test
@@ -223,9 +257,487 @@ $(immersed_face_targets): include/CubicCartesianSplineFace.hpp
 runtime_cleanup_cli_test: tests/test_runtime_cleanup_cli.cpp src/iga_navier_stokes.cpp $(wildcard include/*.hpp ../../include/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
-all: iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference
+all: iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_transport_validate iga_womersley_reference surface_fem_preflight
+
+native_tet_fem_test: tests/test_native_tet_fem.cpp include/NativeTetFem.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetHydraulicVisualization.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_mesh_components_test: tests/test_native_tet_mesh_components.cpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_mesh_inspect: src/native_tet_mesh_inspect.cpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_matching_mesh_inspect: src/native_tet_matching_mesh_inspect.cpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetVesselTissueSourceMap.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_matching_darcy_smoke: src/native_tet_matching_darcy_smoke.cpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_matching_solved_roi_smoke: src/native_tet_matching_solved_roi_smoke.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_cube_dual_tree_fixed_flow: src/native_tet_cube_dual_tree_fixed_flow.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMatchingFsiInterface.hpp include/NativeTetLinearElasticPetsc.hpp include/NativeTetLinearElasticVisualization.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_cube_oxygen: src/native_tet_cube_oxygen.cpp $(wildcard include/NativeTet*.hpp include/ParallelVtkOutput.hpp include/Collective*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_flow_darcy_chain: src/native_tet_flow_darcy_chain.cpp $(wildcard include/NativeTet*.hpp include/ParallelVtkOutput.hpp include/Collective*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_fsi_steps: src/native_tet_fsi_steps.cpp $(wildcard include/NativeTet*.hpp include/ParallelVtkOutput.hpp include/Collective*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_hyperelastic_solid_test: tests/test_native_tet_hyperelastic_solid.cpp include/NativeTetHyperelasticSolid.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_solid_static_solver_test: tests/test_native_tet_solid_static_solver.cpp include/NativeTetSolidStaticSolver.hpp include/NativeTetHyperelasticSolid.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_solid_prestress_test: tests/test_native_tet_solid_prestress.cpp include/NativeTetSolidPrestress.hpp include/NativeTetSolidStaticSolver.hpp include/NativeTetHyperelasticSolid.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_mixed_hyperelastic_solid_test: tests/test_native_tet_mixed_hyperelastic_solid.cpp include/NativeTetMixedHyperelasticSolid.hpp include/NativeTetHyperelasticSolid.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_mixed_solid_static_solver_test: tests/test_native_tet_mixed_solid_static_solver.cpp include/NativeTetMixedSolidStaticSolver.hpp include/NativeTetMixedHyperelasticSolid.hpp include/NativeTetSolidStaticSolver.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_mixed_locking_test: tests/test_native_tet_mixed_locking.cpp include/NativeTetMixedSolidStaticSolver.hpp include/NativeTetMixedHyperelasticSolid.hpp include/NativeTetAleKinematics.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_matching_fsi_interface_test: tests/test_native_tet_matching_fsi_interface.cpp include/NativeTetMatchingFsiInterface.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_solid_fsi_runtime_test: tests/test_native_tet_solid_fsi_runtime.cpp include/NativeTetSolidFsiRuntime.hpp include/NativeTetSolidStaticSolver.hpp include/NativeTetHyperelasticSolid.hpp include/StrongFluidStructureCoupling.hpp ../../include/FsiDomainRuntime.hpp ../../include/FsiCouplingEdge.hpp ../../include/DistributedSurfaceInterface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_ale_solid_fsi_test: tests/test_native_tet_ale_solid_fsi.cpp include/NativeTetAleFsiRuntime.hpp include/NativeTetSolidFsiRuntime.hpp include/NativeTetAleDenseRuntime.hpp include/NativeTetMatchingFsiInterface.hpp include/StrongFluidStructureCoupling.hpp ../../include/FsiDomainRuntime.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_compliant_channel_fsi_test: tests/test_native_tet_compliant_channel_fsi.cpp include/NativeTetFsiCheckpoint.hpp include/NativeTetAleFsiRuntime.hpp include/NativeTetSolidFsiRuntime.hpp include/NativeTetAleDenseRuntime.hpp include/NativeTetMatchingFsiInterface.hpp include/StrongFluidStructureCoupling.hpp ../../include/FsiDomainRuntime.hpp ../../include/CheckpointMetadataCodec.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_fixed_spatial_convergence_test: tests/test_native_tet_fixed_spatial_convergence.cpp include/NativeTetAleDenseRuntime.hpp include/NativeTetAleKinematics.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_ale_immersed_chamber_motion_test: tests/test_native_tet_ale_immersed_chamber_motion.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleMeshMotion.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_star_radial_refinement_test: tests/test_native_tet_star_radial_refinement.cpp include/NativeTetStarRadialRefinement.hpp include/IdealizedLeftVentricleFixture.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_moving_species_transport_test: tests/test_native_tet_moving_species_transport.cpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetSpeciesVisualization.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_moving_species_ports_test: tests/test_native_tet_moving_species_ports.cpp include/NativeTetMovingSpeciesPorts.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetFem.hpp ../../include/CoupledDomainRuntime.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_ale_graph_ports_test: tests/test_native_tet_ale_graph_ports.cpp include/NativeTetAleGraphPorts.hpp include/NativeTetAleBoundaryControl.hpp include/NativeTetAleBackflow.hpp ../../include/CoupledDomainRuntime.hpp ../../include/FlowDomainPortMetadata.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_ale_graph_petsc_runtime_test: tests/test_native_tet_ale_graph_petsc_runtime.cpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBoundaryControl.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesPorts.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_flow_transport_domain_adapter_test: tests/test_native_tet_ale_flow_transport_domain_adapter.cpp include/NativeTetAleFlowTransportDomainAdapter.hpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetMovingSpeciesCheckpoint.hpp include/NativeTetMovingSpeciesPorts.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_species_graph_1d_test: tests/test_native_tet_ale_species_graph_1d.cpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../one_d/include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) -I../one_d/include $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_flow_0d_graph_test: tests/test_native_tet_ale_flow_0d_graph.cpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_hydraulic_graph: src/native_tet_hydraulic_graph.cpp include/ParallelVtkOutput.hpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../one_d/include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) -I../one_d/include $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_species_transport: src/native_tet_species_transport.cpp include/ParallelVtkOutput.hpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_moving_species_petsc_runtime_test: tests/test_native_tet_moving_species_petsc_runtime.cpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetRt0Flux.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_wall_reservoir_exchange_test: tests/test_native_tet_wall_reservoir_exchange.cpp include/NativeTetWallReservoirExchange.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_darcy_petsc_test: tests/test_native_tet_darcy_petsc.cpp include/NativeTetDarcyPetsc.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetVesselTissueSourceMap.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetRt0Flux.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_darcy: src/native_tet_darcy.cpp include/NativeTetDarcyVisualization.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetRt0Flux.hpp include/NativeTetFem.hpp include/ParallelVtkOutput.hpp ../../include/PartitionedVtkOutput.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_moving_species_spatial_convergence_test: tests/test_native_tet_moving_species_spatial_convergence.cpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+native_tet_moving_species_checkpoint_test: tests/test_native_tet_moving_species_checkpoint.cpp include/NativeTetMovingSpeciesCheckpoint.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
+
+.PHONY: native-tet-moving-species-transport-test
+native-tet-moving-species-transport-test: native_tet_moving_species_transport_test
+	./native_tet_moving_species_transport_test
+
+.PHONY: native-tet-moving-species-ports-test
+native-tet-moving-species-ports-test: native_tet_moving_species_ports_test
+	./native_tet_moving_species_ports_test
+
+.PHONY: native-tet-ale-graph-ports-test
+native-tet-ale-graph-ports-test: native_tet_ale_graph_ports_test
+	./native_tet_ale_graph_ports_test
+
+native_iga_shell_surface_test: tests/test_native_iga_shell_surface.cpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_kirchhoff_love_test: tests/test_native_iga_kirchhoff_love.cpp include/NativeIgaKirchhoffLove.hpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_shell_patch_system_test: tests/test_native_iga_shell_patch_system.cpp include/NativeIgaShellPatchSystem.hpp include/NativeIgaKirchhoffLove.hpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_shell_static_solver_test: tests/test_native_iga_shell_static_solver.cpp include/NativeIgaShellStaticSolver.hpp include/NativeIgaShellPatchSystem.hpp include/NativeIgaKirchhoffLove.hpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_shell_spatial_convergence_test: tests/test_native_iga_shell_spatial_convergence.cpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_shell_flat_plate_test: tests/test_native_iga_shell_flat_plate.cpp include/NativeIgaShellFlatPlate.hpp include/NativeIgaShellStaticSolver.hpp include/NativeIgaShellPatchSystem.hpp include/NativeIgaKirchhoffLove.hpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_iga_shell_patch_interface_test: tests/test_native_iga_shell_patch_interface.cpp include/NativeIgaShellPatchInterface.hpp include/NativeIgaKirchhoffLove.hpp include/NativeIgaShellSurface.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_kinematics_test: tests/test_native_tet_ale_kinematics.cpp include/NativeTetAleKinematics.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_velocity_field_test: tests/test_native_tet_velocity_field.cpp include/NativeTetVelocityField.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+.PHONY: native-tet-velocity-field-test
+native-tet-velocity-field-test: native_tet_velocity_field_test
+	./native_tet_velocity_field_test
+
+native_tet_ale_mesh_motion_test: tests/test_native_tet_ale_mesh_motion.cpp include/NativeTetAleMeshMotion.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_boundary_test: tests/test_native_tet_ale_boundary.cpp include/NativeTetAleBoundary.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_boundary_control_test: tests/test_native_tet_ale_boundary_control.cpp include/NativeTetAleBoundaryControl.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_backflow_test: tests/test_native_tet_ale_backflow.cpp include/NativeTetAleBackflow.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+native_tet_ale_step_control_test: tests/test_native_tet_ale_step_control.cpp include/NativeTetAleStepControl.hpp include/NativeTetAleKinematics.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_conservation_test: tests/test_native_tet_ale_conservation.cpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_transient_test: tests/test_native_tet_ale_transient.cpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_dense_runtime_test: tests/test_native_tet_ale_dense_runtime.cpp include/NativeTetAleDenseRuntime.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_prescribed_runtime_test: tests/test_native_tet_ale_prescribed_runtime.cpp include/NativeTetAleDenseRuntime.hpp include/NativeTetAleTransient.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleMeshMotion.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_ale_temporal_convergence_test: tests/test_native_tet_ale_temporal_convergence.cpp include/NativeTetAleDenseRuntime.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_fixed_temporal_convergence_test: tests/test_native_tet_fixed_temporal_convergence.cpp include/NativeTetAleDenseRuntime.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+native_tet_flow: src/native_tet_flow.cpp include/NativeTetFem.hpp ../../include/CaseConfig.hpp ../../include/CheckedText.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_petsc_assembly_test: tests/test_native_tet_ale_petsc_assembly.cpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_petsc_runtime_test: tests/test_native_tet_ale_petsc_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_radial_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_radial_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_CYCLES -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT -DIGA_NATIVE_LV_TWO_CYCLES -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_RADIAL_SHELLS -DIGA_NATIVE_LV_SINGLE_STEP -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_idealized_lv_two_shell_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_RADIAL_SHELLS -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
+
+.PHONY: native-tet-ale-idealized-lv-radial-backflow-flow-test
+native-tet-ale-idealized-lv-radial-backflow-flow-test: native_tet_ale_idealized_lv_radial_backflow_flow_test
+	timeout --kill-after=10s 600s ./native_tet_ale_idealized_lv_radial_backflow_flow_test
+
+native_tet_ale_petsc_runtime_test native_tet_ale_petsc_prescribed_runtime_test native_tet_ale_petsc_mesh_runtime_test native_tet_ale_idealized_lv_flow_test native_tet_ale_idealized_lv_radial_flow_test native_tet_ale_idealized_lv_backflow_flow_test native_tet_ale_idealized_lv_radial_backflow_flow_test native_tet_ale_idealized_lv_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test native_tet_ale_idealized_lv_two_shell_backflow_flow_test: include/NativeTetAleBackflow.hpp include/NativeTetAleBoundaryControl.hpp
+
+native_tet_ale_petsc_prescribed_runtime_test: tests/test_native_tet_ale_petsc_prescribed_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleMeshMotion.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_ale_petsc_mesh_runtime_test: tests/test_native_tet_ale_petsc_mesh_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_bifurcation_runtime_test: tests/test_native_tet_bifurcation_runtime.cpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetRt0Flux.hpp include/NativeTetVesselTissueSourceMap.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+.PHONY: native-tet-ale-petsc-assembly-test
+native-tet-ale-petsc-assembly-test: native_tet_ale_petsc_assembly_test
+	timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_assembly_test
+
+.PHONY: native-tet-ale-petsc-runtime-test
+native-tet-ale-petsc-runtime-test: native_tet_ale_petsc_runtime_test
+	timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_runtime_test
+
+.PHONY: native-tet-ale-idealized-lv-flow-test
+native-tet-ale-idealized-lv-flow-test: native_tet_ale_idealized_lv_flow_test
+	timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_flow_test
+
+.PHONY: native-tet-ale-idealized-lv-radial-flow-test
+native-tet-ale-idealized-lv-radial-flow-test: native_tet_ale_idealized_lv_radial_flow_test
+	timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_radial_flow_test
+
+.PHONY: native-tet-ale-idealized-lv-backflow-flow-test
+native-tet-ale-idealized-lv-backflow-flow-test: native_tet_ale_idealized_lv_backflow_flow_test
+	timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_backflow_flow_test
+
+.PHONY: native-tet-ale-petsc-fieldsplit-test
+native-tet-ale-petsc-fieldsplit-test: native_tet_ale_petsc_runtime_test
+	timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_runtime_test -native_ale_scale true -native_ale_user_schur false -ksp_type fgmres -ksp_rtol 1e-10 -ksp_max_it 300 -pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full -pc_fieldsplit_schur_precondition selfp -fieldsplit_velocity_ksp_type preonly -fieldsplit_velocity_pc_type hypre -fieldsplit_pressure_ksp_type preonly -fieldsplit_pressure_pc_type jacobi
+
+.PHONY: native-tet-ale-petsc-prescribed-runtime-test
+native-tet-ale-petsc-prescribed-runtime-test: native_tet_ale_petsc_prescribed_runtime_test
+	timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_prescribed_runtime_test
+
+.PHONY: native-tet-ale-petsc-mesh-runtime-test
+native-tet-ale-petsc-mesh-runtime-test: native_tet_ale_petsc_mesh_runtime_test
+	test -n "$(T4_ALE_MESH)" || (echo "set T4_ALE_MESH=/path/to/volume.msh" >&2; exit 2)
+	timeout --kill-after=5s 300s mpiexec -np 2 ./native_tet_ale_petsc_mesh_runtime_test "$(T4_ALE_MESH)" $(if $(strip $(T4_ALE_RESULT)),"$(T4_ALE_RESULT)","/tmp/native-tet-ale-mesh-result.json") "$(if $(strip $(T4_ALE_MODE)),$(T4_ALE_MODE),translation)"
+
+.PHONY: native-tet-bifurcation-runtime-test
+native-tet-bifurcation-runtime-test: native_tet_bifurcation_runtime_test
+	test -n "$(T2_BIFURCATION_MESH)" || (echo "set T2_BIFURCATION_MESH=/path/to/y.msh" >&2; exit 2)
+	timeout --kill-after=5s 300s mpiexec -np $(if $(strip $(T2_BIFURCATION_RANKS)),$(T2_BIFURCATION_RANKS),2) ./native_tet_bifurcation_runtime_test "$(T2_BIFURCATION_MESH)" $(if $(strip $(T2_BIFURCATION_RESULT)),"$(T2_BIFURCATION_RESULT)") -bifurcation_steps $(if $(strip $(T2_BIFURCATION_STEPS)),$(T2_BIFURCATION_STEPS),5) -bifurcation_dt $(if $(strip $(T2_BIFURCATION_DT)),$(T2_BIFURCATION_DT),0.01)
+
+.PHONY: native-tet-fem-test
+native-tet-fem-test: native_tet_fem_test
+	./native_tet_fem_test
+
+test: native-tet-fem-test
+
+.PHONY: native-tet-hyperelastic-solid-test
+native-tet-hyperelastic-solid-test: native_tet_hyperelastic_solid_test
+	./native_tet_hyperelastic_solid_test
+
+test: native-tet-hyperelastic-solid-test
+
+.PHONY: native-tet-solid-static-solver-test
+native-tet-solid-static-solver-test: native_tet_solid_static_solver_test
+	./native_tet_solid_static_solver_test
+
+test: native-tet-solid-static-solver-test
+
+.PHONY: native-tet-matching-fsi-interface-test
+native-tet-matching-fsi-interface-test: native_tet_matching_fsi_interface_test
+	./native_tet_matching_fsi_interface_test
+
+test: native-tet-matching-fsi-interface-test
+
+.PHONY: native-tet-solid-fsi-runtime-test
+native-tet-solid-fsi-runtime-test: native_tet_solid_fsi_runtime_test
+	./native_tet_solid_fsi_runtime_test
+
+test: native-tet-solid-fsi-runtime-test
+
+.PHONY: native-tet-solid-prestress-test
+native-tet-solid-prestress-test: native_tet_solid_prestress_test
+	./native_tet_solid_prestress_test
+
+test: native-tet-solid-prestress-test
+
+.PHONY: native-tet-mixed-hyperelastic-solid-test
+native-tet-mixed-hyperelastic-solid-test: native_tet_mixed_hyperelastic_solid_test
+	./native_tet_mixed_hyperelastic_solid_test
+
+test: native-tet-mixed-hyperelastic-solid-test
+
+.PHONY: native-tet-mixed-solid-static-solver-test
+native-tet-mixed-solid-static-solver-test: native_tet_mixed_solid_static_solver_test
+	./native_tet_mixed_solid_static_solver_test
+
+test: native-tet-mixed-solid-static-solver-test
+
+.PHONY: native-tet-mixed-locking-test
+native-tet-mixed-locking-test: native_tet_mixed_locking_test
+	./native_tet_mixed_locking_test
+
+test: native-tet-mixed-locking-test
+
+.PHONY: native-tet-ale-solid-fsi-test
+native-tet-ale-solid-fsi-test: native_tet_ale_solid_fsi_test
+	./native_tet_ale_solid_fsi_test
+
+test: native-tet-ale-solid-fsi-test
+
+.PHONY: native-tet-compliant-channel-fsi-test
+native-tet-compliant-channel-fsi-test: native_tet_compliant_channel_fsi_test
+	./native_tet_compliant_channel_fsi_test
+
+test: native-tet-compliant-channel-fsi-test
+
+.PHONY: native-tet-fixed-spatial-convergence-test
+native-tet-fixed-spatial-convergence-test: native_tet_fixed_spatial_convergence_test
+	./native_tet_fixed_spatial_convergence_test
+
+test: native-tet-fixed-spatial-convergence-test
+
+.PHONY: native-tet-ale-immersed-chamber-motion-test
+native-tet-ale-immersed-chamber-motion-test: native_tet_ale_immersed_chamber_motion_test
+	./native_tet_ale_immersed_chamber_motion_test
+
+.PHONY: native-tet-star-radial-refinement-test
+native-tet-star-radial-refinement-test: native_tet_star_radial_refinement_test
+	./native_tet_star_radial_refinement_test
+
+test: native-tet-star-radial-refinement-test
+
+test: native-tet-ale-immersed-chamber-motion-test
+
+.PHONY: native-iga-shell-surface-test
+native-iga-shell-surface-test: native_iga_shell_surface_test
+	./native_iga_shell_surface_test
+
+test: native-iga-shell-surface-test
+
+.PHONY: native-iga-kirchhoff-love-test
+native-iga-kirchhoff-love-test: native_iga_kirchhoff_love_test
+	./native_iga_kirchhoff_love_test
+
+test: native-iga-kirchhoff-love-test
+
+.PHONY: native-iga-shell-patch-system-test
+native-iga-shell-patch-system-test: native_iga_shell_patch_system_test
+	./native_iga_shell_patch_system_test
+
+test: native-iga-shell-patch-system-test
+
+.PHONY: native-iga-shell-static-solver-test
+native-iga-shell-static-solver-test: native_iga_shell_static_solver_test
+	./native_iga_shell_static_solver_test
+
+test: native-iga-shell-static-solver-test
+
+.PHONY: native-iga-shell-spatial-convergence-test
+native-iga-shell-spatial-convergence-test: native_iga_shell_spatial_convergence_test
+	./native_iga_shell_spatial_convergence_test
+
+test: native-iga-shell-spatial-convergence-test
+
+.PHONY: native-iga-shell-flat-plate-test
+native-iga-shell-flat-plate-test: native_iga_shell_flat_plate_test
+	./native_iga_shell_flat_plate_test
+
+test: native-iga-shell-flat-plate-test
+
+.PHONY: native-iga-shell-patch-interface-test
+native-iga-shell-patch-interface-test: native_iga_shell_patch_interface_test
+	./native_iga_shell_patch_interface_test
+
+test: native-iga-shell-patch-interface-test
+
+.PHONY: native-tet-ale-kinematics-test
+native-tet-ale-kinematics-test: native_tet_ale_kinematics_test
+	./native_tet_ale_kinematics_test
+
+test: native-tet-ale-kinematics-test
+
+.PHONY: native-tet-ale-mesh-motion-test
+native-tet-ale-mesh-motion-test: native_tet_ale_mesh_motion_test
+	./native_tet_ale_mesh_motion_test
+
+test: native-tet-ale-mesh-motion-test
+
+.PHONY: native-tet-ale-boundary-test
+native-tet-ale-boundary-test: native_tet_ale_boundary_test
+	./native_tet_ale_boundary_test
+
+test: native-tet-ale-boundary-test
+
+.PHONY: native-tet-ale-boundary-control-test
+native-tet-ale-boundary-control-test: native_tet_ale_boundary_control_test
+	./native_tet_ale_boundary_control_test
+
+test: native-tet-ale-boundary-control-test
+
+.PHONY: native-tet-ale-backflow-test
+native-tet-ale-backflow-test: native_tet_ale_backflow_test
+	./native_tet_ale_backflow_test
+
+test: native-tet-ale-backflow-test
+
+.PHONY: native-tet-ale-step-control-test
+native-tet-ale-step-control-test: native_tet_ale_step_control_test
+	./native_tet_ale_step_control_test
+
+test: native-tet-ale-step-control-test
+
+.PHONY: native-tet-ale-conservation-test
+native-tet-ale-conservation-test: native_tet_ale_conservation_test
+	./native_tet_ale_conservation_test
+
+test: native-tet-ale-conservation-test
+
+.PHONY: native-tet-ale-transient-test
+native-tet-ale-transient-test: native_tet_ale_transient_test
+	./native_tet_ale_transient_test
+
+test: native-tet-ale-transient-test
+
+.PHONY: native-tet-ale-dense-runtime-test
+native-tet-ale-dense-runtime-test: native_tet_ale_dense_runtime_test
+	./native_tet_ale_dense_runtime_test
+
+test: native-tet-ale-dense-runtime-test
+
+.PHONY: native-tet-ale-prescribed-runtime-test
+native-tet-ale-prescribed-runtime-test: native_tet_ale_prescribed_runtime_test
+	./native_tet_ale_prescribed_runtime_test
+
+test: native-tet-ale-prescribed-runtime-test
+
+.PHONY: native-tet-ale-temporal-convergence-test
+native-tet-ale-temporal-convergence-test: native_tet_ale_temporal_convergence_test
+	./native_tet_ale_temporal_convergence_test
+
+test: native-tet-ale-temporal-convergence-test
+
+.PHONY: native-tet-fixed-temporal-convergence-test
+native-tet-fixed-temporal-convergence-test: native_tet_fixed_temporal_convergence_test
+	./native_tet_fixed_temporal_convergence_test
+
+test: native-tet-fixed-temporal-convergence-test
 
 iga_inspect iga_flow_validate: ../../include/CheckedText.hpp
+iga_inspect: include/Sha256.hpp
+
+surface_fem_preflight: src/surface_fem_preflight.cpp include/SurfaceReaders.hpp include/SurfaceGeometry.hpp include/ExactDyadicPredicates.hpp include/Sha256.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@ $(LDLIBS)
 
 compliant_channel_fsi_test compliant_channel_fsi_openmp_test immersed_aneurysm_jacobian_test: tests/ReferenceStateOutput.hpp include/Sha256.hpp
 
@@ -335,11 +847,16 @@ immersed_static_flow_test: tests/test_immersed_static_flow.cpp include/ImmersedS
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed_transient_flow_openmp_test: CXXFLAGS += -fopenmp -UNDEBUG
+immersed_transient_flow_test immersed_transient_flow_openmp_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_TRANSIENT_FLOW_RUNTIME_TESTING
 immersed_transient_flow_test immersed_transient_flow_openmp_test: tests/test_immersed_transient_flow.cpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp include/ImmersedFlowPort.hpp include/CutCellGhostPenalty.hpp include/ImmersedNitscheWall.hpp include/NavierStokesElement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 immersed-transient-flow-test: immersed_transient_flow_test
 	./immersed_transient_flow_test
+
+.PHONY: immersed-transient-backflow-test
+immersed-transient-backflow-test: immersed_transient_flow_test
+	timeout --kill-after=5s 480s ./immersed_transient_flow_test --backflow-port-smoke
 
 moving_immersed_transient_flow_test: tests/test_moving_immersed_transient_flow.cpp include/MaterialSurfaceKinematics.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshotPublisher.hpp include/MovingImmersedFlowSnapshot.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/ImmersedTransientState.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
@@ -394,13 +911,31 @@ phase6-aneurysm-runtime-closure-test: phase6_aneurysm_runtime_closure_test
 # Focused real 16-step prescribed-motion closure.  It publishes only committed
 # epochs into a temporary directory by default; pass an output stem directly to
 # the executable when retaining VTU/JSON/PVD evidence is desired.
-phase7_lv_closure_test: tests/test_phase7_lv_closure.cpp include/IdealizedLeftVentricleFixture.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshotPublisher.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/SurfaceGeometry.hpp
+phase7_lv_closure_test: tests/test_phase7_lv_closure.cpp include/IdealizedLeftVentricleFixture.hpp include/MovingImmersedFlowSnapshotCapture.hpp include/MovingImmersedFlowSnapshotPublisher.hpp include/MovingImmersedTransientFlowRuntime.hpp include/ImmersedTransientFlowRuntime.hpp include/ImmersedVelocityExtension.hpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/SurfaceGeometry.hpp include/NativeTetVelocityField.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 phase7_lv_closure_test: CPPFLAGS += -DIGA_MOVING_IMMERSED_FLOW_SNAPSHOT_PUBLISHER_TESTING
 
 phase7-lv-closure-test: phase7_lv_closure_test
 	./phase7_lv_closure_test
+
+.PHONY: phase7-lv-matched-backflow-probe
+LV_MATCHED_STEPS ?=16
+LV_MATCHED_FLOW_DEPTH ?=2
+phase7-lv-matched-backflow-probe: phase7_lv_closure_test
+	timeout --kill-after=10s 3600s ./phase7_lv_closure_test --matched-backflow-probe $(LV_MATCHED_STEPS) $(LV_MATCHED_FLOW_DEPTH)
+
+.PHONY: phase7-lv-matched-field-probe
+LV_MATCHED_FIELD_STEPS ?=1
+LV_MATCHED_FIELD_DEPTH ?=2
+LV_MATCHED_ALE_MODE ?=
+phase7-lv-matched-field-probe: phase7_lv_closure_test
+	timeout --kill-after=10s 3600s ./phase7_lv_closure_test --matched-field-probe $(LV_MATCHED_FIELD_STEPS) $(LV_MATCHED_FIELD_DEPTH) $(LV_MATCHED_ALE_MODE)
+
+.PHONY: phase7-lv-matched-volume-probe
+LV_MATCHED_VOLUME_DEPTH ?=3
+phase7-lv-matched-volume-probe: phase7_lv_closure_test
+	timeout --kill-after=5s 600s ./phase7_lv_closure_test --matched-volume-probe $(LV_MATCHED_VOLUME_DEPTH)
 
 # Standard Phase 7 gate: focused moving-cut/runtime/snapshot coverage and its
 # cut, ghost, Nitsche, and port prerequisites.  The expensive 16-step LV
@@ -499,7 +1034,7 @@ material_surface_patch_kinematics_test: tests/test_material_surface_patch_kinema
 material-surface-patch-kinematics-test: material_surface_patch_kinematics_test
 	./material_surface_patch_kinematics_test
 
-moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/MaterialSurfaceKinematics.hpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/CutCellGhostPenalty.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/Sha256.hpp
+moving_cut_geometry_test: tests/test_moving_cut_geometry.cpp include/GeometryContractManifest.hpp include/MaterialSurfaceKinematics.hpp include/MovingCutGeometry.hpp include/PrescribedSurfaceMotion.hpp include/CutCellGhostPenalty.hpp include/ImmersedSurfaceQuadrature.hpp include/CutCellVolumeQuadrature.hpp include/CartesianDomainClassification.hpp include/CartesianBackground.hpp include/SurfaceSpatialIndex.hpp include/SurfaceGeometry.hpp include/Quadrature.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 moving-cut-geometry-test: moving_cut_geometry_test
@@ -681,12 +1216,15 @@ iga_navier_stokes iga_navier_stokes_openmp: include/CollectiveAssetInput.hpp inc
 iga_navier_stokes iga_navier_stokes_openmp: src/iga_navier_stokes.cpp include/BoundarySupport.hpp include/IgaDatabase.hpp include/OwnedRowAssembler.hpp include/CaseInput.hpp include/GenericCaseInput.hpp include/GenericTransportElement.hpp include/TransientFlowRuntime.hpp include/TransientTransportRuntime.hpp include/TransportElement.hpp include/NavierStokesElement.hpp include/BoundaryFlow.hpp include/PressureTractionFlow.hpp ../../include/CaseConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../../include/SimulationConfig.hpp ../../include/MeshConfig.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/VascularCoupling.hpp ../../include/CouplingConfig.hpp ../../include/TemporalFunction.hpp ../../include/FlowCheckpoint.hpp ../../include/VcaCheckpoint.hpp ../../include/CouplingHistory.hpp ../../include/OutletModel.hpp ../../include/OutletCheckpoint.hpp ../../include/PressureTraction.hpp ../../include/VelocitySeries.hpp ../../include/VtkOutput.hpp ../../include/BezierVisualization.hpp ../../include/TemporalVtkHdf.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
+iga_navier_stokes iga_navier_stokes_openmp iga_solve iga_config_check simulation_config_test: ../../include/MeshConfig.hpp
+
 iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/TransportElement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp
 
 clean:
+	$(RM) native_tet_flow native_tet_fem_test native_tet_mesh_components_test native_tet_mesh_inspect native_tet_matching_mesh_inspect native_tet_matching_darcy_smoke native_tet_matching_solved_roi_smoke
 	$(RM) moving_checkpoint_bundle_test
 	$(RM) moving_checkpoint_metadata_test
 	$(RM) membrane_checkpoint_test
@@ -730,7 +1268,25 @@ clean:
 	$(RM) collective_failure_test
 	$(RM) parallel_ownership_test
 	$(RM) phase_profile_test body_fitted_subcommunicator_test
-	$(RM) immersed_small_cut_solver_test legacy_transport_failure_test vtkhdf_close_failure_test flow_step_failure_test flow_output_failure_test text_output_failure_test iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_womersley_reference case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+	$(RM) immersed_small_cut_solver_test legacy_transport_failure_test vtkhdf_close_failure_test flow_step_failure_test flow_output_failure_test text_output_failure_test iga_pack iga_inspect iga_bezier_export iga_case_check iga_config_check iga_flow_validate iga_womersley_reference surface_fem_preflight case_config_test simulation_config_test boundary_support_test coupling_port_test sha256_test surface_geometry_test prescribed_surface_motion_test material_surface_patch_kinematics_test moving_cut_geometry_test fluid_surface_traction_test moving_immersed_transient_flow_fsi_runtime_test compliant_channel_fsi_test pretensioned_membrane_test pretensioned_membrane_fsi_runtime_test strong_fluid_structure_coupling_test surface_spatial_index_test cartesian_domain_classification_test cut_cell_volume_quadrature_test immersed_surface_quadrature_test surface_stl_test surface_vtp_test cartesian_background_test quadrature_test vtk_output_test bezier_visualization_test temporal_vtkhdf_test flow_checkpoint_test transport_checkpoint_test vca_checkpoint_test outlet_model_test boundary_flow_test womersley_reference_test generic_transport_test navier_stokes_test nitsche_wall_test ghost_penalty_test immersed_transient_state_test immersed_velocity_extension_test immersed_static_flow_test immersed_transient_flow_test moving_immersed_transient_flow_test moving_immersed_flow_snapshot_test moving_immersed_flow_snapshot_publisher_test immersed_flow_port_test immersed_flow_domain_test immersed_aneurysm_jacobian_test phase5_closure_test phase6_aneurysm_runtime_closure_test phase7_lv_closure_test transport_boundary_preflight_test vca_3d_runtime_test vca_3d_smoke_test native_tet_hyperelastic_solid_test native_tet_solid_static_solver_test native_tet_solid_prestress_test native_tet_mixed_hyperelastic_solid_test native_tet_mixed_locking_test native_tet_matching_fsi_interface_test native_tet_solid_fsi_runtime_test native_tet_ale_solid_fsi_test native_tet_compliant_channel_fsi_test native_tet_ale_idealized_lv_flow_test native_tet_star_radial_refinement_test native_tet_ale_boundary_control_test native_tet_ale_immersed_chamber_motion_test native_tet_fixed_spatial_convergence_test native_tet_fixed_temporal_convergence_test iga_solve iga_assembly_smoke iga_transport iga_navier_stokes iga_mesh_check
+
+	$(RM) native_tet_mixed_solid_static_solver_test native_tet_ale_idealized_lv_radial_flow_test native_tet_ale_idealized_lv_backflow_flow_test native_tet_ale_backflow_test
+	$(RM) native_tet_ale_idealized_lv_radial_backflow_flow_test native_tet_ale_idealized_lv_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test native_tet_ale_idealized_lv_two_shell_backflow_flow_test
+	$(RM) native_tet_moving_species_transport_test
+	$(RM) native_tet_moving_species_ports_test
+	$(RM) native_tet_ale_graph_ports_test
+	$(RM) native_tet_ale_graph_petsc_runtime_test
+	$(RM) native_tet_ale_flow_transport_domain_adapter_test
+	$(RM) native_tet_ale_species_graph_1d_test
+	$(RM) native_tet_ale_flow_0d_graph_test
+	$(RM) native_tet_hydraulic_graph
+	$(RM) native_tet_flow_darcy_chain
+	$(RM) native_tet_fsi_steps
+	$(RM) native_tet_species_transport
+	$(RM) native_tet_moving_species_petsc_runtime_test
+	$(RM) native_tet_wall_reservoir_exchange_test
+	$(RM) native_tet_moving_species_spatial_convergence_test
+	$(RM) native_tet_moving_species_checkpoint_test
 
 iga_transport: include/PetscSolverOptions.hpp include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/PetscGather.hpp include/PetscReadArray.hpp
 

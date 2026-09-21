@@ -72,6 +72,55 @@ zero_d_flow_test: tests/test_zero_d_flow.cpp ../../include/ZeroDFlowDomain.hpp .
 zero-d-flow-test: zero_d_flow_test
 	./zero_d_flow_test
 
+zero_d_species_reservoir_test: tests/test_zero_d_species_reservoir.cpp ../../include/ZeroDSpeciesReservoir.hpp ../../include/CoupledDomainRuntime.hpp ../../include/CouplingPort.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-species-reservoir-test
+zero-d-species-reservoir-test: zero_d_species_reservoir_test
+	./zero_d_species_reservoir_test
+
+zero_d_source_reservoir_species_test: tests/test_zero_d_source_reservoir_species.cpp ../../include/ZeroDSourceReservoirSpecies.hpp ../../include/ZeroDSpeciesReservoir.hpp ../../include/ZeroDFlowDomain.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-source-reservoir-species-test
+zero-d-source-reservoir-species-test: zero_d_source_reservoir_species_test
+	./zero_d_source_reservoir_species_test
+
+zero_d_source_reservoir_species_runtime_test: tests/test_zero_d_source_reservoir_species_runtime.cpp ../../include/ZeroDSourceReservoirSpeciesDomainRuntime.hpp ../../include/ZeroDSourceReservoirSpecies.hpp ../../include/ZeroDSpeciesReservoir.hpp ../../include/ZeroDFlowDomain.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+zero_d_flow_species_checkpoint_test: tests/test_zero_d_flow_species_checkpoint.cpp ../../include/ZeroDFlowSpeciesCheckpoint.hpp ../../include/ZeroDSourceReservoirSpeciesDomainRuntime.hpp ../../include/ZeroDTerminalRcrSpeciesDomainRuntime.hpp ../../include/CoupledCheckpointBundle.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-flow-species-checkpoint-test
+zero-d-flow-species-checkpoint-test: zero_d_flow_species_checkpoint_test
+	@checkpoint_dir=$$(mktemp -d); ./zero_d_flow_species_checkpoint_test save "$$checkpoint_dir/paired" && ./zero_d_flow_species_checkpoint_test resume "$$checkpoint_dir/paired"
+
+.PHONY: zero-d-source-reservoir-species-runtime-test
+zero-d-source-reservoir-species-runtime-test: zero_d_source_reservoir_species_runtime_test
+	./zero_d_source_reservoir_species_runtime_test
+
+zero_d_terminal_rcr_species_test: tests/test_zero_d_terminal_rcr_species.cpp ../../include/ZeroDTerminalRcrSpecies.hpp ../../include/ZeroDSpeciesReservoir.hpp ../../include/ZeroDFlowDomain.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-terminal-rcr-species-test
+zero-d-terminal-rcr-species-test: zero_d_terminal_rcr_species_test
+	./zero_d_terminal_rcr_species_test
+
+zero_d_terminal_rcr_species_runtime_test: tests/test_zero_d_terminal_rcr_species_runtime.cpp ../../include/ZeroDTerminalRcrSpeciesDomainRuntime.hpp ../../include/ZeroDTerminalRcrSpecies.hpp ../../include/ZeroDSpeciesReservoir.hpp ../../include/ZeroDFlowDomain.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-terminal-rcr-species-runtime-test
+zero-d-terminal-rcr-species-runtime-test: zero_d_terminal_rcr_species_runtime_test
+	./zero_d_terminal_rcr_species_runtime_test
+
+zero_d_terminal_rcr_species_graph_test: tests/test_zero_d_terminal_rcr_species_graph.cpp ../../include/ZeroDTerminalRcrSpeciesDomainRuntime.hpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/SimulationGraph.hpp
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
+
+.PHONY: zero-d-terminal-rcr-species-graph-test
+zero-d-terminal-rcr-species-graph-test: zero_d_terminal_rcr_species_graph_test
+	./zero_d_terminal_rcr_species_graph_test
+
 distributed_surface_contracts_test: tests/test_distributed_surface_contracts.cpp ../../include/DistributedSurfaceInterface.hpp ../../include/DynamicWeightedAitkenRelaxation.hpp ../../include/AitkenRelaxation.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
@@ -104,13 +153,20 @@ species_pressure_flow_executor_test: ../../include/PressureFlowCheckpointControl
 multidomain_config_test: tests/test_multidomain_config.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/DomainResourcePlan.hpp ../../include/ZeroDFlowDomain.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/CouplingPort.hpp ../../include/SpeciesCoupling.hpp ../../include/CaseConfig.hpp ../cpu/include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
-test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test
+test: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test zero_d_species_reservoir_test zero_d_source_reservoir_species_test zero_d_source_reservoir_species_runtime_test zero_d_flow_species_checkpoint_test zero_d_terminal_rcr_species_test zero_d_terminal_rcr_species_runtime_test zero_d_terminal_rcr_species_graph_test distributed_surface_contracts_test fsi_runtime_contracts_test
 	./explicit_coupling_test
 	./simulation_graph_test
 	./pressure_flow_executor_test
 	./species_pressure_flow_executor_test
 	./multidomain_config_test
 	./zero_d_flow_test
+	./zero_d_species_reservoir_test
+	./zero_d_source_reservoir_species_test
+	./zero_d_source_reservoir_species_runtime_test
+	@checkpoint_dir=$$(mktemp -d); ./zero_d_flow_species_checkpoint_test save "$$checkpoint_dir/paired" && ./zero_d_flow_species_checkpoint_test resume "$$checkpoint_dir/paired"
+	./zero_d_terminal_rcr_species_test
+	./zero_d_terminal_rcr_species_runtime_test
+	./zero_d_terminal_rcr_species_graph_test
 	./distributed_surface_contracts_test
 	./fsi_runtime_contracts_test
 

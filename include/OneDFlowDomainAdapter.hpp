@@ -276,6 +276,10 @@ public:
 				throw std::runtime_error("1D staged hydraulic rollback requires a solved hydraulic trial");
 		});
 		runtime_.RollbackHydraulicTrial();
+		runtime_.RunLocalAdapterStage("1d staged adapter rollback inlet rearm", [&] {
+			if(inlet_policy_==OneDInletPolicy::ConfiguredOpenLoop)
+				runtime_.SetConfiguredOpenLoopInlet();
+		});
 		hydraulic_inputs_.clear();
 		hydraulic_trial_succeeded_ = false;
 	}

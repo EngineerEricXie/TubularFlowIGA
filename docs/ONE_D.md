@@ -39,9 +39,8 @@ an additional full scan of each checked asset on every rank; this Linux/WSL
 validation has not been measured on a large shared filesystem.
 
 These checks compare inputs within the current job. They do not add waveform
-or replay hashes to checkpoint identity; complete restart identity remains
-part of HPC-05. See the [1D asset validation report](progress/HPC_01C_ONE_D_ASSET_PROGRESS.md)
-for coverage and the immutable-input contract.
+or replay hashes to checkpoint identity; the complete restart identity is
+defined by the [coupled checkpoint contract](architecture/COUPLED_CHECKPOINT_CONTRACT.md).
 
 PETSc options remain command-line options rather than JSON keys:
 
@@ -256,12 +255,9 @@ Both 1D adapters also coordinate local mutations and solve preparation through
 the injected agreement. Every group member must call these mutations in the same
 order; constructors and port queries remain local. Staged input maps publish only
 after agreement, allowing rejected inputs to be corrected and resent.
-Executor bookkeeping and failures inside backend collectives still need separate handling.
-See the [trial regression report](progress/HPC_01C_ONE_D_TRIAL_PROGRESS.md) and
-[staged/OpenMP report](progress/HPC_01C_ONE_D_STAGED_PROGRESS.md) and
-[implicit PETSc report](progress/HPC_01C_ONE_D_IMPLICIT_PROGRESS.md) for the tested scope and limits.
-The [adapter report](progress/HPC_01C_ONE_D_ADAPTER_PROGRESS.md) records local-query,
-input-retry, rollback and graph precommit-failure coverage.
+Executor bookkeeping and failures inside backend collectives still need
+separate handling. Native regression targets cover trial, staged/OpenMP,
+implicit PETSc, local-query, input-retry, rollback, and graph precommit failures.
 
 ```bash
 ./solvers/one_d/iga_1d CASE_DIR \
@@ -288,9 +284,8 @@ distributed VecLoad/VecView path.
 
 This provides controlled error exits, not atomic checkpoint publication or a
 checksum against identical corruption on all ranks. A failed overwrite can still
-damage the previous checkpoint; the versioned publication protocol remains an
-HPC-05 task. See the [checkpoint regression report](progress/HPC_01C_ONE_D_CHECKPOINT_PROGRESS.md)
-for fault coverage, complete multispecies restart comparisons and communicator tests.
+damage the previous checkpoint. The versioned publication protocol is defined
+by the [coupled checkpoint contract](architecture/COUPLED_CHECKPOINT_CONTRACT.md).
 
 ## Outputs
 

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "card_id": "T4-native-tetrahedral-ALE-v1",
+  "contract_status": "frozen_before_runtime_implementation",
+  "implementation_status": "native_coarse_mesh_deforming_runtime_verified_chamber_comparison_pending",
+  "backend": "native_cpp_petsc_tetrahedral_ALE",
+  "external_discretization_or_assembly_framework": false,
+  "kinematics": {
+    "reference_coordinate": "X",
+    "mesh_displacement": "d(X,t)",
+    "current_coordinate": "x(X,t)=X+d(X,t)",
+    "mesh_velocity": "w=(d_next-d_committed)/dt",
+    "fluid_convective_velocity": "u-w",
+    "geometry_evaluation_time": "next",
+    "mesh_velocity_time": "same_step_as_fluid_residual",
+    "state_lifecycle": ["committed", "trial", "accepted_or_rollback"]
+  },
+  "initial_mesh_motion": {
+    "method": "vector_harmonic_extension",
+    "operator": "componentwise_Laplacian_on_reference_tetrahedra",
+    "moving_wall": "explicit_prescribed_displacement_and_velocity",
+    "ports": "explicit_fixed_or_configured_sliding; never inferred from label order"
+  },
+  "boundary_policy": {
+    "every_surface_label_requires_an_explicit_rule": true,
+    "moving_wall": "prescribed_displacement_is_mesh_motion; fluid_velocity_is_a_separate_boundary_condition",
+    "fixed_port": "zero_mesh_displacement_and_velocity",
+    "shared_wall_port_nodes": "values_must_agree_or_the_step_fails",
+    "sliding_port": "declared_but_fails_closed_until_normal_constraint_MPC_is_implemented"
+  },
+  "time_contract": {
+    "unit": "s",
+    "positive_dt_required": true,
+    "first_step_requires_committed_displacement": true,
+    "rejected_step_does_not_advance_time_or_history": true
+  },
+  "quality_gates": {
+    "positive_current_tetrahedron_determinant": true,
+    "minimum_current_to_reference_determinant_ratio": 0.05,
+    "minimum_current_scaled_jacobian": 0.001,
+    "nonfinite_geometry_is_failure": true,
+    "quality_failure_action": "rollback_then_reduce_step_or_stop",
+    "implicit_remeshing": false
+  },
+  "verification_cards": [
+    "zero_motion_reduces_exactly_to_fixed_mesh_operator",
+    "uniform_translation_preserves_relative_velocity_and_volume",
+    "rigid_rotation_preserves_tetrahedron_volume_and_quality",
+    "affine_expansion_matches_analytic_Jacobian_and_mesh_velocity",
+    "discrete_geometric_conservation_uniform_field",
+    "moving_domain_surface_volume_mass_balance",
+    "inverted_trial_mesh_rolls_back_without_history_leak",
+    "temporal_convergence_on_prescribed_motion"
+  ],
+  "required_evidence": [
+    "reference_current_geometry_hashes",
+    "committed_and_trial_time_s",
+    "dt_s",
+    "minimum_determinant_ratio",
+    "minimum_scaled_jacobian",
+    "mesh_motion_iterations_and_residual",
+    "fluid_mass_and_GCL_residuals",
+    "accepted_or_rejected_status"
+  ],
+  "local_resource_budget": {
+    "kinematics_and_element_tests_maximum_wall_s": 60,
+    "small_prescribed_motion_case_maximum_wall_s": 300,
+    "maximum_peak_rss_bytes": 4294967296
+  }
+}
