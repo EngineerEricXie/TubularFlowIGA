@@ -119,14 +119,11 @@ PETSc, CUDA/Conda, WSL, RHEL-family systems, and Bridges-2 instructions.
 
 ```text
 SWC or radius-annotated line-OBJ centerline
-  -> smoothing and hexahedral control mesh
-  -> controlmesh.vtk
-  -> spline construction and Bezier extraction
-  -> bzmeshinfo.txt + spline_cache.igacache
-  -> METIS partition + iga_pack
-  -> partition-aware .ntiga database
-  -> MPI/PETSc CPU or single-GPU CUDA solver
-  -> velocity, pressure, and transported fields
+  |-> template-free smooth surface -> labelled tetrahedra -> native FEM
+  `-> smoothing -> hexahedral control mesh -> spline construction
+      -> bzmeshinfo.txt + spline_cache.igacache
+      -> METIS partition + iga_pack -> partition-aware .ntiga database
+      -> MPI/PETSc CPU or single-GPU CUDA IGA solver
 ```
 
 The packed database rank count must match the CPU launch rank count. Native
@@ -166,6 +163,9 @@ Use the compute capability of the target GPU for `CUDA_ARCHS` (for example,
 Standalone cases use versioned JSON configuration files and source geometry:
 
 - 0D and 1D models use circuit or radius-annotated network inputs.
+- Body-fitted FEM models can use the template-free
+  [`skeleton_to_tet.py`](preprocessing/tet/skeleton_to_tet.py) path from an SWC
+  or line-OBJ centerline.
 - Body-fitted IGA models use an SWC or line-OBJ centerline and a schema-v4
   configuration.
 - Tetrahedral FEM models use labeled Gmsh meshes or the supported
@@ -204,6 +204,7 @@ The coupled Darcy examples are documented in the
 ## Repository layout
 
 - `preprocessing/mesh/`: centerline smoothing and hexahedral control meshes
+- `preprocessing/tet/`: template-free skeleton-to-surface and tetrahedral meshes
 - `preprocessing/spline/`: spline construction and Bezier extraction
 - `meshgeneration/`: legacy MATLAB reference and mesh templates
 - `solvers/cpu/`: packing, validation, MPI/PETSc flow, transport, and FEM runtimes

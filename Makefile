@@ -7,6 +7,7 @@ mesh:
 
 mesh-test:
 	$(MAKE) -C preprocessing/mesh test
+	python3 -m unittest scripts.tests.test_skeleton_to_tet
 
 solver-test:
 	$(MAKE) -C solvers/cpu surface_fem_preflight

@@ -100,10 +100,14 @@ coordinate unit as the skeleton. The resulting spline representation is later
 normalized, with the affine transform retained, as documented in the
 [pipeline guide](PIPELINE.md).
 
-The current 3D control-mesh generator supports binary branching: after root
+The template-free tetrahedral path in
+[`preprocessing/tet/skeleton_to_tet.py`](../preprocessing/tet/skeleton_to_tet.py)
+accepts two, three, or more children and applies configurable smooth radius
+transitions without a junction template. The IGA control-mesh generator
+supports binary branching: after root
 orientation, a node may have at most two children. A 3D preparation stops with
 the offending node ID and child count when this is violated. The complete
-liver OBJ contains multiway junctions and is therefore valid for 1D but must be
-reduced to a binary subtree or otherwise preprocessed before full 3D meshing.
-The source-only `liver_vein_obj_segment` examples exercise both supported paths
-on vertices 1–12 from that file.
+liver OBJ contains multiway junctions and is therefore accepted by the 1D and
+template-free tetrahedral paths; it must be reduced to a binary subtree before
+IGA control-mesh generation. The source-only `liver_vein_obj_segment` examples
+exercise both existing paths on vertices 1–12 from that file.

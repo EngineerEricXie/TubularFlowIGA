@@ -24,9 +24,10 @@ For the optional liver DICOM SEG geometry workflow, the project-owned
 `dicom_seg_to_surface.py`, `audit_dicom_seg_region_overlap.py`, and
 `dicom_seg_to_multiregion_tet.py` additionally
 need Python `pydicom`, NumPy, and SciPy; surface extraction also needs VTK.
-`surface_to_fem_volume.py` and `dicom_seg_to_multiregion_tet.py` need the
-Gmsh Python module. The smooth dual-tree FEM geometry additionally uses the
-VTK Python module for non-shrinking vessel-surface smoothing, while the fTetWild
+`surface_to_fem_volume.py`, `dicom_seg_to_multiregion_tet.py`, and the
+template-free `preprocessing/tet/skeleton_to_tet.py` path need the Gmsh Python
+module. Skeleton-to-tet and smooth dual-tree geometry additionally use the VTK
+Python module for non-shrinking vessel-surface smoothing, while the fTetWild
 route invokes a separately installed [fTetWild](https://github.com/wildmeshing/fTetWild)
 binary. These tools generate or audit geometry only—none supplies FEM elements,
 weak forms, assembly, or physical coupling. The WSL patient-label checks used
