@@ -5,7 +5,6 @@ set -euo pipefail
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 config_file=$repo_dir/execution.conf
 requested_cases=()
-live_output_override=
 built_cpu_3d=false
 built_cuda_3d=false
 built_cpu_1d=false
@@ -13,7 +12,7 @@ built_cpu_1d=false
 Usage()
 {
 	cat <<USAGE
-usage: $0 [--config FILE] [--live-output|--no-live-output] [CASE ...]
+usage: $0 [--config FILE] [CASE ...]
 
 Validate and optionally prepare and solve one or more 1D or 3D cases. CASE
 values are directory names directly below CASE_ROOT. With no CASE arguments,
@@ -22,7 +21,6 @@ every immediate subdirectory of CASE_ROOT is run.
 Examples:
   $0 MyCase
   $0 --config execution.conf CaseA CaseB
-  $0 --live-output MyCase
 USAGE
 }
 
@@ -65,8 +63,6 @@ ParseArgs()
 				shift 2
 				;;
 			--config=*) config_file=${1#*=}; shift ;;
-			--live-output) live_output_override=1; shift ;;
-			--no-live-output) live_output_override=0; shift ;;
 			--*) Die "unknown option: $1" ;;
 			*) requested_cases+=("$1"); shift ;;
 		esac
@@ -81,7 +77,6 @@ LoadConfig()
 	CASE_ROOT=Input
 	OUTPUT_ROOT=
 	OUTPUT_MODE=atomic
-	LIVE_OUTPUT=0
 	RANKS=2
 	BACKEND=cpu
 	BUILD_SOLVERS=1
@@ -93,6 +88,7 @@ LoadConfig()
 	SYSTEM=
 	MPIEXEC=mpiexec
 	OMP_NUM_THREADS=2
+	OPENBLAS_NUM_THREADS=1
 	SOLVER_ARGS=
 	PETSC_OPTIONS=${PETSC_OPTIONS:-}
 	DRY_RUN=0
@@ -112,7 +108,7 @@ LoadConfig()
 		[[ $key =~ ^[A-Z][A-Z0-9_]*$ ]] \
 			|| Die "$config_file:$line_number: invalid key: $key"
 		case $key in
-			CASE_ROOT|OUTPUT_ROOT|OUTPUT_MODE|LIVE_OUTPUT|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|SOLVER_ARGS|PETSC_OPTIONS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
+			CASE_ROOT|OUTPUT_ROOT|OUTPUT_MODE|RANKS|BACKEND|BUILD_SOLVERS|CLEAN|RUN_MESH_CHECK|RUN_SOLVER|RUN_VALIDATION|SOLVER|SYSTEM|MPIEXEC|OMP_NUM_THREADS|OPENBLAS_NUM_THREADS|SOLVER_ARGS|PETSC_OPTIONS|DRY_RUN|PETSC_DIR|PETSC_ARCH|HDF5_CFLAGS|HDF5_LIBS) ;;
 			*) Die "$config_file:$line_number: unknown setting: $key" ;;
 		esac
 		if (( ${#value} >= 2 )); then
@@ -132,14 +128,12 @@ ValidateConfig()
 	[[ $OMP_NUM_THREADS =~ ^[0-9]+$ ]] && (( OMP_NUM_THREADS >= 1 )) \
 		|| Die "OMP_NUM_THREADS must be a positive integer"
 	case $BACKEND in cpu|cuda) ;; *) Die "BACKEND must be cpu or cuda; got: $BACKEND" ;; esac
+	[[ $OPENBLAS_NUM_THREADS =~ ^[0-9]+$ ]] && (( OPENBLAS_NUM_THREADS >= 1 )) \
+		|| Die "OPENBLAS_NUM_THREADS must be a positive integer"
 	case $OUTPUT_MODE in
 		atomic|versioned) ;;
 		*) Die "OUTPUT_MODE must be atomic or versioned; got: $OUTPUT_MODE" ;;
 	esac
-	IsTruthy "$LIVE_OUTPUT" || true
-	if IsTruthy "$LIVE_OUTPUT" && [[ $OUTPUT_MODE != versioned ]]; then
-		Die "LIVE_OUTPUT=1 requires OUTPUT_MODE=versioned"
-	fi
 	case $SOLVER in
 		auto|navier_stokes|transport) ;;
 		*) Die "SOLVER must be auto, navier_stokes, or transport; got: $SOLVER" ;;
@@ -170,11 +164,9 @@ RunMpi()
 	local launcher=()
 	read -r -a launcher <<< "$MPIEXEC"
 	(( ${#launcher[@]} > 0 )) || Die "MPIEXEC cannot be empty"
-	if [[ -n $PETSC_OPTIONS ]]; then
-		Run env "PETSC_OPTIONS=$PETSC_OPTIONS" "${launcher[@]}" -np "$RANKS" "$@"
-	else
-		Run "${launcher[@]}" -np "$RANKS" "$@"
-	fi
+	local environment=("OMP_NUM_THREADS=$OMP_NUM_THREADS" "OPENBLAS_NUM_THREADS=$OPENBLAS_NUM_THREADS")
+	if [[ -n $PETSC_OPTIONS ]]; then environment+=("PETSC_OPTIONS=$PETSC_OPTIONS"); fi
+	Run env "${environment[@]}" "${launcher[@]}" -np "$RANKS" "$@"
 }
 
 SelectCases()
@@ -512,8 +504,8 @@ RunThreeDCase()
 	local results_dir=$generated_dir/results/$selected_system
 	local generate_args=("$source_dir" --output "$generated_dir" --ranks "$RANKS")
 	if IsTruthy "$CLEAN"; then generate_args+=(--clean); fi
-	if IsTruthy "$LIVE_OUTPUT"; then generate_args+=(--direct-output); fi
-	if ! Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" \
+	if [[ $OUTPUT_MODE == versioned ]]; then generate_args+=(--direct-output); fi
+	if ! Run env "OMP_NUM_THREADS=$OMP_NUM_THREADS" "OPENBLAS_NUM_THREADS=$OPENBLAS_NUM_THREADS" \
 		"$repo_dir/scripts/generate_case.sh" "${generate_args[@]}"; then
 		if [[ $OUTPUT_MODE == versioned ]] && ! IsTruthy "$DRY_RUN"; then
 			rmdir -- "$generated_dir" 2>/dev/null || true
@@ -593,7 +585,6 @@ Main()
 {
 	ParseArgs "$@"
 	LoadConfig
-	if [[ -n $live_output_override ]]; then LIVE_OUTPUT=$live_output_override; fi
 	ValidateConfig
 	local case_root output_root= case_dir
 	case_root=$(ResolvePath "$CASE_ROOT")
@@ -606,9 +597,9 @@ Main()
 	fi
 	SelectCases "$case_root"
 	EnsureConfigChecker
-	printf 'execution profile: %s\ncase root:         %s\noutput root:       %s\noutput mode:       %s\nlive output:       %s\nbackend:           %s\nranks:             %s\ncases:             %s\n' \
+	printf 'execution profile: %s\ncase root:         %s\noutput root:       %s\noutput mode:       %s\nOpenMP threads:    %s\nOpenBLAS threads:  %s\nbackend:           %s\nranks:             %s\ncases:             %s\n' \
 		"$config_file" "$case_root" "${output_root:-CASE/generated}" \
-		"$OUTPUT_MODE" "$LIVE_OUTPUT" "$BACKEND" "$RANKS" "${#case_dirs[@]}"
+		"$OUTPUT_MODE" "$OMP_NUM_THREADS" "$OPENBLAS_NUM_THREADS" "$BACKEND" "$RANKS" "${#case_dirs[@]}"
 	for case_dir in "${case_dirs[@]}"; do RunCase "$case_dir" "$output_root"; done
 	printf '\ncompleted %s case(s)\n' "${#case_dirs[@]}"
 }

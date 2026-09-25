@@ -30,7 +30,9 @@ inline std::function<void()>& AssetReadProbeForTesting()
 
 // Local operation. The caller coordinates exceptions before entering MPI.
 // Inputs must remain immutable throughout the run. The descriptor checks
-// reject changes observed during this read; they are not a file-system lock.
+// reject content and identity changes. A timestamp-only change is retried on
+// the same descriptor; matching full-file hashes tolerate continued metadata
+// refreshes from a distributed file system without weakening content checks.
 inline std::string ReadAssetFingerprint(const std::filesystem::path& path)
 {
 	struct Descriptor {
@@ -40,37 +42,53 @@ inline std::string ReadAssetFingerprint(const std::filesystem::path& path)
 	descriptor.value = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 	if (descriptor.value < 0)
 		throw std::system_error(errno, std::generic_category(), "cannot open asset " + path.string());
-	struct stat before{}, after{}, visible{};
-	if (::fstat(descriptor.value, &before) != 0)
-		throw std::system_error(errno, std::generic_category(), "cannot inspect asset " + path.string());
-	if (!S_ISREG(before.st_mode) || before.st_size < 0)
-		throw std::runtime_error("asset is not a regular file: " + path.string());
-	Sha256 hash;
-	std::array<char, 65536> buffer{};
-	std::uint64_t bytes = 0;
-	const auto expected = static_cast<std::uint64_t>(before.st_size);
-	for (;;) {
-		const auto count = ::read(descriptor.value, buffer.data(), buffer.size());
-		if (count < 0 && errno == EINTR) continue;
-		if (count < 0)
-			throw std::system_error(errno, std::generic_category(), "cannot read asset " + path.string());
-		if (!count) break;
-		if (static_cast<std::uint64_t>(count) > expected - bytes)
-			throw std::runtime_error("asset grew while being read: " + path.string());
-		hash.Append(buffer.data(), static_cast<std::size_t>(count));
-		bytes += static_cast<std::uint64_t>(count);
+	struct Read {
+		std::string fingerprint;
+		bool timestamp_changed = false;
+	};
+	const auto read_once = [&]() {
+		struct stat before{}, after{}, visible{};
+		if (::fstat(descriptor.value, &before) != 0)
+			throw std::system_error(errno, std::generic_category(), "cannot inspect asset " + path.string());
+		if (!S_ISREG(before.st_mode) || before.st_size < 0)
+			throw std::runtime_error("asset is not a regular file: " + path.string());
+		if (::lseek(descriptor.value, 0, SEEK_SET) < 0)
+			throw std::system_error(errno, std::generic_category(), "cannot rewind asset " + path.string());
+		Sha256 hash;
+		std::array<char, 65536> buffer{};
+		std::uint64_t bytes = 0;
+		const auto expected = static_cast<std::uint64_t>(before.st_size);
+		for (;;) {
+			const auto count = ::read(descriptor.value, buffer.data(), buffer.size());
+			if (count < 0 && errno == EINTR) continue;
+			if (count < 0)
+				throw std::system_error(errno, std::generic_category(), "cannot read asset " + path.string());
+			if (!count) break;
+			if (static_cast<std::uint64_t>(count) > expected - bytes)
+				throw std::runtime_error("asset grew while being read: " + path.string());
+			hash.Append(buffer.data(), static_cast<std::size_t>(count));
+			bytes += static_cast<std::uint64_t>(count);
 #ifdef IGA_ASSET_INPUT_TESTING
-		if (AssetReadProbeForTesting()) AssetReadProbeForTesting()();
+			if (AssetReadProbeForTesting()) AssetReadProbeForTesting()();
 #endif
-	}
-	if (::fstat(descriptor.value, &after) != 0 || ::stat(path.c_str(), &visible) != 0)
-		throw std::system_error(errno, std::generic_category(), "cannot recheck asset " + path.string());
-	if (bytes != expected || before.st_size != after.st_size
-		|| before.st_mtim.tv_sec != after.st_mtim.tv_sec || before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
-		|| before.st_ctim.tv_sec != after.st_ctim.tv_sec || before.st_ctim.tv_nsec != after.st_ctim.tv_nsec
-		|| before.st_dev != visible.st_dev || before.st_ino != visible.st_ino)
-		throw std::runtime_error("asset changed while being read: " + path.string());
-	return std::to_string(bytes) + ":" + hash.Hex();
+		}
+		if (::fstat(descriptor.value, &after) != 0 || ::stat(path.c_str(), &visible) != 0)
+			throw std::system_error(errno, std::generic_category(), "cannot recheck asset " + path.string());
+		if (bytes != expected || before.st_size != after.st_size
+			|| before.st_dev != visible.st_dev || before.st_ino != visible.st_ino)
+			throw std::runtime_error("asset changed while being read: " + path.string());
+		const bool timestamp_changed = before.st_mtim.tv_sec != after.st_mtim.tv_sec
+			|| before.st_mtim.tv_nsec != after.st_mtim.tv_nsec
+			|| before.st_ctim.tv_sec != after.st_ctim.tv_sec
+			|| before.st_ctim.tv_nsec != after.st_ctim.tv_nsec;
+		return Read{std::to_string(bytes) + ":" + hash.Hex(), timestamp_changed};
+	};
+	const auto first = read_once();
+	if (!first.timestamp_changed) return first.fingerprint;
+	const auto second = read_once();
+	if (second.fingerprint == first.fingerprint)
+		return second.fingerprint;
+	throw std::runtime_error("asset content changed across repeated reads: " + path.string());
 }
 
 // Keys describe logical inputs, not their rank-local paths. Catalog agreement

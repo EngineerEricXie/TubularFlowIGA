@@ -1,4 +1,5 @@
 #include "CollectiveAssetInput.hpp"
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <set>
@@ -43,6 +44,17 @@ void RunGroup(MPI_Comm comm, const fs::path& root)
 			"3:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "abc file SHA differs");
 		Require(iga::ReadAssetFingerprint(file) ==
 			"196625:4bb7439bc39bc2d0e3d6a915d7c81e38250a9c5bb320a94a19a95bba0d5fe40a", "multi-buffer SHA differs");
+		int metadata_changes = 0;
+		const auto original_time = fs::last_write_time(file);
+		iga::AssetReadProbeForTesting() = [&] {
+			++metadata_changes;
+			fs::last_write_time(file, original_time + std::chrono::seconds(metadata_changes));
+		};
+		const auto retried = iga::ReadAssetFingerprint(file);
+		iga::AssetReadProbeForTesting() = {};
+		Require(metadata_changes >= 2, "metadata retry fixture did not continuously change the timestamp");
+		Require(retried == "196625:4bb7439bc39bc2d0e3d6a915d7c81e38250a9c5bb320a94a19a95bba0d5fe40a",
+			"timestamp-only metadata retry changed the fingerprint");
 	});
 	iga::AssetFileCatalog healthy;
 	iga::CollectiveLocalStage(comm, "asset healthy catalog", [&] {
@@ -92,7 +104,9 @@ void RunGroup(MPI_Comm comm, const fs::path& root)
 		iga::CollectiveLocalStage(comm, "asset rejection verification", [&] {
 			const char* expected = catalog_difference ? "asset catalog agreement"
 				: contents_difference ? "asset unit data" : "asset content read";
-			Require(diagnostic.find(expected) != std::string::npos, "asset failure was not rejected at expected stage");
+			if (diagnostic.find(expected) == std::string::npos)
+				throw std::runtime_error("asset failure mode " + mode
+					+ " was not rejected at expected stage; diagnostic: " + diagnostic);
 			Require(DescriptorCount() == descriptors, "asset failure leaked a file descriptor");
 			fs::remove(file); Write(file, data);
 		});

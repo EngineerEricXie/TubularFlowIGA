@@ -35,6 +35,7 @@ SOLVER=auto
 SYSTEM=
 MPIEXEC=mpiexec
 OMP_NUM_THREADS=2
+OPENBLAS_NUM_THREADS=1
 SOLVER_ARGS=
 PETSC_OPTIONS=
 DRY_RUN=1
@@ -45,6 +46,10 @@ config=$work_dir/execution.conf
 WriteConfig "$config" "" 0
 flow_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $flow_output == *"iga_navier_stokes"* ]]
+[[ $flow_output != *"--direct-output"* ]]
+[[ $flow_output == *"OMP_NUM_THREADS=2"* ]]
+[[ $flow_output == *"OPENBLAS_NUM_THREADS=1"* ]]
+[[ $flow_output == *"OpenBLAS threads:  1"* ]]
 [[ $flow_output == *"--system blood_flow"* ]]
 [[ $flow_output == *"-np 10"* ]]
 [[ $flow_output == *"simple/generated"* ]]
@@ -118,18 +123,9 @@ WriteConfig "$config" "$output_root" 0 cpu 2
 printf '\nOUTPUT_MODE=versioned\n' >> "$config"
 versioned_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $versioned_output == *"$output_root/simple_3"* ]]
-[[ $versioned_output != *"--direct-output"* ]]
+[[ $versioned_output == *"--direct-output"* ]]
 [[ $versioned_output == *"$output_root/simple_3/results/blood_flow/navier_stokes-cpu.txt"* ]]
 [[ $versioned_output != *".simple_3.staging."* ]]
-
-live_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" --live-output simple)
-[[ $live_output == *"--direct-output"* ]]
-[[ $live_output == *"live output:       1"* ]]
-
-printf '\nLIVE_OUTPUT=1\n' >> "$config"
-staged_override_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" --no-live-output simple)
-[[ $staged_override_output != *"--direct-output"* ]]
-[[ $staged_override_output == *"live output:       0"* ]]
 
 printf '\nPETSC_OPTIONS=-ksp_type cg -pc_type jacobi\n' >> "$config"
 petsc_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
