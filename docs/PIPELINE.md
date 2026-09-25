@@ -39,8 +39,10 @@ and validate several cases while keeping each run in its own workspace:
 ```
 
 The execution profile contains machine and launch settings such as `RANKS`,
-`BACKEND`, and `OMP_NUM_THREADS`. Scientific inputs remain exclusively in each
-case's `simulation_config.json`. With no case names, all immediate
+`BACKEND`, `OMP_NUM_THREADS`, and `OPENBLAS_NUM_THREADS`. The thread settings
+are exported to preprocessing commands and every MPI rank. Scientific inputs
+remain exclusively in each case's `simulation_config.json`. With no case
+names, all immediate
 subdirectories of `CASE_ROOT` are selected. Set `DRY_RUN=1` to inspect the
 commands without generating or solving anything. A fresh checkout must first
 build the dependency-free config checker with `make cpu` before automatic
@@ -51,7 +53,8 @@ The repository execution profile sets `OUTPUT_ROOT=artifacts/cases`. In
 empty it uses `CASE/generated`. The runner replaces it only after hidden staging
 succeeds. In `OUTPUT_MODE=versioned`, the runner appends `_1`, `_2`, ... to that
 output path and never replaces an earlier run. By default, three-dimensional preprocessing still
-uses hidden staging; after it is published, the solver writes directly to the
+uses hidden staging, which is automatically removed if preprocessing fails;
+after it is published, the solver writes directly to the
 final versioned `results/` directory so in-progress visualization files remain
 visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is
 accepted only for a directory containing a matching generated-case

@@ -1218,7 +1218,7 @@ iga_navier_stokes iga_navier_stokes_openmp: src/iga_navier_stokes.cpp include/Bo
 
 iga_navier_stokes iga_navier_stokes_openmp iga_solve iga_config_check simulation_config_test: ../../include/MeshConfig.hpp
 
-iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/TransportElement.hpp
+iga_mesh_check: src/iga_mesh_check.cpp include/IgaDatabase.hpp include/TransportElement.hpp include/CollectiveAssetInput.hpp include/Sha256.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 iga_solve: include/CollectiveAssetInput.hpp include/CollectivePetscOptions.hpp include/MemoryReport.hpp include/PetscCheckpointRead.hpp include/PetscCheckpointWrite.hpp include/PetscGather.hpp include/PetscReadArray.hpp include/Sha256.hpp

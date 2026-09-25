@@ -35,6 +35,7 @@ SOLVER=auto
 SYSTEM=
 MPIEXEC=mpiexec
 OMP_NUM_THREADS=2
+OPENBLAS_NUM_THREADS=1
 SOLVER_ARGS=
 PETSC_OPTIONS=
 DRY_RUN=1
@@ -45,6 +46,10 @@ config=$work_dir/execution.conf
 WriteConfig "$config" "" 0
 flow_output=$("$repo_dir/scripts/run_cases.sh" --config "$config" simple)
 [[ $flow_output == *"iga_navier_stokes"* ]]
+[[ $flow_output != *"--direct-output"* ]]
+[[ $flow_output == *"OMP_NUM_THREADS=2"* ]]
+[[ $flow_output == *"OPENBLAS_NUM_THREADS=1"* ]]
+[[ $flow_output == *"OpenBLAS threads:  1"* ]]
 [[ $flow_output == *"--system blood_flow"* ]]
 [[ $flow_output == *"-np 10"* ]]
 [[ $flow_output == *"simple/generated"* ]]
