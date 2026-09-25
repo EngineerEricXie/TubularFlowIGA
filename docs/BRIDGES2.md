@@ -12,8 +12,8 @@ Treat login nodes as coordination hosts only: edit, inspect, and submit jobs
 there, but do not compile large targets or run simulations. Run builds, tests,
 MPI programs, and GPU programs inside an allocated compute resource.
 
-Codex or VS Code may already have been launched inside an allocation. Check
-before requesting another one:
+Your development session or IDE may already be running inside an allocation.
+Check before requesting another one:
 
 ```bash
 hostname
@@ -28,8 +28,9 @@ Do not start a nested `interact` session. Submit large cases, long benchmarks,
 or several independent validations with `sbatch`. GPU execution still requires
 an allocation containing a GPU.
 
-The shell that launched Codex determines its inherited modules. Modules loaded
-later in a different terminal are not automatically visible to that process.
+The shell that launched the development session determines its inherited
+modules. Modules loaded later in a different terminal are not automatically
+visible to that process.
 Replace the allocation below if you use another PSC project.
 
 ```bash
@@ -183,7 +184,7 @@ submission because PSC scheduling policies can change.
 
 ## Completed cross-node acceptance
 
-See the [Bridges-2 acceptance report](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
-for ABI, job IDs, numerical results, and formal scaling metrics. For long
-macro-steps, request a checkpoint early; the default five-minute warning may
+Use the [HPC benchmark guide](HPC_BENCHMARKS.md) to record ABI, job IDs,
+numerical results, and scaling metrics. For long macro-steps, request a
+checkpoint early; the default five-minute warning may
 not leave enough time to reach an accepted step.

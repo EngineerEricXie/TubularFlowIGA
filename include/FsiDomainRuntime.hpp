@@ -18,6 +18,8 @@ namespace iga {
 
 class PretensionedMembraneFsiRuntime;
 class MovingImmersedTransientFlowFsiRuntime;
+class NativeTetSolidFsiRuntime;
+class NativeTetAleFsiRuntime;
 
 enum class FsiTrialPhase : std::uint8_t {
 	Idle,
@@ -236,6 +238,8 @@ public:
 private:
 	friend class PretensionedMembraneFsiRuntime;
 	friend class MovingImmersedTransientFlowFsiRuntime;
+	friend class NativeTetSolidFsiRuntime;
+	friend class NativeTetAleFsiRuntime;
 
 	// This is intentionally not part of the lifecycle's public capability.
 	// Only the two runtime adapters that atomically finalize their numerical

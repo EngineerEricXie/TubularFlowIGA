@@ -2,6 +2,15 @@
 
 ## Recommended case-level command
 
+The following `generate_case.sh` command is the established centerline→IGA
+route. For the separately implemented surface/volume→native tetra FEM
+source–RCR route, use the explicit
+[native tetra workflow](T9_NATIVE_TET_WORKFLOW.md); it does not call DOLFIN.
+For prescribed-velocity P1 species transport, select the separate native
+species backend in the same explicit workflow or use its
+[standalone CLI](T9_NATIVE_TET_SPECIES_CLI.md). Neither uses DOLFIN or solves
+fluid equations as part of the species route.
+
 Run the complete 3D workflow through one command:
 
 ```bash
@@ -23,7 +32,7 @@ geometry gates.
 
 [`run_cases.sh`](../scripts/run_cases.sh) is a thin orchestration layer over the
 native 1D solver and the 3D `generate_case.sh` pipeline. It can check, solve,
-and validate several cases while preserving a per-case `generated/` layout:
+and validate several cases while keeping each run in its own workspace:
 
 ```bash
 ./scripts/run_cases.sh --config execution.conf CaseA CaseB
@@ -39,18 +48,26 @@ commands without generating or solving anything. A fresh checkout must first
 build the dependency-free config checker with `make cpu` before automatic
 solver selection can be inspected in dry-run mode.
 
-`OUTPUT_ROOT` may place generated cases below a separate root. In
-`OUTPUT_MODE=atomic`, each output uses `CASE/generated` and replaces it only
-after hidden staging succeeds. In `OUTPUT_MODE=versioned`, the runner
-atomically claims fresh `generated_1`, `generated_2`, ... directories and never
-replaces an earlier run. Preprocessing and solver results are written directly
-into that claimed version directory, so in-progress files remain visible and a
-failed run retains its partial output for diagnosis. `CLEAN=0` is the safe
-default; when enabled in atomic mode, cleanup is accepted only for a directory
-containing a matching generated-case `manifest.json` or `run_manifest.json`.
-Atomic mode continues to stage output because directly replacing an existing
-directory could destroy the last complete result. Direct use of
-`generate_case.sh --direct-output` requires an empty output directory.
+The repository execution profile sets `OUTPUT_ROOT=artifacts/cases`. In
+`OUTPUT_MODE=atomic`, each output uses `OUTPUT_ROOT/CASE`; when `OUTPUT_ROOT` is
+empty it uses `CASE/generated`. The runner replaces it only after hidden staging
+succeeds. In `OUTPUT_MODE=versioned`, the runner appends `_1`, `_2`, ... to that
+output path and never replaces an earlier run. By default, three-dimensional preprocessing still
+uses hidden staging, which is automatically removed if preprocessing fails;
+after it is published, the solver writes directly to the
+final versioned `results/` directory so in-progress visualization files remain
+visible. `CLEAN=0` is the safe default; when enabled in atomic mode, cleanup is
+accepted only for a directory containing a matching generated-case
+`manifest.json` or `run_manifest.json`.
+
+Set `LIVE_OUTPUT=1`, or pass `--live-output` to `run_cases.sh`, with
+`OUTPUT_MODE=versioned` to write 3D preprocessing directly into the newly
+claimed version directory. Files then become visible as each stage creates
+them, and a failed run intentionally leaves its partial directory available
+for diagnosis. Use `--no-live-output` to override an enabled profile. Atomic
+mode deliberately rejects live output because directly replacing an existing
+output could destroy the last complete result. Direct use of
+`generate_case.sh --direct-output` likewise requires an empty output directory.
 
 `PETSC_OPTIONS` may contain whitespace-separated PETSc options that are
 exported through the MPI launcher. Keep the shared profile solver-neutral and
@@ -266,6 +283,19 @@ mpmetis "$CASE_DIR/bzmeshinfo.txt" "$RANKS"
 ./solvers/cpu/iga_bezier_export "$DATABASE" "$CASE_DIR/bzmesh.vtkhdf"
 ./solvers/cpu/iga_inspect "$DATABASE"
 ```
+
+To publish the partition-invariant body-fitted geometry contract as JSON, add
+an explicit region role:
+
+```bash
+./solvers/cpu/iga_inspect "$DATABASE" \
+  --geometry-manifest geometry-contract.json --region-role fluid
+```
+
+The geometry identity excludes rank ownership and the partition index; the
+manifest separately records the exact `.ntiga` artifact SHA-256. Legacy
+version-3/4 databases are rejected for manifest output because they do not
+carry an explicit source transform; repack them as version 5 first.
 
 The packer prefers `spline_cache.igacache` and falls back to legacy text when
 the cache is absent. Pass `--legacy-text` after the output path to force that

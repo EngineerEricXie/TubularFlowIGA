@@ -1,0 +1,12 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.001, "steps": 200},
+  "waveforms": [],
+  "domains": [{
+    "id": "circuit", "dimension": "0d", "solver": "network_0d",
+    "device": "CPU", "case_dir": "../zero_d/rc_rcr_bifurcation",
+    "ports": {}
+  }],
+  "connections": [],
+  "output": {"directory": "results/zero_d_rc_rcr"}
+}

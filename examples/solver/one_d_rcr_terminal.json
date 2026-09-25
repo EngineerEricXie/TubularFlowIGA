@@ -1,0 +1,47 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.001, "steps": 20},
+  "waveforms": [],
+  "domains": [
+    {
+      "id": "network", "dimension": "1d", "solver": "network_1d",
+      "device": "CPU", "case_dir": "../one_d/compliant_bifurcation",
+      "ports": {
+        "branch_3": {"role": "outlet", "node_id": 3},
+        "branch_4": {"role": "outlet", "node_id": 4}
+      }
+    },
+    {
+      "id": "terminal_3", "dimension": "0d", "solver": "rcr",
+      "device": "CPU",
+      "materials": {
+        "proximal_resistance_pa_s_m3": 100000000.0,
+        "distal_resistance_pa_s_m3": 1000000000.0,
+        "capacitance_m3_pa": 1e-10,
+        "reference_pressure_pa": 0.0,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {"inlet": {"role": "inlet"}}
+    },
+    {
+      "id": "terminal_4", "dimension": "0d", "solver": "rcr",
+      "device": "CPU",
+      "materials": {
+        "proximal_resistance_pa_s_m3": 100000000.0,
+        "distal_resistance_pa_s_m3": 1000000000.0,
+        "capacitance_m3_pa": 1e-10,
+        "reference_pressure_pa": 0.0,
+        "initial_pressure_pa": 0.0
+      },
+      "ports": {"inlet": {"role": "inlet"}}
+    }
+  ],
+  "connections": [
+    {"from": "network:branch_3", "to": "terminal_3:inlet",
+      "exchange": ["pressure", "flow_rate"], "scheme": "sequential"},
+    {"from": "network:branch_4", "to": "terminal_4:inlet",
+      "exchange": ["pressure", "flow_rate"], "scheme": "sequential"}
+  ],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/one_d_rcr_terminal", "every_steps": 2}
+}

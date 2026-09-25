@@ -2,9 +2,8 @@
 
 The MPI case owner accepts `prescribed_motion` in `immersed_geometry.json` for
 backward-Euler flow. The ordinary fixed-geometry configuration remains valid.
-Full moving FSI and moving checkpoint/repartition restart are still separate
-unfinished HPC tasks. Validation status is tracked in
-[HPC-03D progress](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md).
+Full moving FSI and moving checkpoint/repartition restart are outside this case
+owner's supported scope.
 
 Keep the Cartesian grid fixed. Every VTP frame must preserve the reference
 file's vertex order, directed triangle connectivity, and boundary labels.
@@ -77,13 +76,13 @@ To reproduce the translating-cube graph used for local validation, generate a
 new case directory from the repository's existing 1D/immersed chain:
 
 ```bash
-python3 scripts/hpc_make_moving_graph_case.py --output-dir outputs/moving-demo
-mkdir outputs/moving-demo/mpi-2
+python3 scripts/hpc_make_moving_graph_case.py --output-dir artifacts/benchmarks/moving-demo
+mkdir artifacts/benchmarks/moving-demo/mpi-2
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 IGA_PROFILE=1 \
   mpiexec -n 2 python3 scripts/hpc_rank_run.py \
-  --output-dir outputs/moving-demo/mpi-2 --expected-ranks 2 --timeout 14400 -- \
+  --output-dir artifacts/benchmarks/moving-demo/mpi-2 --expected-ranks 2 --timeout 14400 -- \
   solvers/coupling/iga_multidomain_flow \
-  --graph-case outputs/moving-demo/fixture --output-dir outputs/moving-demo/mpi-2/result \
+  --graph-case artifacts/benchmarks/moving-demo/fixture --output-dir artifacts/benchmarks/moving-demo/mpi-2/result \
   -domain_immersed_flow_ksp_type gmres \
   -domain_immersed_flow_pc_factor_mat_solver_type mumps \
   -domain_immersed_flow_mat_mumps_icntl_14 100
@@ -96,15 +95,13 @@ wall inertial penalty 1. Its files reproduce the validated two-rank input
 byte-for-byte. The one- and four-rank full graph comparisons remain pending.
 `--steps 2` reproduces the documented coarse-step probe that fails Newton
 backtracking on its second step; it is provided for reproducing that failure,
-not as an accepted baseline. See the
-[moving-flow progress report](progress/HPC_03D_MOVING_EXTENSION_PROGRESS.md)
-for the numerical gates, evidence and limitations.
+not as an accepted baseline.
 
 Validate the saved rank reports and accepted history after the run finishes:
 
 ```bash
 python3 scripts/hpc_check_moving_graph.py \
-  --case-dir outputs/moving-demo/fixture --run outputs/moving-demo/mpi-2
+  --case-dir artifacts/benchmarks/moving-demo/fixture --run artifacts/benchmarks/moving-demo/mpi-2
 ```
 
 The checker verifies every rank's successful exit and log hashes, ownership

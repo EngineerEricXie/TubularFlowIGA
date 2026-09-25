@@ -808,6 +808,20 @@ int main()
 		assert(Close(configured.GetTransportPortState("root-logical").concentration
 			.at("logical_signal"), configured_legacy.GetPortState("root").concentration.at("signal")));
 		configured.AbortStep();
+		// Strong graph iterations replay a configured-open-loop hydraulic trial
+		// after rollback without changing the sampled inlet waveform.
+		configured.BeginStep({0, 0.0, 2.0*waveform_configuration.time.dt});
+		configured.SetPortInput("outlet-logical", configured_pressure);
+		configured.SolveHydraulicTrial();
+		const auto configured_first_flow = configured_native.FlowState().flow;
+		const auto configured_first_inlet = configured_native.HydraulicFrames().front().inlet.flow_m3_s;
+		configured.RollbackHydraulicTrial();
+		configured.SetPortInput("outlet-logical", configured_pressure);
+		configured.SolveHydraulicTrial();
+		assert(configured_native.FlowState().flow == configured_first_flow
+			&& configured_native.HydraulicFrames().front().inlet.flow_m3_s
+				== configured_first_inlet);
+		configured.AbortStep();
 
 		// Hydraulic rollback restores the one committed image and clears inputs.
 		staged.BeginStep({1, 2.0*staged_configuration.time.dt, 2.0*staged_configuration.time.dt});

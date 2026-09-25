@@ -1,0 +1,14 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "steady"},
+  "waveforms": [],
+  "domains": [{
+    "id": "vessel", "dimension": "3d", "method": "IGA", "device": "CPU",
+    "physics": ["flow"], "case_dir": "../vascular_flow/y_bifurcation",
+    "prepare": true, "template_directory": "../../meshgeneration/template",
+    "ports": {}
+  }],
+  "connections": [],
+  "resources": {"mpi_ranks": 2},
+  "output": {"directory": "results/iga_rigid_tree"}
+}

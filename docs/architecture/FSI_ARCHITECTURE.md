@@ -1,17 +1,10 @@
 # FSI Architecture
 
-Status: **Phase 8 foundational simple compliant-channel slice is closed**.
-It composes
-the PR8.4a bounded strong Dirichlet--Neumann coordinator with the PR8.3b real
-moving immersed-flow adapter and PR8.2b real pre-tensioned membrane adapter.
-Fresh Sol review approved closure.  It remains a sequential
-`PETSC_COMM_SELF`, one-partition benchmark; it is not a distributed FSI
-execution claim.  The PR8.4a
-bounded strong Dirichlet--Neumann coordinator is paired
-with the PR8.3a patch-to-closed-material composition foundation, PR8.2b
-structure-side membrane runtime, and PR8.1b traction extraction/projection
-boundary. It is a bounded, single-partition coordinator slice, not a
-distributed FSI execution claim.
+The foundational compliant-channel path combines a bounded strong
+Dirichlet--Neumann coordinator, a moving immersed-flow adapter, a
+pre-tensioned membrane adapter, patch-to-closed-material composition, and
+traction extraction/projection. The reference benchmark remains a sequential
+`PETSC_COMM_SELF`, one-partition configuration.
 
 ## Scope and first benchmark
 
@@ -49,7 +42,7 @@ evaluated displacement state.
 Consumers reject stale time/dt/content or changed material/topology before
 trial geometry is built.
 
-PR8.3a1 adds a producer-neutral `CreateFromSourceTopology` route and an
+The implementation provides a producer-neutral `CreateFromSourceTopology` route and an
 immutable `MaterialSurfacePatchMap`.  The map is initially deliberately narrow:
 one fully-owned partition, one label, and an explicit conforming P1 subset of
 the directed source triangles.  It derives a patch-scoped reference digest,
@@ -97,7 +90,7 @@ t_{\mathrm{on\ structure}}=-\sigma_f n_f.
 The first slice requires identical material topology and global node IDs on
 both sides. Nonmatching interpolation/projection is explicitly deferred.
 
-PR8.3a2 makes that fluid-side extraction patch-authoritative: it requires the
+Fluid-side extraction is patch-authoritative: it requires the
 immutable `MaterialSurfacePatchMap`, accepts a fluid endpoint distinct from
 the map's structural endpoint, and requires the exact fluid role
 `TractionOnStructure <- Displacement, Velocity`.  The fluid interface and
@@ -109,7 +102,7 @@ its canonical/source/map labels, and P1 barycentric coordinates are routed
 through the explicit mapped triangle/node permutation.  State and projection
 identities include map identity and membership.
 
-PR8.1b adds a read-only fluid-side kernel for the immersed Cartesian path.  It
+The immersed Cartesian path provides a read-only fluid-side kernel. It
 uses the catalog normal exactly as the closed-surface outward fluid normal (the
 catalog and moving-cut provenance audit compare it to
 `ClosedTriangulatedSurface::outward_unit_normal`), evaluates
@@ -131,7 +124,7 @@ derived from the projection form, exact field/material/layout identities,
 state, labels, and retained quadrature content.  Runtime publication and
 coupling remain deferred.
 
-## Typed FSI edges and runtime capabilities (PR8.0b1)
+## Typed FSI edges and runtime capabilities
 
 `FsiCouplingEdge.hpp` defines `FsiCouplingEdge`, a deliberately separate type
 from scalar `CouplingEdge`/`PortRef`.  Its `fluid` and `structure` endpoints
@@ -183,11 +176,11 @@ without scalar overloads or ownership ambiguity.  The focused contract test
 uses that arrangement and validates exact field stamps, layouts, partitions,
 subsystems, and lifecycle availability before accepting an input field.
 
-PR8.0b1 did **not** wire FSI edges into `SimulationGraph`, instantiate a
+This interface layer does **not** by itself wire FSI edges into `SimulationGraph`, instantiate a
 production FSI runtime, or add a coordinator/executor. It made no claim of a
 running FSI solve or collective transaction.
 
-## Structure-side runtime adapter (PR8.2b)
+## Structure-side runtime adapter
 
 `PretensionedMembraneFsiRuntime.hpp` is the first production implementation of
 `FsiStructureDomainRuntime`. It composes exactly one `FsiTrialLifecycle` with
@@ -215,7 +208,7 @@ kinematics, and lifecycle availability; neither owner can expose or commit a
 partial trial. The committed-field accessor therefore remains on its old
 snapshot until finalize.
 
-## Moving immersed-flow runtime adapter (PR8.3b)
+## Moving immersed-flow runtime adapter
 
 `MovingImmersedTransientFlowFsiRuntime.hpp` is the rank-local fluid-side
 implementation of `FsiFluidDomainRuntime`. It composes one moving immersed
@@ -247,7 +240,7 @@ triangle-derived reference lumped areas `{.03,.045,.015,.045,.09,.045,.015,.045,
 acceptance bound below `.03`; these are a bounded regression check, not a
 general conservation claim.
 
-## In-memory graph integration (PR8.0b2)
+## In-memory graph integration
 
 `SimulationGraph` now stores typed `FsiCouplingEdge` values separately from
 scalar `CouplingEdge` values. `DomainNode` declares material-surface catalogs
@@ -320,7 +313,7 @@ the field portion of a transaction shaped as `idle -> step-active -> iteration
 convergence data first, then perform a non-allocating ownership exchange.
 Abort discards trial data; ghosts remain scratch.
 
-## Strong Dirichlet--Neumann coordinator (PR8.4a)
+## Strong Dirichlet--Neumann coordinator
 
 `StrongFluidStructureCoupling.hpp` owns one exact `FsiCouplingEdge`, one
 single-partition layout, its convergence controls, and a
@@ -356,15 +349,15 @@ compliant-channel benchmark.  The latter is closure evidence for this bounded
 single-partition slice, not a distributed performance or production-anatomy
 claim.
 
-Performance work carries forward the Phase 7 requirement to measure assembly
-and solve time separately, host peak RSS, CUDA peak allocation, rank/partition
+Performance measurements separate assembly and solve time, host peak RSS,
+CUDA peak allocation, rank/partition
 agreement, and CPU/CUDA field differences. Representative distributed solves
 belong on allocated resources rather than login nodes.
 
 ## Distributed moving-FSI runtime and restart
 
-The current CPU path extends the earlier Phase 8 components with owned surface
-partitions and collective execution. `ImmersedMovingDistributedFsiRuntime`
+The current CPU path uses owned surface partitions and collective execution.
+`ImmersedMovingDistributedFsiRuntime`
 borrows a distributed moving-flow runtime and material patch map. It composes
 owned kinematics into the bounded replicated cut-surface geometry, solves only
 owned PETSc field rows, publishes traction and consistent nodal force slices,
@@ -393,23 +386,22 @@ restore retains exact saved publication bytes. This bounded surface restore
 reads every source surface shard on each target rank; it does not gather the
 full fluid field and is not intended as a large distributed shell solver.
 
-Local 1/2/4-rank and restart evidence is tracked in
-[the HPC-07 progress report](../progress/HPC_07A_MATERIAL_COMPOSITION_PROGRESS.md).
-Cross-node execution, scaling measurements, nonmatching transfer, contact and
+Local regression targets cover 1/2/4-rank execution and restart. Cross-node
+execution, scaling measurements, nonmatching transfer, contact and
 native graph CLI integration remain outside the currently accepted scope.
 
 ## Explicit exclusions
 
-Phase 8 excludes MPI/collective strong execution, nonmatching transfer,
+The bounded single-partition path excludes MPI/collective strong execution, nonmatching transfer,
 contact, ALE/remeshing, monolithic coupling, and any distributed performance
 claim.  The closed compliant-channel benchmark does not close the subsequent
 compliant-tube, aneurysm-wall, thin-shell valve, valve opening/closing,
 leaflet-contact, or patient-specific valve work.
-PR8.2a adds only a bounded, dense, single-rank P1 pre-tensioned membrane
-kernel: normal scalar displacement, reference normals, explicit Dirichlet IDs,
-and backward-Euler trial/prepare/finalize state. PR8.2b adds only its local
-structure-side runtime adapter; PR8.3b adds the bounded local fluid adapter
-above, but neither adds a coordinator or collective execution. Each successful solve issues
+The structure kernel is a bounded, dense, single-rank P1 pre-tensioned membrane
+model with normal scalar displacement, reference normals, explicit Dirichlet IDs,
+and backward-Euler trial/prepare/finalize state. Its local structure runtime and
+the bounded local fluid adapter do not by themselves add a coordinator or
+collective execution. Each successful solve issues
 one membrane-instance-owned generation capability from the unchanged committed
 state; it must be prepared and finalized, or explicitly rejected/aborted,
 before another solve. Rejected, aborted, stale, foreign, superseded, or
@@ -419,6 +411,6 @@ values and its backward-error residual. It excludes MPI structural
 assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
 monolithic FSI solve, a coordinator/executor, and any claim of a distributed
 operating FSI benchmark.
-PR8.3a1 also excludes distributed patch ownership, multiple labels, nonmatching
+The patch mapping excludes distributed patch ownership, multiple labels, nonmatching
 transfer, patch remeshing/contact, and any change to fluid traction/runtime
 paths.

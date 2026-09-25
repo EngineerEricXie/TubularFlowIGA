@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "card_id": "T3-A-native-kirchhoff-love-shell-v1",
+  "contract_status": "frozen",
+  "implementation_status": "verified_single_patch_reference_runtime",
+  "backend": "native_cpp_iga_kirchhoff_love_shell",
+  "external_discretization_or_assembly_framework": false,
+  "algebra_backend": "PETSc_optional",
+  "theory": {
+    "name": "Kirchhoff-Love thin shell",
+    "kinematics": "control-point translations with rotations derived from the spline midsurface",
+    "transverse_shear": "neglected",
+    "thickness_ratio_recommended_maximum": 0.05,
+    "within_patch_continuity": "C1_or_higher_across_element_boundaries",
+    "initial_multipatch_policy": "single_patch_only; non-C1 seams rejected",
+    "configuration": "total_Lagrangian_reference_midsurface",
+    "first_material": "isotropic_St_Venant_Kirchhoff",
+    "nonlinear_scope": "geometric_non_linearity_required; anisotropy_is_a_later_explicit_material"
+  },
+  "input_contract": {
+    "length_unit": "m",
+    "stress_unit": "Pa",
+    "density_unit": "kg/m3",
+    "required": [
+      "tensor_product_B_spline_or_NURBS_midsurface",
+      "degrees_p_and_q_at_least_2",
+      "open_knot_vectors",
+      "control_points_and_positive_weights",
+      "positive_thickness",
+      "Young_modulus_and_Poisson_ratio",
+      "explicit_boundary_constraints_and_loads"
+    ],
+    "forbidden_inference": [
+      "organ_name_selects_material",
+      "surface_label_implies_thickness",
+      "image_geometry_is_stress_free_without_declared_reference_state"
+    ]
+  },
+  "element_outputs": [
+    "residual_force",
+    "consistent_tangent",
+    "mass_matrix",
+    "reference_and_current_surface_geometry",
+    "membrane_and_bending_resultants",
+    "strain_energy"
+  ],
+  "verification_cards": [
+    {
+      "id": "rigid-motion-invariance",
+      "reference": "zero_internal_force_and_energy",
+      "maximum_relative_residual": 1e-11,
+      "maximum_relative_energy": 1e-12
+    },
+    {
+      "id": "flat-membrane-patch",
+      "reference": "constant_analytic_membrane_strain_and_resultant",
+      "maximum_relative_l2_error": 1e-10
+    },
+    {
+      "id": "pure-bending-patch",
+      "reference": "constant_analytic_change_of_curvature_and_moment",
+      "maximum_relative_l2_error": 1e-9
+    },
+    {
+      "id": "consistent-tangent",
+      "reference": "centered_finite_difference_of_residual",
+      "maximum_relative_error": 1e-6
+    },
+    {
+      "id": "spatial-convergence",
+      "reference": "manufactured_smooth_shell_solution",
+      "minimum_levels": 3,
+      "minimum_observed_energy_order": 1.5
+    }
+  ],
+  "failure_classes": [
+    "nonpositive_weight_or_thickness",
+    "degree_below_two",
+    "nonopen_or_nonmonotone_knot_vector",
+    "singular_surface_metric",
+    "unsupported_non_C1_patch_seam",
+    "invalid_material_parameters",
+    "negative_or_nonfinite_quadrature_Jacobian",
+    "Newton_or_linear_nonconvergence"
+  ],
+  "local_resource_budget": {
+    "element_and_patch_tests_maximum_wall_s": 60,
+    "small_nonlinear_case_maximum_wall_s": 300,
+    "maximum_peak_rss_bytes": 4294967296
+  },
+  "classification_policy": {
+    "unit_and_patch_tests": "numerical_verification",
+    "rendered_deformation_only": "demonstration_visualization",
+    "external_solver_comparison": "cross_validation_not_native_completion"
+  }
+}

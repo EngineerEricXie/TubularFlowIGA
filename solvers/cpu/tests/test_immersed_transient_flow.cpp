@@ -301,6 +301,54 @@ void CheckPressureLikePortBranch(const iga::MovingCutGeometry& geometry, iga::Im
 	loaded.AbortTrial();
 }
 
+void CheckPressurePortBackflowRuntime(const iga::MovingCutGeometry& geometry)
+{
+	auto ordinary_options=PressureLikeOptions(iga::ImmersedFlowPortControlMode::Pressure,0.0);
+	auto stabilized_options=ordinary_options;
+	stabilized_options.pressure_port_backflow_beta[1]=0.5;
+	iga::ImmersedTransientFlowRuntime ordinary(geometry,ordinary_options);
+	iga::ImmersedTransientFlowRuntime stabilized(geometry,stabilized_options);
+	ordinary.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,ordinary.Layout(),
+		NonconstantFields(ordinary.Layout()),{},false,0.0));
+	stabilized.SetCommittedGlobalState(iga::ImmersedGlobalFlowState(0.0,0,stabilized.Layout(),
+		NonconstantFields(stabilized.Layout()),{},false,0.0));
+	ordinary.BeginTrial(1.0,1,1.0);
+	stabilized.BeginTrial(1.0,1,1.0);
+	assert(ordinary.Diagnostics().input_hash_sha256!=stabilized.Diagnostics().input_hash_sha256);
+	auto state=ordinary.TrialState();
+	std::vector<PetscScalar> direction(state.size(),0.0);
+	for(std::size_t row=0;row<ordinary.Layout().NodeIds().size();++row) {
+		state[4*row]=1.0;
+		direction[4*row]=1.0;
+	}
+	ordinary.SetTrialState(state); stabilized.SetTrialState(state);
+	ordinary.Assemble(); stabilized.Assemble();
+	const auto a=ordinary.AssembledNegativeResidual(), b=stabilized.AssembledNegativeResidual();
+	const auto ja=ordinary.AssembledJacobianAction(direction), jb=stabilized.AssembledJacobianAction(direction);
+	double backflow_energy=0.0, jacobian_difference=0.0;
+	for(std::size_t row=0;row<state.size();++row) {
+		backflow_energy-=PetscRealPart(b[row]-a[row])*PetscRealPart(state[row]);
+		jacobian_difference+=std::abs(PetscRealPart(jb[row]-ja[row]));
+	}
+	assert(backflow_energy>0.0 && jacobian_difference>0.0);
+	for(std::size_t row=0;row<ordinary.Layout().NodeIds().size();++row)state[4*row]=-1.0;
+	ordinary.SetTrialState(state); stabilized.SetTrialState(state);
+	ordinary.Assemble(); stabilized.Assemble();
+	const auto outward_a=ordinary.AssembledNegativeResidual(), outward_b=stabilized.AssembledNegativeResidual();
+	for(std::size_t row=0;row<state.size();++row)
+		assert(std::abs(PetscRealPart(outward_b[row]-outward_a[row]))<=1e-11);
+	ordinary.AbortTrial(); stabilized.AbortTrial();
+	auto invalid=ordinary_options;
+	invalid.pressure_port_backflow_beta[2]=0.5;
+	Reject([&] { iga::ImmersedTransientFlowRuntime runtime(geometry,invalid); });
+	invalid.pressure_port_backflow_beta.clear();
+	invalid.pressure_port_backflow_beta[1]=-0.5;
+	Reject([&] { iga::ImmersedTransientFlowRuntime runtime(geometry,invalid); });
+	invalid=Options();
+	invalid.pressure_port_backflow_beta[1]=0.5;
+	Reject([&] { iga::ImmersedTransientFlowRuntime runtime(geometry,invalid); });
+}
+
 void CheckAbortPublication(const iga::MovingCutGeometry& geometry)
 {
 	iga::ImmersedTransientFlowRuntime runtime(geometry,Options());
@@ -778,13 +826,14 @@ int RunPreconditionerReuseDiagnostic()
 
 int main(int argc,char** argv)
 {
-	bool newton_diagnostic=false,p4_cache_diagnostic=false,p4_cache_w1_on=false,p4_cache_w1_off=false,p5_preconditioner_reuse=false;
+	bool newton_diagnostic=false,p4_cache_diagnostic=false,p4_cache_w1_on=false,p4_cache_w1_off=false,p5_preconditioner_reuse=false,backflow_port_smoke=false;
 	for(int i=1;i<argc;++i) {
 		if(std::string(argv[i])=="--newton-diagnostic") newton_diagnostic=true;
 		if(std::string(argv[i])=="--p4-cache") p4_cache_diagnostic=true;
 		if(std::string(argv[i])=="--p4-cache-w1-on") p4_cache_w1_on=true;
 		if(std::string(argv[i])=="--p4-cache-w1-off") p4_cache_w1_off=true;
 		if(std::string(argv[i])=="--p5-preconditioner-reuse") p5_preconditioner_reuse=true;
+		if(std::string(argv[i])=="--backflow-port-smoke") backflow_port_smoke=true;
 	}
 	PetscInitialize(&argc,&argv,nullptr,nullptr); int status=0;
 	iga::CurrentPhaseProfile().EnableFromEnvironment();
@@ -794,6 +843,19 @@ int main(int argc,char** argv)
 		else if(p4_cache_diagnostic) status=RunVolumeBasisCacheDiagnostic();
 		else if(p4_cache_w1_on!=p4_cache_w1_off) status=RunVolumeBasisCacheW1(p4_cache_w1_on);
 		else if(p5_preconditioner_reuse) status=RunPreconditionerReuseDiagnostic();
+		else if(backflow_port_smoke) {
+			const auto soup=Cube();
+			iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
+			iga::MovingCutGeometryOptions options;
+			options.volume.max_depth=3;
+			options.volume.max_nodes=500000;
+			options.volume.max_leaves=500000;
+			options.volume.max_points=3000000;
+			const iga::CubicCartesianGridSpec grid{{{0,0,0}},{{1,1,1}},{{3,3,3}}};
+			const auto geometry=iga::MovingCutGeometry::Build(grid,motion.Evaluate(1.0,0.0,1.0),options);
+			CheckPressurePortBackflowRuntime(*geometry);
+			std::cout << "immersed pressure-port backflow runtime smoke passed\n";
+		}
 		else {
 		const auto soup=Cube(); iga::PrescribedSurfaceMotion motion({{0.0,soup},{1.0,soup}});
 		iga::MovingCutGeometryOptions go; go.volume.max_depth=4; go.volume.max_nodes=500000; go.volume.max_leaves=500000; go.volume.max_points=3000000;

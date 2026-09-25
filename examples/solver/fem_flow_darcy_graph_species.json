@@ -1,0 +1,213 @@
+{
+  "schema_version": "solver-v1",
+  "time": {
+    "mode": "transient",
+    "dt_s": 5.0,
+    "steps": 2
+  },
+  "domains": [
+    {
+      "id": "artery",
+      "role": "artery",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "geometry": "results/fem_flow_darcy_wall_species/flow/submeshes/arterial_lumen.msh",
+      "physics": [
+        "flow",
+        "species"
+      ],
+      "materials": {
+        "density_kg_m3": 1000,
+        "dynamic_viscosity_pa_s": 0.004
+      },
+      "boundaries": {
+        "wall_label": 219,
+        "inlet_velocity_m_s": [
+          0.002,
+          0,
+          0
+        ]
+      },
+      "ports": {
+        "inlet": {
+          "label": 207,
+          "role": "inlet"
+        },
+        "tip0": {
+          "label": 220
+        },
+        "tip1": {
+          "label": 221
+        },
+        "tip2": {
+          "label": 222
+        },
+        "tip3": {
+          "label": 223
+        }
+      },
+      "species": [
+        {
+          "id": "tracer",
+          "initial_concentration_mol_m3": 0.0,
+          "diffusivity_m2_s": 1e-06,
+          "inlet_concentration_mol_m3": 1.0
+        },
+        {
+          "id": "second",
+          "initial_concentration_mol_m3": 0.0,
+          "diffusivity_m2_s": 2e-06,
+          "inlet_concentration_mol_m3": 0.5
+        }
+      ]
+    },
+    {
+      "id": "tissue",
+      "role": "tissue",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "geometry": "results/fem_flow_darcy_wall_species/flow/submeshes/fixed_darcy_tissue.msh",
+      "physics": [
+        "darcy",
+        "species"
+      ],
+      "materials": {
+        "darcy_mobility_m2_pa_s": 1e-08
+      },
+      "ports": {
+        "arterial0": {
+          "label": 220
+        },
+        "arterial1": {
+          "label": 221
+        },
+        "arterial2": {
+          "label": 222
+        },
+        "arterial3": {
+          "label": 223
+        },
+        "venous0": {
+          "label": 226
+        },
+        "venous1": {
+          "label": 227
+        },
+        "venous2": {
+          "label": 228
+        },
+        "venous3": {
+          "label": 229
+        }
+      }
+    },
+    {
+      "id": "vein",
+      "role": "vein",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "geometry": "results/fem_flow_darcy_wall_species/flow/submeshes/venous_lumen.msh",
+      "physics": [
+        "flow",
+        "species"
+      ],
+      "boundaries": {
+        "wall_label": 225,
+        "outlet_pressure_pa": 0
+      },
+      "ports": {
+        "outlet": {
+          "label": 208,
+          "role": "outlet"
+        },
+        "tip0": {
+          "label": 226
+        },
+        "tip1": {
+          "label": 227
+        },
+        "tip2": {
+          "label": 228
+        },
+        "tip3": {
+          "label": 229
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "artery:tip0",
+      "to": "tissue:arterial0",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "artery:tip1",
+      "to": "tissue:arterial1",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "artery:tip2",
+      "to": "tissue:arterial2",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "artery:tip3",
+      "to": "tissue:arterial3",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "tissue:venous0",
+      "to": "vein:tip0",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "tissue:venous1",
+      "to": "vein:tip1",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "tissue:venous2",
+      "to": "vein:tip2",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    },
+    {
+      "from": "tissue:venous3",
+      "to": "vein:tip3",
+      "exchange": [
+        "flow_rate"
+      ],
+      "scheme": "sequential"
+    }
+  ],
+  "resources": {
+    "mpi_ranks": 2
+  },
+  "output": {
+    "directory": "results/fem_flow_darcy_graph_species"
+  }
+}

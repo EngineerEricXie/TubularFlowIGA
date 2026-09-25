@@ -1,0 +1,13 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "steady"},
+  "waveforms": [],
+  "domains": [{
+    "id": "tissue", "dimension": "3d", "method": "FEM", "device": "CPU",
+    "physics": ["darcy"], "backend": "native_tet_darcy",
+    "case_file": "fem_darcy_case.json", "ports": {}
+  }],
+  "connections": [],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/fem_darcy"}
+}

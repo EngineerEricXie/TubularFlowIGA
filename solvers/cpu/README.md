@@ -1,4 +1,4 @@
-# TubularFlowIGA CPU Backend
+# CoupledFlow CPU Backend
 
 A project-owned C++17 isogeometric-analysis pipeline for stabilized steady and
 backward-Euler Navier-Stokes flow plus configurable transient multi-field transport. PETSc provides distributed
@@ -17,48 +17,38 @@ geometry setup and existing physics kernels, with global port/wall/pressure
 diagnostics. `ImmersedStaticDistributedRuntime` adds owned Newton/KSP updates,
 global convergence and conservation checks, and transactional commit/rollback.
 Its C++ interface and the quasi-static graph entry support distributed steady
-solves. Fixed-geometry backward-Euler case/graph support is described below;
-moving-geometry MPI remains HPC-03D. See
-the [assembly report](../../docs/progress/HPC_03A_ASSEMBLY_PROGRESS.md),
-[static operator report](../../docs/progress/HPC_03A_STATIC_OPERATOR_PROGRESS.md),
-and [static runtime report](../../docs/progress/HPC_03A_STATIC_RUNTIME_PROGRESS.md).
+solves. Fixed-geometry backward-Euler case/graph support is described below.
 
 Static distributed constructors also accept
 `ImmersedWorkPartition::WeightedContiguous` to distribute cell work using
 quadrature and stabilization cost estimates. The default remains `CellCount`;
-the measured small case showed no clear speedup. See the
-[partition comparison](../../docs/progress/HPC_03B_WORK_PARTITION_PROGRESS.md)
-for per-rank work, halo, assembly timings, and reproducible benchmark commands.
+the measured small case showed no clear speedup.
 
-The [steady graph MPI report](../../docs/progress/HPC_03C_STATIC_GRAPH_PROGRESS.md)
-covers collective port updates, case preflight/initialization, transactional
-rollback, and native explicit/fixed/Aitken graph validation.
+The steady graph MPI regression covers collective port updates, case
+preflight/initialization, transactional rollback, and native
+explicit/fixed/Aitken graph validation.
 
 `ImmersedDistributedVelocityHistory` freezes owned committed velocities and
 exchanges only required nodes. `ImmersedDistributedTransientVolume` couples that
 snapshot to uniquely owned, frozen body-force quadrature and backward-Euler
 volume integration. Both compact and expanded catalogs are covered by the
-[transient volume regression](../../docs/progress/HPC_03C_TRANSIENT_VOLUME_PROGRESS.md).
+transient volume regression.
 `ImmersedTransientDistributedOperator` combines these inputs with stationary
 material-aware walls (including optional inertial impedance), mixed traces,
-ghost stabilization, ports, and the gauge. Its
-[operator regression](../../docs/progress/HPC_03C_TRANSIENT_OPERATOR_PROGRESS.md)
-compares five boundary modes against the serial transient runtime on 1/2/4 ranks.
+ghost stabilization, ports, and the gauge. Its operator regression compares
+five boundary modes against the serial transient runtime on 1/2/4 ranks.
 `ImmersedTransientDistributedRuntime` adds shared MPI Newton solves and owned
 committed/prepared fields with a transactional accepted clock. Frozen history
 survives Newton rollback; `AbortTrial` releases it before changing controls.
-The [runtime regression](../../docs/progress/HPC_03C_TRANSIENT_RUNTIME_PROGRESS.md)
-covers two accepted steps, field/conservation parity, failures, split groups,
+The runtime regression covers two accepted steps, field/conservation parity, failures, split groups,
 and weighted work partitions.
 `ThreeDImmersedTransientDistributedFlowDomain` supplies graph transactions that
-restore accepted controls and discard frozen trial inputs before coupling retry;
-see the [adapter regression](../../docs/progress/HPC_03C_TRANSIENT_DOMAIN_PROGRESS.md).
+restore accepted controls and discard frozen trial inputs before coupling retry.
 The production `ImmersedFlowCase` and `iga_multidomain_flow --graph-case` now accept
 `backward_euler` with stationary catalogs and matching domain/graph time grids.
 `wall_inertial_gamma0` is optional in the transient geometry runtime configuration.
 Steady configuration remains supported; moving geometry and species are rejected
-by this flow-only case path. See the [case/graph acceptance report](../../docs/progress/HPC_03C_TRANSIENT_CASE_GRAPH_REPORT.md)
-for commands, numerical gates, and the limits of the local MPI evidence.
+by this flow-only case path.
 
 | Executable | Purpose |
 | --- | --- |
@@ -86,28 +76,24 @@ velocity, selected configuration/legacy parameters, and referenced transient
 boundary tables must have identical contents across rank-local copies. Inputs
 must remain immutable during execution; missing or non-regular required files
 are rejected before parsing. This adds a full startup scan of each asset per
-rank. See the [flow input validation report](../../docs/progress/HPC_01C_FLOW_INPUT_PROGRESS.md)
-for coverage, legacy numerical limitations, and remaining runtime boundaries.
+rank.
 
 Flow output now coordinates path preparation, PETSc gather errors, field writes
 and output indexes across ranks. Existing non-regular output targets are rejected
 before opening, and the final solve summary is printed after those writers return
 successfully. Failed writes may leave partial files; atomic publication remains
-separate work. See the
-[flow output validation report](../../docs/progress/HPC_01C_FLOW_OUTPUT_PROGRESS.md).
+separate work.
 
 CPU flow and configured transport now explicitly finalize VTKHDF before their
 success summaries and coordinate close errors across ranks. The shared writer
 also serves CUDA flow and transport. Geometry reports and coupling histories
-check the stream after closing. See the
-[I/O finalization report](../../docs/progress/HPC_01C_IO_FINALIZATION_PROGRESS.md)
-for native close-failure injection, HDF5 roundtrips, and remaining limitations.
+check the stream after closing. Native regressions cover close-failure injection
+and HDF5 roundtrips.
 
 The native flow CLI also coordinates timestep configuration, waveform and VCA
 inlet preparation, port-result processing, transport budgets, and circuit/history
 updates. A failed VCA step ends the job; this does not provide whole-step rollback
-for an in-process retry. See the
-[flow step validation report](../../docs/progress/HPC_01C_FLOW_STEP_PROGRESS.md).
+for an in-process retry.
 
 `iga_solve` also coordinates input and timestep errors. It validates the
 configuration, labels, selected velocity source and referenced boundary tables
@@ -116,53 +102,41 @@ Unused snapshots and temporal definitions remain unopened. Keep all case inputs
 immutable during execution. Checkpoint reads accept verified identical local
 replicas, while checkpoint writes still require shared storage. State and
 metadata are published separately, so a complete crash-safe restart bundle
-remains pending. See the [transport CLI validation report](../../docs/progress/HPC_01C_TRANSPORT_CLI_PROGRESS.md)
-for failure, numerical, memory-report, VTKHDF and restart evidence.
+remains pending.
 
 The legacy `iga_transport` CLI also checks packed-database, parameter, mesh,
 selected velocity and optional case-configuration contents across rank-local
 replicas. It compares effective PETSc options, coordinates local assembly and
 returned PETSc errors, and releases its matrix/vector/solver owners before the
 success summary. Its positional arguments and numerical defaults are preserved.
-See the [legacy transport report](../../docs/progress/HPC_01C_LEGACY_TRANSPORT_PROGRESS.md)
-for native faults, cleanup checks, replica compatibility and remaining limits.
 
 `iga_mesh_check` and `iga_assembly_smoke` require identical database contents
 across rank-local paths. The mesh checker also rejects out-of-range owners and
 disagreement between the ownership index and loaded element records; an empty
 rank remains valid. Assembly smoke coordinates returned PETSc errors and checks
-matrix destruction before printing its result. See the
-[tool asset report](../../docs/progress/HPC_01C_TOOL_ASSET_PROGRESS.md).
+matrix destruction before printing its result.
 
 Schema-v5 pressure-flow graph and sequential explicit executors coordinate
 operation outcomes and require a common convergence decision before commit.
 Schema-v6 species execution also checks donor ownership and transport order
 before starting transport, and captures port observations before its local
-precommit callback. Registry construction now coordinates storage and index
-validation before adopting runtime owners; see the
-[registry report](../../docs/progress/HPC_01C_REGISTRY_PROGRESS.md),
-[pressure-flow report](../../docs/progress/HPC_01C_PRESSURE_EXECUTOR_PROGRESS.md)
-and [species report](../../docs/progress/HPC_01C_SPECIES_EXECUTOR_PROGRESS.md).
+precommit callback. Registry construction coordinates storage and index
+validation before adopting runtime owners.
 Sequential CSV and manifest writers check explicit close outcomes before
-publishing the graph completion marker; see the
-[sequential output report](../../docs/progress/HPC_01C_SEQUENTIAL_OUTPUT_PROGRESS.md).
+publishing the graph completion marker.
 Sequential initialization now coordinates local preparation, checks effective
 controls/options and selected input contents, and supports identical rank-local
-replicas on a borrowed communicator; see the
-[sequential initialization report](../../docs/progress/HPC_01C_SEQUENTIAL_INITIALIZATION_PROGRESS.md).
+replicas on a borrowed communicator.
 The sequential fixed/Aitken loop now coordinates operation outcomes, global
 convergence and all three abort attempts. Native fault/retry tests cover
 1/2/3-rank communicators and verify committed snapshots and PETSc ownership
-release; see the [strong loop report](../../docs/progress/HPC_01C_SEQUENTIAL_STRONG_PROGRESS.md).
+release.
 Configured transport Bezier VTKHDF initialization also coordinates standard and
-nonstandard exceptions; see the [initialization report](../../docs/progress/HPC_01C_TRANSPORT_VISUALIZATION_INIT_PROGRESS.md).
+nonstandard exceptions.
 Configuration and metadata readers now reject incomplete stream reads, and the
-selected control, JSON, CSV and checkpoint serializers propagate stream errors;
-see the [checked text report](../../docs/progress/HPC_01C_CHECKED_TEXT_PROGRESS.md).
+selected control, JSON, CSV and checkpoint serializers propagate stream errors.
 The 1D checkpoint metadata/fingerprint, VTU filenames, VTKHDF array schema and
-resource report also propagate intermediate stream failures. The allocation
-sweep and native compatibility results are documented in the
-[text helper report](../../docs/progress/HPC_01C_TEXT_HELPER_PROGRESS.md).
+resource report also propagate intermediate stream failures.
 Run the focused MPI regression with `make text-helper-failure-test PETSC_DIR=...`.
 Flow initialization, step controls, port measurements, transport integrals and
 staged adapter signatures also reject stringstream formatting errors before
@@ -204,8 +178,7 @@ count, not a byte budget. Both settings are captured at runtime construction.
 `IGA_PROFILE=1` reports actual team size and maximum resident batch items.
 Failures join workers before propagation; retry completes pending PETSc
 insertions and clears them before reassembly. Runtime calls remain confined
-to the initialization thread. Numerical evidence and remaining acceptance
-work are recorded in [HPC-02 progress](../../docs/progress/HPC_02_VOLUME_PROGRESS.md).
+to the initialization thread.
 
 For body-fitted flow, build `iga_navier_stokes_openmp` with the same PETSc
 installation as the ordinary CLI. For example, on a single allocated node:
@@ -223,8 +196,6 @@ This Open MPI example allocates two physical cores per rank; scheduler jobs
 must request matching resources. A failed worker batch is joined before the
 cross-rank error agreement. Retry flushes pending matrix insertions before
 clearing them, retaining preallocation even if the first assembly failed.
-See [body-fitted hybrid progress](../../docs/progress/HPC_02_HYBRID_PROGRESS.md)
-for tested configurations and outstanding performance comparisons.
 
 ## Embedding MPI runtimes
 
@@ -235,14 +206,11 @@ support, compiled OpenMP, effective OpenMP thread limits, and BLAS thread reques
 Multiple OpenMP threads require at least `MPI_THREAD_FUNNELED`. Legal differences
 between ranks are retained and reported as ranges; the report does not measure
 active workers or certify CPU binding. The native flow, configured transport,
-1D, and graph entrypoints call this preflight automatically. See the
-[resource validation report](../../docs/progress/HPC_01D_PROGRESS.md).
+1D, and graph entrypoints call this preflight automatically.
 `iga_mesh_check`, `iga_assembly_smoke`, and legacy `iga_transport` also perform
 this preflight and coordinate input failures. Assembly `FIELDS` must be a full
 positive integer within the PETSc row capacity; legacy `STEPS` must be a full
 nonnegative integer, and ranks must agree on step count and whether to output.
-See the [auxiliary tool report](../../docs/progress/HPC_01CD_TOOLS_PROGRESS.md)
-for before/after field comparisons, bad-Jacobian exit codes, and failure coverage.
 
 `OwnedRowAssembler`, `TransientFlowRuntime`, and `TransientTransportRuntime`
 borrow the communicator supplied to their constructors. The owner must keep it
@@ -256,9 +224,7 @@ fields in existing scratch vectors, and preserves the public state Vec handle.
 Transport `GatherState` is also collective and validates the ordered field
 layout before gathering. It retains raw values, including NaN and infinity for
 diagnostics, and allocates the complete field on every rank; use the required-node
-query for element work. See the
-[initialization and gather report](../../docs/progress/HPC_01C_INITIALIZATION_PROGRESS.md)
-for failure coverage, compatibility tests, and remaining constructor/I/O work.
+query for element work.
 
 Transport `ReadState` is collective and requires the committed phase. Native
 flow restart and this transport reader validate the path, exact binary length,
@@ -267,9 +233,8 @@ rank reads its owned rows from the same immutable regular file on shared storage
 the reader accepts an ordinary uncompressed PETSc binary Vec matching the current
 PetscInt/PetscScalar build and ignores adjacent `.info` options. A successful
 transport load retains the existing warm-start convention (`Steps() == 1`).
-The [checkpoint read report](../../docs/progress/HPC_01C_CHECKPOINT_READ_PROGRESS.md)
-records failure and restart coverage. Coordinated checkpoint publication and
-whole-coupled-state recovery remain HPC-05 work.
+Coordinated checkpoint publication and whole-coupled-state recovery use the
+[coupled checkpoint contract](../../docs/architecture/COUPLED_CHECKPOINT_CONTRACT.md).
 
 Transport `WriteState` is collective and accepts only committed state. The native
 flow and transport writers copy owned coefficients, reject nonfinite input, and
@@ -279,9 +244,7 @@ Caught errors before that rename preserve the previous Vec file and trigger
 temporary-file cleanup. Use one writer group per destination; separate groups
 must use distinct paths. New files have owner-only permissions; replacement
 preserves an existing regular file's permission bits. Nonregular destinations,
-including symlinks, are rejected. See the
-[checkpoint write report](../../docs/progress/HPC_01C_CHECKPOINT_WRITE_PROGRESS.md)
-for format compatibility and real I/O failure tests. Metadata and coupled state
+including symlinks, are rejected. Metadata and coupled state
 are still separate publications, so this is not a complete restart transaction.
 
 The synchronous [RunMultidomainFlow API](../../include/MultidomainRunner.hpp)
@@ -291,8 +254,7 @@ initialize/finalize PETSc or insert a new PETSc options database. Compile the
 coupling runner with `IGA_MULTIDOMAIN_NO_MAIN` when embedding it. Independent
 graphs require distinct output paths. Existing CLIs continue to select world.
 This is whole-graph isolation; assigning separate groups to individual domains
-remains HPC-08. See the [communicator report](../../docs/progress/HPC_01A_PROGRESS.md)
-for tests and numerical limits. Fixed-geometry immersed graphs now also support
+is not supported. Fixed-geometry immersed graphs now also support
 MPI; moving immersed/FSI execution remains serial.
 
 `OwnedRowAssembler::RequiredRows` validates the global IDs and PETSc row
@@ -311,9 +273,8 @@ coordinate local database/preallocation exceptions before PETSc creation.
 the same stages in the same order, and callbacks must not enter MPI/PETSc
 collectives. It propagates the lowest failing group rank's bounded diagnostic.
 Body-fitted element assembly and graph preflight/output use this protocol;
-coverage of other failure boundaries remains in progress. See the
-[failure protocol report](../../docs/progress/HPC_01C_PROGRESS.md) for the exact
-tested scope and the controlled-failure regression command.
+coverage of other failure boundaries is listed in the
+[MPI boundary index](../../docs/architecture/MPI_FAILURE_BOUNDARIES.md).
 
 Graph execution now compares captured manifest, 0D model and native 1D/3D
 configuration bytes within each communicator before creating collective
@@ -321,17 +282,14 @@ runtimes. Identical copies may live at different paths; different formatting
 also counts as different input bytes. Stop/Newton/injection controls must agree.
 The assembler additionally checks global node, element and field counts.
 These checks do not establish identity of all geometry, waveform or packed
-database contents. See the
-[configuration progress report](../../docs/progress/HPC_01C_CONFIGURATION_PROGRESS.md).
+database contents.
 
 Graph startup also compares the visible PETSc option entries within its supplied
 communicator, preserving unused-option tracking. Application arguments are checked
 separately; different `-options_file` locations are allowed when the loaded entries
 agree. Separate communicators may use different options. This checks the startup
-database, not later changes or preconfigured PETSc objects. The native 1D CLI now
-uses the same startup check; standalone CPU CLI coverage remains pending. See the
-[PETSc options report](../../docs/progress/HPC_01C_PETSC_OPTIONS_PROGRESS.md) and
-[1D CLI report](../../docs/progress/HPC_01C_ONE_D_CLI_PROGRESS.md).
+database, not later changes or preconfigured PETSc objects. The native 1D CLI
+uses the same startup check; standalone CPU CLI coverage remains pending.
 
 ## Why this version is faster and smaller
 

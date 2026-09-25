@@ -190,8 +190,8 @@ python3 scripts/hpc_finalize_cross_node.py \
   --output /shared/results/cross-node-acceptance-${USER}.json
 ```
 
-Only a `status: passed` result from this finalizer closes HPC-05C, HPC-07C/D,
-and HPC-09A-D. Preserve the referenced output trees with the acceptance file.
+Only a `status: passed` result from this finalizer is an accepted cross-node
+result. Preserve the referenced output trees with the acceptance file.
 
 Auto-preparation requires the prebuilt
 `solvers/coupling/hpc_duct_solver_fixture`. Set `IGA_SCALING_PREPARE=0` to use
@@ -214,13 +214,10 @@ dependency/build manifest, Slurm job ID and node list, exact launcher and
 binding output, staged input hashes, exit status, native convergence and
 physical gates, field comparisons, phase/RSS records, checkpoint generation,
 and `sacct` or `sstat` accounting. Generated databases, results, JSON evidence,
-and scheduler logs remain outside Git; commit only the scripts and a concise
-report that points to their location.
+and scheduler logs remain outside Git.
 
-## Recorded Bridges-2 acceptance
+## Bridges-2 scaling configuration
 
-The [completed acceptance report](progress/HPC_09_BRIDGES2_CROSS_NODE_ACCEPTANCE.md)
-records the tested revision, actual jobs, numerical checks, and formal scaling.
 The graph used 256 ranks (128/node) and a four-hour allocation per attempt.
 Accepted macro-steps exceeded the default five-minute warning margin: request
 checkpoints early with `scancel --signal=USR1 --batch JOBID` and leave

@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "kind": "native_fem_functional_smoke_not_physical_validation",
+  "recorded_on": "2026-09-18",
+  "backend": "native_cpp_petsc_tetrahedral_fem",
+  "external_fem_framework": false,
+  "algebra_backend": "PETSc 3.15.5",
+  "contract_sha256": "90b86bf0e78e56fc7c14ebb93355ba799a982f8f89997e27c5beefca9b1695b3",
+  "mesh_contract_sha256": "3a96d20b7e31066d21dfafeff5b6280b6ded1f3e47e3d3e7e9085fe1479c64ab",
+  "source_commit": "19e73d7062e8d4f4a01d9e5e2950ae2e8994d49b",
+  "source_tree_state": "dirty_with_source_manifest",
+  "source_files_sha256": "1ad63956bc1f551d1374cc2313572f3eaf1fa32407b28fae4be600fe613934a4",
+  "current_compatible_source_files_sha256": "79630dc4e740e2c98d0e80b53b09fa7b7876ca536dcc412c1cee2903f255fcc4",
+  "current_source_compatibility": "affine body acceleration defaults identically to zero; zero-force element and prior temporal regressions pass",
+  "executable_sha256": "bf4803468fb23776705f19e5e0ee9eb95fcbc8137ad84d7f6d50c3a75ef2e745",
+  "host": {
+    "logical_cpus": 16,
+    "memory_gib": 47,
+    "environment": "local WSL",
+    "mpi": "Open MPI 4.1.2"
+  },
+  "solver_policy": {
+    "profile": "Schur field split; direct MUMPS velocity block; direct pressure block",
+    "nonlinear_absolute_tolerance": 1e-8,
+    "result_classification": "functional_smoke",
+    "validation_gates_enforced": false
+  },
+  "passed_levels": [
+    {
+      "mesh_level": 1,
+      "target_size_m": 0.0025,
+      "mesh_sha256": "f7cefab8ce79f2dc29e58cd3ccf0c303de1ed681eef9b00f95cecedb646667fd",
+      "mesh_vertices": 1461,
+      "velocity_edges": 7787,
+      "tetrahedra": 5209,
+      "mixed_dofs": 29205,
+      "mpi_ranks": 2,
+      "newton_iterations": 1,
+      "linear_iterations": 164,
+      "assembly_wall_s": 6.30841265,
+      "solve_wall_s": 2.953774498,
+      "total_wall_s": 9.26408939,
+      "peak_rss_bytes_per_rank_max": 320847872,
+      "pressure_drop_pa": 1.4465644759821192,
+      "velocity_relative_l2": 0.010075419199673767,
+      "wall_shear_relative_l2": 0.035009909563905844,
+      "relative_mass_imbalance": 2.854275213263254e-8,
+      "surface_volume_divergence_relative_error": 1.658180927474459e-15,
+      "outlet_backflow_area_fraction": 0.0
+    },
+    {
+      "mesh_level": 2,
+      "target_size_m": 0.00125,
+      "mesh_sha256": "30ce83d2dbf6472ee4f7546684c37069e767c838e379a81fe765848cc75f70e4",
+      "mesh_vertices": 7448,
+      "velocity_edges": 43605,
+      "tetrahedra": 31721,
+      "mixed_dofs": 160607,
+      "mpi_ranks": 4,
+      "newton_iterations": 1,
+      "linear_iterations": 190,
+      "assembly_wall_s": 148.539214966,
+      "solve_wall_s": 36.412526417,
+      "total_wall_s": 184.962742747,
+      "peak_rss_bytes_per_rank_max": 1303339008,
+      "pressure_drop_pa": 1.4256469386129453,
+      "velocity_relative_l2": 0.004153243966695146,
+      "wall_shear_relative_l2": 0.019711882671023053,
+      "relative_mass_imbalance": 2.010649413687637e-8,
+      "surface_volume_divergence_relative_error": 1.7386751582835075e-15,
+      "outlet_backflow_area_fraction": 0.0
+    }
+  ],
+  "failed_attempts": [
+    {
+      "mesh_level": 3,
+      "target_size_m": 0.000625,
+      "tetrahedra": 211177,
+      "mpi_ranks": 8,
+      "timeout_s": 600,
+      "failure": "wall_time_timeout",
+      "result_promoted": false
+    },
+    {
+      "mesh_level": 3,
+      "target_size_m": 0.000625,
+      "tetrahedra": 211177,
+      "mpi_ranks": 16,
+      "mpi_launcher_options": ["--use-hwthread-cpus"],
+      "timeout_s": 600,
+      "failure": "wall_time_timeout",
+      "result_promoted": false
+    }
+  ],
+  "rejected_solver_experiments": [
+    {
+      "profile": "single_Hypre_AMG_velocity_V_cycle",
+      "observation": "coarse failed after 600 outer iterations",
+      "accepted": false
+    },
+    {
+      "profile": "inner_GMRES_plus_Hypre_AMG_velocity",
+      "observation": "coarse converged in 128.6 s versus 10.2 s retained direct-block observation",
+      "accepted": false
+    },
+    {
+      "profile": "cached_reference_basis_and_cell_geometry",
+      "observation": "numerically equivalent but no repeatable assembly speedup and higher memory",
+      "accepted": false
+    }
+  ],
+  "limitations": [
+    "This file is functional evidence and cannot satisfy the three-level physical validation gate.",
+    "The current direct velocity-block factorization does not complete the fine level inside the local 600 s budget.",
+    "Peak RSS is the maximum per-rank process RSS, not the sum over ranks."
+  ]
+}

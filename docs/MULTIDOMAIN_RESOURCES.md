@@ -51,7 +51,7 @@ reproducible comparison tool is:
 
 ```bash
 python3 scripts/hpc_domain_group_scaling.py \
-  --output-dir outputs/hpc08/domain-group-scaling --repeats 3
+  --output-dir artifacts/benchmarks/hpc08/domain-group-scaling --repeats 3
 ```
 
 The script uses five ranks: one owner for all small domains and two ranks for

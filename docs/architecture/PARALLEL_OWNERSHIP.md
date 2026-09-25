@@ -1,9 +1,7 @@
 # Parallel ownership and halo contract
 
-HPC-01B contract. Status: **common interfaces and current-backend acceptance complete**.
 Row mappings, exact entity/incidence checks, body-fitted integration and surface
-publication checks are implemented. Evidence and scope are recorded in the
-[progress report](../progress/HPC_01B_PROGRESS.md). This does not certify new
+publication checks are implemented. This contract does not certify additional
 distributed backends.
 
 ## Identity and scope
@@ -46,8 +44,7 @@ METIS element ownership. The flow runtime deliberately loads both catalogs.
 The collective assembler constructor checks agreement on global node, element
 and field counts before PETSc object creation. This is a shape check, not a
 content digest or a field-name/order check. The exact ownership/incidence audit
-below remains independently useful. Configuration and controlled-failure
-coverage are recorded in the [HPC-01C update](../progress/HPC_01C_CONFIGURATION_PROGRESS.md).
+below remains independently useful.
 
 An owned-row assembly may evaluate the same element on multiple ranks. Each
 rank inserts only its owned test rows, including columns referring to remote
@@ -61,8 +58,8 @@ off-process assembly protocol replaces the current method.
 The following invariants apply to each supported backend, with collectives
 restricted to its supplied communicator. Body-fitted checks cover row and
 integration catalogs; the surface adapter covers publication ownership.
-Distributed quadrature/transfer checks become mandatory when HPC-03/07 add
-those currently unsupported modes:
+Distributed quadrature/transfer checks are mandatory for backends that support
+those modes:
 
 1. Every global algebraic degree of freedom has exactly one owner. Local
    ranges cover the expected global range without overlap or holes, including
@@ -103,7 +100,7 @@ Begin/end asynchronous exchanges must complete before buffers, PETSc objects
 or communicators are destroyed. OpenMP workers must not share mutable element
 scratch or modify PETSc objects concurrently under the existing contract.
 Thread-local integration and serial insertion are separate concerns from
-MPI entity ownership; their implementation is HPC-02.
+MPI entity ownership.
 
 ## Other backends and outstanding implementation
 

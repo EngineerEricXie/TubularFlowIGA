@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "hardware": "NVIDIA GeForce RTX 4080 SUPER, CUDA 12.6, sm_89",
+  "build": "conda run -n tubularflow-cuda make cuda CUDA_ARCHS=89 -j12",
+  "cases": [
+    {
+      "name": "P2/P1 channel flow, 24 tetra, 2 steps",
+      "assembly_s": 0.003630707,
+      "solve_s": 0.009475833,
+      "host_peak_rss_kib": 270336,
+      "cuda_peak_requested_bytes": 1547668,
+      "cpu_gpu_velocity_relative_l2": 7.44675e-12,
+      "cpu_gpu_pressure_relative_l2": 1.190715e-11
+    },
+    {
+      "name": "P1 Darcy, 4 tetra, heterogeneous mobility/source",
+      "assembly_s": 0.000848121,
+      "solve_s": 0.0142842,
+      "host_peak_rss_kib": 268772,
+      "cuda_peak_requested_bytes": 1604,
+      "cpu_gpu_pressure_max_abs_pa": 1.1102230246251565e-15,
+      "cpu_gpu_pressure_relative_l2": 5.288963260925187e-16,
+      "cpu_gpu_cell_flux_max_abs_m_s": 4.440892098500626e-15,
+      "cpu_gpu_cell_flux_relative_l2": 2.4886880684337314e-14,
+      "cpu_gpu_conservative_face_flow_max_abs_m3_s": 4.163336342344337e-17,
+      "cpu_gpu_conservative_face_flow_relative_l2": 3.421937179708943e-16,
+      "maximum_cell_balance_defect_m3_s": 2.77556e-17
+    },
+    {
+      "name": "P1 species from P2 channel flow, 24 tetra, 2 steps",
+      "assembly_s": 0.000797537,
+      "solve_s": 0.0162706,
+      "host_peak_rss_kib": 269080,
+      "cuda_peak_requested_bytes": 16724,
+      "cpu_gpu_concentration_max_abs_mol_m3": 3.2751579226442118e-15,
+      "cpu_gpu_concentration_final_relative_l2": 2.733172756723016e-15
+    },
+    {
+      "name": "P1 species from Darcy RT0 face flow, 4 tetra, 2 steps",
+      "assembly_s": 0.00077349,
+      "solve_s": 0.00458406,
+      "host_peak_rss_kib": 269824,
+      "cuda_peak_requested_bytes": 3288,
+      "cpu_gpu_concentration_max_abs_mol_m3": 3.885780586188048e-16,
+      "cpu_gpu_concentration_final_relative_l2": 1.3261572708058312e-15
+    },
+    {
+      "name": "Explicit sequential GPU flow, solid wall, and ALE, 24 fluid tetra, 2 steps",
+      "assembly_s": 0.00375253,
+      "solve_s": 0.021312167,
+      "host_peak_rss_kib": 270248,
+      "cuda_peak_requested_bytes": 1547668,
+      "maximum_gcl_residual_m3_s": 3.494010907423989e-21,
+      "step_1_wall_max_displacement_m": 5.75876534670582e-5,
+      "step_1_interface_force_n": 0.01992301028594514,
+      "step_1_interface_power_w": 2.9047434538703392e-5
+    },
+    {
+      "name": "GPU P2/P1 flow boundary to P1 Darcy source to P1 species, 4 tetra, 2 steps",
+      "flow_source_m3_s": 0.1,
+      "source_map_defect_m3_s": 0.0,
+      "darcy_volume_source_m3_s": 0.1,
+      "maximum_cell_balance_defect_m3_s": 4.71845e-16,
+      "darcy_assembly_s": 0.000492803,
+      "darcy_solve_s": 0.00448236,
+      "species_assembly_s": 0.00186351,
+      "species_solve_s": 0.00473472,
+      "host_peak_rss_kib": 269620,
+      "cuda_peak_requested_bytes": 3288,
+      "cpu_gpu_pressure_max_abs_pa": 0.0,
+      "cpu_gpu_cell_flux_max_abs_m_s": 6.938893903907228e-18,
+      "cpu_gpu_cell_flux_relative_l2": 2.0296182298226076e-16,
+      "cpu_gpu_rt0_centroid_flux_max_abs_m_s": 6.938893903907228e-18,
+      "cpu_gpu_conservative_face_flow_max_abs_m3_s": 1.734723475976807e-18
+    },
+    {
+      "name": "Explicit T7 0D source to GPU P2/P1 flow to RCR, 4 tetra, 2 steps",
+      "assembly_s": 0.001819475,
+      "solve_s": 0.016843412,
+      "host_peak_rss_kib": 269044,
+      "cuda_peak_requested_bytes": 200276,
+      "maximum_boundary_flow_pair_residual_m3_s": 1.3877787807814457e-17,
+      "maximum_zero_d_storage_residual_m3": 8.673617379884035e-19
+    }
+  ],
+  "scope": "Small single-GPU dense LU cases; timings are individual local runs and not throughput claims."
+}

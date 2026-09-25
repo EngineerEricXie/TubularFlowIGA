@@ -17,8 +17,8 @@ Bézier VTKHDF path described below.
 
 The standalone `phase8_compliant_channel_fsi_paraview` exporter requires one
 MPI rank and rejects larger communicators before creating or modifying output.
-It runs the single-process compliant-channel FSI fixture; distributed FSI is
-tracked in [HPC-07](WORKSTATION_HPC_TODO.md#hpc-07分散式-fsi).
+It runs the single-process compliant-channel FSI fixture. Distributed FSI uses
+the runtime described in the [FSI architecture](architecture/FSI_ARCHITECTURE.md).
 
 ## Default format
 
@@ -35,13 +35,13 @@ initialized state is timestep zero.
 
 ## Partitioned CPU flow and transport output
 
-`iga_navier_stokes ... --output results/flow.txt --visualization-format pvtu`
+`iga_navier_stokes ... --output artifacts/runs/flow/flow.txt --visualization-format pvtu`
 writes cubic Bézier cells to `flow.stepNNNNNN/rankR.vtu`, one piece per MPI
 rank, with `snapshot.pvtu` and a top-level `flow.pvd` time index. Open the PVD
 in ParaView. Shared points carry partition-independent Int64 global IDs;
 empty partitions produce valid empty pieces. Geometry is repeated each frame.
 Configured transport uses the same layout with
-`iga_solve ... --output results/field.txt --visualization-format pvtu`; its point
+`iga_solve ... --output artifacts/runs/transport/field.txt --visualization-format pvtu`; its point
 arrays use the configured species field names.
 
 This mode extracts only the control rows required by each rank's owned elements
@@ -77,7 +77,6 @@ RSS high-water mark, and PETSc allocation/process counters at state, geometry,
 solve, and output boundaries. The report is closed before the success summary.
 Boundary samples do not capture every transient allocation; cumulative peaks
 are not isolated phase peaks, and their sum is not a simultaneous global peak.
-See the [memory inventory](progress/HPC_06A_MEMORY_INVENTORY.md) for stage lifetimes.
 
 ## Temporal Bézier VTKHDF
 
@@ -141,8 +140,7 @@ nonstandard exceptions, before peers continue. When embedding
 root-group close, remaining local file objects, and file close. Repeated successful
 `Close()` calls are harmless; `Append()` is rejected once closing has started.
 Destructors provide best-effort cleanup during unwinding. These checks do not
-provide atomic publication or crash durability. See the
-[finalization validation report](progress/HPC_01C_IO_FINALIZATION_PROGRESS.md).
+provide atomic publication or crash durability.
 
 ## Geometry report
 
@@ -173,8 +171,7 @@ The 2026-09-10 cubic Bezier ordering correction fixes the interior point order
 on two faces. Existing VTKHDF files written with the old order have a different
 geometry hash and cannot be resumed by the corrected writer; regenerate the
 visualization in a new output file. Solver checkpoint state is unchanged.
-The ParaView regression now checks interpolation inside the cell, as well as
-stored arrays. See [partitioned output validation](progress/HPC_06B_PARTITIONED_VTK_PROGRESS.md).
+The ParaView regression checks interpolation inside the cell and stored arrays.
 
 ## Validation
 

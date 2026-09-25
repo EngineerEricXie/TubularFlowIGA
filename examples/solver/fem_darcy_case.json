@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "mesh_file": "../../solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
+  "mobility_m2_pa_s": 1e-8,
+  "source_s_inv": 0.0,
+  "pressure_by_boundary_label_pa": {"1": 1.0},
+  "outward_flux_by_boundary_label_m_s": {"2": 0.0}
+}

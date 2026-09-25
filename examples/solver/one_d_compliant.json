@@ -1,0 +1,12 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient"},
+  "waveforms": [],
+  "domains": [{
+    "id": "artery", "dimension": "1d", "solver": "network_1d",
+    "device": "CPU", "case_dir": "../one_d/compliant_bifurcation",
+    "ports": {}
+  }],
+  "connections": [],
+  "output": {"directory": "results/one_d_compliant"}
+}

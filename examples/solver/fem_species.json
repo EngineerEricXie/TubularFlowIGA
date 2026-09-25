@@ -1,0 +1,13 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.1, "steps": 2},
+  "waveforms": [],
+  "domains": [{
+    "id": "tracer", "dimension": "3d", "method": "FEM", "device": "CPU",
+    "physics": ["species"], "backend": "native_tet_species_transport",
+    "case_file": "fem_species_case.json", "ports": {}
+  }],
+  "connections": [],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/fem_species"}
+}

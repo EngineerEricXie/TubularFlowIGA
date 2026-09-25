@@ -1,10 +1,10 @@
 # Coupled checkpoint bundle v1
 
-HPC-05B implements the shared-storage format, publication, verification, and
-recovery discovery in [CoupledCheckpointManifest.hpp](../../include/CoupledCheckpointManifest.hpp)
+The shared-storage format, publication, verification, and recovery discovery
+are implemented in [CoupledCheckpointManifest.hpp](../../include/CoupledCheckpointManifest.hpp)
 and [CoupledCheckpointBundle.hpp](../../include/CoupledCheckpointBundle.hpp).
 The [state contract](COUPLED_CHECKPOINT_CONTRACT.md) defines the domain payloads
-which HPC-05C/D must supply. The production graph does **not** yet expose these
+that providers must supply. The production graph does **not** yet expose these
 checkpoint/restart APIs through its CLI.
 
 ## Format and identity
@@ -88,7 +88,7 @@ As with other POSIX crash protocols, power-loss durability requires the
 filesystem/storage to honor fsync and atomic link semantics; this batch tests
 process termination and injected I/O errors, not physical power loss.
 
-No helper calls MPI. HPC-05C must perform collective catalog/receipt/error
+No helper calls MPI. The integration layer must perform collective catalog/receipt/error
 agreement and invoke these local operations in the proper schedule, outside
 any lambda that already represents local failure agreement. Missing receipts
 or expected files prevent completion. The bundle layer cannot infer missing

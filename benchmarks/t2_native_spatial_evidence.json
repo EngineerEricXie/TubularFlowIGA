@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "native_fixed_domain_spatial_manufactured_validation",
+  "recorded_on": "2026-09-18",
+  "backend": "native_cpp_dense_reference_tetrahedral_P2_P1",
+  "external_fem_framework": false,
+  "source_files_sha256": "4206ba0b7ceb947fd0644a6fdbe9439669c3a95c00376c6098ee6ea617f1cd30",
+  "manufactured_solution": {
+    "domain": "fixed unit cube split into six tetrahedra per Cartesian subcell",
+    "velocity_m_s": "u_x=1e-4*y^3; u_y=u_z=0",
+    "pressure_pa": "zero",
+    "density_kg_m3": 1.0,
+    "dynamic_viscosity_pa_s": 0.004,
+    "body_acceleration_m_s2": "b_x=-6*mu*1e-4*y/rho; b_y=b_z=0",
+    "boundary_condition": "exact velocity on the complete boundary plus one pressure gauge",
+    "discretization": "native tetrahedral Taylor-Hood P2 velocity/P1 pressure"
+  },
+  "convergence": {
+    "subdivisions_per_axis": [2, 3, 4],
+    "velocity_relative_l2_errors": [0.0113759, 0.00337066, 0.00142203],
+    "observed_orders": [2.99998, 2.99991],
+    "minimum_observed_order": 2.2,
+    "status": "passed"
+  },
+  "classification": "fixed_geometry_spatial_operator_validation_not_poiseuille_or_physiological_validation"
+}

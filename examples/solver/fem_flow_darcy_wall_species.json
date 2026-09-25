@@ -1,0 +1,18 @@
+{
+  "schema_version": "solver-v1",
+  "domains": [
+    {
+      "id": "dual_tree",
+      "dimension": "3d",
+      "method": "FEM",
+      "device": "CPU",
+      "backend": "idealized_cube_dual_tree",
+      "physics": ["flow", "darcy", "solid", "species"],
+      "case_file": "../../cases/idealized_cube_dual_tree_refined.json",
+      "species_case_file": "../../cases/idealized_cube_dual_tree_oxygen.json"
+    }
+  ],
+  "connections": [],
+  "resources": {"mpi_ranks": 2},
+  "output": {"directory": "results/fem_flow_darcy_wall_species"}
+}

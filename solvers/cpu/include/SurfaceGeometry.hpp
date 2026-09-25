@@ -738,8 +738,14 @@ private:
 			increment(result.broad_candidates);
 			if (!BoundsOverlap(triangle_bounds[first], triangle_bounds[second], tolerance)) return;
 			increment(result.narrow_candidates);
-			if (PairIntersectsForbidden(triangles[first], triangles[second], vertices, bounds, length))
-				throw std::invalid_argument("surface self-intersection detected");
+			if (PairIntersectsForbidden(triangles[first], triangles[second], vertices, bounds, length)) {
+				const auto& a = vertices[triangles[first].indices[0]];
+				const auto& b = vertices[triangles[second].indices[0]];
+				throw std::invalid_argument("surface self-intersection detected between canonical triangles "
+					+std::to_string(first)+" and "+std::to_string(second)
+					+" near ("+std::to_string(a[0])+","+std::to_string(a[1])+","+std::to_string(a[2])+")"
+					+" and ("+std::to_string(b[0])+","+std::to_string(b[1])+","+std::to_string(b[2])+") m");
+			}
 		};
 		std::function<void(std::size_t, std::size_t)> visit = [&](std::size_t left, std::size_t right) {
 			if (!BoundsOverlap(nodes[left].bounds, nodes[right].bounds, tolerance)) return;

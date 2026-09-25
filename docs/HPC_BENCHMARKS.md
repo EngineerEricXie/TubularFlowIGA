@@ -32,9 +32,7 @@ reference, and no rank-based parallel efficiency is reported for this mode.
 Use otherwise idle allocated resources and retain negative performance results.
 Omit `--total-cores` for the existing one-thread-per-rank CPU matrix.
 
-The baseline catalog retains its original capability snapshot and policy;
-current implementation and acceptance status are tracked in the
-[workstation/HPC checklist](WORKSTATION_HPC_TODO.md).
+The baseline catalog retains its original capability snapshot and policy.
 
 ```bash
 python3 scripts/hpc_inventory.py \
@@ -100,7 +98,6 @@ Accounting rules:
 - Process peak RSS is recorded per rank. Their sum is a sum of individual
   peaks, not a measured simultaneous aggregate peak.
 - Rank-zero console timers are not substitutes for all-rank stage timing.
-  Additional application instrumentation remains part of HPC-00B.
 - CUDA allocation and synchronized kernel timings require the CUDA backend's
   own metrics; this wrapper measures host resource use only. The CUDA solver
   now reports `cuda_allocations scope=project_device_buffers` with requested
@@ -111,9 +108,8 @@ Accounting rules:
 - A zero exit status is named `process_passed`, not `numerically_validated`.
   Require the independent gates and output comparisons before acceptance.
 
-The CPU matrix runner below aggregates repeated body-fitted MPI runs. The full
-cross-backend matrix, including serial immersed/FSI and GPU repetitions, remains
-tracked by HPC-00C. Record a fresh-process first run separately from at least
+The CPU matrix runner below aggregates repeated body-fitted MPI runs. Record a
+fresh-process first run separately from at least
 three repetitions, and do not call it a cold filesystem-cache run unless cache
 state was controlled. Keep benchmark runs isolated from other simulations and
 compilation when making speedup claims.
@@ -219,8 +215,8 @@ Every accepted GPU run must have exactly one allocation report, a positive
 requested project-buffer peak, and zero project buffers live at shutdown. The
 summary reports repeated allocation peaks separately from host peak RSS. Driver,
 library, and whole-device usage are outside that project allocation scope.
-Native solver convergence and field comparisons still do not replace the
-independent physical validation tracked in HPC-00D.
+Native solver convergence and field comparisons do not replace independent
+physical validation.
 
 The serial runner shares the CPU runner's exclusive output directories and
 failure-preserving statistics policy. It preserves all observations, excludes
@@ -301,9 +297,8 @@ enabled only with `IGA_PROFILE=1`. CPU/GPU transfer work stays in the enclosing
 phase; `communication` does not purport to count all PCIe traffic. The wrapper
 and existing allocation counter retain host RSS and requested GPU peak bytes.
 
-The [current numerical and instrumentation report](progress/HPC_00BD_PROGRESS.md)
-records the CPU/CUDA wall-trace fix, steady/transient comparisons, and the
-actual one/two-rank instrumentation checks.
+The benchmark output records CPU/CUDA wall traces, steady/transient
+comparisons, and the one/two-rank instrumentation checks.
 
 ## Compare fields
 
@@ -346,9 +341,8 @@ The selected two-species regression additionally requires zero net linear
 transfer. This is an offline small-case checker with full fields in memory;
 it does not implement distributed diagnostics for large runs.
 
-See the [transport budget report](progress/HPC_00D_TRANSPORT_BUDGET.md) for
-the registered normalization, exact commands, analytic tests, results, and
-unsupported modes, including SUPG diffusion and moving geometry.
+The registered normalization, commands, analytic checks, and unsupported
+modes are encoded by the transport budget script and catalog.
 
 ## Complete immersed and FSI reference states
 
@@ -372,9 +366,8 @@ collections with matching fixture definitions and physical inputs; different
 binary versions are recorded and may be compared. A failed numerical comparison
 returns 2, invalid/incomplete evidence returns 1, and acceptance returns 0.
 
-The [full-state report](progress/HPC_00D_REFERENCE_STATES.md) documents field
-coverage and the archived reference sources. These numerical state files are
-not restart checkpoints. Collection with extra output, particularly concurrent
+The reference-state manifests document field coverage and source identity.
+These numerical state files are not restart checkpoints. Collection with extra output, particularly concurrent
 collection, is separate from an isolated performance matrix.
 
 The immersed transient runtime now has optional OpenMP volume assembly. Build
@@ -396,8 +389,6 @@ native evidence of the requested assembly team and bounded batches.
 `--binary` must implement the same fixture, native gates and complete state
 export. It does not enable parallelism in a serial executable. The static
 immersed aneurysm fixture has not received this volume-assembly integration.
-See [HPC-02 volume progress](progress/HPC_02_VOLUME_PROGRESS.md) for the scope
-and current numerical, failure-recovery and performance evidence.
 
 For an isolated repeated comparison, the OpenMP matrix controller serializes
 fresh processes and compares all nine fields against the accepted reference
@@ -405,7 +396,7 @@ after every run:
 
 ```bash
 python3 scripts/hpc_openmp_matrix.py \
-  --reference outputs/hpc00/reference-states/fsi-reference \
+  --reference artifacts/benchmarks/hpc00/reference-states/fsi-reference \
   --output-dir NEW_ISOLATED_MATRIX --threads 1 4 --cpus 0 2 4 6 \
   --repetitions 3 --timeout 1800
 ```

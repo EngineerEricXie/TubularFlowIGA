@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "status": "native_backend_selected",
+  "case_id": "steady-circular-pipe-poiseuille",
+  "physics": {
+    "equations": "steady_incompressible_navier_stokes",
+    "density_kg_m3": 1060.0,
+    "dynamic_viscosity_pa_s": 0.0035,
+    "body_force_m_s2": [0.0, 0.0, 0.0]
+  },
+  "geometry": {
+    "kind": "straight_circular_pipe",
+    "axis": [1.0, 0.0, 0.0],
+    "length_m": 0.1,
+    "radius_m": 0.005,
+    "boundary_labels": {"wall": 0, "inlet": 1, "outlet": 2}
+  },
+  "boundary_conditions": {
+    "wall": "no_slip",
+    "inlet": "analytic_parabolic_velocity",
+    "outlet": "zero_gauge_pressure_natural_traction",
+    "pressure_gauge_pa": 0.0,
+    "flow_sign": "outward_positive",
+    "prescribed_flow_m3_s": 1e-06,
+    "expected_inlet_outward_flow_m3_s": -1e-06,
+    "expected_outlet_outward_flow_m3_s": 1e-06,
+    "backflow_policy": "verification_fails_if_outlet_backflow_area_fraction_exceeds_threshold",
+    "maximum_outlet_backflow_area_fraction": 1e-08
+  },
+  "analytic_reference": {
+    "formula": "u_x(r)=2Q/(pi R^2)*(1-r^2/R^2); dp=8 mu L Q/(pi R^4); tau_w=4 mu Q/(pi R^3)",
+    "cross_section_area_m2": 7.853981633974483e-05,
+    "volume_m3": 7.853981633974484e-06,
+    "mean_velocity_m_s": 0.012732395447351627,
+    "centerline_velocity_m_s": 0.025464790894703253,
+    "pressure_drop_pa": 1.4260282901033825,
+    "wall_shear_stress_pa": 0.03565070725258455,
+    "diameter_reynolds_number": 38.56096906912207
+  },
+  "discretization_contract": {
+    "velocity_pressure_requirement": "backend must declare an inf-sup-stable pair or a cited, tested equal-order stabilization",
+    "tetrahedron_order": "backend_declared",
+    "mesh_levels_target_size_m": [0.0025, 0.00125, 0.000625],
+    "geometry_policy": "record boundary approximation error separately from PDE error",
+    "quadrature_policy": "exact enough for the declared element and stabilization forms"
+  },
+  "qoi_gates": {
+    "maximum_velocity_relative_l2": 0.02,
+    "maximum_pressure_drop_relative_error": 0.02,
+    "maximum_wall_shear_relative_l2": 0.05,
+    "maximum_relative_mass_imbalance": 1e-08,
+    "maximum_surface_volume_divergence_relative_error": 1e-06,
+    "minimum_observed_velocity_convergence_order": 1.8,
+    "minimum_mesh_levels": 3,
+    "absolute_qoi_gate_level": "finest"
+  },
+  "required_result_fields": [
+    "backend", "backend_version", "source_commit", "source_tree_state",
+    "source_files_sha256", "input_sha256", "mesh_sha256",
+    "velocity_space", "pressure_space", "stabilization", "nonlinear_convergence_reason",
+    "linear_convergence_reason", "linear_solver", "inlet_outward_flow_m3_s", "outlet_outward_flow_m3_s",
+    "pressure_drop_pa", "velocity_relative_l2", "wall_shear_relative_l2",
+    "outlet_backflow_area_fraction",
+    "relative_mass_imbalance", "surface_volume_divergence_relative_error",
+    "geometry_error", "assembly_wall_s", "solve_wall_s", "peak_rss_bytes"
+  ],
+  "failure_classes": [
+    "invalid_geometry_or_labels", "unsupported_discretization", "nonlinear_nonconvergence",
+    "linear_nonconvergence", "conservation_failure", "qoi_failure", "backflow_failure",
+    "timeout", "infrastructure_failure"
+  ],
+  "local_resource_budget": {"maximum_wall_s": 600, "maximum_peak_rss_bytes": 4294967296},
+  "backend_decision": {
+    "architecture": "native",
+    "selected_backend": "native_cpp_petsc_tetrahedral_fem",
+    "allowed_next_choices": ["native_cpp_petsc_tetrahedral_fem"],
+    "selection_required_before_solver_adapter": false,
+    "external_discretization_frameworks_allowed": false
+  }
+}

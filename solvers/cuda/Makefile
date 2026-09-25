@@ -40,7 +40,19 @@ HEADERS += ../../include/CheckedText.hpp ../../include/ExecutionEnvironment.hpp 
 
 .PHONY: all clean allocation-test execution-test
 
-all: $(TARGET)
+all: $(TARGET) native_tet_flow_cuda native_tet_darcy_cuda native_tet_species_cuda native_tet_fsi_cuda
+
+native_tet_flow_cuda: src/native_tet_flow_cuda.cu include/NativeTetFlowKernels.cuh include/CudaRuntime.hpp ../cpu/include/NativeTetFem.hpp ../cpu/include/NativeTetAleTransient.hpp
+	$(NVCC) $(CUDA_CPPFLAGS) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcusolver -lcublas -lstdc++fs
+
+native_tet_darcy_cuda: src/native_tet_darcy_cuda.cu include/NativeTetDarcyKernels.cuh include/CudaRuntime.hpp ../cpu/include/NativeTetDarcyPetsc.hpp ../cpu/include/NativeTetDarcyVisualization.hpp ../cpu/include/NativeTetVesselTissueSourceMap.hpp
+	$(NVCC) $(CUDA_CPPFLAGS) $(filter -I%,$(shell pkg-config --cflags PETSc)) $(shell mpicxx --showme:compile 2>/dev/null) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcusolver -lcublas -lstdc++fs
+
+native_tet_species_cuda: src/native_tet_species_cuda.cu include/NativeTetSpeciesKernels.cuh include/CudaRuntime.hpp ../cpu/include/NativeTetSpeciesVisualization.hpp
+	$(NVCC) $(CUDA_CPPFLAGS) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcusolver -lcublas -lstdc++fs
+
+native_tet_fsi_cuda: src/native_tet_fsi_cuda.cu src/native_tet_flow_cuda.cu include/NativeTetFlowKernels.cuh include/CudaRuntime.hpp ../cpu/include/NativeTetSolidStaticSolver.hpp ../cpu/include/NativeTetAleMeshMotion.hpp
+	$(NVCC) $(CUDA_CPPFLAGS) $(filter -I%,$(shell pkg-config --cflags PETSc)) $(shell mpicxx --showme:compile 2>/dev/null) $(NVCCFLAGS) $(GENCODE) -Xcompiler=$(HOSTWARN) $< -o $@ -lcusolver -lcublas -lstdc++fs
 
 cuda_execution_test: tests/test_execution.cpp include/CudaExecution.hpp ../../include/ExecutionEnvironment.hpp ../../include/CheckedText.hpp
 	$(CXX) -Iinclude -I../../include -std=c++17 -Wall -Wextra -Wpedantic $< -o $@
@@ -61,4 +73,4 @@ allocation-test: device_allocation_test
 	./device_allocation_test
 
 clean:
-	$(RM) $(TARGET) device_allocation_test cuda_stdout_failure_test cuda_execution_test
+	$(RM) $(TARGET) native_tet_flow_cuda native_tet_darcy_cuda native_tet_species_cuda native_tet_fsi_cuda device_allocation_test cuda_stdout_failure_test cuda_execution_test

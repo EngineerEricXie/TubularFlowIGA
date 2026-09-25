@@ -176,6 +176,72 @@ inline ImmersedFlowPortElementAssembly BuildImmersedFlowPortElement(
 	return result;
 }
 
+// Optional pressure-port term matching the native ALE weak momentum model:
+// R_u += beta*rho*max(-(u-w).n,0)*u. The moving surface supplies w at each
+// retained quadrature point. The returned vector follows the local -R sign.
+inline NavierStokesSystem BuildImmersedPressurePortBackflowElement(
+	const Element& element, const SurfaceQuadratureRule& rule, int boundary_label,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 3>>& material_velocity,
+	double density, double beta,
+	NavierStokesAssemblyRequest request = NavierStokesAssemblyRequest::ResidualAndJacobian)
+{
+	if (boundary_label < 0 || nodal_state.size() != element.connectivity.size()
+		|| material_velocity.size() != rule.Points().size()
+		|| !(density > 0.0) || !std::isfinite(density)
+		|| !(beta >= 0.0) || !std::isfinite(beta))
+		throw std::invalid_argument("immersed pressure-port backflow inputs are invalid");
+	ValidateSurfaceQuadratureRule(element, rule);
+	const std::size_t ndof = 4*element.connectivity.size();
+	NavierStokesSystem result{
+		request == NavierStokesAssemblyRequest::ResidualAndJacobian
+			? std::vector<PetscScalar>(ndof*ndof, 0.0) : std::vector<PetscScalar>{},
+		std::vector<PetscScalar>(ndof, 0.0)};
+	if (beta == 0.0) return result;
+	for (std::size_t point_index = 0; point_index < rule.Points().size(); ++point_index) {
+		const auto& point = rule.Points()[point_index];
+		if (point.boundary_id != boundary_label) continue;
+		const auto& w = material_velocity[point_index];
+		for (double component : w)
+			if (!std::isfinite(component))
+				throw std::invalid_argument("immersed pressure-port material velocity is not finite");
+		const auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1], point.parametric[2], false);
+		std::array<double, 3> velocity{};
+		for (std::size_t node = 0; node < element.connectivity.size(); ++node)
+			for (int component = 0; component < 3; ++component)
+				velocity[component] += nodal_state[node][component]*basis.value[node];
+		double relative_normal = 0.0;
+		for (int component = 0; component < 3; ++component)
+			relative_normal += (velocity[component]-w[component])*point.normal[component];
+		if (!std::isfinite(relative_normal))
+			throw std::overflow_error("immersed pressure-port relative normal velocity is not finite");
+		if (relative_normal >= 0.0) continue;
+		const double coefficient = beta*density*point.weight;
+		if (!std::isfinite(coefficient))
+			throw std::overflow_error("immersed pressure-port backflow coefficient is not finite");
+		for (std::size_t test = 0; test < element.connectivity.size(); ++test)
+			for (int component = 0; component < 3; ++component) {
+				const std::size_t row = 4*test+component;
+				const double residual = coefficient*basis.value[test]*(-relative_normal)*velocity[component];
+				double total = PetscRealPart(result.negative_residual[row]);
+				AddImmersedFlowPortFinite(total, -residual, "backflow negative residual");
+				result.negative_residual[row] = total;
+				if (request == NavierStokesAssemblyRequest::ResidualAndJacobian)
+					for (std::size_t unknown = 0; unknown < element.connectivity.size(); ++unknown)
+						for (int derivative = 0; derivative < 3; ++derivative) {
+							const std::size_t column = 4*unknown+derivative;
+							const double derivative_value = coefficient*basis.value[test]*basis.value[unknown]
+								*((component == derivative ? -relative_normal : 0.0)
+									-point.normal[derivative]*velocity[component]);
+							double jacobian = PetscRealPart(result.jacobian[row*ndof+column]);
+							AddImmersedFlowPortFinite(jacobian, derivative_value, "backflow Jacobian");
+							result.jacobian[row*ndof+column] = jacobian;
+						}
+			}
+	}
+	return result;
+}
+
 inline ImmersedFlowPortMeasurement MeasureImmersedFlowPortElement(
 	const Element& element, const SurfaceQuadratureRule& rule, int boundary_label,
 	const std::vector<std::array<double, 4>>& nodal_state, double viscosity)

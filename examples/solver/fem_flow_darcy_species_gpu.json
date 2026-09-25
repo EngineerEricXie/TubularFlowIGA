@@ -1,0 +1,35 @@
+{
+  "schema_version": "solver-v1",
+  "time": {"mode": "transient", "dt_s": 0.05, "steps": 2},
+  "domains": [
+    {
+      "id": "vessel", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "physics": ["flow"], "backend": "native_tet_flow_cuda",
+      "case_file": "fem_flow_gpu_case.json",
+      "ports": {"tissue_outlet": {"role": "outlet", "label": 2}}
+    },
+    {
+      "id": "tissue", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "physics": ["darcy"], "backend": "native_tet_darcy_cuda",
+      "case_file": "fem_darcy_case.json",
+      "ports": {
+        "vessel_source": {"cell_id_weights": {"5": 1.0}},
+        "transport": {"role": "field"}
+      }
+    },
+    {
+      "id": "tracer", "dimension": "3d", "method": "FEM", "device": "GPU",
+      "physics": ["species"], "backend": "native_tet_species_cuda",
+      "case_file": "fem_flow_darcy_species_gpu_case.json",
+      "ports": {"advection": {"role": "field"}}
+    }
+  ],
+  "connections": [
+    {"from": "vessel:tissue_outlet", "to": "tissue:vessel_source",
+      "exchange": ["flow_rate", "source"], "scheme": "sequential"},
+    {"from": "tissue:transport", "to": "tracer:advection",
+      "exchange": ["flow_rate"], "scheme": "sequential"}
+  ],
+  "resources": {"mpi_ranks": 1},
+  "output": {"directory": "results/fem_flow_darcy_species_gpu", "every_steps": 1}
+}

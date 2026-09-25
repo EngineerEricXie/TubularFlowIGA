@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "native_tetra_p1_to_fixed_volume_0d_wall_exchange_functional",
+  "source_files_sha256": "ded38a693fb76b7db18fc2376af4b1a8f81282e1449c180bcfc5e62e545b9904",
+  "test_command": "make t6-native-wall-reservoir-exchange-test",
+  "external_fem_framework": false,
+  "mpi_ranks_tested": [1, 2, 4],
+  "outward_positive_pair_balance": true,
+  "forward_and_reverse_transfer": true,
+  "rigid_ale_translation": true,
+  "source_decay_combined_budget": true,
+  "invalid_label_and_flow_rejected": true,
+  "newly_generated_ftetwild_pipe_tested": true,
+  "pipe_transfer_coefficient_sensitivity": true,
+  "solves_tissue_storage": true,
+  "solves_tissue_hydraulics": false,
+  "single_region_cli_paired_file_restart": true,
+  "multi_region_calculation_mpi_ranks_tested": [1, 2, 4],
+  "multi_region_opposite_direction_and_cross_response": true,
+  "multi_region_cli_paired_file_restart": true,
+  "physiological_validation_passed": false
+}

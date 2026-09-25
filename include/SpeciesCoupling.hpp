@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -87,8 +88,14 @@ inline SpeciesDonor ResolveSpeciesDonor(double first_outward_flow_m3_s,
 		std::abs(second_outward_flow_m3_s));
 	const double tolerance = std::max(controls.flow_absolute_tolerance_m3_s,
 		controls.flow_relative_tolerance*scale);
-	if (std::abs(first_outward_flow_m3_s+second_outward_flow_m3_s) > tolerance)
-		throw std::runtime_error("species routing requires a conservative flow pair");
+	if (std::abs(first_outward_flow_m3_s+second_outward_flow_m3_s) > tolerance) {
+		std::ostringstream message;
+		message.precision(17);
+		message << "species routing requires a conservative flow pair: first="
+			<< first_outward_flow_m3_s << " second=" << second_outward_flow_m3_s
+			<< " tolerance=" << tolerance;
+		throw std::runtime_error(message.str());
+	}
 	if (std::abs(first_outward_flow_m3_s) <= controls.flow_switch_m3_s
 		&& std::abs(second_outward_flow_m3_s) <= controls.flow_switch_m3_s) {
 		if (!last_committed_donor)
