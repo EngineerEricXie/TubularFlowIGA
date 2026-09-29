@@ -250,3 +250,5 @@ solvers/one_d/one_d_filename_failure_test
 /benchmarks/heartbeat-optimized-*/
 /benchmarks/heartbeat-optimized-*.out
 /benchmarks/heartbeat-optimized-*.err
+
+/0922_tmp/
