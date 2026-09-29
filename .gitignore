@@ -252,3 +252,4 @@ solvers/one_d/one_d_filename_failure_test
 /benchmarks/heartbeat-optimized-*.err
 
 /0922_tmp/
+/solvers/one_d/one_d_transport_junction_test

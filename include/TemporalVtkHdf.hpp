@@ -414,7 +414,8 @@ public:
 	TemporalVtkHdfPointWriter(const std::filesystem::path& path,
 		VtkHdfUnstructuredGrid mesh, bool resume = false, int compression = 4,
 		VtkHdfAssociation association = VtkHdfAssociation::Points)
-		: path_(path), mesh_(std::move(mesh)), compression_(compression), association_(association)
+		: path_(path), mesh_(std::move(mesh)), compression_(compression), association_(association),
+		  allow_rewind_(resume)
 	{
 		hdf_detail::ValidateUnstructuredGrid(mesh_);
 		if (compression_ < 0 || compression_ > 9)
@@ -452,10 +453,25 @@ public:
 			hdf_detail::ReadScalarAttribute<std::int64_t>(steps.get(), "NSteps"));
 		bool replace = false;
 		if (step_count > 0) {
-			const auto last = hdf_detail::ReadRowValue<double>(values.get(), step_count-1);
-			const auto tolerance = 1e-12*std::max({1.0, std::abs(last), std::abs(physical_time)});
-			if (physical_time < last-tolerance)
-				throw std::runtime_error("VTKHDF time steps must be monotone");
+			auto last = hdf_detail::ReadRowValue<double>(values.get(), step_count-1);
+			auto tolerance = 1e-12*std::max({1.0, std::abs(last), std::abs(physical_time)});
+			if (physical_time < last-tolerance) {
+				if (!allow_rewind_)
+					throw std::runtime_error("VTKHDF time steps must be monotone outside restart");
+				std::uint64_t retained = step_count;
+				while (retained > 0) {
+					last = hdf_detail::ReadRowValue<double>(values.get(), retained-1);
+					tolerance = 1e-12*std::max({1.0, std::abs(last), std::abs(physical_time)});
+					if (last <= physical_time+tolerance) break;
+					--retained;
+				}
+				if (retained == 0 || std::abs(last-physical_time) > tolerance)
+					throw std::runtime_error("VTKHDF restart time does not match an existing time step");
+				hdf_detail::ReplaceScalarAttribute<std::int64_t>(steps.get(), "NSteps",
+					static_cast<std::int64_t>(retained));
+				RecoverInterruptedAppend();
+				step_count = retained;
+			}
 			replace = std::abs(physical_time-last) <= tolerance;
 		}
 		const auto step = replace ? step_count-1 : step_count;
@@ -476,6 +492,7 @@ public:
 		}
 		hdf_detail::Require(H5Fflush(file_.get(), H5F_SCOPE_GLOBAL),
 			"cannot flush VTKHDF output "+path_.string());
+		allow_rewind_ = false;
 	}
 
 	void Close()
@@ -710,6 +727,7 @@ private:
 	VtkHdfUnstructuredGrid mesh_;
 	int compression_ = 4;
 	VtkHdfAssociation association_ = VtkHdfAssociation::Points;
+	bool allow_rewind_ = false;
 	hdf_detail::Handle file_;
 	hdf_detail::Handle root_;
 };

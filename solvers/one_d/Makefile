@@ -59,10 +59,14 @@ one_d_petsc_test: tests/test_one_d_petsc.cpp ../cpu/include/CollectiveFailure.hp
 one_d_output_test: tests/test_one_d_output.cpp include/OneDNetwork.hpp include/OneDFlow.hpp include/OneDTransport.hpp include/OneDOutput.hpp ../../include/OneDConfig.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp ../../include/SimulationConfig.hpp ../../include/TemporalFunction.hpp ../../include/CaseConfig.hpp ../../include/TemporalVtkHdf.hpp ../../include/BezierVisualization.hpp ../../include/VtkOutput.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(HDF5_CFLAGS) $< -o $@ $(HDF5_LIBS)
 
-core-test: one_d_core_test one_d_coupling_test one_d_runtime_test
+one_d_transport_junction_test: tests/test_one_d_transport_junction.cpp $(wildcard include/*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+core-test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_transport_junction_test
 	./one_d_core_test
 	./one_d_coupling_test
 	./one_d_runtime_test
+	./one_d_transport_junction_test
 
 one_d_subcommunicator_test: tests/test_one_d_subcommunicator.cpp include/OneDImplicit.hpp include/OneDFlow.hpp include/OneDNetwork.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
@@ -77,11 +81,12 @@ one_d_trial_failure_test: tests/test_one_d_trial_failure.cpp include/OneDRuntime
 subcommunicator-test: one_d_subcommunicator_test
 	OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PETSC_OPTIONS='-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps' timeout 90 $(MPIEXEC) -np 4 ./one_d_subcommunicator_test ../../examples/one_d/rigid_straight/skeleton_initial.swc
 
-test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_output_test one_d_petsc_test
+test: one_d_core_test one_d_coupling_test one_d_runtime_test one_d_output_test one_d_petsc_test one_d_transport_junction_test
 	./one_d_core_test
 	./one_d_coupling_test
 	./one_d_runtime_test
 	./one_d_output_test
+	./one_d_transport_junction_test
 	./one_d_petsc_test
 	$(MPIEXEC) -np $(MPI_TEST_RANKS) ./one_d_petsc_test
 
@@ -91,6 +96,7 @@ vtkhdf-paraview-test: one_d_output_test
 	./one_d_output_test
 
 clean:
+	$(RM) one_d_transport_junction_test
 	$(RM) one_d_solver_options_test
 	$(RM) one_d_accepted_checkpoint_test
 	$(RM) one_d_adapter_failure_test
@@ -103,7 +109,7 @@ clean:
 	$(RM) one_d_core_test one_d_coupling_test one_d_runtime_test one_d_output_test one_d_petsc_test iga_1d iga_0d
 
 one_d_implicit_failure_test: tests/test_one_d_implicit_failure.cpp include/OneDImplicit.hpp include/OneDCheckpoint.hpp include/OneDFlow.hpp include/OneDNetwork.hpp
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIBS) $(HDF5_LIBS)
 
 iga_1d one_d_petsc_test one_d_subcommunicator_test one_d_trial_failure_test one_d_implicit_failure_test: include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp
 iga_1d one_d_petsc_test one_d_subcommunicator_test one_d_trial_failure_test one_d_implicit_failure_test one_d_adapter_failure_test: ../../include/ExecutionEnvironment.hpp ../cpu/include/ExecutionResources.hpp
@@ -119,6 +125,6 @@ one_d_accepted_checkpoint_test: tests/test_one_d_accepted_checkpoint.cpp $(wildc
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $< -o $@
 
 one_d_solver_options_test: tests/test_one_d_solver_options.cpp tests/test_one_d_implicit_failure.cpp $(wildcard include/*.hpp ../cpu/include/*.hpp ../../include/*.hpp)
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
+	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $(HDF5_CFLAGS) $< -o $@ $(PETSC_LIBS) $(HDF5_LIBS)
 
 iga_1d one_d_petsc_test one_d_implicit_failure_test one_d_subcommunicator_test: include/OneDPetscSupport.hpp ../cpu/include/PetscSolverOptions.hpp ../cpu/include/CollectivePetscOptions.hpp

@@ -55,7 +55,12 @@ void CheckCallbacks(MPI_Comm group, const iga::OneDNetwork& network,
 		healthy.dt = 1e-3; healthy.inlet_flow = 1e-9;
 		healthy.old_pressure = state.node_pressure;
 		healthy.old_flow.assign(graph.edges.size(), 0.0);
-		healthy.compliance = iga::OneDNodeCompliance(graph, flow, healthy.old_pressure);
+		healthy.compliance = iga::OneDNodeCompliance(graph, network, flow, healthy.old_pressure);
+		healthy.incident_edges.resize(static_cast<std::size_t>(graph.nodes));
+		for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
+			healthy.incident_edges[static_cast<std::size_t>(graph.edges[edge].from)].push_back(static_cast<int>(edge));
+			healthy.incident_edges[static_cast<std::size_t>(graph.edges[edge].to)].push_back(static_cast<int>(edge));
+		}
 		auto broken = healthy;
 		if (rank == target) broken.old_flow.clear();
 		std::vector<double> initial(static_cast<std::size_t>(unknowns), 0.0);

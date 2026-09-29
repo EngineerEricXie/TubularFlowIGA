@@ -250,6 +250,51 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 		double root_native_flux = 0.0;
 		std::map<int, double> outlet_native_flux;
 		double source_amount = 0.0;
+		std::size_t node_count = network.nodes.size();
+		for (const auto& segment : network.segments)
+			node_count = std::max(node_count, static_cast<std::size_t>(
+				std::max(segment.parent, segment.child)+1));
+		std::vector<double> node_concentration(node_count, 0.0);
+		std::vector<double> node_weight(node_count, 0.0);
+		std::vector<double> fallback_sum(node_count, 0.0);
+		std::vector<int> fallback_count(node_count, 0);
+		for (const auto& segment : network.segments) {
+			const auto first = static_cast<std::size_t>(segment.cell_offset);
+			const auto last = static_cast<std::size_t>(segment.cell_offset+segment.cells-1);
+			const double first_concentration = scalar[first]/flow.area[first];
+			const double last_concentration = scalar[last]/flow.area[last];
+			fallback_sum[static_cast<std::size_t>(segment.parent)] += first_concentration;
+			fallback_sum[static_cast<std::size_t>(segment.child)] += last_concentration;
+			++fallback_count[static_cast<std::size_t>(segment.parent)];
+			++fallback_count[static_cast<std::size_t>(segment.child)];
+			const double first_flow = flow.flow[first];
+			const double last_flow = flow.flow[last];
+			// Junction diffusion must balance even for unequal areas/lengths.
+			// These conductances match the boundary face fluxes below.
+			const double dx = segment.length/segment.cells;
+			const double first_diffusion = species.definition.diffusivity*flow.area[first]/dx;
+			const double last_diffusion = species.definition.diffusivity*flow.area[last]/dx;
+			node_concentration[static_cast<std::size_t>(segment.parent)] += first_diffusion*first_concentration;
+			node_concentration[static_cast<std::size_t>(segment.child)] += last_diffusion*last_concentration;
+			node_weight[static_cast<std::size_t>(segment.parent)] += first_diffusion;
+			node_weight[static_cast<std::size_t>(segment.child)] += last_diffusion;
+			if (first_flow < 0.0) {
+				node_concentration[static_cast<std::size_t>(segment.parent)]
+					+= -first_flow*first_concentration;
+				node_weight[static_cast<std::size_t>(segment.parent)] += -first_flow;
+			}
+			if (last_flow > 0.0) {
+				node_concentration[static_cast<std::size_t>(segment.child)]
+					+= last_flow*last_concentration;
+				node_weight[static_cast<std::size_t>(segment.child)] += last_flow;
+			}
+		}
+		for (std::size_t node = 0; node < node_concentration.size(); ++node) {
+			if (node_weight[node] > 0.0) node_concentration[node] /= node_weight[node];
+			else if (fallback_count[node] > 0)
+				node_concentration[node] = fallback_sum[node]/fallback_count[node];
+			else node_concentration[node] = inlet_concentration;
+		}
 		for (const auto& segment : network.segments) {
 			const double dx = segment.length/segment.cells;
 			std::vector<double> concentration(static_cast<std::size_t>(segment.cells+2));
@@ -272,10 +317,7 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 					? concentration[1] : inlet_concentration;
 			}
 			else {
-				const int incoming = OneDSegmentIntoNode(network, segment.parent);
-				const auto& parent = network.segments[static_cast<std::size_t>(incoming)];
-				concentration[0] = scalar[static_cast<std::size_t>(parent.cell_offset+parent.cells-1)]
-					/flow.area[static_cast<std::size_t>(parent.cell_offset+parent.cells-1)];
+				concentration[0] = node_concentration[static_cast<std::size_t>(segment.parent)];
 			}
 			const bool outlet = std::find(network.outlet_nodes.begin(),
 				network.outlet_nodes.end(), segment.child) != network.outlet_nodes.end();
@@ -292,8 +334,9 @@ inline void AdvanceOneDSpecies(const OneDConfiguration& configuration,
 				}
 			}
 			if (!outlet_concentration_supplied)
-				concentration[static_cast<std::size_t>(segment.cells+1)]
-					= concentration[static_cast<std::size_t>(segment.cells)];
+				concentration[static_cast<std::size_t>(segment.cells+1)] = outlet
+					? concentration[static_cast<std::size_t>(segment.cells)]
+					: node_concentration[static_cast<std::size_t>(segment.child)];
 			area[0] = area[1];
 			area[static_cast<std::size_t>(segment.cells+1)] = area[static_cast<std::size_t>(segment.cells)];
 			for (int face = 0; face <= segment.cells; ++face) {

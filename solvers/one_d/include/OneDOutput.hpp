@@ -247,9 +247,10 @@ public:
 	OneDOutputWriter(std::filesystem::path directory, const OneDNetwork& network,
 		const OneDFlowSystemDefinition& system,
 		OneDVisualizationFormat visualization_format = OneDVisualizationFormat::VtkHdf,
-		bool resume_visualization = false)
+		bool resume_visualization = false, bool spatial_csv = true,
+		int vtkhdf_compression = 4)
 		: directory_(std::move(directory)), network_(network), system_(system),
-		  visualization_format_(visualization_format)
+		  visualization_format_(visualization_format), spatial_csv_(spatial_csv)
 	{
 		std::filesystem::create_directories(directory_);
 		const std::string dimension = NetworkFlowPhysicalDimension(system_);
@@ -258,31 +259,38 @@ public:
 		if (visualization_format_ == OneDVisualizationFormat::VtkHdf)
 			vtkhdf_ = std::make_unique<TemporalVtkHdfPointWriter>(
 				directory_/("profile_"+dimension+".vtkhdf"),
-				OneDVtkHdfGrid(network_), resume_visualization, 4,
+				OneDVtkHdfGrid(network_), resume_visualization, vtkhdf_compression,
 				VtkHdfAssociation::Cells);
 		flow_.open(directory_/"flow_timeseries.csv");
 		outlet_.open(directory_/"outlet_timeseries.csv");
 		node_.open(directory_/"node_timeseries.csv");
-		branch_.open(directory_/"branch_timeseries.csv");
-		profile_.open(directory_/("profile_"+dimension+".csv"));
-		species_.open(directory_/("species_profile_"+dimension+".csv"));
-		derived_.open(directory_/("derived_profile_"+dimension+".csv"));
-		if (!flow_ || !outlet_ || !node_ || !branch_ || !profile_ || !species_ || !derived_)
+		if (spatial_csv_) {
+			branch_.open(directory_/"branch_timeseries.csv");
+			profile_.open(directory_/("profile_"+dimension+".csv"));
+			species_.open(directory_/("species_profile_"+dimension+".csv"));
+			derived_.open(directory_/("derived_profile_"+dimension+".csv"));
+		}
+		if (!flow_ || !outlet_ || !node_ || (spatial_csv_
+			&& (!branch_ || !profile_ || !species_ || !derived_)))
 			throw std::runtime_error("cannot create network output files in " + directory_.string());
 		flow_ << "time,inlet_flow_rate,outlet_flow_rate_sum,storage_rate,relative_continuity_residual,distal_outlet_flow_rate_sum,outlet_capacitor_storage_rate,total_circuit_relative_residual,pressure_drop,min_area,max_area\n";
 		outlet_ << "time,node_id,kind,inlet_flow,terminal_pressure,capacitor_pressure,distal_flow,capacitor_storage_rate,proximal_resistance,distal_resistance,capacitance,reference_pressure\n";
 		node_ << "time,node_id,pressure,is_root,is_outlet\n";
-		branch_ << "time,parent_id,child_id,flow_rate,pressure_parent,pressure_child,segment_resistance\n";
-		profile_ << "time,parent_id,child_id,cell,x,area,flow_rate,pressure,velocity\n";
-		species_ << "time,parent_id,child_id,cell,x,species,concentration,species_flux\n";
-		derived_ << "time,parent_id,child_id,cell,x,field,value\n";
+		if (spatial_csv_) {
+			branch_ << "time,parent_id,child_id,flow_rate,pressure_parent,pressure_child,segment_resistance\n";
+			profile_ << "time,parent_id,child_id,cell,x,area,flow_rate,pressure,velocity\n";
+			species_ << "time,parent_id,child_id,cell,x,species,concentration,species_flux\n";
+			derived_ << "time,parent_id,child_id,cell,x,field,value\n";
+		}
 		flow_ << std::setprecision(17);
 		outlet_ << std::setprecision(17);
 		node_ << std::setprecision(17);
-		branch_ << std::setprecision(17);
-		profile_ << std::setprecision(17);
-		species_ << std::setprecision(17);
-		derived_ << std::setprecision(17);
+		if (spatial_csv_) {
+			branch_ << std::setprecision(17);
+			profile_ << std::setprecision(17);
+			species_ << std::setprecision(17);
+			derived_ << std::setprecision(17);
+		}
 	}
 
 	void Write(int step, double time, const OneDFlowState& state,
@@ -365,7 +373,7 @@ public:
 				<< item.distal_resistance << ',' << item.capacitance << ','
 				<< item.reference_pressure << '\n';
 		}
-		for (const auto& segment : network_.segments) {
+		if (spatial_csv_) for (const auto& segment : network_.segments) {
 			const double parent_pressure = state.node_pressure.size() == network_.nodes.size()
 				? state.node_pressure[static_cast<std::size_t>(segment.parent)]
 				: state.pressure[static_cast<std::size_t>(segment.cell_offset)];
@@ -410,7 +418,12 @@ public:
 			WriteOneDVtp(directory_/name.str(), network_, state, transports, derived);
 			vtp_.push_back({time, name.str()});
 		}
-		for (auto* stream : {&flow_, &outlet_, &node_, &branch_, &profile_, &species_, &derived_}) {
+		for (auto* stream : {&flow_, &outlet_, &node_}) {
+			stream->flush();
+			if (!*stream)
+				throw std::runtime_error("cannot write network CSV output in " + directory_.string());
+		}
+		if (spatial_csv_) for (auto* stream : {&branch_, &profile_, &species_, &derived_}) {
 			stream->flush();
 			if (!*stream)
 				throw std::runtime_error("cannot write network CSV output in " + directory_.string());
@@ -420,7 +433,12 @@ public:
 	void Finish(const OneDFlowState& state, double setup_seconds,
 		double solve_seconds, double output_seconds)
 	{
-		for (auto* stream : {&flow_, &outlet_, &node_, &branch_, &profile_, &species_, &derived_}) {
+		for (auto* stream : {&flow_, &outlet_, &node_}) {
+			stream->close();
+			if (!*stream)
+				throw std::runtime_error("cannot close network CSV output in " + directory_.string());
+		}
+		if (spatial_csv_) for (auto* stream : {&branch_, &profile_, &species_, &derived_}) {
 			stream->close();
 			if (!*stream)
 				throw std::runtime_error("cannot close network CSV output in " + directory_.string());
@@ -484,6 +502,7 @@ private:
 	const OneDNetwork& network_;
 	const OneDFlowSystemDefinition& system_;
 	OneDVisualizationFormat visualization_format_ = OneDVisualizationFormat::VtkHdf;
+	bool spatial_csv_ = true;
 	std::unique_ptr<TemporalVtkHdfPointWriter> vtkhdf_;
 	std::ofstream flow_, outlet_, node_, branch_, profile_, species_, derived_;
 	std::vector<std::pair<double, std::string>> vtp_;

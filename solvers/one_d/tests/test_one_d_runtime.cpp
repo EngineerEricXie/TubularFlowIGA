@@ -78,6 +78,22 @@ int main()
 	const auto flow = configuration.flow_systems.front();
 	auto network = iga::ReadOneDNetwork(directory/"tree.swc", 1.0, 1, flow.dynamic_viscosity);
 	{
+		iga::OneDFlowRuntime rounded(configuration, flow, network,
+			iga::ResolveOneDInlet(configuration), directory);
+		rounded.InitializeOpenLoop(1.0e-9);
+		RequireRejected([&] { rounded.BeginStep(0.0, configuration.time.dt*0.9); });
+		rounded.BeginStep(0.0, std::nextafter(configuration.time.dt, 0.0));
+		assert(rounded.Diagnostics().planned_configured_substeps == 1);
+		auto cyclic = network;
+		cyclic.has_cycles = true;
+		auto explicit_flow = flow;
+		explicit_flow.scheme = iga::OneDFlowScheme::ExplicitRusanov;
+		RequireRejected([&] {
+			iga::OneDFlowRuntime unsupported(configuration, explicit_flow, cyclic,
+				iga::ResolveOneDInlet(configuration), directory);
+		});
+	}
+	{
 		auto bifurcated_network = iga::ReadOneDNetwork(directory/"root-bifurcation.swc",
 			1.0, 1, flow.dynamic_viscosity);
 		assert(iga::OneDSegmentsOutOfNode(bifurcated_network,

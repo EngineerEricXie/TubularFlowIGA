@@ -153,6 +153,39 @@ inline void OneDSetInitialVector(Vec vector, const std::vector<double>& values)
 	OneDCollectivePetscCheck(communicator, VecAssemblyEnd(vector), "VecAssemblyEnd");
 }
 
+inline void ConfigureOneDFieldSplit(KSP solver, Mat matrix,
+	const OneDImplicitGraph& graph, MPI_Comm communicator)
+{
+	PC pc = nullptr;
+	OneDCollectivePetscCheck(communicator, KSPGetPC(solver, &pc), "KSPGetPC");
+	OneDCollectivePetscCheck(communicator, PCSetType(pc, PCFIELDSPLIT), "PCSetType");
+	PetscInt first = 0, last = 0;
+	OneDCollectivePetscCheck(communicator,
+		MatGetOwnershipRange(matrix, &first, &last), "MatGetOwnershipRange");
+	const PetscInt pressure_first = first;
+	const PetscInt pressure_last = std::min(last, static_cast<PetscInt>(graph.nodes));
+	const PetscInt flow_first = std::max(first, static_cast<PetscInt>(graph.nodes));
+	const PetscInt flow_last = last;
+	IS pressure = nullptr, flow = nullptr;
+	OneDCollectivePetscCheck(communicator, ISCreateStride(communicator,
+		std::max<PetscInt>(0, pressure_last-pressure_first), pressure_first, 1, &pressure),
+		"ISCreateStride");
+	OneDCollectivePetscCheck(communicator, ISCreateStride(communicator,
+		std::max<PetscInt>(0, flow_last-flow_first), flow_first, 1, &flow),
+		"ISCreateStride");
+	OneDCollectivePetscCheck(communicator,
+		PCFieldSplitSetIS(pc, "pressure", pressure), "PCFieldSplitSetIS");
+	OneDCollectivePetscCheck(communicator,
+		PCFieldSplitSetIS(pc, "flow", flow), "PCFieldSplitSetIS");
+	OneDCollectivePetscCheck(communicator,
+		PCFieldSplitSetType(pc, PC_COMPOSITE_SCHUR), "PCFieldSplitSetType");
+	OneDCollectivePetscCheck(communicator,
+		PCFieldSplitSetSchurFactType(pc, PC_FIELDSPLIT_SCHUR_FACT_FULL),
+		"PCFieldSplitSetSchurFactType");
+	ISDestroy(&pressure);
+	ISDestroy(&flow);
+}
+
 inline void OneDUpdateStateFromImplicitSolution(const OneDNetwork& network,
 	const OneDImplicitGraph& graph, const OneDFlowSystemDefinition& flow,
 	const std::vector<double>& pressure, const std::vector<double>& edge_flow,
@@ -205,8 +238,16 @@ inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 	std::optional<OneDPetscSolverContext> fallback;
 	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDImplicitGraph graph;
+	std::vector<std::vector<int>> incident_edges;
 	CollectiveLocalStage(communicator, "1d implicit graph preparation", [&] {
 		graph = BuildOneDImplicitGraph(network, false);
+		incident_edges.resize(static_cast<std::size_t>(graph.nodes));
+		for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
+			incident_edges[static_cast<std::size_t>(graph.edges[edge].from)].push_back(
+				static_cast<int>(edge));
+			incident_edges[static_cast<std::size_t>(graph.edges[edge].to)].push_back(
+				static_cast<int>(edge));
+		}
 		if (!std::isfinite(dt) || dt <= 0.0 || !std::isfinite(inlet_flow))
 			throw std::runtime_error("implicit step requires finite flow and positive finite dt");
 	});
@@ -238,8 +279,8 @@ inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 			}
 			double diagonal = compliance[static_cast<std::size_t>(row)]/dt;
 			double value = diagonal*previous[static_cast<std::size_t>(row)];
-			for (const auto& edge : graph.edges) {
-				if (edge.from != row && edge.to != row) continue;
+			for (const int edge_index : incident_edges[static_cast<std::size_t>(row)]) {
+				const auto& edge = graph.edges[static_cast<std::size_t>(edge_index)];
 				const auto& segment = network.segments[static_cast<std::size_t>(edge.segment)];
 				const double resistance = flow.model == OneDFlowModel::Lumped
 					? OneDLumpedSegmentResistance(network, flow, segment)
@@ -269,6 +310,7 @@ inline void SolveOneDPressureNetworkPetsc(const OneDNetwork& network,
 	OneDCollectivePetscCheck(communicator, VecAssemblyEnd(rhs), "VecAssemblyEnd");
 	OneDCollectivePetscCheck(communicator, KSPCreate(communicator, &solver), "KSPCreate");
 	OneDCollectivePetscCheck(communicator, KSPSetOperators(solver, matrix, matrix), "KSPSetOperators");
+	// This pressure-only system has no flow block to split.
 	solver_context->options.Attach(solver);
 	solver_context->options.Call("1d solver options", [&] { return KSPSetFromOptions(solver); });
 	RequireKspFactorBackend(solver, matrix, communicator);
@@ -323,8 +365,16 @@ inline void SolveOneDLinearizedAQPetsc(const OneDNetwork& network,
 	std::optional<OneDPetscSolverContext> fallback;
 	if (!solver_context) { fallback.emplace(communicator); solver_context = &*fallback; }
 	OneDImplicitGraph graph;
+	std::vector<std::vector<int>> incident_edges;
 	CollectiveLocalStage(communicator, "1d implicit graph preparation", [&] {
 		graph = BuildOneDImplicitGraph(network, expand_cells);
+		incident_edges.resize(static_cast<std::size_t>(graph.nodes));
+		for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
+			incident_edges[static_cast<std::size_t>(graph.edges[edge].from)].push_back(
+				static_cast<int>(edge));
+			incident_edges[static_cast<std::size_t>(graph.edges[edge].to)].push_back(
+				static_cast<int>(edge));
+		}
 		if (!std::isfinite(dt) || dt <= 0.0 || !std::isfinite(inlet_flow))
 			throw std::runtime_error("implicit step requires finite flow and positive finite dt");
 	});
@@ -356,8 +406,8 @@ inline void SolveOneDLinearizedAQPetsc(const OneDNetwork& network,
 				}
 				double diagonal = compliance[static_cast<std::size_t>(row)]/dt;
 				double value = diagonal*previous_pressure[static_cast<std::size_t>(row)];
-				for (std::size_t edge_index = 0; edge_index < graph.edges.size(); ++edge_index) {
-					const auto& edge = graph.edges[edge_index];
+				for (const int edge_index : incident_edges[static_cast<std::size_t>(row)]) {
+					const auto& edge = graph.edges[static_cast<std::size_t>(edge_index)];
 					if (edge.from == row) OneDPetscCheck(MatSetValue(matrix, row, graph.nodes+edge_index, 1.0, ADD_VALUES), "MatSetValue");
 					if (edge.to == row) OneDPetscCheck(MatSetValue(matrix, row, graph.nodes+edge_index, -1.0, ADD_VALUES), "MatSetValue");
 				}
@@ -395,6 +445,12 @@ inline void SolveOneDLinearizedAQPetsc(const OneDNetwork& network,
 	OneDCollectivePetscCheck(communicator, VecAssemblyEnd(rhs), "VecAssemblyEnd");
 	OneDCollectivePetscCheck(communicator, KSPCreate(communicator, &solver), "KSPCreate");
 	OneDCollectivePetscCheck(communicator, KSPSetOperators(solver, matrix, matrix), "KSPSetOperators");
+	int mpi_size = 1;
+	MPI_Comm_size(communicator, &mpi_size);
+	if (mpi_size > 1) {
+		OneDCollectivePetscCheck(communicator, KSPSetType(solver, KSPFGMRES), "KSPSetType");
+		ConfigureOneDFieldSplit(solver, matrix, graph, communicator);
+	}
 	solver_context->options.Attach(solver);
 	solver_context->options.Call("1d solver options", [&] { return KSPSetFromOptions(solver); });
 	RequireKspFactorBackend(solver, matrix, communicator);
@@ -428,6 +484,7 @@ struct OneDNonlinearContext {
 	std::vector<double> old_pressure;
 	std::vector<double> old_flow;
 	std::vector<double> compliance;
+	std::vector<std::vector<int>> incident_edges;
 };
 
 inline PetscErrorCode OneDNonlinearResidual(SNES, Vec input, Vec residual, void* raw) noexcept
@@ -448,9 +505,11 @@ inline PetscErrorCode OneDNonlinearResidual(SNES, Vec input, Vec residual, void*
 				}
 				double value = context.compliance[static_cast<std::size_t>(node)]
 					*(x[static_cast<std::size_t>(node)]-context.old_pressure[static_cast<std::size_t>(node)])/context.dt;
-				for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
-					if (graph.edges[edge].from == node) value += x[static_cast<std::size_t>(graph.nodes)+edge];
-					if (graph.edges[edge].to == node) value -= x[static_cast<std::size_t>(graph.nodes)+edge];
+				for (const int edge : context.incident_edges[static_cast<std::size_t>(node)]) {
+					if (graph.edges[static_cast<std::size_t>(edge)].from == node)
+						value += x[static_cast<std::size_t>(graph.nodes)+static_cast<std::size_t>(edge)];
+					if (graph.edges[static_cast<std::size_t>(edge)].to == node)
+						value -= x[static_cast<std::size_t>(graph.nodes)+static_cast<std::size_t>(edge)];
 				}
 				if (node == graph.root) value -= context.inlet_flow;
 				if (outlet) value += (x[static_cast<std::size_t>(node)]-OutletEffectivePressure(*outlet, context.dt))
@@ -512,9 +571,11 @@ inline PetscErrorCode OneDNonlinearJacobian(SNES, Vec input, Mat jacobian, Mat, 
 					double diagonal = context.compliance[static_cast<std::size_t>(row)]/context.dt;
 					if (outlet) diagonal += 1.0/OutletEffectiveResistance(*outlet, context.dt);
 					OneDPetscCheck(MatSetValue(jacobian, row, row, diagonal, INSERT_VALUES), "MatSetValue");
-					for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
-						if (graph.edges[edge].from == row) OneDPetscCheck(MatSetValue(jacobian, row, graph.nodes+edge, 1.0, INSERT_VALUES), "MatSetValue");
-						if (graph.edges[edge].to == row) OneDPetscCheck(MatSetValue(jacobian, row, graph.nodes+edge, -1.0, INSERT_VALUES), "MatSetValue");
+					for (const int edge : context.incident_edges[static_cast<std::size_t>(row)]) {
+						if (graph.edges[static_cast<std::size_t>(edge)].from == row)
+							OneDPetscCheck(MatSetValue(jacobian, row, graph.nodes+edge, 1.0, INSERT_VALUES), "MatSetValue");
+						if (graph.edges[static_cast<std::size_t>(edge)].to == row)
+							OneDPetscCheck(MatSetValue(jacobian, row, graph.nodes+edge, -1.0, INSERT_VALUES), "MatSetValue");
 					}
 				} else {
 					const std::size_t edge_index = static_cast<std::size_t>(row-graph.nodes);
@@ -601,6 +662,13 @@ inline void SolveOneDNonlinearAQPetsc(const OneDNetwork& network,
 				context.old_flow[i] = state.segment_flow[static_cast<std::size_t>(edge.segment)];
 		}
 		context.compliance = OneDNodeCompliance(graph, network, flow, context.old_pressure);
+		context.incident_edges.resize(static_cast<std::size_t>(graph.nodes));
+		for (std::size_t edge = 0; edge < graph.edges.size(); ++edge) {
+			context.incident_edges[static_cast<std::size_t>(graph.edges[edge].from)].push_back(
+				static_cast<int>(edge));
+			context.incident_edges[static_cast<std::size_t>(graph.edges[edge].to)].push_back(
+				static_cast<int>(edge));
+		}
 		initial.assign(static_cast<std::size_t>(unknowns), 0.0);
 		std::copy(context.old_pressure.begin(), context.old_pressure.end(), initial.begin());
 		for (int i = 0; i < graph.original_nodes && i < static_cast<int>(linear_guess.node_pressure.size()); ++i)
@@ -630,9 +698,8 @@ inline void SolveOneDNonlinearAQPetsc(const OneDNetwork& network,
 		OneDCollectivePetscCheck(communicator, KSPSetType(nonlinear_ksp, KSPPREONLY), "KSPSetType");
 		OneDCollectivePetscCheck(communicator, PCSetType(nonlinear_pc, PCLU), "PCSetType");
 	} else {
-		OneDCollectivePetscCheck(communicator, KSPSetType(nonlinear_ksp, KSPPREONLY), "KSPSetType");
-		OneDCollectivePetscCheck(communicator, PCSetType(nonlinear_pc, PCLU), "PCSetType");
-		OneDCollectivePetscCheck(communicator, PCFactorSetMatSolverType(nonlinear_pc, MATSOLVERMUMPS), "PCFactorSetMatSolverType");
+		OneDCollectivePetscCheck(communicator, KSPSetType(nonlinear_ksp, KSPFGMRES), "KSPSetType");
+		ConfigureOneDFieldSplit(nonlinear_ksp, jacobian, graph, communicator);
 	}
 	solver_context->options.Attach(solver);
 	solver_context->options.Call("1d nonlinear options", [&] { return SNESSetFromOptions(solver); });

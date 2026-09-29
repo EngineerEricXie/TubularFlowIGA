@@ -320,6 +320,34 @@ Restarting into an older midpoint/PointData VTKHDF file is rejected rather than
 mixing incompatible geometries. Restart to a new output directory instead.
 The [legacy repair tool](NETWORK_VTKHDF_REPAIR.md) is only for existing old files.
 
+### Output controls and restart
+
+`--no-spatial-csv` suppresses branch/profile/species/derived CSV files while
+retaining VTKHDF, flow/node/outlet time series, and conservation diagnostics.
+`--vtkhdf-compression N` selects lossless HDF5 compression from 0 (disabled) to
+9; the default is 4. These choices do not change solved fields.
+
+When reopening a compatible VTKHDF during checkpoint restart, the first append
+may replace an existing earlier timestep and discard later frames. The restart
+time must match a stored timestep; other backward-time writes are rejected.
+Use a separate output directory to preserve the abandoned future frames.
+
+### Cyclic networks
+
+OBJ networks containing cycles require a PETSc implicit flow scheme. Tree-only
+rigid/explicit schemes are rejected for these inputs. Compliant cyclic networks
+initialize at wall reference pressure and zero segment flow, rather than using
+the tree-only rigid initializer. This is a startup state, not a steady solution.
+The mixed pressure/flow multi-rank solvers (linearized and nonlinear) use a
+pressure/flow Schur field split by default;
+PETSc options can still override it. Pressure-only systems do not use this split.
+
+Transport junction values mix incoming advective fluxes and diffusive
+conductances from every incident segment, including reverse flows. For balanced
+junction flows this preserves the internal species balance even when segment
+areas and lengths differ. It does not fix an unbalanced hydraulic solution or
+guarantee that transient oxygen concentrations stay within inlet bounds.
+
 ## Hex/FEniCS concept map
 
 This table is a manual migration aid, not an accepted legacy schema. `iga_1d`

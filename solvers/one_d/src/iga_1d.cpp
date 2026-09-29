@@ -35,6 +35,8 @@ struct Options {
 	int checkpoint_every = 0;
 	fs::path restart;
 	int stop_after_step = 0;
+	bool spatial_csv = true;
+	int vtkhdf_compression = 4;
 	iga::OneDVisualizationFormat visualization_format =
 		iga::OneDVisualizationFormat::VtkHdf;
 };
@@ -54,16 +56,18 @@ Options ParseOptions(int argc, char** argv)
 	if (argc < 2) throw std::runtime_error(
 		"usage: iga_1d|iga_0d CASE_DIR [--system NAME] [--output-dir DIR] [--check] "
 		"[--checkpoint PREFIX --checkpoint-every N] [--restart PREFIX] "
-		"[--stop-after-step N] [--visualization-format auto|vtkhdf|vtp] [PETSc options]");
+		"[--stop-after-step N] [--visualization-format auto|vtkhdf|vtp] "
+		"[--no-spatial-csv] [--vtkhdf-compression 0..9] [PETSc options]");
 	Options options;
 	options.case_directory = argv[1];
 	for (int i = 2; i < argc; ++i) {
 		const std::string argument(argv[i]);
 		if (argument == "--check") { options.check = true; continue; }
+		if (argument == "--no-spatial-csv") { options.spatial_csv = false; continue; }
 		if (argument == "--system" || argument == "--output-dir"
 			|| argument == "--checkpoint" || argument == "--checkpoint-every"
 			|| argument == "--restart" || argument == "--stop-after-step"
-			|| argument == "--visualization-format") {
+			|| argument == "--visualization-format" || argument == "--vtkhdf-compression") {
 			if (++i >= argc) throw std::runtime_error(argument+" requires a value");
 			const std::string value(argv[i]);
 			if (argument == "--system") options.system = value;
@@ -73,7 +77,18 @@ Options ParseOptions(int argc, char** argv)
 			else if (argument == "--restart") options.restart = value;
 			else if (argument == "--stop-after-step")
 				options.stop_after_step = PositiveInteger(value, argument);
-			else options.visualization_format = iga::ParseOneDVisualizationFormat(value);
+			else if (argument == "--visualization-format")
+				options.visualization_format = iga::ParseOneDVisualizationFormat(value);
+			else {
+				std::size_t used = 0;
+				try { options.vtkhdf_compression = std::stoi(value, &used); }
+				catch (const std::exception&) {
+					throw std::runtime_error(argument+" requires an integer from 0 through 9");
+				}
+				if (used != value.size() || options.vtkhdf_compression < 0
+					|| options.vtkhdf_compression > 9)
+					throw std::runtime_error(argument+" requires an integer from 0 through 9");
+			}
 			continue;
 		}
 		if (!argument.empty() && argument[0] == '-') {
@@ -177,9 +192,12 @@ int main(int argc, char** argv)
 			controls = std::to_string(options.system.size())+":"+options.system+":"
 				+std::to_string(options.check)+":"+std::to_string(options.stop_after_step)+":"
 				+std::to_string(options.checkpoint_every)+":"
-				+std::to_string(!options.checkpoint.empty())+":"+std::to_string(!options.restart.empty());
+				+std::to_string(!options.checkpoint.empty())+":"+std::to_string(!options.restart.empty())+":"
+				+std::to_string(options.spatial_csv)+":"+std::to_string(options.vtkhdf_compression)+":"
+				+iga::OneDVisualizationFormatName(options.visualization_format);
 			application_options = {"--system", "--output-dir", "--check", "--checkpoint",
-				"--checkpoint-every", "--restart", "--stop-after-step", "-options_file"};
+				"--checkpoint-every", "--restart", "--stop-after-step", "-options_file",
+				"--visualization-format", "--no-spatial-csv", "--vtkhdf-compression"};
 		});
 		iga::RequireCollectiveSameText(communicator, "1d execution controls", controls);
 		iga::RequireCollectivePetscOptions(communicator, nullptr, application_options);
@@ -212,7 +230,8 @@ int main(int argc, char** argv)
 			const auto& selected_flow = SelectFlow(configuration, options.system);
 			auto network = iga::ReadOneDNetwork(options.case_directory/configuration.geometry.file,
 				configuration.geometry.length_scale_to_m, selected_flow.discretization.cells_per_segment,
-				selected_flow.dynamic_viscosity, configuration.geometry.root_node_id);
+				selected_flow.dynamic_viscosity, configuration.geometry.root_node_id,
+				true);
 			iga::ValidateOneDTopologyReferences(configuration, network);
 			inlet = iga::ResolveOneDInlet(configuration);
 			// Construction only stores the advance callback; it does not execute MPI.
@@ -319,7 +338,8 @@ int main(int argc, char** argv)
 					runtime.Configuration().geometry.length_scale_to_m);
 				writer = std::make_unique<iga::OneDOutputWriter>(
 					options.output_directory, runtime.Network(), flow,
-					options.visualization_format, !options.restart.empty());
+					options.visualization_format, !options.restart.empty(), options.spatial_csv,
+					options.vtkhdf_compression);
 			}
 			if (rank == 0 && runtime.Configuration().coupling.mode != iga::SimulationScopeMode::FlowOnly)
 				coupling_writer = std::make_unique<iga::CouplingHistoryWriter>(

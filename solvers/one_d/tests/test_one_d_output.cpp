@@ -80,14 +80,23 @@ void CheckTopology(const fs::path& directory, int subdivisions, bool cycle)
 		iga::TemporalVtkHdfPointWriter writer(path, grid, false, 4, iga::VtkHdfAssociation::Cells);
 		writer.Append(0.0, arrays);
 		writer.Append(0.1, arrays);
+		writer.Append(0.2, arrays);
+		bool rejected_rewind = false;
+		try { writer.Append(0.1, arrays); }
+		catch (const std::runtime_error&) { rejected_rewind = true; }
+		assert(rejected_rewind);
 		writer.Close();
 	}
 	{
 		iga::TemporalVtkHdfPointWriter writer(path, grid, true, 4, iga::VtkHdfAssociation::Cells);
+		bool rejected_missing = false;
+		try { writer.Append(0.05, arrays); }
+		catch (const std::runtime_error&) { rejected_missing = true; }
+		assert(rejected_missing);
 		for (auto& array : arrays)
 			if (array.name == "pressure")
 				for (auto& value : array.values) value += 10.0;
-		writer.Append(0.1, arrays); // Restart replaces the final stored step.
+		writer.Append(0.1, arrays); // Explicit restart discards the abandoned future step.
 		writer.Append(0.2, arrays);
 		writer.Close();
 	}
@@ -211,6 +220,26 @@ int main()
 	assert(fs::is_regular_file(legacy_directory/"profile_1d.pvd"));
 	assert(fs::is_regular_file(legacy_directory/"profile_1d_000001.vtp"));
 	assert(!fs::exists(legacy_directory/"profile_1d.vtkhdf"));
+	// Suppressing spatial CSV must not suppress storage/conservation diagnostics.
+	for (const bool spatial : {false, true}) {
+		const auto output = directory/(spatial ? "csv_on" : "csv_off");
+		iga::OneDOutputWriter writer(output, network, flow,
+			iga::OneDVisualizationFormat::VtkHdf, false, spatial, spatial ? 9 : 0);
+		auto moving = state;
+		writer.Write(0, 0.0, moving, transports, derived);
+		for (auto& area : moving.area) area *= 1.2;
+		writer.Write(1, 0.1, moving, transports, derived);
+		writer.Finish(moving, 0.0, 0.0, 0.0);
+		for (const auto* name : {"branch_timeseries.csv", "profile_1d.csv",
+			"species_profile_1d.csv", "derived_profile_1d.csv"})
+			assert(fs::exists(output/name) == spatial);
+	}
+	for (const auto* name : {"flow_timeseries.csv", "node_timeseries.csv", "outlet_timeseries.csv"}) {
+		std::ifstream on(directory/"csv_on"/name), off(directory/"csv_off"/name);
+		const std::string first((std::istreambuf_iterator<char>(on)), {});
+		const std::string second((std::istreambuf_iterator<char>(off)), {});
+		assert(!first.empty() && first == second);
+	}
 	if (std::getenv("TUBULARFLOWIGA_KEEP_TEST_OUTPUT") == nullptr)
 		fs::remove_all(directory);
 }

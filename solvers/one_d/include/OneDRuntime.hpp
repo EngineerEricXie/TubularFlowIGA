@@ -11,10 +11,12 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <map>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -88,6 +90,9 @@ public:
 		if (!checkpoint_identity_sha256_.empty() && (checkpoint_identity_sha256_.size() != 64
 			|| checkpoint_identity_sha256_.find_first_not_of("0123456789abcdef") != std::string::npos))
 			throw std::runtime_error("invalid 1d checkpoint configuration identity");
+		if (network_.has_cycles && flow_.scheme != OneDFlowScheme::Petsc
+			&& flow_.scheme != OneDFlowScheme::ImplicitPetsc)
+			throw std::runtime_error("cyclic networks require a PETSc implicit flow scheme");
 		flow_state_.outlets = ResolveOneDOutlets(configuration_, network_);
 		for (const auto& transport : configuration_.transport_systems)
 			if (transport.flow_system == flow_.name)
@@ -859,7 +864,21 @@ private:
 			SolveRigidOneD(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
 		else if (flow_.model == OneDFlowModel::Lumped)
 			InitializeLumpedOneD(network_, flow_, flow_state_, inlet_flow);
-		else InitializeCompliantOneDFromRigid(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+		else if (!network_.has_cycles)
+			InitializeCompliantOneDFromRigid(network_, flow_, flow_state_, inlet_flow, configuration_.time.dt);
+		else {
+			flow_state_.inlet_flow = inlet_flow;
+			flow_state_.node_pressure.assign(network_.nodes.size(), flow_.wall.reference_pressure);
+			flow_state_.segment_flow.assign(network_.segments.size(), 0.0);
+			flow_state_.area.assign(static_cast<std::size_t>(network_.cells), 0.0);
+			flow_state_.flow.assign(static_cast<std::size_t>(network_.cells), 0.0);
+			flow_state_.pressure.assign(static_cast<std::size_t>(network_.cells),
+				flow_.wall.reference_pressure);
+			for (const auto& segment : network_.segments)
+				for (int cell = 0; cell < segment.cells; ++cell)
+					flow_state_.area[static_cast<std::size_t>(segment.cell_offset+cell)]
+						= segment.area0;
+		}
 	}
 
 	void RestoreCommitted()
@@ -886,12 +905,20 @@ private:
 	int ConfiguredSubsteps(double macro_dt_s) const
 	{
 		const long double ratio = static_cast<long double>(macro_dt_s)/configuration_.time.dt;
-		if (!std::isfinite(ratio) || ratio < 1.0L || ratio > std::numeric_limits<int>::max())
-			throw std::runtime_error("1d macro dt ratio is outside supported range");
+		const auto diagnostic = [&] {
+			std::ostringstream output;
+			output << std::setprecision(17) << " macro_dt_s=" << macro_dt_s
+				<< " configured_dt_s=" << configuration_.time.dt
+				<< " ratio=" << ratio;
+			return output.str();
+		};
+		if (!std::isfinite(ratio) || !(ratio > 0.0L)
+			|| ratio > static_cast<long double>(std::numeric_limits<int>::max())+0.5L)
+			throw std::runtime_error("1d macro dt ratio is outside supported range"+diagnostic());
 		const long long rounded = std::llround(ratio);
-		if (ratio < 1.0L || rounded < 1 || rounded > std::numeric_limits<int>::max()
+		if (rounded < 1 || rounded > std::numeric_limits<int>::max()
 			|| std::abs(ratio-rounded) > 1.0e-12L*std::max(1.0L, std::abs(ratio)))
-			throw std::runtime_error("1d BeginStep macro dt must be an integer multiple of configured dt");
+			throw std::runtime_error("1d BeginStep macro dt must be an integer multiple of configured dt"+diagnostic());
 		return static_cast<int>(rounded);
 	}
 

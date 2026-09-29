@@ -65,6 +65,36 @@ int main(int argc, char** argv)
 			assert(std::isfinite(state.pressure[i]));
 		}
 	}
+	// Cyclic networks start from reference pressure/zero flow, not a tree solve.
+	const auto cycle_path = fs::temp_directory_path()/"tubularflowiga-one-d-cycle.obj";
+	if (rank == 0) {
+		std::ofstream output(cycle_path);
+		output << "v 0 0 0 0.001 0 0\nv 0.01 0 0 0.001 0 0\n"
+			<< "v 0.02 0.01 0 0.001 0 0\nv 0.02 -0.01 0 0.001 0 0\n"
+			<< "v 0.03 0 0 0.001 0 0\nv 0.04 0 0 0.001 0 0\n"
+			<< "l 1 2\nl 2 3\nl 2 4\nl 3 5\nl 4 5\nl 5 6\n";
+	}
+	MPI_Barrier(PETSC_COMM_WORLD);
+	const auto cyclic = iga::ReadOneDNetwork(cycle_path, 1.0, 1, flow.dynamic_viscosity, 1, true);
+	assert(cyclic.has_cycles && cyclic.segments.size() == 6);
+	iga::OneDFlowState startup;
+	startup.node_pressure.assign(cyclic.nodes.size(), flow.wall.reference_pressure);
+	startup.segment_flow.assign(cyclic.segments.size(), 0.0);
+	startup.pressure.assign(cyclic.cells, flow.wall.reference_pressure);
+	startup.flow.assign(cyclic.cells, 0.0);
+	for (const auto& edge : cyclic.segments) startup.area.push_back(edge.area0);
+	iga::OneDOutletState terminal;
+	terminal.node = cyclic.outlet_nodes.front();
+	terminal.kind = iga::OneDOutletKind::Pressure;
+	startup.outlets.push_back(terminal);
+	for (int step = 0; step < 3; ++step) {
+		iga::AdvanceImplicitOneD(cyclic, flow, startup, 1.0e-9, 0.01);
+		for (std::size_t cell = 0; cell < startup.area.size(); ++cell)
+			assert(startup.area[cell] > 0.0 && std::isfinite(startup.pressure[cell])
+				&& std::isfinite(startup.flow[cell]));
+	}
+	MPI_Barrier(PETSC_COMM_WORLD);
+	if (rank == 0) fs::remove(cycle_path);
 	iga::OneDFlowSystemDefinition lumped = flow;
 	lumped.model = iga::OneDFlowModel::Lumped;
 	lumped.scheme = iga::OneDFlowScheme::Petsc;
