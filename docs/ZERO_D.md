@@ -163,7 +163,11 @@ files, `node_timeseries.csv` records every circuit-node pressure and
 capacitor pressure, distal flow, and capacitor storage rate. The visualization
 file is named `profile_0d.vtkhdf`; spatially distributed 1D cases use
 `profile_1d.vtkhdf`. Use `--visualization-format vtp` for the legacy PVD/VTP
-collection. The flow summary reports both network balance
+collection. Both visualization formats use the actual network edges and shared
+junctions. Segment pressure, flow, oxygen, and VTKHDF segment metadata are stored
+as **Cell Data**, not as midpoint vertices. New output needs no geometry repair;
+this visualization change does not add a spatial PDE to the 0D circuit model.
+The flow summary reports both network balance
 
 ```text
 inlet - terminal inflow - vascular storage

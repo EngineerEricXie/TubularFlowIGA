@@ -309,8 +309,16 @@ All generated files go to `--output-dir` (default:
 - `physiology_fields.json` with solved/derived/skipped status.
 
 Open `skeleton.vtp` for the static network or `profile_1d.vtkhdf` for simulated
-fields. Choose a point-data array and use **Tube** with `radius` as an absolute
-scalar when a finite-width skeleton rendering is desired.
+fields. Native VTKHDF and VTP output preserve the original network nodes and
+junctions, adding only interior subdivision points. Each computational cell is
+one `VTK_LINE`; pressure, flow, oxygen, and segment metadata are **Cell Data**
+in solver cell order, without interpolation. No geometry-repair postprocessing
+is needed for new output. For finite-width rendering of `skeleton.vtp`, use
+**Tube** with its point-data `radius` as an absolute scalar.
+
+Restarting into an older midpoint/PointData VTKHDF file is rejected rather than
+mixing incompatible geometries. Restart to a new output directory instead.
+The [legacy repair tool](NETWORK_VTKHDF_REPAIR.md) is only for existing old files.
 
 ## Hex/FEniCS concept map
 

@@ -2,7 +2,9 @@
 
 `scripts/repair_network_vtkhdf_geometry.py` repairs existing 0D/1D network
 VTKHDF visualization without rerunning a simulation. It is a postprocessor,
-not a change to the native solver output writer.
+only for legacy files. The native 0D/1D writer now emits the correct network
+geometry and `CellData` directly, including subdivided segments. New simulations
+do not need this tool; do not run it on new native output.
 
 The old visualization places vertices at segment midpoints and connects those
 vertices across junctions. This cuts bends, shifts branch junctions, and omits

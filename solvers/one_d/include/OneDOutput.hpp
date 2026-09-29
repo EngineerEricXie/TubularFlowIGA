@@ -126,48 +126,40 @@ inline std::vector<VtkPointArray> OneDVisualizationArrays(
 
 inline VtkHdfUnstructuredGrid OneDVtkHdfGrid(const OneDNetwork& network)
 {
-	constexpr std::uint8_t vtk_vertex = 1;
 	constexpr std::uint8_t vtk_line = 3;
-	constexpr std::uint8_t vtk_poly_line = 4;
 	VtkHdfUnstructuredGrid grid;
-	grid.points = OneDCellCenters(network);
-	grid.offsets.push_back(0);
-	std::vector<std::vector<int>> node_cells(network.nodes.size());
-	std::vector<bool> used(grid.points.size(), false);
+	// Share real junction/end nodes; only interior subdivision points are new.
+	for (const auto& node : network.nodes) grid.points.push_back(node.position);
+	grid.connectivity.resize(static_cast<std::size_t>(network.cells)*2);
+	grid.types.assign(static_cast<std::size_t>(network.cells), vtk_line);
+	for (int cell = 0; cell <= network.cells; ++cell)
+		grid.offsets.push_back(static_cast<std::int64_t>(cell)*2);
 	for (const auto& segment : network.segments) {
-		node_cells[static_cast<std::size_t>(segment.parent)].push_back(segment.cell_offset);
-		node_cells[static_cast<std::size_t>(segment.child)].push_back(
-			segment.cell_offset+segment.cells-1);
-		if (segment.cells <= 1) continue;
+		const auto& first = network.nodes[static_cast<std::size_t>(segment.parent)].position;
+		const auto& last = network.nodes[static_cast<std::size_t>(segment.child)].position;
+		std::int64_t previous = segment.parent;
 		for (int cell = 0; cell < segment.cells; ++cell) {
-			const auto point = segment.cell_offset+cell;
-			grid.connectivity.push_back(point);
-			used[static_cast<std::size_t>(point)] = true;
+			std::int64_t next = segment.child;
+			if (cell+1 < segment.cells) {
+				next = static_cast<std::int64_t>(grid.points.size());
+				const double fraction = static_cast<double>(cell+1)/segment.cells;
+				std::array<double, 3> point{};
+				for (std::size_t axis = 0; axis < 3; ++axis)
+					point[axis] = (1.0-fraction)*first[axis]+fraction*last[axis];
+				grid.points.push_back(point);
+			}
+			const auto offset = static_cast<std::size_t>(segment.cell_offset+cell)*2;
+			grid.connectivity[offset] = previous;
+			grid.connectivity[offset+1] = next;
+			previous = next;
 		}
-		grid.offsets.push_back(static_cast<std::int64_t>(grid.connectivity.size()));
-		grid.types.push_back(segment.cells == 2 ? vtk_line : vtk_poly_line);
 	}
-	for (const auto& cells : node_cells)
-		for (std::size_t i = 1; i < cells.size(); ++i) {
-			grid.connectivity.push_back(cells.front());
-			grid.connectivity.push_back(cells[i]);
-			used[static_cast<std::size_t>(cells.front())] = true;
-			used[static_cast<std::size_t>(cells[i])] = true;
-			grid.offsets.push_back(static_cast<std::int64_t>(grid.connectivity.size()));
-			grid.types.push_back(vtk_line);
-		}
-	for (std::size_t point = 0; point < used.size(); ++point)
-		if (!used[point]) {
-			grid.connectivity.push_back(static_cast<std::int64_t>(point));
-			grid.offsets.push_back(static_cast<std::int64_t>(grid.connectivity.size()));
-			grid.types.push_back(vtk_vertex);
-		}
-	std::vector<std::int32_t> segment_id(grid.points.size());
-	std::vector<std::int32_t> parent_node_id(grid.points.size());
-	std::vector<std::int32_t> child_node_id(grid.points.size());
-	std::vector<std::int32_t> segment_cell(grid.points.size());
-	std::vector<double> axial_position(grid.points.size());
-	std::vector<double> reference_radius(grid.points.size());
+	std::vector<std::int32_t> segment_id(grid.types.size());
+	std::vector<std::int32_t> parent_node_id(grid.types.size());
+	std::vector<std::int32_t> child_node_id(grid.types.size());
+	std::vector<std::int32_t> segment_cell(grid.types.size());
+	std::vector<double> axial_position(grid.types.size());
+	std::vector<double> reference_radius(grid.types.size());
 	for (const auto& segment : network.segments)
 		for (int cell = 0; cell < segment.cells; ++cell) {
 			const auto point = static_cast<std::size_t>(segment.cell_offset+cell);
@@ -179,12 +171,12 @@ inline VtkHdfUnstructuredGrid OneDVtkHdfGrid(const OneDNetwork& network)
 				*segment.length/segment.cells;
 			reference_radius[point] = segment.radius0;
 		}
-	grid.point_int32.push_back({"segment_id", std::move(segment_id)});
-	grid.point_int32.push_back({"parent_node_id", std::move(parent_node_id)});
-	grid.point_int32.push_back({"child_node_id", std::move(child_node_id)});
-	grid.point_int32.push_back({"segment_cell", std::move(segment_cell)});
-	grid.point_double.push_back({"axial_position_m", std::move(axial_position)});
-	grid.point_double.push_back({"reference_radius_m", std::move(reference_radius)});
+	grid.cell_int32.push_back({"segment_id", std::move(segment_id)});
+	grid.cell_int32.push_back({"parent_node_id", std::move(parent_node_id)});
+	grid.cell_int32.push_back({"child_node_id", std::move(child_node_id)});
+	grid.cell_int32.push_back({"segment_cell", std::move(segment_cell)});
+	grid.cell_double.push_back({"axial_position_m", std::move(axial_position)});
+	grid.cell_double.push_back({"reference_radius_m", std::move(reference_radius)});
 	return grid;
 }
 
@@ -196,54 +188,34 @@ inline void WriteOneDVtp(const std::filesystem::path& path,
 	std::ofstream output(path);
 	if (!output) throw std::runtime_error("cannot create 1d VTP output: " + path.string());
 	output << std::setprecision(17);
-	const auto points = OneDCellCenters(network);
-	std::vector<std::vector<int>> node_cells(network.nodes.size());
-	for (const auto& segment : network.segments) {
-		node_cells[static_cast<std::size_t>(segment.parent)].push_back(segment.cell_offset);
-		node_cells[static_cast<std::size_t>(segment.child)].push_back(
-			segment.cell_offset+segment.cells-1);
-	}
-	int lines = 0;
-	for (const auto& segment : network.segments) if (segment.cells > 1) ++lines;
-	for (const auto& cells : node_cells)
-		if (cells.size() > 1) lines += static_cast<int>(cells.size())-1;
+	const auto grid = OneDVtkHdfGrid(network);
+	const auto& points = grid.points;
+	const auto lines = grid.types.size();
 	output << "<?xml version=\"1.0\"?>\n"
 		<< "<VTKFile type=\"PolyData\" version=\"0.1\" byte_order=\"LittleEndian\">\n"
 		<< "  <PolyData>\n"
 		<< "    <Piece NumberOfPoints=\"" << points.size() << "\" NumberOfVerts=\"0\" NumberOfLines=\""
 		<< lines << "\" NumberOfStrips=\"0\" NumberOfPolys=\"0\">\n"
-		<< "      <PointData>\n";
+		<< "      <PointData/>\n      <CellData>\n";
 	for (const auto& array : OneDVisualizationArrays(flow, transports, derived)) {
-		if (array.components != 1 || array.values.size() != points.size())
+		if (array.components != 1 || array.values.size() != lines)
 			throw std::runtime_error("1d VTP field size mismatch");
 		output << "        <DataArray type=\"Float64\" Name=\"" << OneDEscapeXml(array.name)
 			<< "\" format=\"ascii\">\n          ";
 		for (const double value : array.values) output << value << ' ';
 		output << "\n        </DataArray>\n";
 	}
-	output << "      </PointData>\n"
+	output << "      </CellData>\n"
 		<< "      <Points><DataArray type=\"Float64\" NumberOfComponents=\"3\" format=\"ascii\">\n        ";
 	for (const auto& point : points) output << point[0] << ' ' << point[1] << ' ' << point[2] << ' ';
 	output << "\n      </DataArray></Points>\n"
 		<< "      <Lines>\n"
-		<< "        <DataArray type=\"Int32\" Name=\"connectivity\" format=\"ascii\">\n          ";
-	for (const auto& segment : network.segments) if (segment.cells > 1)
-		for (int cell = 0; cell < segment.cells; ++cell) output << segment.cell_offset+cell << ' ';
-	for (const auto& cells : node_cells)
-		for (std::size_t i = 1; i < cells.size(); ++i)
-			output << cells.front() << ' ' << cells[i] << ' ';
+		<< "        <DataArray type=\"Int64\" Name=\"connectivity\" format=\"ascii\">\n          ";
+	for (const auto point : grid.connectivity) output << point << ' ';
 	output << "\n        </DataArray>\n"
-		<< "        <DataArray type=\"Int32\" Name=\"offsets\" format=\"ascii\">\n          ";
-	int offset = 0;
-	for (const auto& segment : network.segments) if (segment.cells > 1) {
-		offset += segment.cells;
-		output << offset << ' ';
-	}
-	for (const auto& cells : node_cells)
-		for (std::size_t i = 1; i < cells.size(); ++i) {
-			offset += 2;
-			output << offset << ' ';
-		}
+		<< "        <DataArray type=\"Int64\" Name=\"offsets\" format=\"ascii\">\n          ";
+	for (std::size_t cell = 1; cell < grid.offsets.size(); ++cell)
+		output << grid.offsets[cell] << ' ';
 	output << "\n        </DataArray>\n"
 		<< "      </Lines>\n"
 		<< "    </Piece>\n  </PolyData>\n</VTKFile>\n";
@@ -286,7 +258,8 @@ public:
 		if (visualization_format_ == OneDVisualizationFormat::VtkHdf)
 			vtkhdf_ = std::make_unique<TemporalVtkHdfPointWriter>(
 				directory_/("profile_"+dimension+".vtkhdf"),
-				OneDVtkHdfGrid(network_), resume_visualization);
+				OneDVtkHdfGrid(network_), resume_visualization, 4,
+				VtkHdfAssociation::Cells);
 		flow_.open(directory_/"flow_timeseries.csv");
 		outlet_.open(directory_/"outlet_timeseries.csv");
 		node_.open(directory_/"node_timeseries.csv");

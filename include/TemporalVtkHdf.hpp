@@ -336,6 +336,8 @@ struct VtkHdfUnstructuredGrid {
 	std::vector<std::uint8_t> types;
 	std::vector<std::pair<std::string, std::vector<std::int32_t>>> point_int32;
 	std::vector<std::pair<std::string, std::vector<double>>> point_double;
+	std::vector<std::pair<std::string, std::vector<std::int32_t>>> cell_int32;
+	std::vector<std::pair<std::string, std::vector<double>>> cell_double;
 };
 
 namespace hdf_detail {
@@ -355,19 +357,22 @@ inline void ValidateUnstructuredGrid(const VtkHdfUnstructuredGrid& mesh)
 		if (point < 0 || point >= static_cast<std::int64_t>(mesh.points.size()))
 			throw std::runtime_error("VTKHDF unstructured grid connectivity is out of range");
 	std::set<std::string> names;
-	auto validate = [&](const auto& arrays) {
+	auto validate = [&](const auto& arrays, std::size_t size) {
 		for (const auto& array : arrays) {
 			if (array.first.empty() || array.first.find('/') != std::string::npos
 				|| !names.insert(array.first).second)
 				throw std::runtime_error("invalid or duplicate VTKHDF static point-array name: "
 					+array.first);
-			if (array.second.size() != mesh.points.size())
+			if (array.second.size() != size)
 				throw std::runtime_error("VTKHDF static point-array size mismatch for '"
 					+array.first+"'");
 		}
 	};
-	validate(mesh.point_int32);
-	validate(mesh.point_double);
+	validate(mesh.point_int32, mesh.points.size());
+	validate(mesh.point_double, mesh.points.size());
+	names.clear();
+	validate(mesh.cell_int32, mesh.types.size());
+	validate(mesh.cell_double, mesh.types.size());
 }
 
 inline std::uint64_t GeometryHash(const VtkHdfUnstructuredGrid& mesh)
@@ -388,16 +393,28 @@ inline std::uint64_t GeometryHash(const VtkHdfUnstructuredGrid& mesh)
 		hash = HashBytes(hash, array.first.data(), array.first.size());
 		hash = HashBytes(hash, array.second.data(), array.second.size()*sizeof(double));
 	}
+	for (const auto& array : mesh.cell_int32) {
+		hash = HashBytes(hash, array.first.data(), array.first.size());
+		hash = HashBytes(hash, array.second.data(), array.second.size()*sizeof(std::int32_t));
+	}
+	for (const auto& array : mesh.cell_double) {
+		hash = HashBytes(hash, array.first.data(), array.first.size());
+		hash = HashBytes(hash, array.second.data(), array.second.size()*sizeof(double));
+	}
 	return hash;
 }
 
 } // namespace hdf_detail
 
+enum class VtkHdfAssociation { Points, Cells };
+
+// The default point association preserves existing callers and files.
 class TemporalVtkHdfPointWriter {
 public:
 	TemporalVtkHdfPointWriter(const std::filesystem::path& path,
-		VtkHdfUnstructuredGrid mesh, bool resume = false, int compression = 4)
-		: path_(path), mesh_(std::move(mesh)), compression_(compression)
+		VtkHdfUnstructuredGrid mesh, bool resume = false, int compression = 4,
+		VtkHdfAssociation association = VtkHdfAssociation::Points)
+		: path_(path), mesh_(std::move(mesh)), compression_(compression), association_(association)
 	{
 		hdf_detail::ValidateUnstructuredGrid(mesh_);
 		if (compression_ < 0 || compression_ > 9)
@@ -424,7 +441,7 @@ public:
 			throw std::runtime_error("VTKHDF physical time is not finite");
 		for (const auto& array : arrays)
 			if (array.components < 1 || array.values.size()
-				!= mesh_.points.size()*static_cast<std::size_t>(array.components))
+				!= TupleCount()*static_cast<std::size_t>(array.components))
 				throw std::runtime_error("VTKHDF point-array size mismatch for '"
 					+array.name+"'");
 		EnsureArraySchema(arrays);
@@ -442,13 +459,13 @@ public:
 			replace = std::abs(physical_time-last) <= tolerance;
 		}
 		const auto step = replace ? step_count-1 : step_count;
-		auto point_data = hdf_detail::OpenGroup(root_.get(), "PointData");
+		auto point_data = hdf_detail::OpenGroup(root_.get(), DataGroup());
 		for (const auto& array : arrays) {
 			auto dataset = hdf_detail::RequireHandle(H5Dopen2(point_data.get(),
 				array.name.c_str(), H5P_DEFAULT), H5Dclose,
 				"cannot open VTKHDF point array "+array.name);
 			hdf_detail::WriteRows(dataset.get(),
-				static_cast<hsize_t>(step*mesh_.points.size()), mesh_.points.size(),
+				static_cast<hsize_t>(step*TupleCount()), TupleCount(),
 				array.components, array.values.data());
 		}
 		if (!replace) {
@@ -476,6 +493,31 @@ public:
 	const std::filesystem::path& path() const { return path_; }
 
 private:
+	std::size_t TupleCount() const
+	{
+		return association_ == VtkHdfAssociation::Cells ? mesh_.types.size() : mesh_.points.size();
+	}
+	const char* DataGroup() const
+	{
+		return association_ == VtkHdfAssociation::Cells ? "CellData" : "PointData";
+	}
+	const char* OffsetGroup() const
+	{
+		return association_ == VtkHdfAssociation::Cells ? "CellDataOffsets" : "PointDataOffsets";
+	}
+	const char* SchemaName() const
+	{
+		return association_ == VtkHdfAssociation::Cells ? "CellArraySchema" : "PointArraySchema";
+	}
+	template <typename Function>
+	void ForEachStaticArray(const Function& function) const
+	{
+		for (const auto& array : mesh_.point_int32) function("PointDataOffsets", array.first);
+		for (const auto& array : mesh_.point_double) function("PointDataOffsets", array.first);
+		for (const auto& array : mesh_.cell_int32) function("CellDataOffsets", array.first);
+		for (const auto& array : mesh_.cell_double) function("CellDataOffsets", array.first);
+	}
+
 	void CreateFile()
 	{
 		root_ = hdf_detail::CreateGroup(file_.get(), "VTKHDF");
@@ -512,7 +554,13 @@ private:
 		for (const auto& array : mesh_.point_double)
 			hdf_detail::WriteFixedDataset(point_data.get(), array.first,
 				array.second.data(), {array.second.size()}, compression_);
-		hdf_detail::CreateGroup(root_.get(), "CellData");
+		auto cell_data = hdf_detail::CreateGroup(root_.get(), "CellData");
+		for (const auto& array : mesh_.cell_int32)
+			hdf_detail::WriteFixedDataset(cell_data.get(), array.first,
+				array.second.data(), {array.second.size()}, compression_);
+		for (const auto& array : mesh_.cell_double)
+			hdf_detail::WriteFixedDataset(cell_data.get(), array.first,
+				array.second.data(), {array.second.size()}, compression_);
 		auto steps = hdf_detail::CreateGroup(root_.get(), "Steps");
 		hdf_detail::WriteScalarAttribute<std::int64_t>(steps.get(), "NSteps", 0);
 		hdf_detail::CreateExpandableDataset<double>(steps.get(), "Values", 1, 0);
@@ -524,7 +572,13 @@ private:
 		hdf_detail::CreateExpandableDataset<std::int64_t>(steps.get(),
 			"ConnectivityIdOffsets", 1, 0, true);
 		hdf_detail::CreateGroup(steps.get(), "PointDataOffsets");
+		hdf_detail::CreateGroup(steps.get(), "CellDataOffsets");
+		ForEachStaticArray([&](const char* group, const std::string& name) {
+			auto offsets = hdf_detail::OpenGroup(steps.get(), group);
+			hdf_detail::CreateExpandableDataset<std::int64_t>(offsets.get(), name, 1, 0);
+		});
 		auto metadata = hdf_detail::CreateGroup(file_.get(), "TubularFlowIGA");
+		hdf_detail::WriteStringAttribute(metadata.get(), "DataAssociation", DataGroup());
 		hdf_detail::WriteScalarAttribute<std::uint64_t>(metadata.get(), "GeometryHash",
 			hdf_detail::GeometryHash(mesh_));
 		hdf_detail::WriteScalarAttribute<std::uint64_t>(metadata.get(), "UniquePoints",
@@ -539,6 +593,10 @@ private:
 		if (hdf_detail::ReadStringAttribute(root_.get(), "Type") != "UnstructuredGrid")
 			throw std::runtime_error("existing VTKHDF output is not an UnstructuredGrid");
 		auto metadata = hdf_detail::OpenGroup(file_.get(), "TubularFlowIGA");
+		const auto association = H5Aexists(metadata.get(), "DataAssociation") > 0
+			? hdf_detail::ReadStringAttribute(metadata.get(), "DataAssociation") : "PointData";
+		if (association != DataGroup())
+			throw std::runtime_error("existing VTKHDF data association does not match; use a new output file");
 		if (hdf_detail::ReadScalarAttribute<std::uint64_t>(metadata.get(), "GeometryHash")
 			!= hdf_detail::GeometryHash(mesh_))
 			throw std::runtime_error("existing VTKHDF geometry does not match the current mesh");
@@ -550,6 +608,13 @@ private:
 		auto steps = hdf_detail::OpenGroup(root_.get(), "Steps");
 		const auto count = static_cast<hsize_t>(
 			hdf_detail::ReadScalarAttribute<std::int64_t>(steps.get(), "NSteps"));
+		ForEachStaticArray([&](const char* group, const std::string& name) {
+			const auto path = std::string(group)+"/"+name;
+			if (H5Lexists(steps.get(), path.c_str(), H5P_DEFAULT) <= 0) return;
+			auto dataset = hdf_detail::RequireHandle(H5Dopen2(steps.get(), path.c_str(),
+				H5P_DEFAULT), H5Dclose, "cannot open static VTKHDF offsets");
+			hdf_detail::ResizeRows(dataset.get(), count);
+		});
 		for (const auto* name : {"Values", "PartOffsets", "NumberOfParts", "PointOffsets",
 			"CellOffsets", "ConnectivityIdOffsets"}) {
 			auto dataset = hdf_detail::RequireHandle(H5Dopen2(steps.get(), name, H5P_DEFAULT),
@@ -557,19 +622,19 @@ private:
 			hdf_detail::ResizeRows(dataset.get(), count);
 		}
 		auto metadata = hdf_detail::OpenGroup(file_.get(), "TubularFlowIGA");
-		if (H5Aexists(metadata.get(), "PointArraySchema") <= 0) return;
-		const auto schema = hdf_detail::ReadStringAttribute(metadata.get(), "PointArraySchema");
+		if (H5Aexists(metadata.get(), SchemaName()) <= 0) return;
+		const auto schema = hdf_detail::ReadStringAttribute(metadata.get(), SchemaName());
 		std::istringstream input(schema);
 		std::string line;
-		auto point_data = hdf_detail::OpenGroup(root_.get(), "PointData");
-		auto offsets = hdf_detail::OpenGroup(steps.get(), "PointDataOffsets");
+		auto point_data = hdf_detail::OpenGroup(root_.get(), DataGroup());
+		auto offsets = hdf_detail::OpenGroup(steps.get(), OffsetGroup());
 		while (std::getline(input, line)) {
 			const auto separator = line.find('\t');
 			if (separator == std::string::npos) continue;
 			const auto name = line.substr(0, separator);
 			auto values = hdf_detail::RequireHandle(H5Dopen2(point_data.get(), name.c_str(),
 				H5P_DEFAULT), H5Dclose, "cannot open VTKHDF point array "+name);
-			hdf_detail::ResizeRows(values.get(), count*mesh_.points.size());
+			hdf_detail::ResizeRows(values.get(), count*TupleCount());
 			auto positions = hdf_detail::RequireHandle(H5Dopen2(offsets.get(), name.c_str(),
 				H5P_DEFAULT), H5Dclose, "cannot open VTKHDF point offset "+name);
 			hdf_detail::ResizeRows(positions.get(), count);
@@ -580,22 +645,24 @@ private:
 	{
 		const auto schema = hdf_detail::ArraySchema(arrays);
 		auto metadata = hdf_detail::OpenGroup(file_.get(), "TubularFlowIGA");
-		if (H5Aexists(metadata.get(), "PointArraySchema") > 0) {
-			if (hdf_detail::ReadStringAttribute(metadata.get(), "PointArraySchema") != schema)
+		if (H5Aexists(metadata.get(), SchemaName()) > 0) {
+			if (hdf_detail::ReadStringAttribute(metadata.get(), SchemaName()) != schema)
 				throw std::runtime_error("VTKHDF point-array schema changed while appending");
 			return;
 		}
 		std::set<std::string> static_names;
-		for (const auto& array : mesh_.point_int32) static_names.insert(array.first);
-		for (const auto& array : mesh_.point_double) static_names.insert(array.first);
+		const auto& integers = association_ == VtkHdfAssociation::Cells ? mesh_.cell_int32 : mesh_.point_int32;
+		const auto& doubles = association_ == VtkHdfAssociation::Cells ? mesh_.cell_double : mesh_.point_double;
+		for (const auto& array : integers) static_names.insert(array.first);
+		for (const auto& array : doubles) static_names.insert(array.first);
 		for (const auto& array : arrays)
 			if (static_names.count(array.name))
 				throw std::runtime_error("VTKHDF transient point array conflicts with static array '"
 					+array.name+"'");
-		hdf_detail::WriteStringAttribute(metadata.get(), "PointArraySchema", schema);
-		auto point_data = hdf_detail::OpenGroup(root_.get(), "PointData");
+		hdf_detail::WriteStringAttribute(metadata.get(), SchemaName(), schema);
+		auto point_data = hdf_detail::OpenGroup(root_.get(), DataGroup());
 		auto steps = hdf_detail::OpenGroup(root_.get(), "Steps");
-		auto offsets = hdf_detail::OpenGroup(steps.get(), "PointDataOffsets");
+		auto offsets = hdf_detail::OpenGroup(steps.get(), OffsetGroup());
 		for (const auto& array : arrays) {
 			auto dataset = hdf_detail::CreateExpandableDataset<double>(point_data.get(),
 				array.name, array.components, compression_);
@@ -611,6 +678,14 @@ private:
 	{
 		const std::int64_t zero = 0;
 		const std::int64_t one = 1;
+		ForEachStaticArray([&](const char* group, const std::string& name) {
+			const auto path = std::string(group)+"/"+name;
+			// Older point-data files have no explicit static offsets.
+			if (H5Lexists(steps, path.c_str(), H5P_DEFAULT) <= 0) return;
+			auto dataset = hdf_detail::RequireHandle(H5Dopen2(steps, path.c_str(),
+				H5P_DEFAULT), H5Dclose, "cannot open static VTKHDF offsets");
+			hdf_detail::WriteRows(dataset.get(), step, 1, 1, &zero);
+		});
 		for (const auto* name : {"PartOffsets", "PointOffsets", "CellOffsets",
 			"ConnectivityIdOffsets"}) {
 			auto dataset = hdf_detail::RequireHandle(H5Dopen2(steps, name, H5P_DEFAULT),
@@ -621,8 +696,8 @@ private:
 			"NumberOfParts", H5P_DEFAULT), H5Dclose,
 			"cannot open VTKHDF NumberOfParts");
 		hdf_detail::WriteRows(number_of_parts.get(), step, 1, 1, &one);
-		auto offsets = hdf_detail::OpenGroup(steps, "PointDataOffsets");
-		const auto point_offset = static_cast<std::int64_t>(step*mesh_.points.size());
+		auto offsets = hdf_detail::OpenGroup(steps, OffsetGroup());
+		const auto point_offset = static_cast<std::int64_t>(step*TupleCount());
 		for (const auto& array : arrays) {
 			auto dataset = hdf_detail::RequireHandle(H5Dopen2(offsets.get(),
 				array.name.c_str(), H5P_DEFAULT), H5Dclose,
@@ -634,6 +709,7 @@ private:
 	std::filesystem::path path_;
 	VtkHdfUnstructuredGrid mesh_;
 	int compression_ = 4;
+	VtkHdfAssociation association_ = VtkHdfAssociation::Points;
 	hdf_detail::Handle file_;
 	hdf_detail::Handle root_;
 };
