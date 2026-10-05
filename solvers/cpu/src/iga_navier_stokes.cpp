@@ -57,6 +57,7 @@ struct FlowOptions {
 	int checkpoint_every = 0;
 	int diagnostic_every = 1;
 	int stop_after_step = 0;
+	int jacobian_reuse_steps = 0;
 	bool parallel_output = false;
 	iga::VisualizationFormat visualization_format = iga::VisualizationFormat::Automatic;
 	double nonlinear_relative_tolerance = 1e-5;
@@ -185,6 +186,7 @@ FlowOptions ParseOptions(int argc, char** argv)
 		"[--checkpoint PREFIX] [--checkpoint-every N] [--restart PREFIX] "
 		"[--diagnostic-every N] "
 		"[--stop-after-step N] [--nonlinear-rtol R] [--nonlinear-atol A] [--mass-rtol R] "
+		"[--jacobian-reuse-steps N] "
 		"[--memory-report PATH] [--visualization-format auto|vtu|vtkhdf|pvtu]");
 	FlowOptions options;
 	options.database = argv[1];
@@ -222,6 +224,8 @@ FlowOptions ParseOptions(int argc, char** argv)
 		else if (argument == "--diagnostic-every") options.diagnostic_every = ParsePositiveInteger(value, argument);
 		else if (argument == "--restart") options.restart = value;
 		else if (argument == "--stop-after-step") options.stop_after_step = ParsePositiveInteger(value, argument);
+		else if (argument == "--jacobian-reuse-steps")
+			options.jacobian_reuse_steps = ParsePositiveInteger(value, argument);
 		else if (argument == "--nonlinear-rtol")
 			options.nonlinear_relative_tolerance = ParsePositiveFiniteDouble(value, argument);
 		else if (argument == "--nonlinear-atol")
@@ -386,7 +390,8 @@ int main(int argc, char** argv)
 				<< static_cast<int>(options.visualization_format) << ' ' << options.parallel_output << ' '
 				<< options.nonlinear_relative_tolerance << ' ' << options.nonlinear_absolute_tolerance << ' '
 				<< options.mass_relative_tolerance << ' ' << !options.output.empty() << ' '
-				<< !options.checkpoint.empty() << ' ' << !options.restart.empty() << ' ' << !options.memory_report.empty();
+				<< !options.checkpoint.empty() << ' ' << !options.restart.empty() << ' ' << !options.memory_report.empty()
+				<< ' ' << options.jacobian_reuse_steps;
 			controls = text.str();
 		});
 		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "flow execution controls", controls);
@@ -536,6 +541,7 @@ int main(int argc, char** argv)
 		iga::TransientFlowRuntime flow(database, PETSC_COMM_WORLD, configured, transient,
 			parameters, boundaries, labels, boundary_velocity, wall_trace_basis,
 			std::move(outlet_models), {}, {}, 0.0, flow_solver_prefix);
+		if (options.jacobian_reuse_steps > 0) flow.SetJacobianReuse(options.jacobian_reuse_steps);
 		iga::RequireValidGeometry(flow.Elements(), rank, PETSC_COMM_WORLD);
 		geometry_phase.Stop();
 		if (vca_circuit) {

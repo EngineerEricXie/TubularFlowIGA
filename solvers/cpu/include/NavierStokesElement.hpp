@@ -342,11 +342,24 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const std::vector<std::array<double, 4>>& previous_nodal_state,
 	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature,
-	const NavierStokesBodyForceEvaluator& body_force)
+	const NavierStokesBodyForceEvaluator& body_force,
+	NavierStokesAssemblyRequest request = NavierStokesAssemblyRequest::ResidualAndJacobian)
 {
 	ValidateVolumeQuadratureRule(element, quadrature);
 	return BuildNavierStokesElementFromPoints(element, nodal_state, previous_nodal_state, parameters,
-		[&quadrature](const auto& consume) { for (const auto& point : quadrature.Points()) consume(point); }, body_force);
+		[&quadrature](const auto& consume) { for (const auto& point : quadrature.Points()) consume(point); }, body_force,
+		NavierStokesResolvedMixedForm::LegacyBodyFitted, request);
+}
+
+// Zero body force with an explicit assembly request (residual-only checks).
+inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
+	const std::vector<std::array<double, 4>>& nodal_state,
+	const std::vector<std::array<double, 4>>& previous_nodal_state,
+	const NavierStokesParameters& parameters, const VolumeQuadratureRule& quadrature,
+	NavierStokesAssemblyRequest request)
+{
+	return BuildNavierStokesElement(element, nodal_state, previous_nodal_state, parameters, quadrature,
+		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; }, request);
 }
 
 // Low-level callers that already own element-local data retain this explicit

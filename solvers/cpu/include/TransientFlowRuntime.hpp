@@ -276,6 +276,7 @@ private:
 		cleanup_result_.Observe("flow update", VecDestroy(&update_));
 		cleanup_result_.Observe("flow previous", VecDestroy(&previous_));
 		cleanup_result_.Observe("flow committed_state", VecDestroy(&committed_state_));
+		cleanup_result_.Observe("flow reuse backup", VecDestroy(&reuse_backup_));
 		cleanup_result_.Observe("flow state", VecDestroy(&state_));
 		cleanup_result_.Observe("flow jacobian", MatDestroy(&jacobian_));
 		return cleanup_result_;
@@ -516,6 +517,7 @@ public:
 	{
 		if (phase_ != FlowStepPhase::CommitPrepared) std::terminate();
 		accepted_steps_ = trial_step_+1; accepted_time_s_ = trial_time_;
+		if (jacobian_reusable_ && jacobian_age_ < std::numeric_limits<int>::max()) ++jacobian_age_;
 		total_linear_iterations_ += trial_linear_iterations_;
 		trial_linear_iterations_ = 0;
 		trial_solve_succeeded_ = false;
@@ -960,6 +962,7 @@ public:
 			signature = ValidateCheckpointState(value);
 			boundaries = value.boundaries; tractions = value.pressure_tractions; outlets = value.outlets;
 		});
+		jacobian_reusable_ = false;
 		RequireCollectiveSameText(communicator_, "flow checkpoint replicated state agreement", signature);
 		CollectiveLocalStage(communicator_, "flow accepted checkpoint staging", [&] { StageOwnedCheckpointVector(update_, value.field); });
 		RequireCollectivePetscSuccess(communicator_, "flow accepted checkpoint history", VecCopy(update_, rhs_));
@@ -975,6 +978,29 @@ public:
 	double AcceptedTime() const noexcept { return accepted_time_s_; }
 	Vec State() const { return state_; }
 	const ElementBatchStatistics& LastVolumeBatchStatistics() const noexcept { return last_volume_batch_; }
+
+	// Opt-in modified Newton for transient runs: a factorized Jacobian may be
+	// reused for up to maximum_age_steps accepted steps while each reused
+	// iterate at least halves the residual. Convergence is still tested on the
+	// exact residual, so accepted states satisfy the same tolerances. Zero
+	// restores exact Newton.
+	void SetJacobianReuse(int maximum_age_steps)
+	{
+		CollectiveLocalStage(communicator_, "flow Jacobian reuse controls", [&] {
+			RequirePhase(FlowStepPhase::Committed, "SetJacobianReuse");
+			if (maximum_age_steps < 0) throw std::invalid_argument("Jacobian reuse age must be nonnegative");
+			if (maximum_age_steps > 0 && !transient_)
+				throw std::invalid_argument("Jacobian reuse applies only to transient flow");
+		});
+		RequireCollectiveSameInt(communicator_, "flow Jacobian reuse agreement", maximum_age_steps);
+		if (maximum_age_steps > 0 && !reuse_backup_)
+			RequireCollectivePetscSuccess(communicator_, "flow reuse backup creation",
+				VecDuplicate(state_, &reuse_backup_));
+		jacobian_reuse_steps_ = maximum_age_steps;
+		jacobian_reusable_ = false;
+		jacobian_age_ = 0;
+	}
+
 #ifdef IGA_FLOW_RUNTIME_TESTING
 	void SetVolumeProbeForTesting(std::function<void(std::size_t)> probe) { volume_probe_for_testing_=std::move(probe); }
 	std::vector<std::array<double, 3>>& ReferenceVelocityForTesting() { return boundary_velocity_; }
@@ -1063,6 +1089,8 @@ private:
 		trial_solve_succeeded_ = false;
 		has_trial_configuration_ = false;
 		trial_pressure_overrides_.clear();
+		// A rolled-back or failed trial may leave the KSP mid-setup.
+		jacobian_reusable_ = false;
 	}
 
 	void RequirePhase(FlowStepPhase required, const char* operation) const
@@ -1317,127 +1345,161 @@ private:
 				"configured 3D flow boundary constraint topology changed; PETSc boundary rows are fixed");
 	}
 
+	// Assembles the Newton residual (right-hand side with Dirichlet updates)
+	// and, when requested, the Jacobian with Dirichlet rows. ResidualOnly
+	// evaluates the identical residual without the tangent, so convergence
+	// checks and modified-Newton iterates skip the dominant assembly cost.
+	IGA_FLOW_NOINLINE FlowConvergenceMetrics AssembleNonlinearSystem(bool with_jacobian)
+	{
+		FlowConvergenceMetrics convergence;
+		// All ranks set this flag before entering the local assembly stage,
+		// and clear it only after collectively completing both objects.
+		// A coordinated worker/insertion failure therefore leaves every
+		// rank on the same recovery branch, including empty ranks.
+		if(assembly_pending_) {
+			// FLUSH clears insertion mode without compressing preallocated
+			// entries that a first, failed assembly has not filled yet.
+			// Only a failed Jacobian assembly leaves the matrix in insertion
+			// mode; a reused, finally assembled Jacobian must not be flushed.
+			if(jacobian_assembly_pending_) {
+				RequireCollectivePetscSuccess(communicator_, "flow recovery flush begin",
+					MatAssemblyBegin(jacobian_, MAT_FLUSH_ASSEMBLY));
+				RequireCollectivePetscSuccess(communicator_, "flow recovery flush end",
+					MatAssemblyEnd(jacobian_, MAT_FLUSH_ASSEMBLY));
+			}
+			OwnedRowAssembler::Assemble(rhs_, communicator_);
+		}
+		assembly_pending_=true;
+		jacobian_assembly_pending_=with_jacobian;
+		if (with_jacobian) {
+			// Any failure from here on leaves no factorized Jacobian to reuse.
+			jacobian_reusable_=false;
+			RequireCollectivePetscSuccess(communicator_, "flow clear Jacobian", MatZeroEntries(jacobian_));
+		}
+		RequireCollectivePetscSuccess(communicator_, "flow clear residual", VecSet(rhs_, 0.0));
+		ScatterState();
+		if (transient_) {
+			PhaseScope communication_phase(ProfilePhase::Communication);
+			RequireCollectivePetscSuccess(communicator_, "flow history scatter begin", VecScatterBegin(scatter_, previous_, ghost_previous_, INSERT_VALUES, SCATTER_FORWARD));
+			RequireCollectivePetscSuccess(communicator_, "flow history scatter end", VecScatterEnd(scatter_, previous_, ghost_previous_, INSERT_VALUES, SCATTER_FORWARD));
+		}
+		PetscReadArray current_view, previous_view;
+		CollectiveLocalStage(communicator_, "flow element assembly", [&] {
+			current_view.Acquire(ghost_state_);
+			const auto* values = current_view.Data();
+			if (transient_) previous_view.Acquire(ghost_previous_);
+			const auto* previous_values = previous_view.Data();
+			struct PreparedVolume {
+				const Element* element;
+				std::vector<std::array<double,4>> nodal, previous_nodal;
+			};
+			const auto batch=ForEachElementBatch(assembler_.elements().size(),assembly_execution_->Options(),
+				[&](std::size_t index) {
+				const auto& element=assembler_.elements()[index];
+				std::vector<std::array<double, 4>> nodal(element.connectivity.size());
+				std::vector<std::array<double, 4>> previous_nodal;
+				if (transient_) previous_nodal.resize(element.connectivity.size());
+				for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
+					const auto position = ghost_position_.at(element.connectivity[a]);
+					for (int field = 0; field < 4; ++field) {
+						nodal[a][field] = PetscRealPart(values[4*position+field]);
+						if (transient_)
+							previous_nodal[a][field] = PetscRealPart(previous_values[4*position+field]);
+					}
+				}
+				return PreparedVolume{&element,std::move(nodal),std::move(previous_nodal)};
+				},
+				[this,with_jacobian](const PreparedVolume& input,std::size_t index) {
+				FullCell4x4x4VolumeQuadratureProvider volume_quadrature(*input.element);
+				auto local=BuildNavierStokesElement(*input.element,input.nodal,input.previous_nodal,
+					parameters_,volume_quadrature.Rule(),with_jacobian
+						? NavierStokesAssemblyRequest::ResidualAndJacobian
+						: NavierStokesAssemblyRequest::ResidualOnly);
+#ifdef IGA_FLOW_RUNTIME_TESTING
+				if(volume_probe_for_testing_) volume_probe_for_testing_(index);
+#else
+				(void)index;
+#endif
+				return local;
+				},
+				[&](const PreparedVolume& input,NavierStokesSystem& local,std::size_t) {
+				const auto& element=*input.element;
+				BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
+				for (const auto& traction : pressure_tractions_) {
+					const auto surface = IntegrateBoundaryPressureTraction(element,
+						surface_quadrature.Rule(), traction.first, traction.second);
+					for (std::size_t row = 0; row < surface.size(); ++row)
+						local.negative_residual[row] += surface[row];
+				}
+				if (with_jacobian) assembler_.AddElementMatrix(jacobian_, element, local.jacobian);
+				assembler_.AddElementVector(rhs_, element, local.negative_residual);
+				});
+			last_volume_batch_=batch;
+			if(CurrentPhaseProfile().Enabled()) {
+				std::cout << "body_fitted_element_assembly rank=" << rank_
+					<< " threads_requested=" << assembly_execution_->Options().threads
+					<< " team_size=" << batch.maximum_team_size << " elements=" << batch.items
+					<< " batches=" << batch.batches << " maximum_resident_items=" << batch.maximum_resident_items << '\n';
+				iga::FlushCheckedText(std::cout);
+			}
+			previous_view.Restore();
+		});
+		{
+			PhaseScope communication_phase(ProfilePhase::Communication);
+			if (with_jacobian) OwnedRowAssembler::Assemble(jacobian_, communicator_);
+			OwnedRowAssembler::Assemble(rhs_, communicator_);
+		}
+		assembly_pending_=false;
+		jacobian_assembly_pending_=false;
+		PhaseScope diagnostics_phase(ProfilePhase::Diagnostics);
+		convergence = MeasureConvergence(current_view.Data());
+		diagnostics_phase.Stop();
+		std::vector<PetscScalar> boundary_update;
+		CollectiveLocalStage(communicator_, "flow boundary values", [&] {
+			current_view.Restore();
+			PetscReadArray owned_view;
+			owned_view.Acquire(state_);
+			const auto* owned = owned_view.Data();
+			boundary_update.reserve(boundary_rows_.size());
+			for (const auto row : boundary_rows_) {
+				const auto local = static_cast<std::size_t>(row-4*assembler_.node_begin());
+				boundary_update.push_back(BoundaryValue(row)-PetscRealPart(owned[local]));
+			}
+			owned_view.Restore();
+		});
+		if (with_jacobian)
+			RequireCollectivePetscSuccess(communicator_, "flow boundary rows",
+				MatZeroRows(jacobian_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
+					1.0, nullptr, nullptr));
+		CollectiveLocalStage(communicator_, "flow boundary insertion", [&] {
+			if (VecSetValues(rhs_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
+				boundary_update.data(), INSERT_VALUES))
+				throw std::runtime_error("flow boundary VecSetValues failed");
+		});
+		OwnedRowAssembler::Assemble(rhs_, communicator_);
+		return convergence;
+	}
+
 	IGA_FLOW_NOINLINE bool SolveNonlinearStep(int step, double physical_time, int maximum_newton,
 		double nonlinear_relative_tolerance, double nonlinear_absolute_tolerance,
 		double mass_relative_tolerance)
 	{
 		RequireCollectiveSameInt(communicator_, "flow transient mode agreement", transient_ ? 1 : 0);
-		PetscReal initial_residual = -1.0;
+		PetscReal initial_residual = -1.0, previous_residual = -1.0;
+		bool previous_iterate_reused = false, refresh_jacobian = false;
 		for (int nonlinear = 0; nonlinear < maximum_newton; ++nonlinear) {
 			PhaseScope assembly_phase(ProfilePhase::Assembly);
 			const auto iteration_start = std::chrono::steady_clock::now();
-			// All ranks set this flag before entering the local assembly stage,
-			// and clear it only after collectively completing both objects.
-			// A coordinated worker/insertion failure therefore leaves every
-			// rank on the same recovery branch, including empty ranks.
-			if(assembly_pending_) {
-				// FLUSH clears insertion mode without compressing preallocated
-				// entries that a first, failed assembly has not filled yet.
-				RequireCollectivePetscSuccess(communicator_, "flow recovery flush begin",
-					MatAssemblyBegin(jacobian_, MAT_FLUSH_ASSEMBLY));
-				RequireCollectivePetscSuccess(communicator_, "flow recovery flush end",
-					MatAssemblyEnd(jacobian_, MAT_FLUSH_ASSEMBLY));
-				OwnedRowAssembler::Assemble(rhs_, communicator_);
-			}
-			assembly_pending_=true;
-			RequireCollectivePetscSuccess(communicator_, "flow clear Jacobian", MatZeroEntries(jacobian_));
-			RequireCollectivePetscSuccess(communicator_, "flow clear residual", VecSet(rhs_, 0.0));
-			ScatterState();
-			if (transient_) {
-				PhaseScope communication_phase(ProfilePhase::Communication);
-				RequireCollectivePetscSuccess(communicator_, "flow history scatter begin", VecScatterBegin(scatter_, previous_, ghost_previous_, INSERT_VALUES, SCATTER_FORWARD));
-				RequireCollectivePetscSuccess(communicator_, "flow history scatter end", VecScatterEnd(scatter_, previous_, ghost_previous_, INSERT_VALUES, SCATTER_FORWARD));
-			}
-			PetscReadArray current_view, previous_view;
-			CollectiveLocalStage(communicator_, "flow element assembly", [&] {
-				current_view.Acquire(ghost_state_);
-				const auto* values = current_view.Data();
-				if (transient_) previous_view.Acquire(ghost_previous_);
-				const auto* previous_values = previous_view.Data();
-				struct PreparedVolume {
-					const Element* element;
-					std::vector<std::array<double,4>> nodal, previous_nodal;
-				};
-				const auto batch=ForEachElementBatch(assembler_.elements().size(),assembly_execution_->Options(),
-					[&](std::size_t index) {
-					const auto& element=assembler_.elements()[index];
-					std::vector<std::array<double, 4>> nodal(element.connectivity.size());
-					std::vector<std::array<double, 4>> previous_nodal;
-					if (transient_) previous_nodal.resize(element.connectivity.size());
-					for (std::size_t a = 0; a < element.connectivity.size(); ++a) {
-						const auto position = ghost_position_.at(element.connectivity[a]);
-						for (int field = 0; field < 4; ++field) {
-							nodal[a][field] = PetscRealPart(values[4*position+field]);
-							if (transient_)
-								previous_nodal[a][field] = PetscRealPart(previous_values[4*position+field]);
-						}
-					}
-					return PreparedVolume{&element,std::move(nodal),std::move(previous_nodal)};
-					},
-					[this](const PreparedVolume& input,std::size_t index) {
-					FullCell4x4x4VolumeQuadratureProvider volume_quadrature(*input.element);
-					auto local=BuildNavierStokesElement(*input.element,input.nodal,input.previous_nodal,
-						parameters_,volume_quadrature.Rule());
-#ifdef IGA_FLOW_RUNTIME_TESTING
-					if(volume_probe_for_testing_) volume_probe_for_testing_(index);
-#else
-					(void)index;
-#endif
-					return local;
-					},
-					[&](const PreparedVolume& input,NavierStokesSystem& local,std::size_t) {
-					const auto& element=*input.element;
-					BodyFittedSurface4x4QuadratureProvider surface_quadrature(element);
-					for (const auto& traction : pressure_tractions_) {
-						const auto surface = IntegrateBoundaryPressureTraction(element,
-							surface_quadrature.Rule(), traction.first, traction.second);
-						for (std::size_t row = 0; row < surface.size(); ++row)
-							local.negative_residual[row] += surface[row];
-					}
-					assembler_.AddElementMatrix(jacobian_, element, local.jacobian);
-					assembler_.AddElementVector(rhs_, element, local.negative_residual);
-					});
-				last_volume_batch_=batch;
-				if(CurrentPhaseProfile().Enabled()) {
-					std::cout << "body_fitted_element_assembly rank=" << rank_
-						<< " threads_requested=" << assembly_execution_->Options().threads
-						<< " team_size=" << batch.maximum_team_size << " elements=" << batch.items
-						<< " batches=" << batch.batches << " maximum_resident_items=" << batch.maximum_resident_items << '\n';
-					iga::FlushCheckedText(std::cout);
-				}
-				previous_view.Restore();
-			});
-			{
-				PhaseScope communication_phase(ProfilePhase::Communication);
-				OwnedRowAssembler::Assemble(jacobian_, communicator_);
-				OwnedRowAssembler::Assemble(rhs_, communicator_);
-			}
-			assembly_pending_=false;
-			PhaseScope diagnostics_phase(ProfilePhase::Diagnostics);
-			const auto convergence = MeasureConvergence(current_view.Data());
-			diagnostics_phase.Stop();
-			std::vector<PetscScalar> boundary_update;
-			CollectiveLocalStage(communicator_, "flow boundary values", [&] {
-				current_view.Restore();
-				PetscReadArray owned_view;
-				owned_view.Acquire(state_);
-				const auto* owned = owned_view.Data();
-				boundary_update.reserve(boundary_rows_.size());
-				for (const auto row : boundary_rows_) {
-					const auto local = static_cast<std::size_t>(row-4*assembler_.node_begin());
-					boundary_update.push_back(BoundaryValue(row)-PetscRealPart(owned[local]));
-				}
-				owned_view.Restore();
-			});
-			RequireCollectivePetscSuccess(communicator_, "flow boundary rows",
-				MatZeroRows(jacobian_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
-					1.0, nullptr, nullptr));
-			CollectiveLocalStage(communicator_, "flow boundary insertion", [&] {
-				if (VecSetValues(rhs_, static_cast<PetscInt>(boundary_rows_.size()), boundary_rows_.data(),
-					boundary_update.data(), INSERT_VALUES))
-					throw std::runtime_error("flow boundary VecSetValues failed");
-			});
-			OwnedRowAssembler::Assemble(rhs_, communicator_);
+			// Modified Newton: a factorized Jacobian from an earlier step may be
+			// reused while it stays young and the residual keeps contracting.
+			const bool reuse_candidate = jacobian_reuse_steps_ > 0 && jacobian_reusable_
+				&& jacobian_age_ < jacobian_reuse_steps_ && !refresh_jacobian;
+			RequireCollectiveSameInt(communicator_, "flow Jacobian reuse agreement", reuse_candidate ? 1 : 0);
+			// The first iterate of a step is almost never converged, so its
+			// Jacobian is built together with the residual. Later iterates test
+			// convergence from the residual alone.
+			bool with_jacobian = !reuse_candidate && nonlinear == 0;
+			auto convergence = AssembleNonlinearSystem(with_jacobian);
 			PetscReal residual = 0.0;
 			RequireCollectivePetscSuccess(communicator_, "flow residual norm", VecNorm(rhs_, NORM_2, &residual));
 			if (initial_residual < 0.0) initial_residual = residual;
@@ -1471,14 +1533,42 @@ private:
 				});
 				return true;
 			}
+			const bool slow_contraction = previous_iterate_reused && previous_residual > 0.0
+				&& residual > kJacobianReuseContraction*previous_residual;
+			if (slow_contraction) refresh_jacobian = true;
+			// A reused-Jacobian update that raised the residual is undone, so the
+			// iteration continues exactly as Newton from the accepted iterate.
+			const bool reject_update = previous_iterate_reused && previous_residual > 0.0
+				&& residual > previous_residual;
+			if (reject_update) {
+				RequireCollectivePetscSuccess(communicator_, "flow reject reused update",
+					VecCopy(reuse_backup_, state_));
+				residual = previous_residual;
+				with_jacobian = false;
+				CollectiveLocalStage(communicator_, "flow reuse rejection logging", [&] {
+					if (rank_ == 0) std::cout << "step=" << step+1 << " time=" << physical_time
+						<< " newton=" << nonlinear << " jacobian=rejected-reuse\n";
+					iga::FlushCheckedText(std::cout);
+				});
+			}
+			const bool reuse = reuse_candidate && !slow_contraction;
+			if (!reuse && !with_jacobian) {
+				// Same state as the residual above, so the residual is unchanged.
+				convergence = AssembleNonlinearSystem(true);
+				with_jacobian = true;
+			}
 			const auto linear_start = std::chrono::steady_clock::now();
 			assembly_phase.Stop();
-			RequireKspFactorBackend(solver_, jacobian_, communicator_);
-			RequireCollectivePetscSuccess(communicator_, "flow solver operators", KSPSetOperators(solver_, jacobian_, jacobian_));
-			{
-				PhaseScope setup_phase(ProfilePhase::SolverSetup);
-				solver_options_->Call("flow solver setup", [&] { return KSPSetUp(solver_); });
-				solver_options_->Call("flow block solver setup", [&] { return KSPSetUpOnBlocks(solver_); });
+			if (with_jacobian) {
+				RequireKspFactorBackend(solver_, jacobian_, communicator_);
+				RequireCollectivePetscSuccess(communicator_, "flow solver operators", KSPSetOperators(solver_, jacobian_, jacobian_));
+				{
+					PhaseScope setup_phase(ProfilePhase::SolverSetup);
+					solver_options_->Call("flow solver setup", [&] { return KSPSetUp(solver_); });
+					solver_options_->Call("flow block solver setup", [&] { return KSPSetUpOnBlocks(solver_); });
+				}
+				jacobian_reusable_ = jacobian_reuse_steps_ > 0;
+				jacobian_age_ = 0;
 			}
 			{
 				PhaseScope solve_phase(ProfilePhase::LinearSolve);
@@ -1511,6 +1601,8 @@ private:
 			CollectiveLocalStage(communicator_, "flow update validation", [&] {
 				if (!std::isfinite(update_norm)) throw std::runtime_error("nonfinite Navier-Stokes update");
 			});
+			if (!with_jacobian)
+				RequireCollectivePetscSuccess(communicator_, "flow reuse backup", VecCopy(state_, reuse_backup_));
 			RequireCollectivePetscSuccess(communicator_, "flow update state", VecAXPY(state_, 1.0, update_));
 			trial_linear_iterations_ += iterations;
 			CollectiveLocalStage(communicator_, "flow iteration logging", [&] {
@@ -1524,9 +1616,12 @@ private:
 					<< " update_l2=" << update_norm << " linear_iterations=" << iterations
 					<< " linear_residual=" << linear_residual << " assembly_s="
 					<< std::chrono::duration<double>(linear_start-iteration_start).count()
-					<< " linear_s=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_start).count() << '\n';
+					<< " linear_s=" << std::chrono::duration<double>(std::chrono::steady_clock::now()-linear_start).count()
+					<< " jacobian=" << (with_jacobian ? "fresh" : "reused") << '\n';
 				iga::FlushCheckedText(std::cout);
 			});
+			previous_iterate_reused = !with_jacobian;
+			previous_residual = residual;
 		}
 		return false;
 	}
@@ -1573,6 +1668,11 @@ private:
 	std::optional<ElementAssemblyExecution> assembly_execution_;
 	ElementBatchStatistics last_volume_batch_;
 	bool assembly_pending_=false;
+	bool jacobian_assembly_pending_=false;
+	int jacobian_reuse_steps_ = 0;
+	int jacobian_age_ = 0;
+	bool jacobian_reusable_ = false;
+	static constexpr PetscReal kJacobianReuseContraction = 0.5;
 #ifdef IGA_FLOW_RUNTIME_TESTING
 	std::function<void(std::size_t)> volume_probe_for_testing_;
 #endif
@@ -1598,6 +1698,7 @@ private:
 	std::map<int, double> pressure_tractions_;
 	Mat jacobian_ = nullptr;
 	Vec state_ = nullptr, previous_ = nullptr, committed_state_ = nullptr;
+	Vec reuse_backup_ = nullptr;
 	Vec update_ = nullptr, rhs_ = nullptr;
 	IS source_rows_ = nullptr, destination_rows_ = nullptr;
 	Vec ghost_state_ = nullptr, ghost_previous_ = nullptr;
