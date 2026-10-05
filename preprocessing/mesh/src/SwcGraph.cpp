@@ -97,12 +97,23 @@ SwcGraph SwcGraph::Read(const std::filesystem::path& path)
 	if (!input) throw std::runtime_error("cannot open SWC file: "+path.string());
 	struct Raw { int id; int type; Vec3 p; double radius; int parent; };
 	std::vector<Raw> raw;
+	std::unordered_map<int,Vec3> spline_tangents;
 	std::string line;
 	int line_number = 0;
 	while (std::getline(input, line)) {
 		++line_number;
 		const auto first = line.find_first_not_of(" \t\r");
-		if (first == std::string::npos || line[first] == '#') continue;
+		if (first == std::string::npos) continue;
+		if(line.compare(first,20,"# tubular_tangent_v1")==0) {
+			std::istringstream metadata(line.substr(first+20));
+			int id; Vec3 tangent; std::string extra;
+			if(!(metadata>>id>>tangent.x>>tangent.y>>tangent.z) || (metadata>>extra)
+				|| id<=0 || !IsFinite(tangent) || std::abs(Norm(tangent)-1.0)>1.e-8
+				|| !spline_tangents.emplace(id,tangent).second)
+				throw std::runtime_error("invalid or duplicate B-spline tangent metadata");
+			continue;
+		}
+		if(line[first]=='#') continue;
 		std::istringstream row(line);
 		Raw value;
 		if (!(row >> value.id >> value.type >> value.p.x >> value.p.y >> value.p.z >> value.radius >> value.parent))
@@ -140,6 +151,17 @@ SwcGraph SwcGraph::Read(const std::filesystem::path& path)
 	}
 	graph.RebuildChildren();
 	graph.Validate();
+	if(!spline_tangents.empty()) {
+		for(const auto& item:spline_tangents) {
+			const auto found=index.find(item.first);
+			if(found==index.end() || graph.is_branch(found->second))
+				throw std::runtime_error("B-spline tangent metadata has unknown or junction node");
+			graph.nodes[found->second].spline_tangent=item.second;
+		}
+		for(std::size_t i=0;i<graph.nodes.size();++i)
+			if(!graph.is_branch(static_cast<int>(i)) && Norm(graph.nodes[i].spline_tangent)==0.0)
+				throw std::runtime_error("incomplete B-spline tangent metadata");
+	}
 	return graph;
 }
 
@@ -149,6 +171,12 @@ void SwcGraph::Write(const std::filesystem::path& path) const
 	if (!output) throw std::runtime_error("cannot write SWC file: "+path.string());
 	output << "# TubularFlowIGA smoothed skeleton\n"
 		<< "# id type x y z radius parent\n";
+	output << std::setprecision(17);
+	for(std::size_t i=0;i<nodes.size();++i) {
+		const auto& v=nodes[i].spline_tangent;
+		if(Norm(v)>0.0)
+			output<<"# tubular_tangent_v1 "<<i+1<<' '<<v.x<<' '<<v.y<<' '<<v.z<<'\n';
+	}
 	output << std::fixed << std::setprecision(8);
 	for (std::size_t i=0; i<nodes.size(); ++i) {
 		const auto& n = nodes[i];
@@ -487,12 +515,14 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 			node.type = 2;
 			node.parent = -1;
 			node.children.clear();
+			node.spline_tangent={};
 			output.nodes.push_back(node);
 		}
 	}
 	const bool no_bifurcations = branches.empty();
 	BranchSamplingOptions sampling;
 	sampling.target_spacing = parameters.segment_length;
+	sampling.synthetic_port_extensions=parameters.synthetic_port_extensions;
 	sampling.max_spacing_over_diameter = parameters.max_spacing_over_diameter;
 	sampling.max_turn_degrees = parameters.max_turn_degrees;
 	sampling.max_diameter_change_fraction = parameters.max_diameter_change_fraction;
@@ -522,11 +552,16 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 			+"->"+std::to_string(work.nodes[section.back()].id));
 		int parent = critical_map.at(section.front());
 		if (parent < 0) throw std::runtime_error("section start is not a critical node");
+		if(!work.is_branch(section.front())) {
+			output.nodes[parent].spline_tangent=Normalized(samples.front().tangent,"B-spline start tangent");
+			output.nodes[parent].position=samples.front().point;
+		}
 		for (std::size_t j=1; j+1<samples.size(); ++j) {
 			SwcNode node;
 			node.type = 2;
 			node.position = samples[j].point;
 			node.diameter = samples[j].diameter;
+			node.spline_tangent=Normalized(samples[j].tangent,"B-spline interior tangent");
 			node.parent = parent;
 			parent = static_cast<int>(output.nodes.size());
 			output.nodes.push_back(node);
@@ -536,6 +571,10 @@ SwcGraph SmoothSkeleton(const SwcGraph& input, const MeshParameters& parameters)
 		if (output.nodes[end].parent >= 0)
 			throw std::runtime_error("critical node received multiple parents");
 		output.nodes[end].parent = parent;
+		if(!work.is_branch(section.back())) {
+			output.nodes[end].spline_tangent=Normalized(samples.back().tangent,"B-spline end tangent");
+			output.nodes[end].position=samples.back().point;
+		}
 	}
 	output.RebuildChildren();
 	output.Validate();

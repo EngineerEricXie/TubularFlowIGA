@@ -353,11 +353,48 @@ CrossSectionTemplates ReadCrossSectionTemplates(const std::filesystem::path& dir
 	return ReadTemplates(directory);
 }
 
+std::vector<Vec3> SectionLayerTangents(const SwcGraph& skeleton)
+{
+	std::vector<Vec3> tangents(skeleton.nodes.size());
+	for(const auto& section:skeleton.Sections()) {
+		for(std::size_t q=0;q<section.size();++q) {
+			const int node=section[q];
+			if(q==0) tangents[node]=Normalized(skeleton.nodes[section[1]].position
+				-skeleton.nodes[node].position,"section start tangent");
+			else if(q+1==section.size()) tangents[node]=Normalized(skeleton.nodes[node].position
+				-skeleton.nodes[section[q-1]].position,"section end tangent");
+			else {
+				const Vec3 before=skeleton.nodes[node].position-skeleton.nodes[section[q-1]].position;
+				const Vec3 after=skeleton.nodes[section[q+1]].position-skeleton.nodes[node].position;
+				const double h0=Norm(before),h1=Norm(after);
+				// Derivative of the local quadratic in cumulative chord length.
+				// Unlike an unweighted secant average this handles long junction
+				// spans adjacent to short ordinary sampling intervals.
+				tangents[node]=Normalized(before*(h1/h0)+after*(h0/h1),"nonuniform section tangent");
+			}
+		}
+	}
+	bool has_spline_tangents=false;
+	for(const auto& node:skeleton.nodes)
+		if(Norm(node.spline_tangent)>0.0) has_spline_tangents=true;
+	if(has_spline_tangents) {
+		for(std::size_t i=0;i<skeleton.nodes.size();++i) {
+			if(skeleton.is_branch(static_cast<int>(i))) continue;
+			const auto& tangent=skeleton.nodes[i].spline_tangent;
+			if(!IsFinite(tangent) || std::abs(Norm(tangent)-1.0)>1.e-8)
+				throw std::runtime_error("incomplete or invalid B-spline layer tangents");
+			tangents[i]=tangent;
+		}
+	}
+	return tangents;
+}
+
 ControlMesh GenerateControlMesh(
 	const SwcGraph& skeleton,
 	const MeshParameters& parameters,
 	const std::filesystem::path& template_directory,
-	double minimum_scaled_jacobian)
+	double minimum_scaled_jacobian,
+	const std::filesystem::path& diagnostic_path)
 {
 	skeleton.Validate();
 	parameters.Validate();
@@ -367,6 +404,7 @@ ControlMesh GenerateControlMesh(
 		? GenerateCircularTemplates(parameters.cross_section_size) : ReadTemplates(template_directory);
 	const int root = skeleton.root();
 	const auto sections = skeleton.Sections();
+	const auto layer_tangents = SectionLayerTangents(skeleton);
 	const std::size_t node_count = skeleton.nodes.size();
 
 	std::vector<Vec3> segment(node_count);
@@ -412,7 +450,6 @@ ControlMesh GenerateControlMesh(
 		Bifurcation info;
 		info.node=branch; info.parent=parent; info.child1=child1; info.child2=child2;
 
-		const Vec3 sv_parent_parent = segment[parent];
 		const Vec3 sv_parent = segment[branch];
 		const Vec3 sv_child1 = segment[child1];
 		const Vec3 sv_child2 = segment[child2];
@@ -438,12 +475,12 @@ ControlMesh GenerateControlMesh(
 		const Vec3 cpn=Normalized(Cross(spik-spkj,spij-spkj), "bifurcation plane");
 		std::cout << "bifurcation_node=" << branch+1 << " plane_normal=[" << cpn.x << "," << cpn.y << "," << cpn.z << "]\n";
 		const Vec3 cp1=cpn*average_radius;
-		const Vec3 ref_parent=FrameReference(sv_parent,cp1,"bifurcation parent frame");
-		const Vec3 ref_child1=FrameReference(sv_child1,cp1,"bifurcation child1 frame");
-		const Vec3 ref_child2=FrameReference(sv_child2,cp1,"bifurcation child2 frame");
-		const Vec3 w_parent=Normalized(Cross(sv_parent,ref_parent), "bifurcation parent frame");
-		const Vec3 w_child1=Normalized(Cross(sv_child1,ref_child1), "bifurcation child1 frame");
-		const Vec3 w_child2=Normalized(Cross(sv_child2,ref_child2), "bifurcation child2 frame");
+		const Vec3 ref_parent=FrameReference(layer_tangents[parent],cp1,"bifurcation parent frame");
+		const Vec3 ref_child1=FrameReference(layer_tangents[child1],cp1,"bifurcation child1 frame");
+		const Vec3 ref_child2=FrameReference(layer_tangents[child2],cp1,"bifurcation child2 frame");
+		const Vec3 w_parent=Normalized(Cross(layer_tangents[parent],ref_parent), "bifurcation parent frame");
+		const Vec3 w_child1=Normalized(Cross(layer_tangents[child1],ref_child1), "bifurcation child1 frame");
+		const Vec3 w_child2=Normalized(Cross(layer_tangents[child2],ref_child2), "bifurcation child2 frame");
 
 		auto parent_terminal=Scale(t.circle,ri);
 		auto child1_terminal=Scale(t.circle,rj);
@@ -519,9 +556,9 @@ ControlMesh GenerateControlMesh(
 			layers[node].tangent=Normalized(tangent,"bifurcation terminal tangent");
 			info.offsets[arm]=offset;
 		};
-		add_terminal(parent,std::move(parent_terminal),sv_parent_parent,ref_parent,sv_parent,1);
-		add_terminal(child1,std::move(child1_terminal),sv_child1,ref_child1,sv_child1,2);
-		add_terminal(child2,std::move(child2_terminal),sv_child2,ref_child2,sv_child2,3);
+		add_terminal(parent,std::move(parent_terminal),layer_tangents[parent],ref_parent,layer_tangents[parent],1);
+		add_terminal(child1,std::move(child1_terminal),layer_tangents[child1],ref_child1,layer_tangents[child1],2);
+		add_terminal(child2,std::move(child2_terminal),layer_tangents[child2],ref_child2,layer_tangents[child2],3);
 		bifurcations.push_back(info);
 	}
 
@@ -531,7 +568,7 @@ ControlMesh GenerateControlMesh(
 		for(std::size_t q=0;q<section.size();++q) {
 			int node=section[q];
 			Vec3 direction;
-			if(q==0) direction=segment[section[1]]; else direction=segment[node];
+			direction=layer_tangents[node];
 			if(q==0) {
 				reference=Normalized(RotateSurface({1,0,0},{0,0,1},direction),"pipe initial reference");
 				w=Normalized(Cross(direction,reference),"pipe initial frame");
@@ -567,8 +604,8 @@ ControlMesh GenerateControlMesh(
 				reference=Normalized(reference,"root-bifurcation reference");
 				Vec3 tangent=Normalized(direction_end,"root-bifurcation tangent");
 				for(std::size_t rev=trim.size()-1;rev>0;--rev) {
-					const int child=trim[rev], node=trim[rev-1];
-					const Vec3 direction=segment[child];
+					const int node=trim[rev-1];
+					const Vec3 direction=layer_tangents[node];
 					TransportFrame(tangent,reference,w,direction,"root-bifurcation frame");
 					auto points=MakeCircle(t,skeleton.nodes[node].diameter/2.0,reference,w,skeleton.nodes[node].position-root_position);
 					std::vector<Vec3> velocities(points.size());
@@ -589,7 +626,7 @@ ControlMesh GenerateControlMesh(
 				Vec3 tangent=Normalized(layers[start].tangent,"bifurcation-terminal tangent");
 				for(std::size_t q=1;q<trim.size();++q) {
 					const int node=trim[q];
-					const Vec3 direction=segment[node];
+					const Vec3 direction=layer_tangents[node];
 					TransportFrame(tangent,reference,w,direction,"bifurcation-terminal frame");
 					auto points=MakeCircle(t,skeleton.nodes[node].diameter/2.0,reference,w,skeleton.nodes[node].position-root_position);
 					std::vector<Vec3> velocities(points.size());
@@ -620,7 +657,7 @@ ControlMesh GenerateControlMesh(
 				const double start_angle=AngleBetween(reference_template,ref_start);
 				for(std::size_t q=1;q+1<trim.size();++q) {
 					const int node=trim[q];
-					const Vec3 direction=segment[node];
+					const Vec3 direction=layer_tangents[node];
 					auto points=Scale(t.circle,skeleton.nodes[node].diameter/2.0);
 					for(auto& p:points) {
 						p=RotateSurface(p,{0,0,1},n_start);
@@ -731,6 +768,9 @@ ControlMesh GenerateControlMesh(
 	if(mesh.points.size()!=mesh.labels.size()||mesh.points.size()!=mesh.velocity.size())
 		throw std::runtime_error("control mesh point data arrays are inconsistent");
 	mesh.quality=EvaluateHexQuality(mesh.points,mesh.elements);
+	// Export before rejection; never bypass any production acceptance check.
+	if(!diagnostic_path.empty())
+		WriteDiagnosticMeshVtk(mesh,minimum_scaled_jacobian,diagnostic_path);
 	if(mesh.quality.bad_elements>0)
 		throw std::runtime_error("generated mesh has invalid elements; first="
 			+std::to_string(mesh.quality.first_bad_element)+" minimum_detJ="
@@ -763,6 +803,31 @@ void WriteControlMeshVtk(const ControlMesh& mesh,const std::filesystem::path& pa
 	for(std::size_t i=0;i<mesh.elements.size();++i)out<<"12\n";
 	out<<"POINT_DATA "<<mesh.points.size()<<"\nSCALARS label float 1\nLOOKUP_TABLE default\n";
 	for(int label:mesh.labels)out<<label<<'\n';
+}
+
+void WriteDiagnosticMeshVtk(const ControlMesh& mesh, double required_scaled_jacobian,
+	const std::filesystem::path& path)
+{
+	WriteControlMeshVtk(mesh,path);
+	std::ofstream out(path,std::ios::app);
+	if(!out) throw std::runtime_error("cannot append diagnostic mesh fields");
+	std::vector<QualityResult> qualities;
+	for(std::size_t i=0;i<mesh.elements.size();++i) {
+		const std::vector<int> subset{static_cast<int>(i)};
+		qualities.push_back(EvaluateHexQuality(mesh.points,mesh.elements,&subset));
+	}
+	out<<std::setprecision(17)<<"CELL_DATA "<<mesh.elements.size()<<'\n';
+	out<<"SCALARS element_id int 1\nLOOKUP_TABLE default\n";
+	for(std::size_t i=0;i<qualities.size();++i) out<<i<<'\n';
+	out<<"SCALARS minimum_scaled_jacobian double 1\nLOOKUP_TABLE default\n";
+	for(const auto& q:qualities) out<<q.minimum_scaled_jacobian<<'\n';
+	out<<"SCALARS minimum_determinant double 1\nLOOKUP_TABLE default\n";
+	for(const auto& q:qualities) out<<q.minimum_determinant<<'\n';
+	out<<"SCALARS quality_failed int 1\nLOOKUP_TABLE default\n";
+	for(const auto& q:qualities)
+		out<<(q.bad_elements>0||q.minimum_scaled_jacobian<required_scaled_jacobian)<<'\n';
+	out<<"SCALARS diagnostic_only_DO_NOT_SIMULATE int 1\nLOOKUP_TABLE default\n";
+	for(std::size_t i=0;i<qualities.size();++i) out<<"1\n";
 }
 
 void WriteMeshQualityJson(

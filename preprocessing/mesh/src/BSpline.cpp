@@ -142,12 +142,34 @@ std::vector<CurveSample> SampleBranch(
 			throw std::runtime_error(context+": B-spline evaluation produced invalid geometry");
 		if(i>0) dense_arc[i]=dense_arc[i-1]+Norm(dense[i].point-dense[i-1].point);
 	}
-	const double length=dense_arc.back();
+	const double source_length=dense_arc.back();
+	const double maximum_diameter=*std::max_element(diameters.begin(),diameters.end());
+	// Append straight C1 tangent extensions; do not refit or stretch the source spline.
+	// Length scales with vessel diameter; target_spacing only guarantees two
+	// layers, so coarse axial spacing cannot lengthen the synthetic domain.
+	const double extension=options.synthetic_port_extensions
+		? std::max(3.0*maximum_diameter,2.0*std::min(options.target_spacing,
+			options.max_spacing_over_diameter*maximum_diameter)):0.0;
+	const double upstream_extension=(mode==3||mode==4)?extension:0.0;
+	const double downstream_extension=(mode==2||mode==4)?extension:0.0;
+	const double length=source_length+upstream_extension+downstream_extension;
 	if(!std::isfinite(length)||length<=0.0)
 		throw std::runtime_error(context+": smoothed branch has invalid arc length");
 
 	auto at_arc=[&](double s) {
-		s=std::max(0.0,std::min(length,s));
+		s=std::max(0.0,std::min(length,s))-upstream_extension;
+		if(s<0.0) {
+			auto value=dense.front();
+			value.tangent=Normalized(value.tangent,"synthetic upstream tangent");
+			value.point+=value.tangent*s;
+			return value;
+		}
+		if(s>source_length) {
+			auto value=dense.back();
+			value.tangent=Normalized(value.tangent,"synthetic downstream tangent");
+			value.point+=value.tangent*(s-source_length);
+			return value;
+		}
 		auto upper=std::lower_bound(dense_arc.begin(),dense_arc.end(),s);
 		if(upper==dense_arc.begin()) return dense.front();
 		if(upper==dense_arc.end()) return dense.back();
@@ -159,8 +181,39 @@ std::vector<CurveSample> SampleBranch(
 		return EvaluateCurve(spline,u);
 	};
 
-	const double start_clearance=clearance.start;
-	const double end_clearance=clearance.end;
+	// Caller clearances (three-arm pairwise bounds) are arc distances. Also
+	// require the retained local criterion: the first ordinary layer must lie a
+	// chord of factor*max(junction, layer diameter) from the junction, which
+	// arc length alone does not guarantee on curved or widening sections.
+	auto chord_clearance=[&](bool from_start,double factor) {
+		const auto junction=from_start?dense.front():dense.back();
+		auto valid=[&](double distance) {
+			const auto layer=at_arc(from_start?distance:length-distance);
+			return Norm(layer.point-junction.point)>=factor*
+				std::max(junction.diameter,layer.diameter);
+		};
+		double lower=0.0;
+		for(int i=1;i<=dense_count;++i) {
+			const double upper_initial=extension>0.0?length*i/dense_count
+				:(from_start?dense_arc[i]:length-dense_arc[dense_count-i]);
+			double upper=upper_initial;
+			if(valid(upper)) {
+				for(int step=0;step<48;++step) {
+					const double middle=(lower+upper)/2.0;
+					if(valid(middle)) upper=middle; else lower=middle;
+				}
+				return upper;
+			}
+			lower=upper;
+		}
+		return length;
+	};
+	const double start_clearance=(mode==1||mode==2)
+		? std::max(clearance.start,chord_clearance(true,options.downstream_clearance_over_diameter))
+		: clearance.start;
+	const double end_clearance=(mode==1||mode==3)
+		? std::max(clearance.end,chord_clearance(false,options.upstream_clearance_over_diameter))
+		: clearance.end;
 	const double usable_begin=start_clearance;
 	const double usable_end=length-end_clearance;
 	const double tolerance=1.0e-10*std::max(1.0,length);
@@ -241,7 +294,10 @@ std::vector<CurveSample> SampleBranch(
 		if(arc_samples.size()>100000000)
 			throw std::runtime_error(context+": adaptive sampling generated too many points");
 	}
-	while(arc_samples.size()<4) {
+	// A terminal arm needs junction, clearance layer and outlet, not an
+	// extra node squeezed into the small remaining ordinary interval.
+	const std::size_t minimum_samples=(mode==2||mode==3)?3:4;
+	while(arc_samples.size()<minimum_samples) {
 		std::size_t best=0;
 		double best_length=-1.0;
 		for(std::size_t i=0;i+1<arc_samples.size();++i) {

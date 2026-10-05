@@ -14,7 +14,7 @@ using namespace std;
 class kernel
 {
 public:
-	void run(string fn_in, bool legacy_text = true, bool legacy_vtk = false);//comparison using B-splines-like
+	void run(string fn_in, bool legacy_text = true, bool legacy_vtk = false, bool preserve_port_rims = false);//comparison using B-splines-like
 
 private:
 	vector<Vertex3D> cp;//control points
@@ -31,6 +31,7 @@ private:
 	void BuildElementSplines_Interior(int eid);
 	void BuildElementSplines_Boundary(int eid);
 	void InitializeMesh(string fn);
+	void PreservePortRims();
 	void RescaleDomain(const string& fn);
 	void InitialConnect();
 	void BuildInitialEdges();

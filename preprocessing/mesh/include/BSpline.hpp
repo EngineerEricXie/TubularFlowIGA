@@ -22,6 +22,7 @@ struct BranchSamplingOptions
 	double max_diameter_change_fraction = 0.15;
 	double upstream_clearance_over_diameter = 1.0;
 	double downstream_clearance_over_diameter = 1.5;
+	bool synthetic_port_extensions = false;
 };
 
 struct BranchClearance

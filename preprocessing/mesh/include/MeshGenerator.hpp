@@ -18,16 +18,21 @@ struct ControlMesh
 	SurfaceIntersectionResult surface_intersections;
 };
 
+std::vector<Vec3> SectionLayerTangents(const SwcGraph& skeleton);
+
 ControlMesh GenerateControlMesh(
 	const SwcGraph& skeleton,
 	const MeshParameters& parameters,
 	const std::filesystem::path& template_directory,
-	double minimum_scaled_jacobian = 1.0e-3);
+	double minimum_scaled_jacobian = 1.0e-3,
+	const std::filesystem::path& diagnostic_path = {});
 
 void WriteControlMeshVtk(const ControlMesh& mesh, const std::filesystem::path& path);
 void WriteMeshQualityJson(
 	const ControlMesh& mesh,
 	double required_scaled_jacobian,
+	const std::filesystem::path& path);
+void WriteDiagnosticMeshVtk(const ControlMesh& mesh, double required_scaled_jacobian,
 	const std::filesystem::path& path);
 void WriteVelocity(const ControlMesh& mesh, const std::filesystem::path& path);
 

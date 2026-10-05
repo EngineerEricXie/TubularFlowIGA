@@ -15,7 +15,7 @@ namespace {
 
 void PrintUsage()
 {
-	cerr << "usage: spline CASE_DIR/ [--no-legacy-text] [--legacy-vtk] [--threads N]\n";
+	cerr << "usage: spline CASE_DIR/ [--no-legacy-text] [--legacy-vtk] [--threads N] [--preserve-port-rims]\n";
 }
 
 int ParseThreadCount(const char* text)
@@ -43,11 +43,13 @@ int main(int argc, char **argv)
 	{
 		bool legacy_text = true;
 		bool legacy_vtk = false;
+		bool preserve_port_rims = false;
 		for (int argument = 2; argument < argc; ++argument)
 		{
 			const string option(argv[argument]);
 			if (option == "--no-legacy-text") legacy_text = false;
 			else if (option == "--legacy-vtk") legacy_vtk = true;
+			else if (option == "--preserve-port-rims" && !preserve_port_rims) preserve_port_rims = true;
 			else if (option == "--threads")
 			{
 				if (++argument == argc)
@@ -73,7 +75,7 @@ int main(int argc, char **argv)
 			}
 		}
 		kernel app;
-		app.run(argv[1], legacy_text, legacy_vtk);
+		app.run(argv[1], legacy_text, legacy_vtk, preserve_port_rims);
 		cout << "DONE!\n";
 		return 0;
 	}
