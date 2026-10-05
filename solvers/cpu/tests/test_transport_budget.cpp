@@ -115,6 +115,23 @@ void SourceAndScaling()
 		"equal-and-opposite field corruption was hidden by the global budget");
 }
 
+void RejectUnsupportedTimeIntegration()
+{
+	// These fields satisfy the backward-Euler source budget exactly. They
+	// must not receive a passing budget when the requested scheme is BDF2,
+	// including its startup step (whose leading mass scale is still one).
+	Fixture fixture;
+	Passed(fixture.Evaluate());
+	fixture.system.time_integration = "bdf2";
+	Reject([&] { fixture.Evaluate(); });
+	fixture.system.time_derivative_scale = 1.5;
+	Reject([&] { fixture.Evaluate(); });
+	fixture.system.time_integration = "backward_euler";
+	Reject([&] { fixture.Evaluate(); });
+	fixture.system.time_derivative_scale = 1.0;
+	Passed(fixture.Evaluate());
+}
+
 void CompressibleAdvection()
 {
 	Fixture fixture;
@@ -280,6 +297,7 @@ int main()
 {
 	try {
 		SourceAndScaling();
+		RejectUnsupportedTimeIntegration();
 		CompressibleAdvection();
 		DiffusiveFlux();
 		EssentialAndRejection();

@@ -7,8 +7,9 @@ residual-only convergence assembly. They do not modify the tetrahedral route.
 
 ## Verification status
 
-The tests and workstation benchmark below are historical evidence recorded
-with the original patches on 2026-09-29. During upstream PR preparation on
+The tests and workstation benchmark in the numbered patch sections below are
+historical evidence recorded with the original patches on 2026-09-29.
+During upstream PR preparation on
 2026-10-05, the patches were applied in order, Git whitespace checks passed,
 and all 22 changed source files were compared byte-for-byte with the existing
 VascularFM source copy. No build, solver, model training, or held-out evaluation
@@ -16,18 +17,57 @@ was launched for this transfer. Existing recorded tests were not rerun.
 
 The benchmark used 8 local CPU MPI ranks. The original notes do not record
 CPU model or PETSc/MPI versions; this transfer supplies no new timing or
-hardware validation. A small native rebuild and targeted test run remain
-review gates before merging this draft PR.
+hardware validation. Subsequent PR review validation is recorded separately below.
 
 The 835 unused vertices previously diagnosed in a tetrahedral fixture are
 outside these patches and remain unfixed. Full-tree simulation and scaling
 are not validated by this transfer. BDF2 support is limited to the standalone
-`iga_solve` linear-transport path; coupled transport explicitly rejects it.
+`iga_solve` linear-transport path; coupled transport, CUDA transport, and the
+backward-Euler budget validator explicitly reject it.
 
 The original patch files and SHA bindings remain in the VascularFM repository
 under `docs/provenance/tubularflowiga_vendored_local_patches/`. The local
 VascularFM revision marker is intentionally not installed into this upstream
 Git checkout.
+
+## PR #7 review validation (2026-10-05)
+
+Review found two consumers of the shared configuration parser that still
+assumed backward Euler. CUDA now rejects BDF2 configurations and BDF2 restart
+metadata. `TransportBudgetAccumulator` rejects BDF2 (including its startup
+step) and any nonunit time-derivative scale, so it cannot certify a trajectory
+using the wrong time discretization. Standalone CPU BDF2 remains supported;
+these guards do not change numerical assembly or file formats.
+
+Local validation used an Intel Core i9-14900KF workstation, GCC 11.4.0,
+PETSc 3.22.0 (`arch-linux-c-opt`), MPICH 4.2.3, CUDA 12.6.85, and an NVIDIA
+GeForce RTX 4080 SUPER (compute capability 8.9). These were correctness tests,
+not a rerun of the historical performance benchmark.
+
+- `make mesh-test`, `make spline`, `generic_transport_test`,
+  `navier_stokes_test`, `transport_checkpoint_test`, and
+  `simulation_config_test` passed on the transferred source.
+- Three-rank `collective_failure_test` and
+  `body_fitted_accepted_checkpoint_test` passed using PETSc's matching MPI
+  launcher. A 48-element, 85-node straight tube passed two-rank
+  `iga_mesh_check` both with and without `--preserve-port-rims` (all positive
+  quadrature Jacobians). Cache and legacy-text packing produced identical
+  databases; stale and truncated caches were rejected.
+- A five-step CPU BDF2 decay case (`c' = -c`, `dt = 0.1`) matched its analytic
+  discrete recurrence within `3.4e-7` at every final node. Stopping after step 2
+  and restarting produced exactly the same final field as the uninterrupted
+  run. Two-step transient flow with Jacobian reuse differed from fresh Newton
+  by `2.38e-9` velocity and `9.68e-10` pressure relative L2.
+- `make -C solvers/cpu transport-budget-test` passed all 80 checks after the
+  guards were added. The CLI rejected both BE and BDF2 fields under a BDF2
+  configuration without emitting a budget report; BE fields still passed
+  under a backward-Euler configuration, and inconsistent fields still failed.
+- `conda run -n tubularflow-cuda make -C solvers/cuda iga_cuda CUDA_ARCHS=89`
+  built without warnings. With the CUDA library path from `DEPENDENCIES.md`,
+  `python3 solvers/cuda/tests/test_transport_time_integration.py
+  solvers/cuda/iga_cuda DATABASE.ntiga CASE_DIR` passed on the small tube:
+  default/explicit backward Euler matched analytic decay, and BDF2
+  configuration/restart inputs failed before publishing output.
 
 ## 0001 Mesher: port dataset fixes; diameter-scaled port extensions
 
@@ -97,8 +137,8 @@ Git checkout.
   rejections). End-to-end `iga_solve` decay `c' = -c` on a portal mesh:
   observed order 0.97/0.99 (backward Euler) and 2.07/2.03 (BDF2) for
   dt = 1/10, 1/20, 1/40.
-- Not covered: transport budget tooling that assumes a backward-Euler time
-  derivative should be reviewed before using it with BDF2 output.
+- BDF2 budget evaluation remains unsupported. PR #7 review added an explicit
+  rejection in the existing backward-Euler budget tool.
 
 ## Benchmark (0003)
 
