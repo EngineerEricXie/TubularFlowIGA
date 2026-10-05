@@ -162,6 +162,11 @@ struct CompiledLinearSystem {
 	std::string velocity_source = "prescribed";
 	double dt = 0.0;
 	int steps = 0;
+	// "backward_euler" (default) or "bdf2" for linear_transport.
+	std::string time_integration = "backward_euler";
+	// Leading time-derivative coefficient of the current step: 1 for backward
+	// Euler, 3/2 once BDF2 has a two-level history. Set by the time loop.
+	double time_derivative_scale = 1.0;
 };
 
 namespace simulation_detail {
@@ -426,9 +431,14 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 		if (system.kind == EquationKind::NavierStokes
 			&& system.time_integration != "steady" && system.time_integration != "backward_euler")
 			throw std::runtime_error("simulation_config.json: navier_stokes time_integration must be 'steady' or 'backward_euler'");
-		if (system.kind != EquationKind::NavierStokes
-			&& (Find(object, "density") || Find(object, "time_integration")))
-			throw std::runtime_error("simulation_config.json: density and time_integration apply only to navier_stokes");
+		if (system.kind != EquationKind::NavierStokes && Find(object, "density"))
+			throw std::runtime_error("simulation_config.json: density applies only to navier_stokes");
+		if (system.kind == EquationKind::LinearTransport) {
+			if (!Find(object, "time_integration")) system.time_integration = "backward_euler";
+			if (system.time_integration != "backward_euler" && system.time_integration != "bdf2")
+				throw std::runtime_error("simulation_config.json: linear_transport time_integration must be 'backward_euler' or 'bdf2'");
+		} else if (system.kind != EquationKind::NavierStokes && Find(object, "time_integration"))
+			throw std::runtime_error("simulation_config.json: time_integration applies only to navier_stokes and linear_transport");
 		if (const auto* terms = Find(object, "terms")) {
 			const auto& array = RequireArray(*terms, context + ".terms");
 			for (std::size_t j = 0; j < array.size(); ++j) {
@@ -705,6 +715,12 @@ inline CompiledLinearSystem CompileLinearSystem(const SimulationConfiguration& c
 	result.fields = source->unknowns;
 	result.dt = configuration.time.dt;
 	result.steps = configuration.time.steps;
+	// Programmatic definitions keep the generic "steady" default; linear
+	// transport always steps in time, and only bdf2 changes the scheme.
+	if (source->time_integration != "steady" && source->time_integration != "backward_euler"
+		&& source->time_integration != "bdf2")
+		throw std::runtime_error("linear_transport time_integration must be backward_euler or bdf2");
+	result.time_integration = source->time_integration == "bdf2" ? "bdf2" : "backward_euler";
 	result.stabilization = source->stabilization;
 	std::set<std::string> velocity_sources;
 	for (const auto& term : source->terms)

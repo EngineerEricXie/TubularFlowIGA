@@ -51,6 +51,8 @@ CudaConfiguredTransportOptions ParseCudaConfiguredTransportOptions(int argc, cha
 std::vector<double> ReadCudaTransportCheckpoint(const fs::path& prefix,
 	const iga::TransportCheckpointMetadata& metadata)
 {
+	if (metadata.time_integration != "backward_euler")
+		throw std::runtime_error("CUDA transport restart supports backward_euler checkpoints only");
 	if (metadata.state_format != "raw_float64")
 		throw std::runtime_error("CUDA transport restart requires raw_float64 state");
 	fs::path path(metadata.state_file);
@@ -143,6 +145,8 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	const CudaConfiguredTransportOptions& options)
 {
 	static_assert(Fields >= 1 && Fields <= 8, "supported CUDA field block width");
+	if (system.time_integration != "backward_euler" || system.time_derivative_scale != 1.0)
+		throw std::runtime_error("CUDA transport supports backward_euler only; use iga_solve for bdf2");
 	if (system.fields.size() != Fields) throw std::runtime_error("internal CUDA field dispatch mismatch");
 	PhaseScope input_phase(ProfilePhase::Input);
 	const auto total_start = Clock::now();

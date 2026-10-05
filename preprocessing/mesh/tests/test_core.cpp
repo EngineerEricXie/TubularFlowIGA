@@ -1,3 +1,4 @@
+#include "CrossSectionTemplate.hpp"
 #include "BSpline.hpp"
 #include "GeometryDiagnostics.hpp"
 #include "HexMesh.hpp"
@@ -50,6 +51,16 @@ int main(int argc, char** argv)
 	short_options.target_spacing=0.25;
 	RequireFailure([&] { SampleBranch({{0,0,0},{1,0,0}}, {1,1}, short_options, 2, "short arm"); },
 		"insufficient bifurcation clearance");
+	Require(std::abs(TemplateRadiusCompensation(8)-6.0/(4.0+std::sqrt(2.0)))<1.0e-14,
+		"radius compensation for an eight-point boundary");
+	auto compensated=GenerateCircularTemplates(1.0);
+	const auto uncompensated=compensated;
+	CompensateTemplateRadius(compensated);
+	for(std::size_t i=0;i<compensated.circle.size();++i)
+		Require(Norm(compensated.circle[i]-uncompensated.circle[i]*TemplateRadiusCompensation(8))<1.0e-14,
+			"template compensation must scale every circle point uniformly");
+	Require(std::abs(Norm(compensated.circle[compensated.boundary_circle.front()])
+		-TemplateRadiusCompensation(8))<1.0e-12,"compensated boundary radius");
 	BranchSamplingOptions explicit_options;
 	explicit_options.target_spacing=0.5;
 	const auto explicit_clearance_samples=SampleBranch(
@@ -57,7 +68,83 @@ int main(int argc, char** argv)
 		BranchClearance{2.0,0.0},2,"explicit clearance");
 	Require(std::abs(explicit_clearance_samples[1].point.x-2.0)<1.0e-10,
 		"explicit clearance was not inserted at its arc-length position");
+	BranchSamplingOptions tiny_tail_options;
+	tiny_tail_options.target_spacing=0.1;
+	const auto tiny_tail=SampleBranch({{0,0,0},{1.59,0,0}}, {1,1}, tiny_tail_options,2,"short ordinary tail");
+	Require(tiny_tail.size()==3,"terminal arm unnecessarily subdivided its ordinary margin");
+	Require(std::abs(tiny_tail.back().point.x-1.59)<1.e-10,"terminal moved during tail sampling");
+	Require(tiny_tail[2].point.x-tiny_tail[1].point.x>0.089,"ordinary tail was halved");
+	SwcGraph tangent_graph;
+	tangent_graph.nodes.resize(3);
+	tangent_graph.nodes[0].parent=-1;tangent_graph.nodes[0].position={0,0,0};
+	tangent_graph.nodes[1].parent=0;tangent_graph.nodes[1].position={1.8,0,0};
+	tangent_graph.nodes[2].parent=1;tangent_graph.nodes[2].position={1.85,0.01,0};
+	for(auto& node:tangent_graph.nodes) node.diameter=1;
+	tangent_graph.RebuildChildren();tangent_graph.Validate();
+	const auto tangents=SectionLayerTangents(tangent_graph);
+	Require(Dot(tangents[1],tangents[2])>0.9999,"nonuniform tangent retained a long-span direction jump");
+	SwcGraph spline_input=tangent_graph;
+	spline_input.nodes[1].position={3,1,0};spline_input.nodes[2].position={6,0,0};
+	MeshParameters spline_parameters;spline_parameters.segment_length=0.5;
+	const auto spline_graph=SmoothSkeleton(spline_input,spline_parameters);
+	BranchSamplingOptions spline_options;spline_options.target_spacing=0.5;
+	const auto expected_samples=SampleBranch({{0,0,0},{3,1,0},{6,0,0}},
+		{1,1,1},spline_options,4,"persisted tangent fixture");
+	const auto spline_section=spline_graph.Sections().front();
+	Require(spline_section.size()==expected_samples.size(),"spline tangent sample count mismatch");
+	const auto spline_path=std::filesystem::temp_directory_path()/"tubular-spline-tangents-test.swc";
+	spline_graph.Write(spline_path);
+	const auto restored_spline=SwcGraph::Read(spline_path);
+	const auto restored_tangents=SectionLayerTangents(restored_spline);
+	for(std::size_t i=0;i<spline_section.size();++i) {
+		const int node=spline_section[i];
+		Require(Norm(restored_tangents[node]-Normalized(expected_samples[i].tangent,"expected tangent"))<1.e-12,
+			"B-spline tangent lost or replaced during SWC round trip");
+	}
+	auto incomplete_spline=restored_spline;
+	incomplete_spline.nodes[0].spline_tangent={};
+	RequireFailure([&] { SectionLayerTangents(incomplete_spline); },"incomplete or invalid");
+	incomplete_spline.Write(spline_path);
+	RequireFailure([&] { SwcGraph::Read(spline_path); },"incomplete B-spline tangent");
+	{
+		std::ofstream malformed(spline_path);
+		malformed<<"# tubular_tangent_v1 1 0 0 0\n1 2 0 0 0 1 -1\n2 2 1 0 0 1 1\n";
+	}
+	RequireFailure([&] { SwcGraph::Read(spline_path); },"invalid or duplicate");
+	std::filesystem::remove(spline_path);
+	BranchSamplingOptions synthetic_options;
+	synthetic_options.target_spacing=0.1;
+	synthetic_options.synthetic_port_extensions=true;
+	const auto synthetic_child=SampleBranch({{0,0,0},{0.5,0,0}},{1,1},synthetic_options,2,"synthetic child");
+	Require(Norm(synthetic_child.front().point)<1.e-12,"synthetic extension moved junction");
+	Require(std::abs(synthetic_child.back().point.x-3.5)<1.e-10,"synthetic downstream length wrong");
+	const auto synthetic_parent=SampleBranch({{0,0,0},{0.5,0,0}},{1,1},synthetic_options,3,"synthetic parent");
+	Require(std::abs(synthetic_parent.front().point.x+3)<1.e-10,"synthetic upstream direction wrong");
+	Require(std::abs(synthetic_parent.back().point.x-0.5)<1.e-10,"synthetic extension moved parent junction");
+	for(const auto& sample:synthetic_child) Require(std::abs(sample.diameter-1)<1.e-12,"extension changed radius");
+	RequireFailure([&] { SampleBranch({{0,0,0},{0.5,0,0}},{1,1},synthetic_options,1,"close junctions"); },
+		"insufficient bifurcation clearance");
 	BranchSamplingOptions adaptive_options;
+	BranchSamplingOptions clearance_options;
+	clearance_options.target_spacing=0.1;
+	const auto tapered_up=SampleBranch({{0,0,0},{3,0,0},{6,0,0}},
+		{3,2,1},clearance_options,3,"tapered upstream regression");
+	const auto& up_layer=tapered_up[tapered_up.size()-2];
+	Require(Norm(up_layer.point-tapered_up.back().point)+1.0e-10>=
+		std::max(up_layer.diameter,tapered_up.back().diameter),
+		"upstream layer ignores local diameter");
+	const auto tapered_down=SampleBranch({{0,0,0},{3,0,0},{6,0,0}},
+		{1,2,3},clearance_options,2,"tapered downstream regression");
+	Require(Norm(tapered_down[1].point-tapered_down[0].point)+1.0e-10>=
+		1.5*std::max(tapered_down[1].diameter,tapered_down[0].diameter),
+		"downstream layer ignores local diameter");
+	const auto curved_clearance=SampleBranch({{0,0,0},{2,2,0},{5,0,0}},
+		{1,1,1},clearance_options,2,"curved chord clearance regression");
+	Require(Norm(curved_clearance[1].point-curved_clearance[0].point)+1.0e-10>=1.5,
+		"reserved arc does not satisfy physical chord clearance");
+	RequireFailure([&] { SampleBranch({{0,0,0},{1,0,0},{2,0,0}},
+		{1,1,1},clearance_options,1,"short internal edge regression"); },
+		"insufficient bifurcation clearance");
 	adaptive_options.target_spacing=10.0;
 	adaptive_options.max_spacing_over_diameter=10.0;
 	adaptive_options.max_turn_degrees=5.0;
@@ -119,6 +206,29 @@ int main(int argc, char** argv)
 	Require(quality.bad_elements == 0, "unit cube reported invalid");
 	Require(std::abs(quality.minimum_determinant-1.0) < 1.0e-12, "unit cube determinant mismatch");
 	Require(std::abs(quality.minimum_scaled_jacobian-1.0) < 1.0e-12, "unit cube scaled Jacobian mismatch");
+	ControlMesh diagnostic_cube;
+	diagnostic_cube.points=cube;diagnostic_cube.elements=elements;
+	diagnostic_cube.labels.assign(8,0);
+	const auto diagnostic_path=std::filesystem::temp_directory_path()/"tubular-diagnostic-test.vtk";
+	WriteDiagnosticMeshVtk(diagnostic_cube,0.1,diagnostic_path);
+	{
+		std::ifstream input(diagnostic_path);
+		const std::string text((std::istreambuf_iterator<char>(input)),{});
+		Require(text.find("CELL_DATA 1")!=std::string::npos,"diagnostic cell count missing");
+		Require(text.find("SCALARS quality_failed int 1\nLOOKUP_TABLE default\n0")!=std::string::npos,
+			"valid cube diagnostic flag wrong");
+		Require(text.find("diagnostic_only_DO_NOT_SIMULATE")!=std::string::npos,
+			"diagnostic-only marker missing");
+	}
+	for(auto& point:diagnostic_cube.points) point.x=-point.x;
+	WriteDiagnosticMeshVtk(diagnostic_cube,0.1,diagnostic_path);
+	{
+		std::ifstream input(diagnostic_path);
+		const std::string text((std::istreambuf_iterator<char>(input)),{});
+		Require(text.find("SCALARS quality_failed int 1\nLOOKUP_TABLE default\n1")!=std::string::npos,
+			"inverted cube diagnostic flag missing");
+	}
+	std::filesystem::remove(diagnostic_path);
 	std::vector<Vec3> small_cube=cube;
 	for(auto& point:small_cube) point*=1.0e-6;
 	const auto small_quality=EvaluateHexQuality(small_cube,elements);
@@ -350,6 +460,22 @@ int main(int argc, char** argv)
 	asymmetric_y.nodes[4].diameter=0.05;
 	Require(!AnalyzeSkeletonGeometry(asymmetric_y,y_parameters).valid(),
 		"extreme junction radius ratio passed geometry preflight");
+	// The same circle must have the same curvature with unequal arc spacing.
+	for(const double last_angle : {0.4, 0.201}) {
+		SwcGraph circle;
+		circle.nodes.resize(3);
+		const double angles[]={0.0,0.2,last_angle};
+		for(int i=0;i<3;++i) {
+			circle.nodes[i].parent=i-1;
+			circle.nodes[i].position={10.0*std::cos(angles[i]),10.0*std::sin(angles[i]),0};
+			circle.nodes[i].diameter=2.0;
+		}
+		circle.RebuildChildren();circle.Validate();
+		const auto diagnostics=AnalyzeSkeletonGeometry(circle,y_parameters);
+		Require(std::abs(diagnostics.node_curvature_radius_product[1]-0.1)<1.e-8,
+			"circle curvature depends on adjacent sample spacing");
+		Require(diagnostics.valid(),"gentle nonuniform circle failed preflight");
+	}
 	SwcGraph tight_bend;
 	tight_bend.nodes.resize(3);
 	tight_bend.nodes[0].parent=-1;tight_bend.nodes[0].position={0,0,0};
@@ -359,6 +485,9 @@ int main(int argc, char** argv)
 	tight_bend.RebuildChildren();tight_bend.Validate();
 	Require(!AnalyzeSkeletonGeometry(tight_bend,y_parameters).valid(),
 		"curvature-radius singularity passed geometry preflight");
+	tight_bend.nodes[2].position={0,0,0};
+	Require(!AnalyzeSkeletonGeometry(tight_bend,y_parameters).valid(),
+		"exact reversal passed geometry preflight");
 	SwcGraph crossing;
 	crossing.nodes.resize(4);
 	crossing.nodes[0].parent=-1;crossing.nodes[0].position={-2,0,0};

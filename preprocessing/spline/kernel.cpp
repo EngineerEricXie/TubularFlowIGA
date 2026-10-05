@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
+#include <set>
 #include <unordered_map>
 
 #include <omp.h>
@@ -177,11 +178,12 @@ string BezierPointRecord(const BezierElement3D& element)
 
 }
 
-void kernel::run(string fn_in, bool legacy_text, bool legacy_vtk)
+void kernel::run(string fn_in, bool legacy_text, bool legacy_vtk, bool preserve_port_rims)
 {
 	const chrono::steady_clock::time_point total_begin = chrono::steady_clock::now();
 	const chrono::steady_clock::time_point initialize_begin = chrono::steady_clock::now();
 	InitializeMesh(fn_in);
+	if (preserve_port_rims) PreservePortRims();
 	cout << fixed << setprecision(6)
 		<< "spline phase initialize seconds: " << ElapsedSeconds(initialize_begin) << "\n";
 	const chrono::steady_clock::time_point extraction_begin = chrono::steady_clock::now();
@@ -1106,8 +1108,11 @@ void kernel::InitializeMesh(string fn)
 			fin >> itmp >> tmesh[i].cnct[0] >> tmesh[i].cnct[1] >> tmesh[i].cnct[2] >> tmesh[i].cnct[3] >>
 				tmesh[i].cnct[4] >> tmesh[i].cnct[5] >> tmesh[i].cnct[6] >> tmesh[i].cnct[7];
 		}
-		for (int i = 0; i<neles+4; i++) getline(fin, stmp);//skip lines
-		for (int i = 0; i<npts; i++)	fin >> cp[i].label;
+		// The old line count stopped before LOOKUP_TABLE and failed label reads.
+		while (fin >> stmp && stmp != "LOOKUP_TABLE") {}
+		if (!(fin >> stmp)) throw runtime_error("controlmesh.vtk is missing point labels");
+		for (int i = 0; i<npts; i++)
+			if (!(fin >> cp[i].label)) throw runtime_error("truncated controlmesh.vtk point labels");
 		fin.close();
 	}
 	else
@@ -1126,6 +1131,49 @@ void kernel::InitializeMesh(string fn)
 	//OutputCM(fn1);
 	//cout << "done setting sharp feature\n";
 	//getchar();
+}
+
+void kernel::PreservePortRims()
+{
+	// Use the packer's face-label convention. Only port/wall interfaces are
+	// creases; subdivisions within a cap and within the wall stay smooth.
+	vector<int> labels(tmface.size(), -1);
+	int ports = 0;
+	for (size_t f = 0; f < tmface.size(); ++f) {
+		if (tmface[f].hex.size() != 1) continue;
+		int positive = 0;
+		for (int n : tmface[f].cnct) {
+			if (cp[n].label > 0) {
+				if (positive && positive != cp[n].label)
+					throw runtime_error("port face contains mixed positive labels");
+				positive = cp[n].label;
+			}
+		}
+		labels[f] = positive;
+		if (positive) ++ports;
+	}
+	if (!ports) throw runtime_error("--preserve-port-rims requires labeled port faces");
+	vector<set<int>> edge_labels(tmedge.size());
+	for (size_t f = 0; f < tmface.size(); ++f)
+		if (labels[f] >= 0)
+			for (int e : tmface[f].edge) edge_labels[e].insert(labels[f]);
+	int creases = 0;
+	vector<int> degree(cp.size(), 0);
+	for (size_t e = 0; e < tmedge.size(); ++e) {
+		if (edge_labels[e].size() <= 1) continue;
+		if (edge_labels[e].size() != 2 || !edge_labels[e].count(0))
+			throw runtime_error("ambiguous port interface: ports must meet walls, not other ports");
+		tmedge[e].sharp = 1;
+		++creases;
+		for (int n : tmedge[e].pt) ++degree[n];
+	}
+	if (!creases) throw runtime_error("no port/wall rim edges found");
+	for (size_t n = 0; n < cp.size(); ++n) {
+		if (!degree[n]) continue;
+		if (degree[n] != 2) throw runtime_error("port rim is not a closed degree-two loop");
+		cp[n].sharp = 1;
+	}
+	cout << "preserved_port_rim_edges=" << creases << "\n";
 }
 
 void kernel::RescaleDomain(const string& fn)

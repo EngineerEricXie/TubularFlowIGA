@@ -66,6 +66,9 @@ public:
 		: nodes_(nodes), system_(system), configuration_(configuration), boundaries_(boundaries),
 		  previous_(previous), current_(current), velocity_(velocity), seen_(elements, false)
 	{
+		if (system_.time_integration != "backward_euler" || system_.time_derivative_scale != 1.0)
+			throw std::invalid_argument(
+				"transport budget supports backward_euler only; bdf2 requires an additional history state");
 		const auto fields = system_.fields.size();
 		if (!nodes || !elements || !fields || nodes > std::numeric_limits<std::size_t>::max()/fields
 			|| !(system_.dt > 0.0) || !std::isfinite(system_.dt))

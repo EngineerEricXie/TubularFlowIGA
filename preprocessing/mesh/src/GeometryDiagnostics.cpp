@@ -204,8 +204,15 @@ GeometryDiagnostics AnalyzeSkeletonGeometry(
 			const Vec3 incoming=graph.nodes[node].position-graph.nodes[parent].position;
 			const Vec3 outgoing=graph.nodes[child].position-graph.nodes[node].position;
 			const double turn=VectorAngle(incoming,outgoing);
-			const double scale=std::min(Norm(incoming),Norm(outgoing));
-			const double product=2.0*std::sin(turn/2.0)/scale*graph.nodes[node].diameter/2.0;
+			// Three-point circumcircle curvature. Dividing by the shortest
+			// incident edge spuriously inflates curvature on nonuniform samples.
+			const double chord=Norm(incoming+outgoing);
+			const double scale=Norm(incoming)+Norm(outgoing);
+			const double curvature=(chord<=1.e-12*scale || turn>=std::acos(-1.0)-1.e-8)
+				? std::numeric_limits<double>::max()
+				: 2.0*std::sin(turn)/chord;
+			const double product=curvature==std::numeric_limits<double>::max()
+				? curvature : curvature*graph.nodes[node].diameter/2.0;
 			result.node_curvature_radius_product[node]=product;
 			if(product>=parameters.maximum_curvature_radius_product) {
 				std::ostringstream message;

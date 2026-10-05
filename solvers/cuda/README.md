@@ -25,6 +25,19 @@ One executable exposes five modes:
 The database can be packed for any CPU MPI rank count. The single-GPU reader
 loads each element exactly once and ignores CPU ownership records.
 
+Configured transport supports `backward_euler` (the default). It rejects
+`bdf2` configurations and checkpoints; use the standalone CPU `iga_solve`
+for BDF2 transport. On a GPU resource, exercise the default, explicit
+backward-Euler, and rejected BDF2 paths with an existing small packed mesh:
+
+```bash
+python3 solvers/cuda/tests/test_transport_time_integration.py \
+  solvers/cuda/iga_cuda DATABASE.ntiga CASE_DIR
+```
+
+Run this command from the repository root. `CASE_DIR/controlmesh.vtk` must
+match the database; the test creates temporary scalar-decay inputs and outputs.
+
 All commands check supported launcher metadata before accessing CUDA or case
 files. Open MPI and PMI launches must contain one process; a Slurm job step
 must contain one task. A batch shell or an allocation's `SLURM_NTASKS` alone
