@@ -245,4 +245,53 @@ int main()
 	const auto resolved = iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
 	assert(resolved.constrained_dofs == 0);
 	std::cout << "scalar flux and Robin surface assembly passed\n";
+
+	// BDF2 scales only the implicit mass: left(3/2) - left(1) equals half of
+	// the history mass, and the history mass itself is unchanged.
+	auto bdf2_system = custom_system;
+	bdf2_system.time_integration = "bdf2";
+	bdf2_system.time_derivative_scale = 1.5;
+	const auto bdf2_matrices = iga::BuildGenericTransportElement(element, velocity, bdf2_system, custom);
+	const auto backward_left = Expand(custom_matrices.left);
+	const auto bdf2_left = Expand(bdf2_matrices.left);
+	const auto history_mass = Expand(custom_matrices.previous);
+	RequireEqual(history_mass, Expand(bdf2_matrices.previous), "BDF2 history mass");
+	std::vector<PetscScalar> left_increment(backward_left.size()), half_mass(backward_left.size());
+	for (std::size_t i = 0; i < backward_left.size(); ++i) {
+		left_increment[i] = bdf2_left[i]-backward_left[i];
+		half_mass[i] = 0.5*history_mass[i];
+	}
+	RequireEqual(half_mass, left_increment, "BDF2 leading mass");
+	bdf2_system.time_derivative_scale = 1.25;
+	bool rejected_scale = false;
+	try {
+		(void)iga::BuildGenericTransportElement(element, velocity, bdf2_system, custom);
+	} catch (const std::runtime_error&) {
+		rejected_scale = true;
+	}
+	assert(rejected_scale);
+	const std::string bdf2_text = R"({"schema_version": 2,
+		"fields": [{"name": "tracer", "kind": "scalar"}],
+		"time": {"dt": 0.1, "steps": 2},
+		"equation_systems": [{"name": "tracer_transport", "kind": "linear_transport",
+			"unknowns": ["tracer"], "time_integration": "bdf2",
+			"terms": [{"operator": "time_derivative", "equation": "tracer"}]}],
+		"boundaries": []})";
+	const auto bdf2_configuration = iga::ParseSimulationConfiguration(bdf2_text);
+	assert(iga::CompileLinearSystem(bdf2_configuration, "tracer_transport").time_integration == "bdf2");
+	auto default_text = bdf2_text;
+	const std::string scheme_key = "\"time_integration\": \"bdf2\",";
+	default_text.erase(default_text.find(scheme_key), scheme_key.size());
+	assert(iga::CompileLinearSystem(iga::ParseSimulationConfiguration(default_text),
+		"tracer_transport").time_integration == "backward_euler");
+	auto invalid_text = bdf2_text;
+	invalid_text.replace(invalid_text.find("bdf2"), 4, "crank");
+	bool rejected_scheme = false;
+	try {
+		(void)iga::ParseSimulationConfiguration(invalid_text);
+	} catch (const std::runtime_error&) {
+		rejected_scheme = true;
+	}
+	assert(rejected_scheme);
+	std::cout << "BDF2 transport assembly and configuration passed\n";
 }

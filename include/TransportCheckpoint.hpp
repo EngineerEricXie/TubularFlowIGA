@@ -30,7 +30,17 @@ struct TransportCheckpointMetadata {
 	double dt = 0.0;
 	std::string state_file;
 	std::string state_format = "petsc_binary";
+	// Schema 2 (BDF2 only): the time scheme and the state one step before
+	// completed_step. Backward Euler checkpoints keep writing schema 1.
+	std::string time_integration = "backward_euler";
+	std::string history_file;
 };
+
+inline std::filesystem::path TransportCheckpointHistoryPath(
+	const std::filesystem::path& prefix)
+{
+	return prefix.string()+".history";
+}
 
 inline std::filesystem::path TransportCheckpointMetadataPath(
 	const std::filesystem::path& prefix)
@@ -78,8 +88,12 @@ inline std::string SerializeTransportCheckpointMetadata(
 		<< "  \"physical_time\": " << metadata.physical_time << ",\n"
 		<< "  \"dt\": " << metadata.dt << ",\n"
 		<< "  \"state_file\": \"" << EscapeTransportCheckpointJson(metadata.state_file) << "\",\n"
-		<< "  \"state_format\": \"" << EscapeTransportCheckpointJson(metadata.state_format) << "\"\n"
-		<< "}\n";
+		<< "  \"state_format\": \"" << EscapeTransportCheckpointJson(metadata.state_format) << "\"";
+	if (metadata.schema_version >= 2)
+		output << ",\n  \"time_integration\": \""
+			<< EscapeTransportCheckpointJson(metadata.time_integration) << "\",\n"
+			<< "  \"history_file\": \"" << EscapeTransportCheckpointJson(metadata.history_file) << "\"";
+	output << "\n}\n";
 	return output.str();
 }
 
@@ -91,7 +105,7 @@ inline TransportCheckpointMetadata ParseTransportCheckpointMetadata(
 	const auto& root = RequireObject(root_value, "transport checkpoint");
 	RequireKnownKeys(root, {"schema_version", "nodes", "fields", "system",
 		"velocity_source", "completed_step", "physical_time", "dt",
-		"state_file", "state_format"}, "transport checkpoint");
+		"state_file", "state_format", "time_integration", "history_file"}, "transport checkpoint");
 	auto required = [&](const std::string& key) -> const JsonValue& {
 		const auto* value = Find(root, key);
 		if (!value) throw std::runtime_error("transport checkpoint requires '"+key+"'");
@@ -126,7 +140,20 @@ inline TransportCheckpointMetadata ParseTransportCheckpointMetadata(
 		required("state_file"), "transport checkpoint.state_file");
 	metadata.state_format = RequireString(
 		required("state_format"), "transport checkpoint.state_format");
-	if (metadata.schema_version != 1 || metadata.fields.empty()
+	if (metadata.schema_version == 1
+		&& (Find(root, "time_integration") || Find(root, "history_file")))
+		throw std::runtime_error("transport checkpoint schema 1 has no time-scheme history");
+	if (metadata.schema_version == 2) {
+		metadata.time_integration = RequireString(
+			required("time_integration"), "transport checkpoint.time_integration");
+		metadata.history_file = RequireString(
+			required("history_file"), "transport checkpoint.history_file");
+		if (metadata.time_integration != "bdf2"
+			|| (metadata.completed_step > 0) != !metadata.history_file.empty())
+			throw std::runtime_error(
+				"transport checkpoint schema 2 requires bdf2 with history exactly after the first step");
+	}
+	if ((metadata.schema_version != 1 && metadata.schema_version != 2) || metadata.fields.empty()
 		|| metadata.system.empty() || metadata.velocity_source.empty()
 		|| metadata.completed_step < 0 || metadata.physical_time < 0.0
 		|| !(metadata.dt > 0.0) || metadata.state_file.empty()

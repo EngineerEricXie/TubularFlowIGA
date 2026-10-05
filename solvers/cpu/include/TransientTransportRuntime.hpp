@@ -94,6 +94,9 @@ public:
 			ResolvedScalarBoundaries boundaries;
 			std::vector<double> initial;
 			RuntimeConstructionStage(communicator_, "transport runtime input", [&] {
+				if (system_.time_integration == "bdf2")
+					throw std::runtime_error(
+						"coupled transport runtime supports backward_euler only; use iga_solve for bdf2");
 				checkpoint_identity_sha256_ = checkpoint_identity_sha256;
 				if (!checkpoint_identity_sha256_.empty()) ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
 				labels_ = labels;

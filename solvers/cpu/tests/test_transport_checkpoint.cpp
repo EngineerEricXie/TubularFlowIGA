@@ -42,5 +42,37 @@ int main()
 		rejected = true;
 	}
 	assert(rejected);
+	const auto schema_one = iga::SerializeTransportCheckpointMetadata(source);
+	assert(schema_one.find("time_integration") == std::string::npos);
+	assert(parsed.time_integration == "backward_euler" && parsed.history_file.empty());
+	auto bdf2 = source;
+	bdf2.schema_version = 2;
+	bdf2.time_integration = "bdf2";
+	bdf2.history_file = "transport.history";
+	const auto parsed_bdf2 = iga::ParseTransportCheckpointMetadata(
+		iga::SerializeTransportCheckpointMetadata(bdf2));
+	assert(parsed_bdf2.schema_version == 2 && parsed_bdf2.time_integration == "bdf2");
+	assert(parsed_bdf2.history_file == bdf2.history_file);
+	auto rejects = [](iga::TransportCheckpointMetadata value) {
+		try {
+			(void)iga::ParseTransportCheckpointMetadata(
+				iga::SerializeTransportCheckpointMetadata(value));
+		} catch (const std::runtime_error&) {
+			return true;
+		}
+		return false;
+	};
+	auto missing_history = bdf2;
+	missing_history.history_file.clear();
+	assert(rejects(missing_history));
+	auto first_step = bdf2;
+	first_step.completed_step = 0;
+	first_step.physical_time = 0.0;
+	assert(rejects(first_step));
+	first_step.history_file.clear();
+	assert(!rejects(first_step));
+	auto backward_schema_two = bdf2;
+	backward_schema_two.time_integration = "backward_euler";
+	assert(rejects(backward_schema_two));
 	std::cout << "transport checkpoint metadata tests passed\n";
 }

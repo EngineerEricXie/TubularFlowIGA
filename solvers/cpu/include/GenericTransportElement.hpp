@@ -74,6 +74,8 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 {
 	if (system.fields.empty()) throw std::runtime_error("linear transport system has no fields");
 	if (!(system.dt > 0.0)) throw std::runtime_error("linear transport time step must be positive");
+	if (!(system.time_derivative_scale == 1.0 || system.time_derivative_scale == 1.5))
+		throw std::runtime_error("linear transport time-derivative scale must be 1 (backward Euler) or 3/2 (BDF2)");
 	const auto fields = system.fields.size();
 	const auto nen = element.connectivity.size();
 	if (matrices.left.pattern().fields() != fields
@@ -130,7 +132,9 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 								+ basis.gradient[a][1]*basis.gradient[b][1] + basis.gradient[a][2]*basis.gradient[b][2];
 							if (term.kind == TermKind::TimeDerivative) {
 								const auto mass = term.coefficient * test * basis.value[b] * measure;
-									left_block[index] += mass;
+									// BDF2 scales only the unknown-level mass; the caller
+									// combines the history levels multiplying previous.
+									left_block[index] += system.time_derivative_scale * mass;
 									previous_block[index] += mass;
 								} else if (term.kind == TermKind::Diffusion) {
 								const auto weak_gradient = matrices.supg[term.equation]

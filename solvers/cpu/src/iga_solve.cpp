@@ -69,10 +69,14 @@ struct TransportPetscObjects {
 	std::unique_ptr<iga::PetscSolverOptions> options;
 	Mat left = nullptr, previous = nullptr;
 	Vec forcing = nullptr, current = nullptr, next = nullptr, rhs = nullptr;
+	// BDF2 only: state one step back and the combined history 2 c^n - c^(n-1)/2.
+	Vec history = nullptr, combination = nullptr;
 	KSP solver = nullptr;
 	~TransportPetscObjects()
 	{
 		if (solver) KSPDestroy(&solver);
+		if (combination) VecDestroy(&combination);
+		if (history) VecDestroy(&history);
 		if (rhs) VecDestroy(&rhs);
 		if (next) VecDestroy(&next);
 		if (current) VecDestroy(&current);
@@ -310,7 +314,7 @@ void WriteTransportOutput(Vec state, std::uint64_t nodes,
 	objects.Close(PETSC_COMM_WORLD);
 }
 
-void WriteTransportCheckpoint(Vec state, const fs::path& prefix,
+void WriteTransportCheckpoint(Vec state, Vec history, const fs::path& prefix,
 	const iga::TransportCheckpointMetadata& metadata, int rank)
 {
 	iga::PhaseScope output_phase(iga::ProfilePhase::Output);
@@ -322,6 +326,9 @@ void WriteTransportCheckpoint(Vec state, const fs::path& prefix,
 	});
 	iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "transport checkpoint write agreement", text);
 	iga::WritePetscCheckpointVector(state, PETSC_COMM_WORLD, state_path);
+	if (!metadata.history_file.empty())
+		iga::WritePetscCheckpointVector(history, PETSC_COMM_WORLD,
+			iga::TransportCheckpointHistoryPath(prefix));
 	iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport checkpoint metadata write", [&] {
 		if (rank != 0) return;
 		const auto path = iga::TransportCheckpointMetadataPath(prefix);
@@ -333,7 +340,7 @@ void WriteTransportCheckpoint(Vec state, const fs::path& prefix,
 	});
 }
 
-void ReadTransportCheckpoint(Vec state, const fs::path& prefix,
+void ReadTransportCheckpoint(Vec state, Vec history, const fs::path& prefix,
 	const iga::TransportCheckpointMetadata& metadata)
 {
 	fs::path state_path;
@@ -345,6 +352,15 @@ void ReadTransportCheckpoint(Vec state, const fs::path& prefix,
 			state_path = iga::TransportCheckpointMetadataPath(prefix).parent_path()/state_path;
 	});
 	iga::ReadReplicatedPetscCheckpointVector(state, PETSC_COMM_WORLD, state_path);
+	if (metadata.history_file.empty()) return;
+	fs::path history_path;
+	iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport checkpoint history path", [&] {
+		if (!history) throw std::runtime_error("transport checkpoint history requires a BDF2 system");
+		history_path = metadata.history_file;
+		if (history_path.is_relative())
+			history_path = iga::TransportCheckpointMetadataPath(prefix).parent_path()/history_path;
+	});
+	iga::ReadReplicatedPetscCheckpointVector(history, PETSC_COMM_WORLD, history_path);
 }
 
 } // namespace
@@ -467,6 +483,8 @@ int main(int argc, char** argv)
 				std::cout << "configuration=simulation_config.json system=" << system.name
 					<< " fields=" << fields << " velocity_source=" << system.velocity_source
 					<< " dirichlet_dofs=" << boundaries.constrained_dofs << '\n';
+				if (system.time_integration != "backward_euler")
+					std::cout << "time_integration=" << system.time_integration << '\n';
 				iga::FlushCheckedText(std::cout);
 				for (std::size_t i = 0; i < system.fields.size(); ++i)
 					std::cout << "field[" << i << "]=" << system.fields[i] << '\n';
@@ -581,6 +599,14 @@ int main(int argc, char** argv)
 		CheckPetsc("transport VecSet", VecSet(current, 0.0));
 		CheckPetsc("transport VecSet", VecSet(next, 0.0));
 		CheckPetsc("transport VecSet", VecSet(rhs, 0.0));
+		const bool bdf2 = system.time_integration == "bdf2";
+		bool have_history = false;
+		if (bdf2) {
+			objects.history = assembler.CreateVector();
+			objects.combination = assembler.CreateVector();
+			CheckPetsc("transport VecSet", VecSet(objects.history, 0.0));
+			CheckPetsc("transport VecSet", VecSet(objects.combination, 0.0));
+		}
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport initial state", [&] {
 			WriteArray view;
 			view.Acquire(current);
@@ -602,10 +628,13 @@ int main(int argc, char** argv)
 				metadata = iga::ReadTransportCheckpointMetadata(options.restart);
 				iga::ValidateTransportCheckpoint(metadata, database.header().nodes,
 					system.fields, system.name, system.velocity_source, system.steps, system.dt);
+				if (metadata.time_integration != system.time_integration)
+					throw std::runtime_error("transport checkpoint time integration does not match configuration");
 				metadata_text = iga::SerializeTransportCheckpointMetadata(metadata);
 			});
 			iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "transport checkpoint metadata agreement", metadata_text);
-			ReadTransportCheckpoint(current, options.restart, metadata);
+			ReadTransportCheckpoint(current, objects.history, options.restart, metadata);
+			have_history = bdf2 && !metadata.history_file.empty();
 			start_step = metadata.completed_step;
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport restart logging", [&] {
 				if (rank == 0) std::cout << "restart=" << options.restart.string()
@@ -726,7 +755,17 @@ int main(int argc, char** argv)
 		if (options.output_every > 0) {
 			write_output(start_step, false);
 		}
+		double assembled_scale = 1.0;
 		for (int step = start_step; step < run_end_step; ++step) {
+			// BDF2 starts with one backward-Euler step, then uses
+			// (3 c^(n+1) - 4 c^n + c^(n-1)) / (2 dt).
+			const double time_derivative_scale = bdf2 && have_history ? 1.5 : 1.0;
+			system.time_derivative_scale = time_derivative_scale;
+			if (!velocity_source && time_derivative_scale != assembled_scale) {
+				assemble_operators(prescribed_velocity);
+				CheckPetsc("transport KSPSetOperators", KSPSetOperators(solver, left, left));
+				assembled_scale = time_derivative_scale;
+			}
 			if (velocity_source) {
 				const auto velocity = velocity_at((step+1)*system.dt);
 				assemble_operators(velocity);
@@ -745,7 +784,11 @@ int main(int argc, char** argv)
 				for (const auto value : step_boundaries.value)
 					if (!std::isfinite(value)) throw std::runtime_error("transport boundary value is not finite");
 			});
-			CheckPetsc("transport MatMult", MatMult(previous, current, rhs));
+			if (time_derivative_scale != 1.0) {
+				CheckPetsc("transport history combination",
+					VecAXPBYPCZ(objects.combination, 2.0, -0.5, 0.0, current, objects.history));
+				CheckPetsc("transport MatMult", MatMult(previous, objects.combination, rhs));
+			} else CheckPetsc("transport MatMult", MatMult(previous, current, rhs));
 			CheckPetsc("transport VecAXPY", VecAXPY(rhs, 1.0, forcing));
 			std::vector<PetscScalar> boundary_values;
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport boundary values", [&] {
@@ -787,6 +830,10 @@ int main(int argc, char** argv)
 				});
 			}
 			total_iterations += iterations;
+			if (bdf2) {
+				CheckPetsc("transport history update", VecCopy(current, objects.history));
+				have_history = true;
+			}
 			CheckPetsc("transport VecSwap", VecSwap(current, next));
 			if (options.output_every > 0
 				&& completed_step%options.output_every == 0) {
@@ -808,8 +855,14 @@ int main(int argc, char** argv)
 					metadata.state_file = iga::TransportCheckpointStatePath(
 						options.checkpoint).filename().string();
 					metadata.state_format = "petsc_binary";
+					if (bdf2) {
+						metadata.schema_version = 2;
+						metadata.time_integration = "bdf2";
+						metadata.history_file = have_history ? iga::TransportCheckpointHistoryPath(
+							options.checkpoint).filename().string() : std::string{};
+					}
 				});
-				WriteTransportCheckpoint(current, options.checkpoint, metadata, rank);
+				WriteTransportCheckpoint(current, objects.history, options.checkpoint, metadata, rank);
 				iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport checkpoint logging", [&] {
 					if (rank == 0) std::cout << "checkpoint=" << options.checkpoint.string()
 						<< " completed_step=" << completed_step << '\n';
