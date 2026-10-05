@@ -22,6 +22,7 @@ struct MeshParameters
 	double upstream_clearance_over_diameter = 1.0;
 	double downstream_clearance_over_diameter = 1.5;
 	bool synthetic_port_extensions = false;
+	bool compensate_template_radius = false;
 	double minimum_bifurcation_angle_degrees = 10.0;
 	double maximum_junction_radius_ratio = 8.0;
 	int junction_optimization_iterations = 4;

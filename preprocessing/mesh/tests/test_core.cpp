@@ -51,6 +51,16 @@ int main(int argc, char** argv)
 	short_options.target_spacing=0.25;
 	RequireFailure([&] { SampleBranch({{0,0,0},{1,0,0}}, {1,1}, short_options, 2, "short arm"); },
 		"insufficient bifurcation clearance");
+	Require(std::abs(TemplateRadiusCompensation(8)-6.0/(4.0+std::sqrt(2.0)))<1.0e-14,
+		"radius compensation for an eight-point boundary");
+	auto compensated=GenerateCircularTemplates(1.0);
+	const auto uncompensated=compensated;
+	CompensateTemplateRadius(compensated);
+	for(std::size_t i=0;i<compensated.circle.size();++i)
+		Require(Norm(compensated.circle[i]-uncompensated.circle[i]*TemplateRadiusCompensation(8))<1.0e-14,
+			"template compensation must scale every circle point uniformly");
+	Require(std::abs(Norm(compensated.circle[compensated.boundary_circle.front()])
+		-TemplateRadiusCompensation(8))<1.0e-12,"compensated boundary radius");
 	BranchSamplingOptions explicit_options;
 	explicit_options.target_spacing=0.5;
 	const auto explicit_clearance_samples=SampleBranch(

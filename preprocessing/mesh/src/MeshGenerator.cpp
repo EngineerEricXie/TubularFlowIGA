@@ -353,6 +353,29 @@ CrossSectionTemplates ReadCrossSectionTemplates(const std::filesystem::path& dir
 	return ReadTemplates(directory);
 }
 
+double TemplateRadiusCompensation(int boundary_points)
+{
+	// Uniform periodic cubic B-spline through N control points on the unit
+	// circle passes its knots at radius (4 + 2 cos(2 pi / N)) / 6, so the
+	// smooth wall sits inside the prescribed radius. Coarse templates (N = 8)
+	// lose about 19 % of the lumen area without this factor.
+	if (boundary_points < 3)
+		throw std::runtime_error("cross-section template boundary needs at least three points");
+	const double pi = std::acos(-1.0);
+	return 6.0/(4.0 + 2.0*std::cos(2.0*pi/boundary_points));
+}
+
+void CompensateTemplateRadius(CrossSectionTemplates& templates)
+{
+	// One factor for every template keeps circle, merge and branch interfaces
+	// coincident; it is taken from the circle boundary they share.
+	const double factor = TemplateRadiusCompensation(
+		static_cast<int>(templates.boundary_circle.size()));
+	for (auto* points : {&templates.circle, &templates.merge, &templates.branch_bottom_points,
+			&templates.branch_left_points, &templates.branch_right_points})
+		for (auto& point : *points) point = point*factor;
+}
+
 std::vector<Vec3> SectionLayerTangents(const SwcGraph& skeleton)
 {
 	std::vector<Vec3> tangents(skeleton.nodes.size());
@@ -400,8 +423,10 @@ ControlMesh GenerateControlMesh(
 	parameters.Validate();
 	if (!std::isfinite(minimum_scaled_jacobian) || minimum_scaled_jacobian <= 0.0)
 		throw std::runtime_error("minimum scaled Jacobian must be positive");
-	const Templates t = parameters.cross_section_size > 0.0
+	Templates t = parameters.cross_section_size > 0.0
 		? GenerateCircularTemplates(parameters.cross_section_size) : ReadTemplates(template_directory);
+	if (parameters.compensate_template_radius)
+		CompensateTemplateRadius(t);
 	const int root = skeleton.root();
 	const auto sections = skeleton.Sections();
 	const auto layer_tangents = SectionLayerTangents(skeleton);

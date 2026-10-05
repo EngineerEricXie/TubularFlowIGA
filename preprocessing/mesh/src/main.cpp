@@ -145,6 +145,9 @@ int main(int argc, char** argv)
 			return 0;
 		}
 		if (command == "pipeline") {
+			const bool compensate_radius = argc >= 3
+				&& std::string(argv[argc-1]) == "--compensate-template-radius";
+			if(compensate_radius) --argc;
 			const bool synthetic_extensions = argc >= 3
 				&& std::string(argv[argc-1]) == "--synthetic-port-extensions";
 			if(synthetic_extensions) --argc;
@@ -155,13 +158,14 @@ int main(int argc, char** argv)
 				&& std::string(argv[argc-1]) == "--allow-preflight-failure";
 			const int positional_argc = argc-(allow_preflight_failure ? 1 : 0);
 			if (positional_argc < 3 || positional_argc > 5) throw std::runtime_error(
-				"usage: tubular_mesh pipeline CASE_DIR [TEMPLATE_DIR] [MIN_SCALED_J] [--allow-preflight-failure] [--export-diagnostic-mesh] [--synthetic-port-extensions]");
+				"usage: tubular_mesh pipeline CASE_DIR [TEMPLATE_DIR] [MIN_SCALED_J] [--allow-preflight-failure] [--export-diagnostic-mesh] [--synthetic-port-extensions] [--compensate-template-radius]");
 			const std::filesystem::path directory = argv[2];
 			const std::filesystem::path templates = positional_argc >= 4 ? argv[3] : "meshgeneration/template";
 			const double minimum_scaled = positional_argc >= 5 ? std::stod(argv[4]) : 1.0e-3;
 			const auto pipeline = ReadPipelineInput(directory);
 			auto parameters = pipeline.parameters;
 			parameters.synthetic_port_extensions=synthetic_extensions;
+			parameters.compensate_template_radius=compensate_radius;
 			if (pipeline.modern && positional_argc >= 5)
 				throw std::runtime_error("MIN_SCALED_J override is not accepted with schema-v4 mesh.quality");
 			if (!pipeline.modern && positional_argc >= 5) parameters.minimum_scaled_jacobian = minimum_scaled;

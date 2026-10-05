@@ -2,6 +2,7 @@
 
 #include "HexMesh.hpp"
 #include "SwcGraph.hpp"
+#include "CrossSectionTemplate.hpp"
 
 #include <filesystem>
 #include <vector>
@@ -19,6 +20,8 @@ struct ControlMesh
 };
 
 std::vector<Vec3> SectionLayerTangents(const SwcGraph& skeleton);
+double TemplateRadiusCompensation(int boundary_points);
+void CompensateTemplateRadius(CrossSectionTemplates& templates);
 
 ControlMesh GenerateControlMesh(
 	const SwcGraph& skeleton,
