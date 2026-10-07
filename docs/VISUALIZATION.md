@@ -4,6 +4,15 @@ CPU and CUDA production solvers share the default visualization formats.
 The CPU flow and configured transport CLIs additionally support the partitioned
 mode below. Checkpoint outputs are independent of this selection.
 
+## Native tetrahedral flow and species
+
+The CPU native hydraulic graph and prescribed-species CLIs now default to
+compressed temporal VTKHDF, including fixed and moving tetrahedral meshes.
+Use `--visualization-format pvtu` for legacy XML output. See
+[Native Tet VTKHDF](NATIVE_TET_VTKHDF.md) for field layouts, MPI memory,
+restart rules, offline conversion and validation. Other backends retain the
+formats documented below.
+
 ## Moving immersed snapshots
 
 Moving immersed flow snapshots are published as recoverable `<stem>.epoch…`

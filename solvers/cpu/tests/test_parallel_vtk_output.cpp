@@ -72,6 +72,27 @@ void Run(MPI_Comm comm,const std::filesystem::path& root,double seed)
 		Require(Read(healthy/"snapshot.pvtu")==saved_index,"existing snapshot index changed");
 		Require(Read(healthy/("rank"+std::to_string(rank)+".vtu"))==saved_piece,"existing snapshot piece changed");
 	});
+	const auto escaped=root/"escaped &quot; & \" ' < >";
+	iga::WriteParallelVtkSnapshot(comm,escaped,piece,.75);
+	const auto collection=root/"flow.pvd";
+	const std::vector<std::pair<double,std::filesystem::path>> series{
+		{.5,healthy/"snapshot.pvtu"},{.75,escaped/"snapshot.pvtu"}};
+	iga::WriteParallelVtkSeries(comm,collection,series);
+	iga::CollectiveLocalStage(comm,"test series round trip",[&]{
+		Require(iga::ReadParallelVtkSeries(collection)==series,"PVD times or escaped paths changed");
+	});
+	iga::CollectiveLocalStage(comm,"test incomplete series setup",[&]{
+		if(rank!=0)return;
+		const auto text=Read(collection);
+		std::ofstream output(collection);
+		output<<text.substr(0,text.find("</Collection>"));output.close();
+		Require(bool(output),"cannot truncate test series");
+	});
+	iga::CollectiveLocalStage(comm,"test incomplete series rejection",[&]{
+		bool invalid=false;
+		try{iga::ReadParallelVtkSeries(collection);}catch(const std::exception&){invalid=true;}
+		Require(invalid,"incomplete PVD was accepted");
+	});
 	if(rank==0)std::cout<<"parallel_vtk ranks="<<ranks<<" failures="<<(ranks==1?3:5)<<" retries=passed\n";
 }
 }

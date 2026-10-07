@@ -175,7 +175,9 @@ Standalone cases use versioned JSON configuration files and source geometry:
 Generated meshes, databases, partitions, caches, and results belong under
 `artifacts/` or another work directory, not beside source inputs. Solver
 outputs include text fields and ParaView-ready VTU, PVTU, PVD, or VTKHDF files,
-depending on the backend. See [Visualization](docs/VISUALIZATION.md).
+depending on the backend. Native CPU Tet hydraulic/species runs default to
+compressed temporal VTKHDF; see [Native Tet VTKHDF](docs/NATIVE_TET_VTKHDF.md)
+and [Visualization](docs/VISUALIZATION.md).
 
 ## Example results
 

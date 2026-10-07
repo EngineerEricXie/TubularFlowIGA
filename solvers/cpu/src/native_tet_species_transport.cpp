@@ -4,7 +4,7 @@
 #include "NativeTetMovingSpeciesPetscRuntime.hpp"
 #include "NativeTetSpeciesVisualization.hpp"
 #include "NativeTetWallReservoirExchange.hpp"
-#include "ParallelVtkOutput.hpp"
+#include "NativeTetTemporalOutput.hpp"
 #include "Sha256.hpp"
 
 #include <petscksp.h>
@@ -447,12 +447,13 @@ int main(int argc,char** argv)
 	int exit_code=0;
 	try{
 		if(argc<3)
-			throw std::invalid_argument("usage: native_tet_species_transport case.json --check-input | --output-dir DIR [--stop-after-step N] | --resume DIR");
+			throw std::invalid_argument("usage: native_tet_species_transport case.json --check-input | --output-dir DIR [--stop-after-step N] | --resume DIR [--visualization-format auto|vtkhdf|pvtu]");
 		const std::filesystem::path case_path=argv[1];
 		bool check_only=false,output_mode=false,resume=false;
 		std::filesystem::path output;
 		int stop_after=0;
-		bool stop_requested=false;
+		bool stop_requested=false,format_set=false;
+		std::string visualization_format="auto";
 		for(int index=2;index<argc;++index){
 			const std::string option=argv[index];
 			if(option=="--check-input"&&!check_only&&!output_mode&&!resume){
@@ -475,12 +476,17 @@ int main(int argc,char** argv)
 				catch(const std::exception&){
 					throw std::invalid_argument("native species stop step is invalid");
 				}
+			}else if(option=="--visualization-format"&&index+1<argc&&!format_set){
+				visualization_format=argv[++index];format_set=true;
+				iga::NativeTetUseVtkHdf(visualization_format);
 			}else throw std::invalid_argument("native species command option is invalid");
 		}
 		if((!check_only&&!output_mode&&!resume)||((output_mode||resume)&&output.empty()))
 			throw std::invalid_argument("native species requires input check, new output, or resume");
 		if(check_only&&argc!=3)
 			throw std::invalid_argument("native species input check has extra options");
+		const bool use_hdf=iga::NativeTetUseVtkHdf(visualization_format);
+		iga::RequireCollectiveSameText(PETSC_COMM_WORLD,"native species visualization format",visualization_format);
 		int rank=0,ranks=1;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 		MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
 		std::string case_text,mesh_text;
@@ -594,7 +600,7 @@ int main(int argc,char** argv)
 						throw std::runtime_error("native species resume identity, clock or publication differs");
 					for(int step=1;step<=published.step;++step){
 						const auto snapshot=output/("step_"+std::to_string(step));
-						if(!std::filesystem::is_regular_file(snapshot/"snapshot.pvtu")
+						if(!std::filesystem::is_regular_file(use_hdf?output/"species.vtkhdf":snapshot/"snapshot.pvtu")
 							||!std::filesystem::is_regular_file(CheckpointPath(output,step)))
 							throw std::runtime_error("native species resume is missing a published step");
 						if(std::filesystem::is_regular_file(TissueCheckpointPath(output,step))
@@ -602,7 +608,7 @@ int main(int argc,char** argv)
 							||std::filesystem::exists(std::filesystem::path(
 								TissueCheckpointPath(output,step).string()+".pending")))
 							throw std::runtime_error("native species resume tissue publication differs");
-						for(int peer=0;peer<ranks;++peer)
+						for(int peer=0;!use_hdf&&peer<ranks;++peer)
 							if(!std::filesystem::is_regular_file(snapshot/(
 								"rank"+std::to_string(peer)+".vtu")))
 								throw std::runtime_error("native species resume is missing a VTU rank piece");
@@ -645,6 +651,19 @@ int main(int argc,char** argv)
 			const int final_step=stop_requested?stop_after:specification.steps;
 			if(final_step<first_step)
 				throw std::invalid_argument("native species requested stop precedes resumed state");
+			std::unique_ptr<iga::TemporalUnstructuredVtkHdfWriter> hdf_output;
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native species VTKHDF initialization",[&]{
+				if(!use_hdf||rank!=0)return;
+				const bool moving=std::any_of(specification.mesh_velocity.begin(),
+					specification.mesh_velocity.end(),[](double value){return value!=0.;});
+				const auto piece=iga::BuildNativeTetSpeciesVtkPartition(reference,
+					committed.current_mesh,committed.concentration_mol_m3,0,1);
+				hdf_output=std::make_unique<iga::TemporalUnstructuredVtkHdfWriter>(
+					output/"species.vtkhdf",piece,moving,4,first_step-1);
+				if(resume&&std::abs(hdf_output->LastTime()-committed.time_s)>1e-12)
+					throw std::runtime_error("native species VTKHDF checkpoint time differs");
+			});
+
 			for(int step=first_step;step<=final_step;++step){
 				auto current=committed.current_mesh;
 				for(auto& point:current.points)
@@ -719,11 +738,15 @@ int main(int argc,char** argv)
 						"native species tissue checkpoint agreement",Hash(tissue_bytes));
 				}
 				iga::VtkPartition piece;
-				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native species field build",[&]{
-					piece=iga::BuildNativeTetSpeciesVtkPartition(reference,current,
+				iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native species field output",[&]{
+					if(use_hdf){
+						if(rank==0)hdf_output->Append(step*specification.dt,
+							iga::BuildNativeTetSpeciesVtkPartition(reference,current,
+								solved.step.concentration_mol_m3,0,1));
+					}else piece=iga::BuildNativeTetSpeciesVtkPartition(reference,current,
 						solved.step.concentration_mol_m3,rank,ranks);
 				});
-				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,
+				if(!use_hdf)iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,
 					output/("step_"+std::to_string(step)),piece,step*specification.dt);
 				const PublishedStep published{step,ranks,candidate.time_s,
 					solved.step.current_inventory_mol,solved.step.balance_defect_mol_s,
@@ -767,6 +790,9 @@ int main(int argc,char** argv)
 				}
 				committed=std::move(candidate);
 			}
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native species VTKHDF close",[&]{
+				if(hdf_output)hdf_output->Close();
+			});
 			if(final_step==specification.steps)
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native species summary publication",[&]{
 				if(rank!=0)return;

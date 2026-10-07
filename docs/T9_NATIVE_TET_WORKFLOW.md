@@ -13,6 +13,11 @@ to this hydraulic run. A third explicit
 and provenance path for an independent, single-compartment
 [Darcy solve](T6_NATIVE_TET_DARCY.md); it is not vessel–tissue coupling.
 
+Transient backends default to one compressed VTKHDF series per field family.
+The optional workflow key `visualization_format` accepts `auto`, `vtkhdf`, or
+`pvtu`; select `pvtu` explicitly for legacy XML output. Keep the selection
+unchanged across resume. See [Native Tet VTKHDF](NATIVE_TET_VTKHDF.md).
+
 First build the native executable:
 
 ```bash

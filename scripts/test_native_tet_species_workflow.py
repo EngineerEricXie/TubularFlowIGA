@@ -56,7 +56,7 @@ def main():
 		(work/"species.json").write_text(json.dumps(case))
 		config = {"schema_version": 1, "backend": "native_tet_p1_prescribed_species",
 			"input_route": "volume", "input_file": str(mesh),
-			"case_file": "species.json", "output_directory": "full", "mpi_ranks": 2}
+			"case_file": "species.json", "output_directory": "full", "mpi_ranks": 2, "visualization_format": "pvtu"}
 		def command(name, options=()):
 			path = work/f"{name}.json"
 			path.write_text(json.dumps({**config, "output_directory": name}))

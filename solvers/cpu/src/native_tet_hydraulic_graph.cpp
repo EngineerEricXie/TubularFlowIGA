@@ -7,7 +7,7 @@
 #include "NativeTetAleFlowTransportDomainAdapter.hpp"
 #include "NativeTetMovingSpeciesPetscRuntime.hpp"
 #include "NativeTetSpeciesVisualization.hpp"
-#include "ParallelVtkOutput.hpp"
+#include "NativeTetTemporalOutput.hpp"
 #include "OneDFlowDomainAdapter.hpp"
 #include "SpeciesPressureFlowComponentExecutor.hpp"
 #include "ZeroDTerminalRcrSpeciesDomainRuntime.hpp"
@@ -290,6 +290,8 @@ struct Options
 	std::filesystem::path case_file,checkpoint_root,restart_root,output_root;
 	int stop_after_step=0;
 	bool check_input=false;
+	std::string visualization_format="auto";
+	bool format_set=false;
 };
 
 Options ParseOptions(int argc,char** argv)
@@ -297,7 +299,7 @@ Options ParseOptions(int argc,char** argv)
 	if(argc<2)throw std::invalid_argument(
 		"usage: native_tet_hydraulic_graph case.json [--checkpoint-dir DIR] "
 		"[--restart-dir DIR] [--output-dir DIR] [--stop-after-step N] "
-		"[--check-input]");
+		"[--visualization-format auto|vtkhdf|pvtu] [--check-input]");
 	Options result;result.case_file=argv[1];
 	for(int i=2;i<argc;){
 		const std::string name=argv[i];
@@ -313,6 +315,10 @@ Options ParseOptions(int argc,char** argv)
 			result.restart_root=argv[i+1];
 		else if(name=="--output-dir"&&result.output_root.empty())
 			result.output_root=argv[i+1];
+		else if(name=="--visualization-format"&&!result.format_set){
+			result.visualization_format=argv[i+1];result.format_set=true;
+			iga::NativeTetUseVtkHdf(result.visualization_format);
+		}
 		else if(name=="--stop-after-step"&&result.stop_after_step==0){
 			const std::string value=argv[i+1];
 			std::size_t consumed=0;
@@ -350,7 +356,7 @@ std::string ExecutionSha256(int ranks)
 	hash.AppendLittleEndian64(static_cast<std::uint64_t>(ranks));
 	const auto options=iga::CapturePetscOptions(nullptr,
 		{"--checkpoint-dir","--restart-dir","--output-dir",
-			"--stop-after-step","--check-input"});
+			"--stop-after-step","--check-input","--visualization-format"});
 	hash.AppendLittleEndian64(options.size());hash.Append(options.data(),options.size());
 	return hash.Hex();
 }
@@ -388,7 +394,7 @@ iga::CouplingPort OneDObservationSpeciesPort(const std::string& species)
 }
 
 void RunT7SpeciesGraph(const Case& scenario,const iga::NativeTetMesh& mesh,
-	const std::vector<double>& initial_flow,const Options& options,int rank,int ranks)
+	const std::vector<double>& initial_flow,const Options& options,int rank)
 {
 	const auto& species=scenario.species.front();
 	const auto source_observation=OneDObservationSpeciesPort(species.id);
@@ -484,35 +490,22 @@ void RunT7SpeciesGraph(const Case& scenario,const iga::NativeTetMesh& mesh,
 		iga::SpeciesAmountTolerance{1e-7,1e-2,1e-6});
 	iga::SpeciesPressureFlowComponentExecutor executor(registry,"source",controls,
 		iga::CollectiveSpeciesPressureFlowExecution(PETSC_COMM_WORLD));
-	std::vector<std::pair<double,std::filesystem::path>> flow_series,species_series;
+	iga::NativeTetTemporalOutput flow_output(PETSC_COMM_WORLD,options.output_root,
+		"flow",options.visualization_format,scenario.motion_kind!="fixed");
+	iga::NativeTetTemporalOutput species_output(PETSC_COMM_WORLD,options.output_root,
+		"species_"+species.id,options.visualization_format,scenario.motion_kind!="fixed");
 	for(int step=0;step<scenario.steps;++step){
 		std::map<std::string,double> guesses{{"source_tet",0.}};
 		for(const auto& outlet:scenario.outlets)guesses.emplace(outlet.edge_id,0.);
 		const auto result=executor.Advance({step,step*scenario.dt_s,scenario.dt_s},guesses);
 		const auto& accepted=native_ptr->CommittedSpeciesState();
-		if(!options.output_root.empty()){
-			iga::VtkPartition flow_piece,species_piece;
-			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"T7 FEM visualization",[&]{
-				flow_piece=iga::BuildNativeTetHydraulicVtkPartition(mesh,
-					accepted.current_mesh,native_ptr->CommittedFlowState(),
-					scenario.fluid.dynamic_viscosity,rank,ranks);
-				species_piece=iga::BuildNativeTetSpeciesVtkPartition(mesh,
-					accepted.current_mesh,accepted.concentration_mol_m3,rank,ranks);
-			});
-			const auto flow_snapshot=options.output_root/("step_"+std::to_string(step+1));
-			const auto species_snapshot=options.output_root/("species_"+species.id
-				+"_step_"+std::to_string(step+1));
-			iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,flow_snapshot,flow_piece,
-				accepted.time_s);
-			iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,species_snapshot,
-				species_piece,accepted.time_s);
-			flow_series.push_back({accepted.time_s,flow_snapshot/"snapshot.pvtu"});
-			species_series.push_back({accepted.time_s,species_snapshot/"snapshot.pvtu"});
-			iga::WriteParallelVtkSeries(PETSC_COMM_WORLD,
-				options.output_root/"flow.pvd",flow_series);
-			iga::WriteParallelVtkSeries(PETSC_COMM_WORLD,
-				options.output_root/("species_"+species.id+".pvd"),species_series);
-		}
+		flow_output.Append(accepted.time_s,"step_"+std::to_string(step+1),[&](int owner,int peers){
+			return iga::BuildNativeTetHydraulicVtkPartition(mesh,accepted.current_mesh,
+				native_ptr->CommittedFlowState(),scenario.fluid.dynamic_viscosity,owner,peers);
+		});
+		species_output.Append(accepted.time_s,"species_"+species.id+"_step_"+std::to_string(step+1),
+			[&](int owner,int peers){return iga::BuildNativeTetSpeciesVtkPartition(mesh,
+				accepted.current_mesh,accepted.concentration_mol_m3,owner,peers);});
 		if(rank==0)std::cout<<std::setprecision(17)
 			<<"native_t7_species_step id="<<species.id<<" step="<<step+1
 			<<" inventory_mol="
@@ -526,6 +519,7 @@ void RunT7SpeciesGraph(const Case& scenario,const iga::NativeTetMesh& mesh,
 			std::cout<<" edge_"<<edge.edge_id<<"_residual_mol="<<edge.residual;
 		if(rank==0)std::cout<<'\n';
 	}
+	flow_output.Close();species_output.Close();
 	if(rank==0)std::cout<<"native_t7_species_complete accepted_steps="
 		<<native_ptr->CommittedSpeciesState().accepted_steps<<'\n';
 }
@@ -609,7 +603,7 @@ int main(int argc,char** argv)
 				&&std::all_of(scenario.outlets.begin(),scenario.outlets.end(),
 					[](const auto& outlet){return outlet.species_volume_m3>0.;});
 			if(t7_species){
-				RunT7SpeciesGraph(scenario,mesh,initial_flow,options,rank,ranks);
+				RunT7SpeciesGraph(scenario,mesh,initial_flow,options,rank);
 				PetscFinalize();return 0;
 			}
 			std::vector<iga::CouplingPort> tet_ports{
@@ -740,10 +734,16 @@ int main(int argc,char** argv)
 				if(rank==0)std::filesystem::create_directories(options.checkpoint_root);
 			});
 		std::vector<std::vector<double>> concentrations;
-		std::vector<std::vector<std::pair<double,std::filesystem::path>>> species_series;
+		iga::NativeTetTemporalOutput flow_output(PETSC_COMM_WORLD,options.output_root,
+			"flow",options.visualization_format,scenario.motion_kind!="fixed",
+			native_ptr->AcceptedSteps(),native_ptr->CommittedTime());
+		std::vector<std::unique_ptr<iga::NativeTetTemporalOutput>> species_outputs;
 		for(const auto& species:scenario.species)
 			concentrations.emplace_back(mesh.points.size(),species.initial_concentration);
-		species_series.resize(scenario.species.size());
+		for(const auto& species:scenario.species)
+			species_outputs.push_back(std::make_unique<iga::NativeTetTemporalOutput>(
+				PETSC_COMM_WORLD,options.output_root,"species_"+species.id,
+				options.visualization_format,scenario.motion_kind!="fixed"));
 		for(int step=static_cast<int>(native_ptr->AcceptedSteps());step<final_step;++step){
 			const auto previous_mesh=native_ptr->CommittedMesh();
 			const iga::DomainStepContext context{step,native_ptr->CommittedTime(),
@@ -834,23 +834,10 @@ int main(int argc,char** argv)
 						||std::abs(result.step.balance_defect_mol_s)>1e-8*scale)
 						throw std::runtime_error("native coupled species step did not conserve or converge");
 					concentrations[index]=result.step.concentration_mol_m3;
-					if(!options.output_root.empty()){
-						iga::VtkPartition piece;
-						iga::CollectiveLocalStage(PETSC_COMM_WORLD,
-							"native species visualization build",[&]{
-								piece=iga::BuildNativeTetSpeciesVtkPartition(mesh,
-									current_mesh,concentrations[index],rank,ranks);
-							});
-						const auto snapshot=options.output_root/("species_"+species.id
-							+"_step_"+std::to_string(step+1));
-						iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,snapshot,piece,
-							native_ptr->CommittedTime());
-						species_series[index].push_back({native_ptr->CommittedTime(),
-							snapshot/"snapshot.pvtu"});
-						iga::WriteParallelVtkSeries(PETSC_COMM_WORLD,
-							options.output_root/("species_"+species.id+".pvd"),
-							species_series[index]);
-					}
+					species_outputs[index]->Append(native_ptr->CommittedTime(),
+						"species_"+species.id+"_step_"+std::to_string(step+1),
+						[&](int owner,int peers){return iga::BuildNativeTetSpeciesVtkPartition(
+							mesh,current_mesh,concentrations[index],owner,peers);});
 					if(rank==0)std::cout<<std::setprecision(17)
 						<<"native_flow_species_step id="<<species.id
 						<<" step="<<step+1
@@ -860,20 +847,10 @@ int main(int argc,char** argv)
 						<<" linear_iterations="<<result.linear_iterations<<'\n';
 				}
 			}
-			if(!options.output_root.empty()){
-				iga::VtkPartition piece;
-				iga::CollectiveLocalStage(PETSC_COMM_WORLD,
-					"native hydraulic visualization build",[&]{
-						piece=iga::BuildNativeTetHydraulicVtkPartition(
-							native_ptr->ReferenceMesh(),
-							native_ptr->CommittedMesh(),
-							native_ptr->CommittedFlowState(),
-							scenario.fluid.dynamic_viscosity,rank,ranks);
-					});
-				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,
-					options.output_root/("step_"+std::to_string(step+1)),
-					piece,native_ptr->CommittedTime());
-			}
+			flow_output.Append(native_ptr->CommittedTime(),"step_"+std::to_string(step+1),
+				[&](int owner,int peers){return iga::BuildNativeTetHydraulicVtkPartition(
+					native_ptr->ReferenceMesh(),native_ptr->CommittedMesh(),
+					native_ptr->CommittedFlowState(),scenario.fluid.dynamic_viscosity,owner,peers);});
 			if(rank==0){
 				std::cout<<std::setprecision(17)
 					<<"native_hydraulic_step step="<<step+1
@@ -911,6 +888,8 @@ int main(int argc,char** argv)
 				previous_epoch=epoch.id;
 			}
 		}
+		flow_output.Close();
+		for(auto& output:species_outputs)output->Close();
 		if(rank==0)std::cout<<"native_hydraulic_complete accepted_steps="
 			<<native_ptr->AcceptedSteps()<<" model_sha256="
 			<<native_ptr->ModelIdentitySha256()<<'\n';

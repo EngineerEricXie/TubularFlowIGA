@@ -65,8 +65,10 @@ The dedicated bundle atomically publishes each accepted source–FEM–RCR epoch
 The CLI initializes hydraulic edge pressure guesses to zero on every step,
 including after restart; this keeps its current stateless coupling policy
 reproducible. It rejects edge/3D flow imbalance or 0D storage imbalance before
-writing an epoch. With `--output-dir`, each accepted step creates an immutable
-`step_N/snapshot.pvtu` with rank-owned quadratic tetra VTU pieces. Point data
+writing an epoch. With `--output-dir`, accepted steps append to one `flow.vtkhdf` by default.
+`--visualization-format pvtu` selects immutable `step_N/snapshot.pvtu`
+with rank-owned quadratic tetra VTU pieces. See [Native Tet VTKHDF](NATIVE_TET_VTKHDF.md)
+for compression, MPI memory and strict restart checks. Point data
 contains every P2 velocity DOF and pressure interpolated from P1 vertices at
 the midside nodes. It also contains `reference_position_m` and
 `displacement_m` for every P2 node; current coordinates equal reference

@@ -274,10 +274,10 @@ native_tet_matching_mesh_inspect: src/native_tet_matching_mesh_inspect.cpp inclu
 native_tet_matching_darcy_smoke: src/native_tet_matching_darcy_smoke.cpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_matching_solved_roi_smoke: src/native_tet_matching_solved_roi_smoke.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
+native_tet_matching_solved_roi_smoke: src/native_tet_matching_solved_roi_smoke.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_cube_dual_tree_fixed_flow: src/native_tet_cube_dual_tree_fixed_flow.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMatchingFsiInterface.hpp include/NativeTetLinearElasticPetsc.hpp include/NativeTetLinearElasticVisualization.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
+native_tet_cube_dual_tree_fixed_flow: src/native_tet_cube_dual_tree_fixed_flow.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetMatchingFsiInterface.hpp include/NativeTetLinearElasticPetsc.hpp include/NativeTetLinearElasticVisualization.hpp include/NativeTetMeshComponents.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 native_tet_cube_oxygen: src/native_tet_cube_oxygen.cpp $(wildcard include/NativeTet*.hpp include/ParallelVtkOutput.hpp include/Collective*.hpp ../../include/*.hpp)
@@ -337,10 +337,10 @@ native_tet_moving_species_ports_test: tests/test_native_tet_moving_species_ports
 native_tet_ale_graph_ports_test: tests/test_native_tet_ale_graph_ports.cpp include/NativeTetAleGraphPorts.hpp include/NativeTetAleBoundaryControl.hpp include/NativeTetAleBackflow.hpp ../../include/CoupledDomainRuntime.hpp ../../include/FlowDomainPortMetadata.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
-native_tet_ale_graph_petsc_runtime_test: tests/test_native_tet_ale_graph_petsc_runtime.cpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBoundaryControl.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesPorts.hpp include/NativeTetFem.hpp
+native_tet_ale_graph_petsc_runtime_test: tests/test_native_tet_ale_graph_petsc_runtime.cpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBoundaryControl.hpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesPorts.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_flow_transport_domain_adapter_test: tests/test_native_tet_ale_flow_transport_domain_adapter.cpp include/NativeTetAleFlowTransportDomainAdapter.hpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetMovingSpeciesCheckpoint.hpp include/NativeTetMovingSpeciesPorts.hpp
+native_tet_ale_flow_transport_domain_adapter_test: tests/test_native_tet_ale_flow_transport_domain_adapter.cpp include/NativeTetAleFlowTransportDomainAdapter.hpp include/NativeTetAleGraphPorts.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetMovingSpeciesCheckpoint.hpp include/NativeTetMovingSpeciesPorts.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
 
 native_tet_ale_species_graph_1d_test: tests/test_native_tet_ale_species_graph_1d.cpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../one_d/include/*.hpp ../../include/*.hpp)
@@ -350,10 +350,10 @@ native_tet_ale_flow_0d_graph_test: tests/test_native_tet_ale_flow_0d_graph.cpp $
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
 
 native_tet_hydraulic_graph: src/native_tet_hydraulic_graph.cpp include/ParallelVtkOutput.hpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../one_d/include/*.hpp ../../include/*.hpp)
-	$(CXX) $(CPPFLAGS) -I../one_d/include $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+	$(CXX) $(CPPFLAGS) -I../one_d/include $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 native_tet_species_transport: src/native_tet_species_transport.cpp include/ParallelVtkOutput.hpp $(wildcard include/NativeTet*.hpp include/Collective*.hpp ../../include/*.hpp)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $(HDF5_ALL_CFLAGS) $< -o $@ $(PETSC_LIB) $(HDF5_LIBS)
 
 native_tet_moving_species_petsc_runtime_test: tests/test_native_tet_moving_species_petsc_runtime.cpp include/NativeTetMovingSpeciesPetscRuntime.hpp include/NativeTetMovingSpeciesTransport.hpp include/NativeTetRt0Flux.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -UNDEBUG $< -o $@ $(PETSC_LIB)
@@ -455,31 +455,31 @@ native_tet_flow: src/native_tet_flow.cpp include/NativeTetFem.hpp ../../include/
 native_tet_ale_petsc_assembly_test: tests/test_native_tet_ale_petsc_assembly.cpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_petsc_runtime_test: tests/test_native_tet_ale_petsc_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+native_tet_ale_petsc_runtime_test: tests/test_native_tet_ale_petsc_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_radial_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_radial_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
+native_tet_ale_idealized_lv_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_radial_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_radial_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
+native_tet_ale_idealized_lv_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_CYCLES -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_RADIAL_REFINEMENT -DIGA_NATIVE_LV_TWO_CYCLES -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_RADIAL_SHELLS -DIGA_NATIVE_LV_SINGLE_STEP -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_idealized_lv_two_shell_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
+native_tet_ale_idealized_lv_two_shell_backflow_flow_test: tests/test_native_tet_ale_idealized_lv_flow.cpp include/IdealizedLeftVentricleFixture.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAleBackflow.hpp include/NativeTetBoundaryFlow.hpp include/NativeTetStarRadialRefinement.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) -DIGA_NATIVE_LV_TWO_RADIAL_SHELLS -DIGA_NATIVE_LV_BACKFLOW_STABILIZATION $< -o $@ $(PETSC_LIB)
 
 .PHONY: native-tet-ale-idealized-lv-radial-backflow-flow-test
@@ -488,13 +488,13 @@ native-tet-ale-idealized-lv-radial-backflow-flow-test: native_tet_ale_idealized_
 
 native_tet_ale_petsc_runtime_test native_tet_ale_petsc_prescribed_runtime_test native_tet_ale_petsc_mesh_runtime_test native_tet_ale_idealized_lv_flow_test native_tet_ale_idealized_lv_radial_flow_test native_tet_ale_idealized_lv_backflow_flow_test native_tet_ale_idealized_lv_radial_backflow_flow_test native_tet_ale_idealized_lv_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_radial_two_cycle_backflow_flow_test native_tet_ale_idealized_lv_two_shell_single_step_backflow_flow_test native_tet_ale_idealized_lv_two_shell_backflow_flow_test: include/NativeTetAleBackflow.hpp include/NativeTetAleBoundaryControl.hpp
 
-native_tet_ale_petsc_prescribed_runtime_test: tests/test_native_tet_ale_petsc_prescribed_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleMeshMotion.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+native_tet_ale_petsc_prescribed_runtime_test: tests/test_native_tet_ale_petsc_prescribed_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleMeshMotion.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_ale_petsc_mesh_runtime_test: tests/test_native_tet_ale_petsc_mesh_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+native_tet_ale_petsc_mesh_runtime_test: tests/test_native_tet_ale_petsc_mesh_runtime.cpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleConservation.hpp include/NativeTetAleKinematics.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
-native_tet_bifurcation_runtime_test: tests/test_native_tet_bifurcation_runtime.cpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetRt0Flux.hpp include/NativeTetVesselTissueSourceMap.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
+native_tet_bifurcation_runtime_test: tests/test_native_tet_bifurcation_runtime.cpp include/NativeTetBoundaryFlow.hpp include/NativeTetDarcyPetsc.hpp include/NativeTetRt0Flux.hpp include/NativeTetVesselTissueSourceMap.hpp include/NativeTetMatchingInterfaceSource.hpp include/NativeTetAlePetscRuntime.hpp include/NativeTetAlePetscPreallocation.hpp include/NativeTetAlePetscAssembly.hpp include/NativeTetAleTransient.hpp include/NativeTetFem.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
 
 .PHONY: native-tet-ale-petsc-assembly-test
@@ -1279,7 +1279,7 @@ clean:
 	$(RM) native_tet_ale_flow_transport_domain_adapter_test
 	$(RM) native_tet_ale_species_graph_1d_test
 	$(RM) native_tet_ale_flow_0d_graph_test
-	$(RM) native_tet_hydraulic_graph
+	$(RM) native_tet_hydraulic_graph native_tet_flow_export temporal_unstructured_vtkhdf_test
 	$(RM) native_tet_flow_darcy_chain
 	$(RM) native_tet_fsi_steps
 	$(RM) native_tet_species_transport
@@ -1392,3 +1392,9 @@ bifurcation_fsi: src/bifurcation_fsi.cpp $(wildcard include/*.hpp ../../include/
 immersed_transient_preallocation_test: CPPFLAGS += -Itests
 immersed_transient_preallocation_test: tests/test_immersed_transient_preallocation.cpp $(wildcard include/*.hpp ../../include/*.hpp tests/*.hpp)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $(PETSC_CC_INCLUDES) $< -o $@ $(PETSC_LIB)
+
+native_tet_flow_export: src/native_tet_flow_export.cpp $(wildcard include/NativeTet*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ $(HDF5_LIBS)
+
+temporal_unstructured_vtkhdf_test: tests/test_temporal_unstructured_vtkhdf.cpp $(wildcard include/NativeTet*.hpp ../../include/*.hpp)
+	$(CXX) $(CPPFLAGS) $(HDF5_ALL_CFLAGS) $(CXXFLAGS) $< -o $@ -Wl,--wrap=H5Fflush $(HDF5_LIBS)

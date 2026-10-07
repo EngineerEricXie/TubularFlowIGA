@@ -146,7 +146,8 @@ step. The native assembler checks that displacement and mesh velocity agree.
 `--check-input` uses the same parser, native mesh reader, Jacobian checks and
 first-step species assembly without creating output. A run requires a new
 output directory and will not overwrite an existing one. Each accepted step
-publishes an immutable rank-owned linear-tetra `step_N/snapshot.pvtu` with
+appends to `species.vtkhdf` by default. Explicit `--visualization-format pvtu`
+publishes immutable rank-owned linear-tetra `step_N/snapshot.pvtu` files. Both contain
 `concentration_mol_m3`, `reference_position_m` and `displacement_m`; VTK
 `Points` are current coordinates. `run_summary.json` records case/mesh
 SHA-256, ranks, accepted steps, final time, inventory, reaction sink, outward
@@ -159,10 +160,12 @@ Each accepted step also publishes a checksummed native concentration/ALE
 checkpoint and, for finite reservoirs, `tissue_step_N.bin`. The original
 single-reservoir sidecar retains its v1 format; multi-region sidecars use a
 checksummed v2 format with all sorted labels and amounts. `run_state.json`
-is updated only after the VTU and both applicable checkpoints exist. Resume
+is updated only after visualization is flushed and both applicable checkpoints exist. Resume
 checks exact case/mesh hashes, MPI count, clock,
 current ALE translation, both latest checkpoint identities, and all previous
-snapshot/checkpoint paths including every rank piece. It rejects changed inputs, completed runs, missing
+checkpoint paths. Legacy PVTU checks every rank piece; VTKHDF checks published
+row counts, schema, topology and final time as described in
+[Native Tet VTKHDF](NATIVE_TET_VTKHDF.md). It rejects changed inputs, completed runs, missing
 or corrupted files, and orphan next-step output. An OS-held output lock
 rejects concurrent writers. A crash between snapshot/checkpoint/manifest
 publication may leave an orphan; the CLI rejects that state rather than

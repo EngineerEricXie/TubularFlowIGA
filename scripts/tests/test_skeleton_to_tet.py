@@ -1,12 +1,15 @@
 """Tests for the template-free skeleton-to-tetrahedron input path."""
 
 from pathlib import Path
+from importlib.util import find_spec
 import tempfile
+import random
+import math
 import unittest
 
 from preprocessing.tet.skeleton_geometry import (branch_transition_radius,
-	fit_terminal_caps, spline_capsule_paths)
-from preprocessing.tet.skeleton_to_tet import read_skeleton, simplify_tree
+	fit_terminal_caps, spline_capsule_paths, ExactCenterlineIndex, closest_centerline_segment)
+from preprocessing.tet.skeleton_to_tet import read_skeleton, simplify_tree, compact_surface_nodes
 
 
 class SkeletonToTetTest(unittest.TestCase):
@@ -61,6 +64,31 @@ l 2 4
 		fit_terminal_caps(points, triangles, tree)
 		self.assertAlmostEqual(points[2][1], 2.)
 		self.assertAlmostEqual(points[5][1], 1.)
+
+	def test_surface_compaction_preserves_ids(self):
+		points = {3: (0., 0., 0.), 9: (1., 0., 0.), 21: (0., 1., 0.), 835: (9., 9., 9.)}
+		kept, removed = compact_surface_nodes(points, {"wall": [(3, 9, 21)]})
+		self.assertEqual(removed, 1)
+		self.assertEqual(kept, {tag: points[tag] for tag in (3, 9, 21)})
+		with self.assertRaises(ValueError):
+			compact_surface_nodes(points, {"wall": []})
+		with self.assertRaises(ValueError):
+			compact_surface_nodes(points, {"wall": [(3, 9, 100)]})
+
+	def test_exact_centerline_index_matches_linear_and_ties(self):
+		if find_spec("scipy") is None:
+			self.skipTest("SciPy is required for exact_kdtree")
+		rng = random.Random(123)
+		segments = []
+		for index in range(100):
+			a = tuple(rng.uniform(-10., 10.) for _ in range(3))
+			b = tuple(a[j]+rng.uniform(-3., 3.) for j in range(3))
+			length = math.dist(a, b)
+			segments.append((a, b, 0., length, length, .1, .2, index))
+		segments.append((*segments[0][:-1], 100))
+		index = ExactCenterlineIndex(segments)
+		for point in [segments[0][0], *(tuple(rng.uniform(-20., 20.) for _ in range(3)) for _ in range(200))]:
+			self.assertEqual(index.query(point), closest_centerline_segment(point, segments))
 
 
 if __name__ == "__main__":

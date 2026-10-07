@@ -1,6 +1,7 @@
 """Shared template-free centerline, radius, and surface operations."""
 
 import math
+import sys
 
 
 def dot(a, b):
@@ -172,6 +173,34 @@ def closest_centerline_segment(point, centerline):
 	return closest
 
 
+class ExactCenterlineIndex:
+	"""Prune segments with a conservative midpoint bound; retain original tie order."""
+	def __init__(self, centerline):
+		import numpy as np
+		from scipy.spatial import cKDTree
+		self.centerline = centerline
+		self.midpoints = np.asarray([[(a+b)/2. for a,b in zip(item[0],item[1])]
+			for item in centerline],dtype=float)
+		self.maximum_half_length = max(math.dist(item[0],item[1])/2. for item in centerline)
+		self.index = cKDTree(self.midpoints)
+		self.coordinate_scale = max(1.,float(np.abs(self.midpoints).max()))
+		self.queries = 0
+		self.candidates = 0
+
+	def query(self, point):
+		_, first = self.index.query(point)
+		upper = closest_centerline_segment(point,[self.centerline[int(first)]])[0]
+		# If a segment is closer than upper, its midpoint is at most
+		# upper + half its length away by the triangle inequality.
+		bound = upper+self.maximum_half_length
+		margin = 64.*sys.float_info.epsilon*max(self.coordinate_scale,abs(bound),
+			max(abs(value) for value in point))
+		candidates = sorted(self.index.query_ball_point(point,bound+margin))
+		self.queries += 1
+		self.candidates += len(candidates)
+		return closest_centerline_segment(point,[self.centerline[i] for i in candidates])
+
+
 def sampled_centerline(tree, geometry):
 	paths = spline_capsule_paths(tree, geometry.get("subsegments_per_edge", 2),
 		geometry.get("tangent_scale", .25))
@@ -216,6 +245,10 @@ def blend_branch_radii(points, triangles, tree, surface, radius_add, geometry):
 def fit_tree_radii(points, triangles, tree, geometry, names=None):
 	"""Expand an undersized capsule union to the skeleton's nodal radius field."""
 	centerline = sampled_centerline(tree, geometry)
+	spatial_index = (ExactCenterlineIndex(centerline)
+		if geometry.get("centerline_search") == "exact_kdtree" else None)
+	closest = spatial_index.query if spatial_index is not None else \
+		lambda point: closest_centerline_segment(point,centerline)
 	children = [0]*len(tree["nodes_m"])
 	for start, _, _ in tree["segments"]:
 		children[start] += 1
@@ -226,7 +259,7 @@ def fit_tree_radii(points, triangles, tree, geometry, names=None):
 	for tag in tags:
 		point = points[tag]
 		distance, axis_point, arc, total, radius, start_radius, start = \
-			closest_centerline_segment(point, centerline)
+			closest(point)
 		transition_length = total
 		if children[start] > 1:
 			transition_length *= geometry["radius_transition_fraction"]
