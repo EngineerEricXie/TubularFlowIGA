@@ -111,7 +111,7 @@ def main():
 	config = json.loads(config_path.read_text(encoding="utf-8"))
 	require_keys(config,
 		{"schema_version", "backend", "input_route", "input_file", "case_file",
-		"output_directory", "mpi_ranks", "mesher"},
+		"output_directory", "mpi_ranks", "mesher", "visualization_format"},
 		{"schema_version", "backend", "input_route", "input_file", "case_file",
 		"output_directory", "mpi_ranks"}, "workflow")
 	if type(config["schema_version"]) is not int or config["schema_version"] != 1:
@@ -124,6 +124,11 @@ def main():
 		raise ValueError("only project-owned native tetra hydraulic/species/Darcy backends are supported")
 	species = config["backend"] == "native_tet_p1_prescribed_species"
 	darcy = config["backend"] == "native_tet_p1_darcy_steady"
+	visualization_format = config.get("visualization_format", "auto")
+	if visualization_format not in ("auto", "vtkhdf", "pvtu"):
+		raise ValueError("visualization_format must be auto, vtkhdf or pvtu")
+	if darcy and visualization_format != "auto":
+		raise ValueError("steady Darcy workflow does not select transient visualization formats")
 	if darcy and (args.stop_after_step is not None or args.resume):
 		raise ValueError("steady Darcy workflow has no step horizon or restart")
 	if config["input_route"] not in ("surface", "volume"):
@@ -186,7 +191,7 @@ def main():
 		"solver_file": str(solver),
 		"input_sha256": sha256(input_path), "case_template_sha256": sha256(case_template),
 		"configuration_sha256": sha256(config_path), "solver_sha256": sha256(solver),
-		"mpi_ranks": config["mpi_ranks"]}
+		"mpi_ranks": config["mpi_ranks"], "visualization_format": visualization_format}
 	if config["input_route"] == "surface" and mesher["kind"] == "ftetwild":
 		identity["mesher_binary_sha256"] = sha256(mesher_binary)
 	def publish():
@@ -227,9 +232,13 @@ def main():
 			raise RuntimeError("resume checkpoint is inconsistent with workflow status")
 		if args.stop_after_step is not None and args.stop_after_step <= last:
 			raise ValueError("resume stop step must advance past the checkpoint")
-		for step in range(1, last+1):
-			if not (output/"fields"/f"step_{step}"/"snapshot.pvtu").is_file():
-				raise RuntimeError("resume is missing an accepted visualization step")
+		if visualization_format == "pvtu":
+			for step in range(1, last+1):
+				if not (output/"fields"/f"step_{step}"/"snapshot.pvtu").is_file():
+					raise RuntimeError("resume is missing an accepted visualization step")
+		elif not (output/"fields"/("species.vtkhdf" if species else "flow.vtkhdf")).is_file():
+			raise RuntimeError("resume is missing its temporal VTKHDF output")
+		# The native HDF writer checks exact published row count and checkpoint time.
 		for entry in (output/"fields").glob("step_*"):
 			if entry.name[5:].isdigit() and int(entry.name[5:]) > last:
 				raise RuntimeError("resume found an uncheckpointed visualization step")
@@ -250,6 +259,7 @@ def main():
 				command += ["--checkpoint-dir", str(output/"checkpoints"),
 					"--restart-dir", str(output/"checkpoints"),
 					"--output-dir", str(output/"fields")]
+			command += ["--visualization-format", visualization_format]
 			if args.stop_after_step is not None:
 				command += ["--stop-after-step", str(args.stop_after_step)]
 			status["timings_s"][f"simulation_resume_{resume_run}"] = invoke(command,
@@ -315,6 +325,8 @@ def main():
 		if not species and not darcy and not coupled_species:
 			command += ["--checkpoint-dir", str(output/"checkpoints")]
 		command += ["--output-dir", str(output/"fields")]
+		if not darcy:
+			command += ["--visualization-format", visualization_format]
 		if args.stop_after_step is not None:
 			command += ["--stop-after-step", str(args.stop_after_step)]
 		logfile = output/"simulation.log"

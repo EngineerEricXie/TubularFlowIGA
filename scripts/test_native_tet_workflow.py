@@ -48,7 +48,7 @@ def main():
 			"backend": "native_tet_p2p1_ale_hydraulic", "input_route": "volume",
 			"input_file": str(fixture.with_suffix(".msh")),
 			"case_file": str(fixture), "output_directory": "volume_result",
-			"mpi_ranks": 1}
+			"mpi_ranks": 1, "visualization_format": "pvtu"}
 		config_path = work/"volume_workflow.json"
 		config_path.write_text(json.dumps(volume_config))
 		command = [sys.executable, str(workflow_script), str(config_path),

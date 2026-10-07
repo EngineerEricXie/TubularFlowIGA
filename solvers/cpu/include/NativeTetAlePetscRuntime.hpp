@@ -4,6 +4,7 @@
 #include "NativeTetAleBoundaryControl.hpp"
 #include "NativeTetAleBackflow.hpp"
 #include "NativeTetAlePetscAssembly.hpp"
+#include "NativeTetAlePetscPreallocation.hpp"
 #include "NativeTetAleTransient.hpp"
 
 #include <petscksp.h>
@@ -72,15 +73,12 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 		||(!steady&&!(dt_s>0.0))
 		||!(absolute_tolerance>0.0)||maximum_iterations==0)
 		throw std::invalid_argument("native ALE PETSc runtime input is invalid");
-	const PetscInt dofs=static_cast<PetscInt>(dofs_size);
 	Mat matrix=nullptr,schur_preconditioner=nullptr;
 	Vec state=nullptr,residual=nullptr,right=nullptr,update=nullptr,base_state=nullptr;
 	Vec row_scale=nullptr,column_scale=nullptr;
 	KSP solver=nullptr;VecScatter scatter=nullptr;Vec replicated=nullptr;
-	NativeTetAlePetscCheck(MatCreateAIJ(PETSC_COMM_WORLD,PETSC_DECIDE,PETSC_DECIDE,
-		dofs,dofs,80,nullptr,80,nullptr,&matrix),"MatCreateAIJ runtime");
-	NativeTetAlePetscCheck(MatSetOption(matrix,MAT_NEW_NONZERO_ALLOCATION_ERR,PETSC_FALSE),
-		"MatSetOption runtime");
+	CreateNativeTetAlePetscMatrix(current_mesh,topology,boundary_conditions,
+		boundary_operators,&matrix);
 	NativeTetAlePetscCheck(MatCreateVecs(matrix,&state,&residual),"MatCreateVecs runtime");
 	NativeTetAlePetscCheck(VecDuplicate(residual,&right),"VecDuplicate right");
 	NativeTetAlePetscCheck(VecDuplicate(state,&update),"VecDuplicate update");

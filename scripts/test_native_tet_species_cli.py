@@ -15,6 +15,8 @@ from pathlib import Path
 
 
 def invoke(binary, ranks, case, *options, success=True):
+	if "--check-input" not in options and "--visualization-format" not in options:
+		options = (*options, "--visualization-format", "pvtu")
 	result = subprocess.run(["mpiexec", "-np", str(ranks), str(binary),
 		str(case), *map(str, options)], capture_output=True, text=True, timeout=120)
 	if success and result.returncode:

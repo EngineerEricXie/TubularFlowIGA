@@ -275,6 +275,7 @@ def generate(tree, output_prefix, controls):
 		points, triangles, collapsed, dropped = clean_surface_triangles(nodes,
 			triangles, controls["join_cleanup_tolerance_m"],
 			{"fluid": list(labels)})
+		points, removed_unused_surface_nodes = compact_surface_nodes(points, triangles)
 		cap_moved, cap_displacement = fit_terminal_caps(points, triangles, tree)
 		moved, maximum_displacement = fit_tree_radii(points, triangles, tree,
 			controls, ("wall",))
@@ -324,6 +325,8 @@ def generate(tree, output_prefix, controls):
 			for index, tag in enumerate(node_tags)}
 		connectivity = [tuple(int(tag) for tag in blocks[0][start:start+4])
 			for start in range(0, len(blocks[0]), 4)]
+		if {tag for cell in connectivity for tag in cell} != set(coordinates):
+			raise ValueError("volume mesh contains unused nodes")
 		minimum_scaled = 1.
 		for cell in connectivity:
 			signed, scaled = tet_quality([coordinates[tag] for tag in cell])
@@ -341,6 +344,7 @@ def generate(tree, output_prefix, controls):
 		"controls": {key: value for key, value in controls.items() if key != "input_path"},
 		"skeleton_nodes": len(tree["nodes_m"]), "skeleton_segments": len(tree["segments"]),
 		"outlets": len(tree["terminals"]), "collapsed_surface_nodes": collapsed,
+		"removed_unused_surface_nodes": removed_unused_surface_nodes, "unused_volume_nodes": 0,
 		"dropped_surface_triangles": dropped, "radius_fitted_surface_nodes": moved,
 		"maximum_radius_fit_displacement_m": maximum_displacement,
 		"volume_nodes": len(coordinates), "tetrahedra": len(connectivity),
@@ -349,6 +353,16 @@ def generate(tree, output_prefix, controls):
 	Path(str(output_prefix)+".json").write_text(json.dumps(manifest, indent=2,
 		sort_keys=True)+"\n", encoding="utf-8")
 	return manifest
+
+
+def compact_surface_nodes(points, triangles):
+	"""Drop nodes unused after surface cleanup without renumbering retained IDs."""
+	if any(not group for group in triangles.values()):
+		raise ValueError("required inlet, outlet, or wall surface is empty")
+	referenced = {tag for group in triangles.values() for face in group for tag in face}
+	if not referenced.issubset(points):
+		raise ValueError("surface connectivity references a missing node")
+	return {tag: points[tag] for tag in sorted(referenced)}, len(points)-len(referenced)
 
 
 def main():
@@ -366,6 +380,7 @@ def main():
 	parser.add_argument("--surface-smoothing-iterations", type=int, default=80)
 	parser.add_argument("--surface-smoothing-pass-band", type=float, default=.01)
 	parser.add_argument("--minimum-scaled-jacobian", type=float, default=.001)
+	parser.add_argument("--centerline-search", choices=("linear", "exact_kdtree"), default="linear")
 	args = parser.parse_args()
 	path = args.input_skeleton.resolve()
 	output_prefix = args.output_prefix.resolve()
@@ -374,7 +389,7 @@ def main():
 	source_nodes = len(tree["nodes_m"])
 	minimum_spacing = args.minimum_centerline_spacing_m or min(tree["node_radii_m"])
 	tree = simplify_tree(tree, minimum_spacing)
-	controls = {"input_path": path,
+	controls = {"input_path": path, "centerline_search": args.centerline_search,
 		"length_scale_to_m": args.length_scale_to_m,
 		"source_skeleton_nodes": source_nodes,
 		"minimum_centerline_spacing_m": minimum_spacing,
