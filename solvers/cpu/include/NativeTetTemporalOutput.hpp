@@ -29,6 +29,15 @@ public:
 		RequireCollectiveSameText(comm_,"native output configuration",
 			directory_.string()+"\n"+stem_+"\n"+format+"\n"
 			+std::to_string(moving_)+"\n"+std::to_string(resume_steps_));
+		CollectiveLocalStage(comm_,"native PVTU series resume",[&]{
+			if(hdf_||directory_.empty()||!resume_steps_)return;
+			const auto path=directory_/(stem_+".pvd");
+			if(!std::filesystem::exists(path))return;
+			series_=ReadParallelVtkSeries(path);
+			if(series_.size()>static_cast<std::uint64_t>(resume_steps_)
+				||std::abs(series_.back().first-resume_time_)>1e-12)
+				throw std::runtime_error("native PVTU checkpoint time or step count differs");
+		});
 	}
 	template<class Builder>
 	void Append(double time,const std::filesystem::path& legacy_directory,Builder&& build)
@@ -45,7 +54,8 @@ public:
 				if(!writer_){
 					const auto path=directory_/(stem_+".vtkhdf");
 					const auto count=std::filesystem::exists(path)?resume_steps_:0;
-					writer_=std::make_unique<TemporalUnstructuredVtkHdfWriter>(path,piece,moving_,4,count);
+					writer_=std::make_unique<TemporalUnstructuredVtkHdfWriter>(
+						path,piece,moving_,4,count,count?0:resume_steps_);
 					if(count&&std::abs(writer_->LastTime()-resume_time_)>1e-12)
 						throw std::runtime_error("native VTKHDF checkpoint time differs");
 				}

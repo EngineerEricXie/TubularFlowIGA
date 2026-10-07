@@ -8,7 +8,9 @@ import argparse
 import copy
 import json
 import os
+import shutil
 import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -40,10 +42,18 @@ def main():
         path.write_text(json.dumps(case, indent=2)+"\n")
         return path
 
-    def compare(hdf, legacy, prefix, steps, dt):
+    def compare(hdf, legacy, prefix, steps, dt, first_step=1):
         comparisons.append({"hdf": str(hdf), "snapshots": [
             {"time_s": dt*step, "file": str(legacy/f"{prefix}{step}"/"snapshot.pvtu")}
-            for step in range(1, steps+1)]})
+            for step in range(first_step, steps+1)]})
+
+    def check_pvd(directory, steps, dt):
+        entries = ET.parse(directory/"flow.pvd").getroot().find("Collection").findall("DataSet")
+        assert len(entries) == len(steps)
+        for entry, step in zip(entries, steps):
+            assert abs(float(entry.attrib["timestep"])-dt*step) < 1e-12
+            assert entry.attrib["file"] == f"step_{step}/snapshot.pvtu"
+            assert (directory/entry.attrib["file"]).is_file()
 
     base = json.loads((source/"solvers/cpu/tests/data/native_tet_hydraulic_star.json").read_text())
     base["mesh_file"] = str(mesh)
@@ -126,6 +136,39 @@ def main():
             compare(folder/"flow.vtkhdf", work/"hydraulic_True_2_pvtu", "step_", 2, .05)
         else:
             compare(folder/"species.vtkhdf", work/"species_False_2_pvtu", "step_", 3, .1)
+    # Repeat restarts both in a fresh series and in the original directory.
+    # An older checkpoint must still be rejected after a fresh series advances.
+    for moving in (False, True):
+        case = copy.deepcopy(base)
+        case["time"]["steps"] = 3
+        if not moving:
+            case["motion"] = {"kind": "fixed", "speed_x_m_s": 0.}
+        path = save(f"repeated_restart_{moving}", case)
+        for ranks in (1, 2):
+            outputs = {}
+            for fmt in ("vtkhdf", "pvtu"):
+                label = f"repeated_{moving}_{ranks}_{fmt}"
+                original, fresh = work/(label+"_original"), work/(label+"_fresh")
+                checkpoint, saved = work/(label+"_checkpoints"), work/(label+"_step1")
+                common = ("--visualization-format", fmt)
+                run(label+"_stop", "native_tet_hydraulic_graph", ranks, path, *common,
+                    "--checkpoint-dir", checkpoint, "--output-dir", original, "--stop-after-step", 1)
+                shutil.copytree(checkpoint, saved)
+                run(label+"_fresh", "native_tet_hydraulic_graph", ranks, path, *common,
+                    "--checkpoint-dir", checkpoint, "--restart-dir", checkpoint,
+                    "--output-dir", fresh, "--stop-after-step", 2)
+                run(label+"_stale", "native_tet_hydraulic_graph", ranks, path, *common,
+                    "--restart-dir", saved, "--output-dir", fresh, success=False)
+                run(label+"_again", "native_tet_hydraulic_graph", ranks, path, *common,
+                    "--checkpoint-dir", checkpoint, "--restart-dir", checkpoint, "--output-dir", fresh)
+                run(label+"_original", "native_tet_hydraulic_graph", ranks, path, *common,
+                    "--checkpoint-dir", saved, "--restart-dir", saved, "--output-dir", original)
+                outputs[fmt] = (original, fresh)
+                if fmt == "pvtu":
+                    check_pvd(original, [1, 2, 3], .05)
+                    check_pvd(fresh, [2, 3], .05)
+            compare(outputs["vtkhdf"][0]/"flow.vtkhdf", outputs["pvtu"][0], "step_", 3, .05)
+            compare(outputs["vtkhdf"][1]/"flow.vtkhdf", outputs["pvtu"][0], "step_", 3, .05, first_step=2)
     save("comparisons", {"comparisons": comparisons, "executions": executions})
     print(json.dumps({"passed": True, "executions": len(executions), "series": len(comparisons)}))
 

@@ -44,6 +44,11 @@ New outputs use exclusive file creation and reject overwrites. Same-directory
 hydraulic checkpoint restart appends only when topology, IDs, coordinate mode,
 field schemas, exact published step count and final physical time agree. A
 hydraulic restart can also use a fresh output directory, starting a new series.
+That series records its initial accepted-step offset so later restarts can
+append to it while still checking its frame count against the checkpoint.
+Files without offset metadata retain the original zero-offset interpretation.
+PVTU restart restores the existing `flow.pvd` entries before appending; its last
+time must match the checkpoint. A fresh directory starts a new PVD collection.
 The prescribed-species `--resume DIR` continues its single file in place.
 Use the same visualization format when resuming a workflow.
 
@@ -125,7 +130,8 @@ The writer fixture tests mixed point/cell fields, Int64 IDs above 2^53, fixed an
 moving geometry, exclusive creation, resume, invalid times/topology/schema,
 append-after-close and injected HDF5 flush failure. MPI fixtures cover 1/2/8
 ranks (including ranks with no owned cells), flow plus species, standalone
-species restart, hydraulic restart, workflow restart and collective output
+species restart, repeated hydraulic restarts in original and fresh directories,
+PVD history preservation, stale checkpoints, workflow restart and collective output
 failure. The independent ParaView reader compares every field and connectivity
 against explicit PVTU output. These are bounded format and numerical regression
 checks, not a mesh-convergence or physiological-validation study.

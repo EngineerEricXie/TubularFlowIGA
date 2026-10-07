@@ -43,6 +43,13 @@ int main(int argc,char** argv)
 			writer.Close();writer.Close();
 			Reject([&]{writer.Append(.1,initial);});
 		}
+		if(!moving){
+			// The original zero-based writer did not record an offset.
+			auto legacy=iga::hdf_detail::RequireHandle(H5Fopen(file.string().c_str(),
+				H5F_ACC_RDWR,H5P_DEFAULT),H5Fclose,"open legacy fixture");
+			auto metadata=iga::hdf_detail::OpenGroup(legacy.get(),"TubularFlowIGA");
+			iga::hdf_detail::Require(H5Adelete(metadata.get(),"StepOffset"),"remove offset");
+		}
 		Reject([&]{iga::TemporalUnstructuredVtkHdfWriter duplicate(file,initial,moving);});
 		Reject([&]{iga::TemporalUnstructuredVtkHdfWriter mismatch(file,initial,!moving,4,1);});
 		Reject([&]{iga::TemporalUnstructuredVtkHdfWriter mismatch(file,initial,moving,4,2);});
@@ -57,6 +64,20 @@ int main(int argc,char** argv)
 			iga::WriteVtuPartition(root/(std::string(stem)+"_"+std::to_string(step)+".vtu"),piece,.1*step);
 		}
 		resumed.Close();
+		const auto fresh=root/(std::string(stem)+"_fresh.vtkhdf");
+		{
+			iga::TemporalUnstructuredVtkHdfWriter writer(fresh,initial,moving,4,0,1);
+			writer.Append(.2,initial);writer.Close();
+		}
+		Reject([&]{iga::TemporalUnstructuredVtkHdfWriter stale(fresh,initial,moving,4,1);});
+		Reject([&]{iga::TemporalUnstructuredVtkHdfWriter ahead(fresh,initial,moving,4,3);});
+		{
+			iga::TemporalUnstructuredVtkHdfWriter writer(fresh,initial,moving,4,2);
+			writer.Append(.3,initial);writer.Close();
+		}
+		iga::TemporalUnstructuredVtkHdfWriter twice(fresh,initial,moving,4,3);
+		if(twice.LastTime()!=.3)throw std::runtime_error("fresh series lost resumed time");
+		twice.Close();
 	}
 	const auto species=iga::BuildNativeTetSpeciesVtkPartition(mesh,mesh,{1.,2.,3.,4.},0,1);
 	iga::TemporalUnstructuredVtkHdfWriter concentration(root/"species.vtkhdf",species);

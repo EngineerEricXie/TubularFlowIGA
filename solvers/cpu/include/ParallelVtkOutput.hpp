@@ -4,6 +4,7 @@
 #include "CollectiveFailure.hpp"
 #include "PartitionedVtkOutput.hpp"
 #include "Sha256.hpp"
+#include <regex>
 
 namespace iga {
 
@@ -56,6 +57,53 @@ inline void WriteParallelVtkSnapshot(MPI_Comm communicator,const std::filesystem
 		WritePvtu(temporary,names,point_schema,cell_schema);
 		std::filesystem::rename(temporary,root/"snapshot.pvtu");
 	});
+}
+
+// Read the collection format emitted below, preserving its exact times and
+// references. Reject incomplete indexes before a resumed run can replace them.
+inline std::vector<std::pair<double,std::filesystem::path>> ReadParallelVtkSeries(
+	const std::filesystem::path& path)
+{
+	std::ifstream input(path);
+	if(!input)throw std::runtime_error("cannot read parallel VTK series");
+	std::string line;
+	if(!std::getline(input,line)||line!="<?xml version=\"1.0\"?>"
+		||!std::getline(input,line)||line!="<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\"><Collection>")
+		throw std::runtime_error("invalid parallel VTK series header");
+	const std::regex entry(R"vtk(<DataSet timestep="([^"]+)" group="" part="0" file="([^"]+)"/>)vtk");
+	std::vector<std::pair<double,std::filesystem::path>> snapshots;
+	bool complete=false;
+	double previous=-std::numeric_limits<double>::infinity();
+	while(std::getline(input,line)){
+		if(line=="</Collection></VTKFile>"){complete=true;break;}
+		std::smatch match;
+		if(!std::regex_match(line,match,entry))throw std::runtime_error("invalid parallel VTK series entry");
+		const auto clock=match[1].str();std::size_t consumed=0;
+		const double time=std::stod(clock,&consumed);
+		if(consumed!=clock.size()||!std::isfinite(time)||time<=previous)
+			throw std::runtime_error("invalid parallel VTK series time");
+		previous=time;
+		auto name=match[2].str();
+		// Decode ampersands last so an escaped literal entity stays literal.
+		for(const auto& entity:std::vector<std::pair<std::string,std::string>>{
+			{"&quot;","\""},{"&apos;","'"},{"&lt;","<"},{"&gt;",">"},{"&amp;","&"}}){
+			std::size_t position=0;
+			while((position=name.find(entity.first,position))!=std::string::npos){
+				name.replace(position,entity.first.size(),entity.second);position+=entity.second.size();
+			}
+		}
+		const std::filesystem::path relative=name;
+		if(relative.empty()||relative.is_absolute())throw std::runtime_error("invalid parallel VTK series reference");
+		for(const auto& part:relative)if(part=="..")throw std::runtime_error("parallel VTK series reference escapes directory");
+		const auto snapshot=path.parent_path()/relative;
+		if(!std::filesystem::is_regular_file(snapshot))throw std::runtime_error("parallel VTK series snapshot is missing");
+		snapshots.push_back({time,snapshot});
+	}
+	if(!complete||snapshots.empty()||input.bad())throw std::runtime_error("incomplete parallel VTK series");
+	while(std::getline(input,line))if(line.find_first_not_of(" \t\r")!=std::string::npos)
+		throw std::runtime_error("trailing parallel VTK series content");
+	if(input.bad())throw std::runtime_error("cannot read complete parallel VTK series");
+	return snapshots;
 }
 
 // Publish a time index after its immutable snapshots are complete. A single

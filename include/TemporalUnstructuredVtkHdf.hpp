@@ -12,16 +12,19 @@ namespace iga {
 class TemporalUnstructuredVtkHdfWriter
 {
 public:
+	// resume_steps is the solver's accepted step count. A new series may start
+	// after step_offset accepted steps; NSteps still counts only frames in this file.
 	TemporalUnstructuredVtkHdfWriter(const std::filesystem::path& path,
 		const VtkPartition& initial,bool moving=false,int compression=4,
-		std::int64_t resume_steps=0)
+		std::int64_t resume_steps=0,std::int64_t step_offset=0)
 		: moving_(moving),compression_(compression),points_(initial.point_ids.size()),
-		  cells_(initial.cell_ids.size()),topology_hash_(TopologyHash(initial,moving)),
+		  cells_(initial.cell_ids.size()),step_offset_(step_offset),topology_hash_(TopologyHash(initial,moving)),
 		  point_schema_(hdf_detail::ArraySchema(initial.point_arrays)),
 		  cell_schema_(hdf_detail::ArraySchema(initial.cell_arrays))
 	{
 		Validate(initial,0.);
-		if(points_==0||cells_==0||compression<0||compression>9||resume_steps<0)
+		if(points_==0||cells_==0||compression<0||compression>9||resume_steps<0
+			||step_offset<0||(resume_steps&&step_offset))
 			throw std::invalid_argument("invalid temporal unstructured VTKHDF configuration");
 		if(!path.parent_path().empty())std::filesystem::create_directories(path.parent_path());
 		file_=hdf_detail::RequireHandle(resume_steps
@@ -153,6 +156,7 @@ private:
 			}
 		}
 		auto metadata=hdf_detail::CreateGroup(file_.get(),"TubularFlowIGA");
+		hdf_detail::WriteScalarAttribute<std::int64_t>(metadata.get(),"StepOffset",step_offset_);
 		hdf_detail::WriteScalarAttribute<std::uint64_t>(metadata.get(),"TopologyHash",topology_hash_);
 		hdf_detail::WriteScalarAttribute<std::int64_t>(metadata.get(),"MovingPoints",moving_);
 		hdf_detail::WriteStringAttribute(metadata.get(),"PointArraySchema",point_schema_);
@@ -163,8 +167,14 @@ private:
 		root_=hdf_detail::OpenGroup(file_.get(),"VTKHDF");
 		auto metadata=hdf_detail::OpenGroup(file_.get(),"TubularFlowIGA");
 		auto steps=hdf_detail::OpenGroup(root_.get(),"Steps");
+		const auto has_offset=H5Aexists(metadata.get(),"StepOffset");
+		hdf_detail::Require(has_offset,"cannot inspect VTKHDF step offset");
+		// Preserve the original writer's zero-offset resume interpretation.
+		step_offset_=has_offset?hdf_detail::ReadScalarAttribute<std::int64_t>(
+			metadata.get(),"StepOffset"):0;
 		steps_=hdf_detail::ReadScalarAttribute<std::int64_t>(steps.get(),"NSteps");
-		if(steps_!=expected_steps
+		if(step_offset_<0||step_offset_>=expected_steps||steps_<=0
+			||steps_!=expected_steps-step_offset_
 			||hdf_detail::ReadScalarAttribute<std::uint64_t>(metadata.get(),"TopologyHash")!=topology_hash_
 			||hdf_detail::ReadScalarAttribute<std::int64_t>(metadata.get(),"MovingPoints")!=moving_
 			||hdf_detail::ReadStringAttribute(metadata.get(),"PointArraySchema")!=point_schema_
@@ -199,7 +209,7 @@ private:
 	}
 	bool moving_=false,closing_=false,failed_=false;
 	int compression_=4;
-	std::int64_t points_=0,cells_=0,steps_=0;
+	std::int64_t points_=0,cells_=0,steps_=0,step_offset_=0;
 	std::uint64_t topology_hash_=0;
 	std::string point_schema_,cell_schema_;
 	double last_time_=-std::numeric_limits<double>::infinity();
