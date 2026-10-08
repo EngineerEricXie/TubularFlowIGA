@@ -56,6 +56,9 @@ iga::BezierVisualizationMesh MakeMesh()
 	mesh.higher_order_degrees = {{{3, 3, 3}}};
 	mesh.element_ids = {17};
 	mesh.element_owners = {0};
+	mesh.point_boundary_labels.assign(mesh.points.size(), -1);
+	mesh.element_boundary_labels = {-1};
+	mesh.element_boundary_face_labels = {{{-1, -1, -1, -1, -1, -1}}};
 	return mesh;
 }
 
