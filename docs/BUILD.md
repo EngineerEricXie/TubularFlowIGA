@@ -93,3 +93,22 @@ compiler, remove the build directory or use another `TFI_BUILD_DIR`.
 embed a hash of the graph sources, `solvers/coupling/CMakeLists.txt`, and
 `cmake/TubularFlowHelpers.cmake`. The build regenerates it whenever one of those
 files changes; a checkpoint written by a different source state is rejected.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every pull
+request and on pushes to `main`:
+
+| Job | What it checks |
+|---|---|
+| Build and unit tests | Configures without PETSc, builds every remaining target, and runs `ctest -L unit -LE slow` |
+| Python tests and evidence cards | `scripts/evidence.py check` and the `unittest` modules in `scripts/tests` |
+
+PETSc, MPI-launched, GPU, ParaView, and `slow` tests are not run by CI; run them
+before merging changes that affect them:
+
+```bash
+make -C solvers/cpu petsc-test PETSC_DIR=... PETSC_ARCH=...
+make -C solvers/coupling petsc-test hpc-regression-test
+python3 scripts/evidence.py run <card>    # for the evidence a change touches
+```
