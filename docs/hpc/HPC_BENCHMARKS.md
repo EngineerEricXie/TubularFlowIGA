@@ -165,30 +165,12 @@ not be added into a supposed critical path. Summed RSS peaks are not simultaneou
 aggregate memory. Unsupported OpenMP/hybrid assembly is N/A; the supported GPU
 backend is recorded as a separate pending measurement, not N/A.
 
-## Repeat serial fixtures and a single GPU
+## Repeat a single GPU
 
-`hpc_serial_matrix.py` runs the other catalog paths with a separate first process
-and at least three fresh-process repetitions. It pins the host process to the
-selected logical CPU and requests one OpenMP/BLAS thread. Compile and prepare
-inputs before running; select a CPU within your allocation.
-
-```bash
-python3 scripts/hpc/hpc_serial_matrix.py \
-  --case immersed --case-dir /path/to/isolated-depth2-fixture \
-  --cpu 0 --repetitions 3 --timeout 300 --output-dir /path/to/new-immersed-matrix
-
-python3 scripts/hpc/hpc_serial_matrix.py \
-  --case fsi --cpu 0 --repetitions 3 --timeout 1500 \
-  --output-dir /path/to/new-fsi-matrix
-```
-
-The immersed fixture runs the full nine-block centered-FD regression and its
-Newton, geometry, and conservation gates. `--solve-only` is not this benchmark.
-The FSI fixture enforces its compiled force/moment, moving-mass, wall leakage,
-continuity, and strong-coupling assertions. The collector requires successful
-process/profile status and complete finite diagnostics; printed values are
-rounded and do not replace the native full-precision assertions. These two
-fixtures remain serial; unsupported MPI/OpenMP modes are N/A.
+`hpc_serial_matrix.py` repeats the CUDA catalog cases with a separate first
+process and at least three fresh-process repetitions. It pins the host process
+to the selected logical CPU and requests one OpenMP/BLAS thread. Compile and
+prepare inputs before running; select a CPU within your allocation.
 
 For CUDA, use an intact accepted CPU matrix for the same body-fitted catalog
 case. The collector verifies the recorded input/binary/tool hashes and the
@@ -228,8 +210,8 @@ serial process have different startup overheads.
 
 ## Rank-local application phases
 
-The CPU `iga_solve` and `iga_navier_stokes`, CUDA simulation commands, and the
-selected immersed aneurysm/FSI gate executables accept the opt-in environment
+The CPU `iga_solve` and `iga_navier_stokes` and the CUDA simulation commands
+accept the opt-in environment
 variable `IGA_PROFILE=1`. Use it outside `mpiexec` so every rank inherits the
 setting. With the per-rank wrapper above, each successful `stdout.log` ends
 with one `hpc_profile` JSON record. Profiling is disabled by default.
@@ -273,14 +255,8 @@ or uninstrumented phase.
 
 Body-fitted flow uses the same accounting for initialization, assembly, ghost
 exchange, matrix finalization, convergence diagnostics, solver setup/solve,
-and field/checkpoint output. Static immersed assembly includes line-search
-assemblies; geometry covers catalog/layout creation. Moving geometry includes
-construction of the candidate epoch, history extension, and state mapping.
-The FSI `coupling` interval encloses an entire accepted/rejected macro-step;
-its exclusive time subtracts nested geometry, fluid/traction/membrane assembly,
-and linear solves. Membrane linear time includes its small dense factorization.
-Serial immersed paths report no inter-rank communication; console diagnostics
-and unwrapped lifecycle work can still appear as unscoped time.
+and field/checkpoint output. Console diagnostics and unwrapped lifecycle work
+can still appear as unscoped time.
 
 The [PETSc profiling interface](https://petsc.org/release/manualpages/KSP/KSPSetUpOnBlocks/)
 explicitly supports moving block-PC setup ahead of `KSPSolve`. Setup includes
@@ -343,74 +319,6 @@ it does not implement distributed diagnostics for large runs.
 
 The registered normalization, commands, analytic checks, and unsupported
 modes are encoded by the transport budget script and catalog.
-
-## Complete immersed and FSI reference states
-
-The native fixtures support optional `--reference-output NEW_DIRECTORY` after
-their numerical gates. The [reference collector](../../scripts/hpc/hpc_reference_states.py)
-records native acceptance, complete physical fields, stable IDs, units, and
-source/binary/input provenance. It preserves the predeclared fieldwise `1e-6`
-relative L2 and `1e-12` zero-reference absolute L2 gates.
-
-```bash
-python3 scripts/hpc/hpc_reference_states.py collect --case fsi \
-  --output-dir NEW_REFERENCE --cpu 0 --timeout 1500
-python3 scripts/hpc/hpc_reference_states.py collect --case fsi \
-  --output-dir NEW_CANDIDATE --cpu 0 --timeout 1500
-python3 scripts/hpc/hpc_reference_states.py compare NEW_REFERENCE NEW_CANDIDATE
-```
-
-For immersed flow, use `--case immersed --case-dir DEPTH2_CASE`. Collection
-always runs the complete FD fixture. Comparison requires two accepted
-collections with matching fixture definitions and physical inputs; different
-binary versions are recorded and may be compared. A failed numerical comparison
-returns 2, invalid/incomplete evidence returns 1, and acceptance returns 0.
-
-The reference-state manifests document field coverage and source identity.
-These numerical state files are not restart checkpoints. Collection with extra output, particularly concurrent
-collection, is separate from an isolated performance matrix.
-
-The immersed transient runtime now has optional OpenMP volume assembly. Build
-the FSI fixture with `make -C solvers/cpu compliant_channel_fsi_openmp_test
-PETSC_DIR=...`, then collect it with explicit resources:
-
-```bash
-python3 scripts/hpc/hpc_reference_states.py collect --case fsi \
-  --binary solvers/cpu/compliant_channel_fsi_openmp_test \
-  --threads 4 --cpus 0 2 4 6 --output-dir NEW_OMP_CANDIDATE
-python3 scripts/hpc/hpc_reference_states.py compare NEW_REFERENCE NEW_OMP_CANDIDATE
-```
-
-Choose available CPU IDs from the actual machine topology. The CPU list
-overrides `--cpu`; it must contain unique available IDs and at least one CPU
-per thread. The collector sets OpenMP binding, limits BLAS to one thread,
-records execution settings separately from physical inputs, and requires
-native evidence of the requested assembly team and bounded batches.
-`--binary` must implement the same fixture, native gates and complete state
-export. It does not enable parallelism in a serial executable. The static
-immersed aneurysm fixture has not received this volume-assembly integration.
-
-For an isolated repeated comparison, the OpenMP matrix controller serializes
-fresh processes and compares all nine fields against the accepted reference
-after every run:
-
-```bash
-python3 scripts/hpc/hpc_openmp_matrix.py \
-  --reference artifacts/benchmarks/hpc00/reference-states/fsi-reference \
-  --output-dir NEW_ISOLATED_MATRIX --threads 1 4 --cpus 0 2 4 6 \
-  --repetitions 3 --timeout 1800
-```
-
-Run this after other simulations finish, on otherwise idle allocated CPUs.
-The controller cannot exclude unrelated external work. It alternates thread
-configurations between repetitions, excludes repetition 0, and preserves each
-collection and field comparison. Its `matrix.json` is updated atomically after
-each accepted run. Numerical acceptance is separate from speedup eligibility:
-the latter requires at least 10% lower median end-to-end launcher time and a
-maximum repeated RSS ratio no greater than 1.25. One-rank RSS is also aggregate
-RSS here. Negative performance results remain valid observations. A failed or
-incomplete run prevents an accepted matrix; fewer iterations or build success
-cannot replace complete native and field gates.
 
 ## Tests
 

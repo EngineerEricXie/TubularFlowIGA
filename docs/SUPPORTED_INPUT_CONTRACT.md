@@ -12,7 +12,7 @@ The short operational rules are:
 - Solver-facing geometry is in metres; time, pressure, velocity, and flow are
   seconds, pascals, metres per second, and cubic metres per second. SWC/line
   OBJ and surface preprocessing accept only an explicit positive scale to
-  metres. Production immersed geometry is already in metres.
+  metres.
 - A centerline case uses strict seven-column SWC or the documented
   radius-annotated **line** OBJ. Surface OBJ is not accepted by that route.
 - The common surface preflight accepts closed triangular VTP or STL. VTP
@@ -21,9 +21,6 @@ The short operational rules are:
 - OFF/OBJ/STL/PLY are capabilities of the separately installed fTetWild CLI.
   The adapter still begins from the common VTP/STL preflight; therefore OFF,
   OBJ, and PLY are not advertised as project surface inputs.
-- Production immersed cases accept VTP, `simulation_config.json`, and
-  `immersed_geometry.json`. Wall and port labels must be disjoint and exactly
-  cover every surface label. Moving frames retain topology and material IDs.
 - Native tetrahedral FEM consumes ASCII Gmsh 4.1 with first-order triangles
   and tetrahedra, physical surface names `boundary_label_<integer>`, and one
   volume named `fluid`. The repository owns P2/P1 basis construction,

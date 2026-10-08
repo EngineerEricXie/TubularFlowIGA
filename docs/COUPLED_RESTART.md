@@ -5,10 +5,8 @@ macro-steps and resume them in a new MPI job. The native CLI supports 0D, 1D,
 and body-fitted 3D flow graphs, plus 1D and body-fitted 3D species graphs.
 Restart currently requires the same MPI rank count and communicator membership.
 
-Moving-flow and bounded moving-FSI library runtimes use versioned bundles and
-can redistribute fields by stable global IDs. They are not yet wired into the
-native graph CLI. Immersed graph, CUDA graph, and body-fitted repartitioned
-restart are also outside the CLI path described here.
+CUDA graph and body-fitted repartitioned restart are outside the CLI path
+described here.
 
 ## Save and resume
 

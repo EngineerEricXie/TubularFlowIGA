@@ -10,45 +10,10 @@ This backend replaces the legacy solver. The matching single-GPU implementation 
 
 ## Capabilities
 
-The immersed MPI assembly layer now supports uniquely owned cell/ghost
-integration, distributed sparse rows, scalar constraints, and required-state
-exchange. `ImmersedStaticDistributedOperator` now uses the shared serial/MPI
-geometry setup and existing physics kernels, with global port/wall/pressure
-diagnostics. `ImmersedStaticDistributedRuntime` adds owned Newton/KSP updates,
-global convergence and conservation checks, and transactional commit/rollback.
-Its C++ interface and the quasi-static graph entry support distributed steady
-solves. Fixed-geometry backward-Euler case/graph support is described below.
-
-Static distributed constructors also accept
-`ImmersedWorkPartition::WeightedContiguous` to distribute cell work using
-quadrature and stabilization cost estimates. The default remains `CellCount`;
-the measured small case showed no clear speedup.
-
-The steady graph MPI regression covers collective port updates, case
-preflight/initialization, transactional rollback, and native
-explicit/fixed/Aitken graph validation.
-
-`ImmersedDistributedVelocityHistory` freezes owned committed velocities and
-exchanges only required nodes. `ImmersedDistributedTransientVolume` couples that
-snapshot to uniquely owned, frozen body-force quadrature and backward-Euler
-volume integration. Both compact and expanded catalogs are covered by the
-transient volume regression.
-`ImmersedTransientDistributedOperator` combines these inputs with stationary
-material-aware walls (including optional inertial impedance), mixed traces,
-ghost stabilization, ports, and the gauge. Its operator regression compares
-five boundary modes against the serial transient runtime on 1/2/4 ranks.
-`ImmersedTransientDistributedRuntime` adds shared MPI Newton solves and owned
-committed/prepared fields with a transactional accepted clock. Frozen history
-survives Newton rollback; `AbortTrial` releases it before changing controls.
-The runtime regression covers two accepted steps, field/conservation parity, failures, split groups,
-and weighted work partitions.
-`ThreeDImmersedTransientDistributedFlowDomain` supplies graph transactions that
-restore accepted controls and discard frozen trial inputs before coupling retry.
-The production `ImmersedFlowCase` and `iga_multidomain_flow --graph-case` now accept
-`backward_euler` with stationary catalogs and matching domain/graph time grids.
-`wall_inertial_gamma0` is optional in the transient geometry runtime configuration.
-Steady configuration remains supported; moving geometry and species are rejected
-by this flow-only case path.
+The backend provides the PETSc-free packing, inspection, and validation tools
+below, the MPI/PETSc body-fitted IGA flow and transport solvers, and the native
+tetrahedral FEM runtimes (`native_tet_*`) for flow, Darcy, species, ALE, solids,
+and single-partition FSI.
 
 | Executable | Purpose |
 | --- | --- |
@@ -146,28 +111,13 @@ The remaining helper and supported-entry audit is still open.
 
 ## Optional OpenMP volume assembly
 
-`ImmersedTransientFlowRuntime` can compute volume element systems with OpenMP.
-Its moving-flow and FSI wrappers use the same implementation. PETSc reads,
-matrix/vector insertion, wall/port terms and ghost penalties execute on the
-MPI initialization thread; volume results are inserted in the original order.
-`TransientFlowRuntime` also supports body-fitted volume assembly with MPI and
+`TransientFlowRuntime` supports body-fitted volume assembly with MPI and
 OpenMP. Each rank gathers its required nodal values on the initialization
 thread, computes private element systems, and inserts them in the original
 order. Pressure traction integration remains on the initialization thread.
-Static immersed flow and body-fitted transport assembly remain serial within
-each rank.
+Body-fitted transport assembly remains serial within each rank.
 
-```bash
-make compliant_channel_fsi_openmp_test PETSC_DIR=/path/to/petsc
-OMP_NUM_THREADS=4 OMP_THREAD_LIMIT=4 OMP_DYNAMIC=FALSE \
-OMP_PROC_BIND=close OMP_PLACES=threads \
-OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
-taskset -c 0,2,4,6 ./compliant_channel_fsi_openmp_test
-```
-
-Adapt CPU IDs to the allocated machine. The ordinary
-`compliant_channel_fsi_test` target remains a build without OpenMP unless the
-caller adds OpenMP flags. An OpenMP build defaults to `omp_get_max_threads()`;
+An OpenMP build defaults to `omp_get_max_threads()`;
 `IGA_ASSEMBLY_THREADS=1` explicitly selects serial assembly. An explicit
 request above one thread is rejected by a build without OpenMP. Multiple
 threads require MPI to provide at least `MPI_THREAD_FUNNELED`.
@@ -254,8 +204,7 @@ initialize/finalize PETSc or insert a new PETSc options database. Compile the
 coupling runner with `IGA_MULTIDOMAIN_NO_MAIN` when embedding it. Independent
 graphs require distinct output paths. Existing CLIs continue to select world.
 This is whole-graph isolation; assigning separate groups to individual domains
-is not supported. Fixed-geometry immersed graphs now also support
-MPI; moving immersed/FSI execution remains serial.
+is not supported.
 
 `OwnedRowAssembler::RequiredRows` validates the global IDs and PETSc row
 arithmetic used by the runtime scatters. Its optional collective

@@ -208,13 +208,9 @@ int main()
 	assert(graph.Edge("upstream_to_roi").law == iga::CouplingLaw::PressureFlow);
 	assert(iga::DomainDimensionOf(iga::DomainKind::OneDFlow) == 1);
 	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDBodyFittedFlow) == 3);
-	assert(iga::DomainDimensionOf(iga::DomainKind::ThreeDImmersedFlow) == 3);
 	assert(iga::DomainTopologyDimensionOf(iga::DomainKind::ZeroDFlow) == 0);
 	assert(iga::DomainEmbeddingDimensionOf(iga::DomainKind::ZeroDFlow) == 0);
 	assert(iga::IsFlowDomainKind(iga::DomainKind::ZeroDFlow));
-	assert(iga::DomainTopologyDimensionOf(iga::DomainKind::SurfaceMembraneStructure) == 2);
-	assert(iga::DomainEmbeddingDimensionOf(iga::DomainKind::SurfaceMembraneStructure) == 3);
-	assert(!iga::IsFlowDomainKind(iga::DomainKind::SurfaceMembraneStructure));
 	const auto plan = iga::MakeSequentialPlan(graph, "upstream");
 	assert((plan.domain_ids == std::vector<std::string>{"upstream", "roi", "downstream"}));
 	assert((plan.edge_ids == std::vector<std::string>{"upstream_to_roi", "roi_to_downstream"}));
@@ -259,24 +255,24 @@ int main()
 	{
 		auto upstream = Domain("upstream", iga::DomainKind::OneDFlow,
 			{LogicalPort("upstream", "terminal", "outlet:2", iga::PortQuantity::MeanPressure)});
-		auto immersed = Domain("immersed", iga::DomainKind::ThreeDImmersedFlow,
-			{LogicalPort("immersed", "inlet", "1", iga::PortQuantity::FlowRate),
-			 LogicalPort("immersed", "outlet", "2", iga::PortQuantity::MeanPressure)});
+		auto volume = Domain("volume", iga::DomainKind::ThreeDBodyFittedFlow,
+			{LogicalPort("volume", "inlet", "1", iga::PortQuantity::FlowRate),
+			 LogicalPort("volume", "outlet", "2", iga::PortQuantity::MeanPressure)});
 		auto downstream = Domain("downstream", iga::DomainKind::OneDFlow,
 			{LogicalPort("downstream", "root", "root", iga::PortQuantity::FlowRate)});
-		const iga::SimulationGraph immersed_chain({std::move(upstream), std::move(immersed),
-			std::move(downstream)}, {{"left", {"upstream", "terminal"}, {"immersed", "inlet"},
-				iga::CouplingLaw::PressureFlow}, {"right", {"immersed", "outlet"},
+		const iga::SimulationGraph volume_chain({std::move(upstream), std::move(volume),
+			std::move(downstream)}, {{"left", {"upstream", "terminal"}, {"volume", "inlet"},
+				iga::CouplingLaw::PressureFlow}, {"right", {"volume", "outlet"},
 				{"downstream", "root"}, iga::CouplingLaw::PressureFlow}});
-		assert((iga::MakeSequentialPlan(immersed_chain, "upstream").domain_ids
-			== std::vector<std::string>{"upstream", "immersed", "downstream"}));
+		assert((iga::MakeSequentialPlan(volume_chain, "upstream").domain_ids
+			== std::vector<std::string>{"upstream", "volume", "downstream"}));
 		auto body = Domain("body", iga::DomainKind::ThreeDBodyFittedFlow,
 			{LogicalPort("body", "outlet", "1", iga::PortQuantity::MeanPressure)});
-		auto immersed_neighbor = Domain("immersed", iga::DomainKind::ThreeDImmersedFlow,
-			{LogicalPort("immersed", "inlet", "1", iga::PortQuantity::FlowRate)});
+		auto volume_neighbor = Domain("volume", iga::DomainKind::ThreeDBodyFittedFlow,
+			{LogicalPort("volume", "inlet", "1", iga::PortQuantity::FlowRate)});
 		const iga::SimulationGraph adjacent_three_d({std::move(body),
-			std::move(immersed_neighbor)}, {{"bad", {"body", "outlet"},
-				{"immersed", "inlet"}, iga::CouplingLaw::PressureFlow}});
+			std::move(volume_neighbor)}, {{"bad", {"body", "outlet"},
+				{"volume", "inlet"}, iga::CouplingLaw::PressureFlow}});
 		RequireRejected([&adjacent_three_d] {
 			(void)iga::MakeSequentialPlan(adjacent_three_d, "body");
 		});
@@ -295,169 +291,26 @@ int main()
 		assert(immutable.Edge("roi_to_downstream").id == "roi_to_downstream");
 	}
 	{
+		// No graph domain kind implements an FSI endpoint yet, so a well-formed
+		// FSI edge between existing kinds is rejected by the pair check itself.
 		const auto mesh_identity = SurfaceHash('a');
 		const iga::SurfaceInterfaceRef fluid_surface{"fluid", "fluid_runtime", "wall"};
-		const iga::SurfaceInterfaceRef structure_surface{"structure", "membrane_runtime", "wall"};
-		const iga::FsiCouplingEdge edge{"fluid_structure", fluid_surface, structure_surface,
-			iga::FsiCouplingLaw::FluidStructureTractionKinematics};
-		const iga::SimulationGraph fsi_graph({
-			FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow, fluid_surface,
-				mesh_identity, true),
-			FsiDomain("structure", iga::DomainKind::SurfaceMembraneStructure,
-				structure_surface, mesh_identity, false)}, {}, {}, {edge});
-		assert(fsi_graph.Edges().empty());
-		assert(fsi_graph.FsiEdges().size() == 1);
-		assert(fsi_graph.FsiEdge("fluid_structure") == edge);
-		assert(fsi_graph.SurfaceInterface(fluid_surface).id == fluid_surface);
-		const auto fsi_plan = iga::MakeFluidStructurePairPlan(fsi_graph);
-		assert(fsi_plan.fluid_domain_id == "fluid");
-		assert(fsi_plan.structure_domain_id == "structure");
-		assert(fsi_plan.interfaces.size() == 1);
-		assert(fsi_plan.interfaces.front().displacement_provider == structure_surface);
-		assert(fsi_plan.interfaces.front().displacement_consumer == fluid_surface);
-		assert(fsi_plan.interfaces.front().traction_provider == fluid_surface);
-		assert(fsi_plan.interfaces.front().traction_consumer == structure_surface);
-		{
-			const iga::SurfaceInterfaceRef fluid_second{"fluid", "fluid_runtime", "wall_two"};
-			const iga::SurfaceInterfaceRef structure_second{
-				"structure", "membrane_runtime", "wall_two"};
-			auto fluid = FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true);
-			auto structure = FsiDomain("structure", iga::DomainKind::SurfaceMembraneStructure,
-				structure_surface, mesh_identity, false);
-			fluid.surface_interfaces.push_back(FsiSurface(fluid_second, mesh_identity, true));
-			fluid.surface_layouts.emplace(fluid_second, SurfaceLayout(mesh_identity));
-			structure.surface_interfaces.push_back(FsiSurface(structure_second, mesh_identity, false));
-			structure.surface_layouts.emplace(structure_second, SurfaceLayout(mesh_identity));
-			const iga::SimulationGraph two_interfaces({std::move(fluid), std::move(structure)},
-				{}, {}, {{"interface_two", fluid_second, structure_second,
-					iga::FsiCouplingLaw::FluidStructureTractionKinematics},
-					{"interface_one", fluid_surface, structure_surface,
-						iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-			const auto two_interface_plan = iga::MakeFluidStructurePairPlan(two_interfaces);
-			assert(two_interface_plan.interfaces.size() == 2);
-			assert(two_interface_plan.interfaces[0].edge_id == "interface_one");
-			assert(two_interface_plan.interfaces[1].edge_id == "interface_two");
-		}
-		{
-			auto structure = FsiDomain("structure", iga::DomainKind::SurfaceMembraneStructure,
-				structure_surface, mesh_identity, false);
-			structure.surface_interfaces.front().boundary_labels = {0, 8};
-			RequireRejected([&fluid_surface, &structure_surface, &mesh_identity, &structure] {
-				iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-					fluid_surface, mesh_identity, true), structure}, {}, {},
-					{{"boundary_mismatch", fluid_surface, structure_surface,
-						iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-			});
-		}
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			iga::SimulationGraph({Domain("upstream", iga::DomainKind::OneDFlow,
-				{LogicalPort("upstream", "out", "out", iga::PortQuantity::FlowRate)}),
-				FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow, fluid_surface,
-					mesh_identity, true), FsiDomain("structure",
-					iga::DomainKind::SurfaceMembraneStructure, structure_surface,
-					mesh_identity, false)}, {{"shared_edge_id", {"upstream", "out"},
-					{"fluid", "flow_port"}, iga::CouplingLaw::PressureFlow}}, {},
-				{{"shared_edge_id", fluid_surface, structure_surface,
-					iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			iga::SimulationGraph({
-				FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow, fluid_surface,
-					mesh_identity, true),
-				FsiDomain("structure", iga::DomainKind::SurfaceMembraneStructure,
-					structure_surface, mesh_identity, false)}, {}, {},
-				{{"reversed", structure_surface, fluid_surface,
-					iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			auto structure = FsiDomain("structure", iga::DomainKind::SurfaceMembraneStructure,
-				structure_surface, mesh_identity, false);
-			structure.surface_interfaces.front().provides
-				= {iga::SurfaceFieldQuantity::TractionOnStructure};
-			structure.surface_interfaces.front().requires = {iga::SurfaceFieldQuantity::Displacement,
-				iga::SurfaceFieldQuantity::Velocity};
-			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
+		const iga::SurfaceInterfaceRef structure_surface{"structure", "solid_runtime", "wall"};
+		auto structure = FsiDomain("structure", iga::DomainKind::OneDFlow,
+			structure_surface, mesh_identity, false);
+		structure.ports = {LogicalPort("structure", "flow_port", "flow_port",
+			iga::PortQuantity::MeanPressure)};
+		bool rejected_pair = false;
+		try {
+			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDBodyFittedFlow,
 				fluid_surface, mesh_identity, true), std::move(structure)}, {}, {},
-				{{"bad_capability", fluid_surface, structure_surface,
+				{{"fluid_structure", fluid_surface, structure_surface,
 					iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			const auto other_mesh = SurfaceHash('b');
-			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, other_mesh, false)},
-				{}, {}, {{"mesh_mismatch", fluid_surface, structure_surface,
-					iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, mesh_identity,
-				false, 2.0)}, {}, {}, {{"partition_mismatch", fluid_surface,
-				structure_surface, iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			auto fluid = FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true);
-			const iga::SurfaceInterfaceRef extra{"fluid", "fluid_runtime", "extra"};
-			auto surface = FsiSurface(extra, mesh_identity, true);
-			fluid.surface_interfaces.push_back(surface);
-			fluid.surface_layouts.emplace(extra, SurfaceLayout(mesh_identity));
-			iga::SimulationGraph({std::move(fluid), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, mesh_identity,
-				false)}, {}, {}, {{"orphan", fluid_surface, structure_surface,
-				iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			const iga::FsiCouplingEdge duplicate{"duplicate", fluid_surface, structure_surface,
-				iga::FsiCouplingLaw::FluidStructureTractionKinematics};
-			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, mesh_identity,
-				false)}, {}, {}, {duplicate, duplicate});
-		});
-		RequireRejected([&fluid_surface, &structure_surface, &mesh_identity] {
-			iga::SimulationGraph({FsiDomain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-				fluid_surface, mesh_identity, true), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, mesh_identity,
-				false)}, {}, {}, {{"first", fluid_surface, structure_surface,
-				iga::FsiCouplingLaw::FluidStructureTractionKinematics},
-				{"second", fluid_surface, structure_surface,
-					iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		});
-	}
-	{
-		const auto mesh_identity = SurfaceHash('c');
-		const iga::SurfaceInterfaceRef fluid_surface{"fluid", "fluid_runtime", "wall"};
-		const iga::SurfaceInterfaceRef structure_surface{"structure", "membrane_runtime", "wall"};
-		auto upstream = Domain("upstream", iga::DomainKind::OneDFlow,
-			{LogicalPort("upstream", "terminal", "outlet:2", iga::PortQuantity::MeanPressure)});
-		auto fluid = Domain("fluid", iga::DomainKind::ThreeDImmersedFlow,
-			{LogicalPort("fluid", "inlet", "boundary:1", iga::PortQuantity::FlowRate),
-				LogicalPort("fluid", "outlet", "boundary:2", iga::PortQuantity::MeanPressure)});
-		fluid.surface_interfaces = {FsiSurface(fluid_surface, mesh_identity, true)};
-		fluid.surface_layouts.emplace(fluid_surface, SurfaceLayout(mesh_identity));
-		auto downstream = Domain("downstream", iga::DomainKind::OneDFlow,
-			{LogicalPort("downstream", "root", "root", iga::PortQuantity::FlowRate)});
-		const iga::SimulationGraph mixed_graph({std::move(upstream), std::move(fluid),
-			std::move(downstream), FsiDomain("structure",
-				iga::DomainKind::SurfaceMembraneStructure, structure_surface, mesh_identity, false)},
-			{{"upstream_to_fluid", {"upstream", "terminal"}, {"fluid", "inlet"},
-				iga::CouplingLaw::PressureFlow}, {"fluid_to_downstream", {"fluid", "outlet"},
-				{"downstream", "root"}, iga::CouplingLaw::PressureFlow}}, {},
-			{{"fluid_structure", fluid_surface, structure_surface,
-				iga::FsiCouplingLaw::FluidStructureTractionKinematics}});
-		const std::vector<std::string> expected_domains{"upstream", "fluid", "downstream"};
-		const std::vector<std::string> expected_edges{"upstream_to_fluid", "fluid_to_downstream"};
-		const auto sequential = iga::MakeSequentialPlan(mixed_graph, "upstream");
-		assert(sequential.domain_ids == expected_domains);
-		assert(sequential.edge_ids == expected_edges);
-		assert(iga::MakeSequentialPressureFlowPlan(mixed_graph, "upstream").domain_ids
-			== expected_domains);
-		assert(iga::MakeAcyclicPressureFlowPlan(mixed_graph, "upstream").domain_order
-			== expected_domains);
-		iga::ValidateConnectedGraph(mixed_graph, "upstream");
+		} catch (const std::runtime_error& error) {
+			rejected_pair = std::string(error.what()).find(
+				"unsupported fluid/structure domain pair") != std::string::npos;
+		}
+		assert(rejected_pair);
 	}
 
 	RequireRejected([&graph] { (void)graph.Domain("missing"); });
@@ -471,10 +324,6 @@ int main()
 	});
 	RequireRejected([] {
 		iga::SimulationGraph({{"empty", iga::DomainKind::OneDFlow, {}}}, {});
-	});
-	RequireRejected([] {
-		iga::SimulationGraph({{"empty_structure",
-			iga::DomainKind::SurfaceMembraneStructure, {}}}, {});
 	});
 	RequireRejected([] {
 		auto port = LogicalPort("unknown", "port", "port", iga::PortQuantity::FlowRate);

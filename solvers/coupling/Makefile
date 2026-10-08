@@ -18,7 +18,7 @@ PETSC_CFLAGS ?= $(PETSC_CC_INCLUDES)
 PETSC_LIBS ?= $(PETSC_LIB)
 endif
 
-.PHONY: all test zero-d-flow-test simulation-graph-test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test immersed-case-factory-test phase6-aneurysm-closure-test phase9-multiscale-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
+.PHONY: all test zero-d-flow-test simulation-graph-test surface-contracts-test fsi-runtime-contracts-test petsc petsc-test bifurcation-test multidomain-test phase9-multiscale-closure-test convergence-test convergence-fixture-test convergence-axial-diagnostic convergence-isotropic-diagnostic convergence-length-diagnostic convergence-bulk-diagnostic temporal-convergence-test temporal-fixture-test clean
 
 all: explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test
 
@@ -193,23 +193,11 @@ multidomain_domain_groups_test: tests/test_multidomain_domain_groups.cpp tests/t
 multidomain_failure_test: tests/test_multidomain_failure.cpp tests/test_bifurcation_coupling_smoke.cpp tests/test_multidomain_flow_smoke.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_MULTIDOMAIN_NO_MAIN $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) tests/test_multidomain_failure.cpp src/iga_1d_3d_bifurcation.cpp -o $@ $(PETSC_LIBS)
 
-# Phase 6 closure combines direct production immersed solves (physical and
-# transactional gates) with real explicit and strong-fixed 1D--3D--1D runs.
-phase6_aneurysm_closure_test: tests/test_phase6_aneurysm_closure.cpp iga_multidomain_flow
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
-
-phase6-aneurysm-closure-test: phase6_aneurysm_closure_test
-	$(MAKE) -C ../cpu phase6-aneurysm-runtime-closure-test PETSC_DIR=$(PETSC_DIR) PETSC_ARCH=$(PETSC_ARCH)
-	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./phase6_aneurysm_closure_test ./iga_multidomain_flow
-
 phase9_multiscale_closure_test: tests/test_phase9_multiscale_closure.cpp tests/CouplingFixture.hpp iga_multidomain_flow ../cpu/include/IgaDatabase.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 phase9-multiscale-closure-test: phase9_multiscale_closure_test
 	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./phase9_multiscale_closure_test ./iga_multidomain_flow
-
-immersed-case-factory-test: immersed_case_factory_test
-	PATH="$(PETSC_PREFIX)/bin:$$PATH" ./immersed_case_factory_test
 
 # Opt-in fixture/convergence prerequisite.  The full numerical ladder is kept
 # out of the default smoke target because it is intentionally multi-minute.
@@ -242,13 +230,10 @@ temporal-fixture-test: pulsatile_straight_vessel_temporal_test
 iga_1d_3d_explicit: src/iga_1d_3d_explicit.cpp ../../include/ExplicitOneDThreeDCoupling.hpp ../../include/StrongOneDThreeDCoupling.hpp ../../include/AitkenRelaxation.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransportElement.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
-iga_1d_3d_bifurcation: src/iga_1d_3d_bifurcation.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/ImmersedFlowCase.hpp ../../include/ThreeDImmersedFlowDomain.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransientTransportRuntime.hpp ../cpu/include/TransportElement.hpp ../cpu/include/ImmersedStaticFlowRuntime.hpp ../cpu/include/ImmersedStaticFlowSetup.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp ../one_d/include/OneDTransport.hpp
+iga_1d_3d_bifurcation: src/iga_1d_3d_bifurcation.cpp ../../include/BifurcationMultidomainCase.hpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransientTransportRuntime.hpp ../cpu/include/TransportElement.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp ../one_d/include/OneDTransport.hpp
 	$(PETSC_CXX) $(CPPFLAGS) -DIGA_BIFURCATION_ENTRY=1 $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
-iga_multidomain_flow: src/iga_1d_3d_bifurcation.cpp ../../include/SequentialMultidomainCase.hpp ../../include/ImmersedFlowCase.hpp ../../include/ThreeDImmersedFlowDomain.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransientTransportRuntime.hpp ../cpu/include/TransportElement.hpp ../cpu/include/ImmersedStaticFlowRuntime.hpp ../cpu/include/ImmersedStaticFlowSetup.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp ../one_d/include/OneDTransport.hpp
-	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
-
-immersed_case_factory_test: tests/test_immersed_case_factory.cpp ../../include/ImmersedFlowCase.hpp ../../include/ThreeDImmersedFlowDomain.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/SimulationGraph.hpp ../../include/SimulationConfig.hpp ../../include/CaseConfig.hpp ../cpu/include/ImmersedStaticFlowRuntime.hpp ../cpu/include/ImmersedStaticFlowSetup.hpp ../cpu/include/ImmersedFlowPort.hpp ../cpu/include/CutCellGhostPenalty.hpp ../cpu/include/ImmersedSurfaceQuadrature.hpp ../cpu/include/CutCellVolumeQuadrature.hpp ../cpu/include/CartesianDomainClassification.hpp ../cpu/include/SurfaceReaders.hpp
+iga_multidomain_flow: src/iga_1d_3d_bifurcation.cpp ../../include/SequentialMultidomainCase.hpp ../../include/MultidomainConfig.hpp ../../include/PressureFlowComponentExecutor.hpp ../../include/SpeciesPressureFlowComponentExecutor.hpp ../../include/DomainRuntimeRegistry.hpp ../../include/CoupledDomainRuntime.hpp ../../include/OneDFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowDomainAdapter.hpp ../../include/ThreeDBodyFittedFlowTransportDomainAdapter.hpp ../../include/FlowDomainPortMetadata.hpp ../../include/SimulationGraph.hpp ../../include/CouplingEdge.hpp ../../include/ThreeDFlowCoupling.hpp ../../include/ThreeDVcaCoupling.hpp ../../include/SimulationConfig.hpp ../../include/CouplingConfig.hpp ../../include/CouplingPort.hpp $(SPECIES_COUPLING_HEADER) ../cpu/include/BoundarySupport.hpp ../cpu/include/IgaDatabase.hpp ../cpu/include/TransientFlowRuntime.hpp ../cpu/include/TransientTransportRuntime.hpp ../cpu/include/TransportElement.hpp ../one_d/include/OneDImplicit.hpp ../one_d/include/OneDRuntime.hpp ../one_d/include/OneDTransport.hpp
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
 
 explicit_coupling_smoke_test: tests/test_explicit_coupling_smoke.cpp iga_1d_3d_explicit ../cpu/include/IgaDatabase.hpp
@@ -288,7 +273,7 @@ clean:
 	$(RM) multidomain_subcommunicator_test
 	$(RM) domain_group_runtime_proxy_test
 	$(RM) multidomain_domain_groups_test
-	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test immersed_case_factory_test phase6_aneurysm_closure_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
+	$(RM) explicit_coupling_test simulation_graph_test pressure_flow_executor_test species_pressure_flow_executor_test multidomain_config_test zero_d_flow_test distributed_surface_contracts_test fsi_runtime_contracts_test explicit_coupling_smoke_test bifurcation_coupling_smoke_test multidomain_flow_smoke_test phase9_multiscale_closure_test straight_vessel_convergence_test pulsatile_straight_vessel_temporal_test iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow
 
 iga_1d_3d_explicit iga_1d_3d_bifurcation iga_multidomain_flow: ../one_d/include/OneDPetscSupport.hpp ../cpu/include/CollectiveFailure.hpp ../cpu/include/PetscReadArray.hpp ../cpu/include/RuntimeConstruction.hpp ../cpu/include/RuntimeCleanup.hpp
 
@@ -336,12 +321,7 @@ graph_registry_failure_test: tests/test_graph_registry_failure.cpp tests/test_mu
 three_d_staged_failure_test three_d_trial_failure_test three_d_port_failure_test: ../cpu/tests/StringStreamFailure.hpp
 pressure_flow_collective_failure_test species_collective_failure_test: tests/AbortReportAllocation.hpp
 
-iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedFlowDomain.hpp ../cpu/include/ImmersedStaticDistributedRuntime.hpp ../cpu/include/ImmersedStaticDistributedOperator.hpp ../cpu/include/ImmersedDistributedAssembly.hpp ../../include/WeightedWorkPartition.hpp
-iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../cpu/include/ImmersedDistributedNewtonRuntime.hpp
-
-iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedDistributedDomain.hpp
-
-iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: ../../include/ThreeDImmersedTransientDistributedFlowDomain.hpp ../cpu/include/ImmersedTransientDistributedRuntime.hpp ../cpu/include/ImmersedTransientDistributedOperator.hpp ../cpu/include/ImmersedDistributedTransientVolume.hpp ../cpu/include/ImmersedDistributedVelocityHistory.hpp ../cpu/include/ImmersedTransientFlowRuntime.hpp ../cpu/include/ImmersedTransientState.hpp
+iga_1d_3d_bifurcation iga_multidomain_flow: ../../include/WeightedWorkPartition.hpp
 
 # Native checkpoint codecs are shared by both graph entry points and embedded tests.
 NATIVE_CHECKPOINT_TARGETS := iga_1d_3d_bifurcation iga_multidomain_flow native_graph_checkpoint_fault_test native_graph_checkpoint_groups_test
@@ -352,7 +332,6 @@ iga_1d_3d_bifurcation iga_multidomain_flow: ../cpu/include/NativeGraphCheckpoint
 
 graph_checkpoint_history_test: tests/test_graph_checkpoint_history.cpp ../../include/GraphAcceptedHistory.hpp ../../include/CheckpointRecordStream.hpp ../../include/CheckpointMetadataCodec.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
-
 
 native_graph_checkpoint_fault_test: tests/test_native_graph_checkpoint_fault.cpp src/iga_1d_3d_bifurcation.cpp $(wildcard ../../include/*.hpp ../cpu/include/*.hpp ../one_d/include/*.hpp)
 	$(PETSC_CXX) $(CPPFLAGS) $(CXXFLAGS) $(OPENMP_FLAGS) $(PETSC_CFLAGS) $< -o $@ $(PETSC_LIBS)
@@ -372,4 +351,4 @@ hpc_duct_solver_fixture: tests/test_hpc_duct_solver_fixture.cpp tests/test_phase
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -UNDEBUG $< -o $@
 
 # Moving case ownership includes geometry, extension, and transaction headers.
-iga_1d_3d_bifurcation iga_multidomain_flow immersed_case_factory_test: $(wildcard ../cpu/include/*.hpp ../../include/*.hpp)
+iga_1d_3d_bifurcation iga_multidomain_flow: $(wildcard ../cpu/include/*.hpp ../../include/*.hpp)

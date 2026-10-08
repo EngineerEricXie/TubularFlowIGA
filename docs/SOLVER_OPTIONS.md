@@ -81,57 +81,20 @@ must be wrapped by the caller's group error protocol when used collectively.
 Factor packages read some settings from the operator matrix rather than the
 KSP or PC. An embedding runtime can call
 `PetscSolverOptions::Attach(Mat)` before factor setup to bind the same private
-database and prefix to the matrix. This path is wired into the shared immersed
-MPI Newton core, the serial transient/moving immersed Jacobian, and the scaled
-matrix in the distributed extension.
-
-For a distributed moving runtime with prefix `immersed_moving_`:
+database and prefix to the matrix, so options such as
 
 ```text
--immersed_moving_mat_mumps_icntl_14 100
+-<prefix>mat_mumps_icntl_14 100
 ```
 
-This increases the MUMPS factor-workspace allowance relative to its estimate;
-it does not change the equation, Jacobian, KSP tolerance, or Newton tolerance.
-Use `-immersed_moving_ksp_view` to confirm the effective factor settings.
+raise the MUMPS factor-workspace allowance relative to its estimate without
+changing the equation, Jacobian, KSP tolerance, or Newton tolerance. Use
+`-<prefix>ksp_view` to confirm the effective factor settings.
 
 Matrix-option regressions verify independent snapshots and factor settings on
 one, two, and four ranks, including split communicators. A factor failure
 diagnostic includes the PC failure reason so structural/numerical zero pivots
 can be distinguished from factor-memory exhaustion.
-
-## Immersed, moving, and FSI runtimes
-
-Immersed graph domains use `domain_<id>_flow_`. Their precedence is:
-
-1. runtime defaults;
-2. `immersed_static_` or `immersed_transient_` family options;
-3. the complete domain prefix.
-
-```bash
-mpiexec -np 2 solvers/coupling/iga_multidomain_flow \
-  --graph-case CASE --output-dir NEW_OUTPUT \
-  -immersed_transient_ksp_type gmres \
-  -domain_immersed_flow_ksp_type fgmres
-```
-
-Here, the domain named `immersed` uses FGMRES; other transient immersed
-domains inherit GMRES. Static-family options use `immersed_static_`.
-
-With no overrides, serial static and distributed immersed runtimes use
-GMRES/LU, while serial transient and moving runtimes use FGMRES/LU. Multi-rank
-LU retains the existing MUMPS selection. These defaults do not establish that
-every PETSc preconditioner is suitable for the saddle-point systems.
-
-Moving geometry reuses one immutable snapshot across committed and trial
-epochs. The FSI wrapper derives a prefix from the fluid domain ID unless the
-caller supplies one. A shared serial-transient options owner must use the same
-communicator and prefix and outlive every attached KSP.
-
-Solver options are part of the transient input identity. The current identities
-are `ImmersedTransientInput/v6` and `ImmersedTransientMovingInput/v3`; changing
-the effective options changes the trial identity without changing the field
-format.
 
 ## Body-fitted standalone and VCA CLIs
 

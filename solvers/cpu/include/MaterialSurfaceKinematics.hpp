@@ -3,8 +3,7 @@
 
 // Producer-neutral immutable material-surface state for one exact geometry
 // epoch.  It deliberately owns no distributed field layout or FSI graph
-// endpoint: those contracts are separate from the geometry consumed by the
-// immersed cut, wall, and transient-runtime paths.
+// endpoint: those contracts are separate from the geometry it describes.
 #include "SurfaceGeometry.hpp"
 #include "Sha256.hpp"
 
@@ -112,7 +111,7 @@ public:
 			evaluated_time_s, step_start_s, step_end_s);
 	}
 
-	// Preferred producer-neutral route.  A future membrane producer need not
+	// Preferred producer-neutral route.  A producer need not
 	// know any hashing format: all identities are derived after the complete
 	// payload has been moved into this immutable owner.
 	static MaterialSurfaceKinematics Create(ClosedTriangulatedSurface surface,

@@ -42,7 +42,6 @@ mapping: restart or resubmission must use the same manifest bytes and allocated
 rank count. Grouped native checkpoint/restart is currently rejected before
 runtime construction; use shared mode when native graph checkpoint/restart is
 required. Grouped mode currently supports 0D, 1D, and body-fitted 3D domains.
-Immersed 3D domains continue to use shared mode.
 
 Use domain groups when independent, expensive domains can overlap or when
 avoiding native state replication reduces memory. Small and sequential graphs

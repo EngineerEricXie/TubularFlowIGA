@@ -44,7 +44,7 @@ docs/
 | Topic | Document |
 |---|---|
 | SWC and radius-annotated OBJ centerlines | [SKELETON_FORMATS.md](SKELETON_FORMATS.md) |
-| Shared geometry vocabulary across IGA, immersed, and FEM routes | [GEOMETRY_DATA_CONTRACT.md](GEOMETRY_DATA_CONTRACT.md) |
+| Shared geometry vocabulary across IGA and FEM routes | [GEOMETRY_DATA_CONTRACT.md](GEOMETRY_DATA_CONTRACT.md) |
 | Supported inputs, units, and boundary labels | [SUPPORTED_INPUT_CONTRACT.md](SUPPORTED_INPUT_CONTRACT.md) |
 | Public liver CT/SEG source data and licensing | [LIVER_GEOMETRY_CANDIDATES.md](LIVER_GEOMETRY_CANDIDATES.md) |
 
@@ -54,7 +54,6 @@ docs/
 |---|---|
 | Idealized cube with arterial/venous trees, Darcy tissue, and FSI | [cases/CUBE_DUAL_TREE_FSI.md](cases/CUBE_DUAL_TREE_FSI.md) |
 | Passive tracer through the same dual-tree cube | [cases/CUBE_DUAL_TREE_OXYGEN.md](cases/CUBE_DUAL_TREE_OXYGEN.md) |
-| Prescribed moving immersed flow | [cases/MOVING_IMMERSED_CASE.md](cases/MOVING_IMMERSED_CASE.md) |
 | Native CPU 3D VCA coupling | [VCA bifurcation case](../examples/vascular_flow/vca_bifurcation/README.md) |
 | Large morphology-derived neuron regression | [NMO_06840 transport](../examples/neuron_transport/nmo_06840_bifurcation/README.md) |
 
@@ -73,7 +72,6 @@ evidence file under [`benchmarks/`](../benchmarks).
 | — | C++ hexahedral mesher correctness | [validation/MESH_CPP_VALIDATION.md](validation/MESH_CPP_VALIDATION.md) |
 | T1 | Surface-to-FEM volume meshing | [validation/T1_FEM_VOLUME_MESH.md](validation/T1_FEM_VOLUME_MESH.md) |
 | T2 | Fixed-wall flow (Poiseuille, bifurcation) | [validation/T2_FIXED_FLOW_VALIDATION.md](validation/T2_FIXED_FLOW_VALIDATION.md) |
-| T3 | Native IGA Kirchhoff–Love shell | [validation/T3_NATIVE_IGA_SHELL.md](validation/T3_NATIVE_IGA_SHELL.md) |
 | T3 | Native tetrahedral hyperelastic solid | [validation/T3_NATIVE_TET_SOLID.md](validation/T3_NATIVE_TET_SOLID.md) |
 | T4 | Native tetrahedral ALE | [validation/T4_NATIVE_ALE.md](validation/T4_NATIVE_ALE.md) |
 | T5 | Matching ALE–solid interface | [validation/T5_NATIVE_MATCHING_INTERFACE.md](validation/T5_NATIVE_MATCHING_INTERFACE.md) |
@@ -105,7 +103,6 @@ The tools these guides call are in [`scripts/hpc/`](../scripts/hpc).
 | Topic | Document |
 |---|---|
 | Multidomain graph, ports, and coupling iteration | [architecture/COUPLING_ARCHITECTURE.md](architecture/COUPLING_ARCHITECTURE.md) |
-| Moving immersed-domain geometry | [architecture/MOVING_DOMAIN_ARCHITECTURE.md](architecture/MOVING_DOMAIN_ARCHITECTURE.md) |
 | Fluid–structure interaction | [architecture/FSI_ARCHITECTURE.md](architecture/FSI_ARCHITECTURE.md) |
 | Parallel node, element, halo, and surface ownership | [architecture/PARALLEL_OWNERSHIP.md](architecture/PARALLEL_OWNERSHIP.md) |
 | MPI failure boundaries and collective error handling | [architecture/MPI_FAILURE_BOUNDARIES.md](architecture/MPI_FAILURE_BOUNDARIES.md) |
