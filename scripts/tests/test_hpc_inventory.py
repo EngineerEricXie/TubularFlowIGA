@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "hpc_inventory.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "hpc" / "hpc_inventory.py"
 SPEC = importlib.util.spec_from_file_location("hpc_inventory", SCRIPT)
 inventory = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(inventory)
@@ -46,7 +46,7 @@ class InventoryTests(unittest.TestCase):
             self.assertIsNone(result["features"]["PETSC_USE_COMPLEX"])
 
     def test_catalog_references_exist(self):
-        root = SCRIPT.parents[1]
+        root = SCRIPT.parents[2]
         catalog = json.loads((root / "benchmarks/hpc_baselines.json").read_text())
         self.assertEqual(len({case["id"] for case in catalog["cases"]}), 4)
         for case in catalog["cases"]:

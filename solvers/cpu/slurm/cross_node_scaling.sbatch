@@ -16,7 +16,7 @@ if [[ -z ${repo_root} ]]; then
 	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 fi
 repo_root=$(cd -- "${repo_root}" && pwd)
-if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+if [[ ! -f ${repo_root}/scripts/hpc/hpc_scheduler_record.py ]]; then
 	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
 	exit 2
 fi
@@ -37,7 +37,7 @@ record_failure()
 	local status=$?
 	trap - EXIT
 	if (( status != 0 )); then
-		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+		python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" \
 			--output "${output_root}.scheduler.json" --status failed --returncode "${status}" -- "$0" || true
 	fi
 	exit "${status}"
@@ -68,7 +68,7 @@ export BLIS_NUM_THREADS=1
 export PETSC_OPTIONS_YAML=${PETSC_OPTIONS_YAML:-'{domain_flow_flow_ksp_gmres_restart: 200, domain_flow_flow_ksp_view: ""}'}
 read -r -a ranks <<<"${IGA_SCALING_RANKS:-1 64 128 256}"
 if [[ ${IGA_SCALING_PREPARE:-0} == 1 ]]; then
-	python3 "${repo_root}/scripts/hpc_prepare_scaling_cases.py" \
+	python3 "${repo_root}/scripts/hpc/hpc_prepare_scaling_cases.py" \
 		--output-dir "${source_root}" --ranks "${ranks[@]}"
 fi
 # PSC exports LOCAL in job steps; SLURM_TMPDIR is supported at other sites.
@@ -81,10 +81,10 @@ staged_root=${SLURM_TMPDIR}/tubularflowiga-scaling
 
 tasks_per_node=${SLURM_NTASKS_PER_NODE}
 launcher="mpiexec --bind-to core --map-by ppr:${tasks_per_node}:node"
-python3 "${repo_root}/scripts/hpc_build_manifest.py" --component cpu \
+python3 "${repo_root}/scripts/hpc/hpc_build_manifest.py" --component cpu \
 	--dependency-status passed --output "${output_root}.build.json" \
 	--binary "${repo_root}/solvers/cpu/iga_navier_stokes"
-python3 "${repo_root}/scripts/hpc_cross_node_scaling.py" \
+python3 "${repo_root}/scripts/hpc/hpc_cross_node_scaling.py" \
 	--strong-case "${staged_root}/${strong_case}" --strong-database "${strong_database}" \
 	--weak-case "${staged_root}/${weak_case}" --weak-database "${weak_database}" \
 	--output-dir "${output_root}" --ranks "${ranks[@]}" \

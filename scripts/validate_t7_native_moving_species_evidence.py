@@ -24,7 +24,7 @@ SOURCE_FILES = (
 	"solvers/cpu/include/NativeTetAleFlowTransportDomainAdapter.hpp",
 	"solvers/cpu/tests/test_native_tet_ale_flow_transport_domain_adapter.cpp",
 	"solvers/cpu/tests/test_native_tet_ale_species_graph_1d.cpp",
-	"scripts/test_native_tet_species_ftetwild.py",
+	"scripts/integration/test_native_tet_species_ftetwild.py",
 	"include/SpeciesCoupling.hpp",
 	"include/ZeroDSpeciesReservoir.hpp",
 	"include/ZeroDFlowSpeciesCheckpoint.hpp",

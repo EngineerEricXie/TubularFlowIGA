@@ -17,7 +17,7 @@ def run_wrapper(root):
         directory = root/variant
         directory.mkdir()
         repo, binaries = directory/'repo', directory/'bin'
-        (repo/'scripts').mkdir(parents=True)
+        (repo/'scripts/hpc').mkdir(parents=True)
         (repo/'solvers/coupling').mkdir(parents=True)
         binaries.mkdir()
         (directory/'case').mkdir()
@@ -31,8 +31,8 @@ def run_wrapper(root):
     a,_=p.parse_known_args();Path(a.output).write_text(json.dumps(vars(a)))
     '''
         recorder = textwrap.dedent(recorder)
-        (repo/'scripts/hpc_scheduler_record.py').write_text(recorder)
-        (repo/'scripts/hpc_build_manifest.py').write_text(recorder)
+        (repo/'scripts/hpc/hpc_scheduler_record.py').write_text(recorder)
+        (repo/'scripts/hpc/hpc_build_manifest.py').write_text(recorder)
         programs = {
             'module': '#!/bin/bash\nexit 0\n',
             'srun': '''

@@ -49,7 +49,7 @@ The CPU MPI process count must equal `RANKS` used during preparation. Do not
 mix an OpenMPI launcher with a PETSc executable built against MPICH. If the
 launcher exposes fewer than 12 slots, choose a smaller `RANKS` value during
 preparation and use it for both MPI commands. On a cluster, follow the local
-scheduler policy and the [Bridges-2 guide](../../../docs/BRIDGES2.md).
+scheduler policy and the [Bridges-2 guide](../../../docs/hpc/BRIDGES2.md).
 
 The result has one row per database node: `node_id N0 Nplus`. The neighboring
 `.fields` file records field order. With `--output-every 1`, the solver also

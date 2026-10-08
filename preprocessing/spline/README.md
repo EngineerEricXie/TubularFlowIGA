@@ -64,5 +64,5 @@ resulting NMO `.ntiga` database is also identical.
 On the 31,680-element NMO case with eight OpenMP threads, the optimized version
 used 158.1 MiB peak RSS and 9.34 seconds, versus about 2.19 GiB and 62.50 seconds
 for the legacy implementation. Cache-only extraction took 3.74 seconds and
-packing took 4.47 seconds. See [the benchmark report](../../docs/BENCHMARKS.md)
+packing took 4.47 seconds. See [the benchmark report](../../docs/validation/BENCHMARKS.md)
 for validation context.

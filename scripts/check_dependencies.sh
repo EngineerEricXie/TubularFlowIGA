@@ -159,7 +159,7 @@ esac
 status=passed
 if (( failures > 0 )); then status=failed; fi
 if [[ -n $report ]]; then
-	python3 "$(dirname "$0")/hpc_build_manifest.py" --component "$component" \
+	python3 "$(dirname "$0")/hpc/hpc_build_manifest.py" --component "$component" \
 		--dependency-status "$status" --output "$report"
 	note "machine-readable build manifest: $report"
 fi

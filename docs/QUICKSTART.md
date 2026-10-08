@@ -6,7 +6,7 @@ the repository root.
 
 On a shared cluster, build and simulate inside an allocated compute resource.
 Use the local scheduler for large cases and GPU work; PSC-specific examples are
-in [BRIDGES2.md](BRIDGES2.md).
+in [BRIDGES2.md](hpc/BRIDGES2.md).
 
 ## 1. Clone and check preprocessing dependencies
 

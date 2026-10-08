@@ -57,7 +57,7 @@ supports 1–8 fields. Block IDs remain integer indices while block-value offset
 use `size_t`; allocation byte overflow is checked without restricting those
 offsets to `INT_MAX`. These checks precede large solver allocations.
 Resource validation commands are documented in the
-[HPC benchmark guide](../../docs/HPC_BENCHMARKS.md).
+[HPC benchmark guide](../../docs/hpc/HPC_BENCHMARKS.md).
 
 ## GPU-specific optimizations
 
@@ -250,7 +250,7 @@ The fixed `transport` command remains only for old input compatibility. See the
 
 The scripts in `slurm/` reproduce the published Bridges-2 measurements and
 require an external `IGA_CASE_ROOT`. See the
-[Bridges-2 guide](../../docs/BRIDGES2.md) for module, allocation, interactive,
+[Bridges-2 guide](../../docs/hpc/BRIDGES2.md) for module, allocation, interactive,
 and `sbatch` commands.
 `slurm/validate_transient_v100.sbatch` is the focused transient/restart gate.
 

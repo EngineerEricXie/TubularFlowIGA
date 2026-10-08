@@ -156,5 +156,5 @@ contract and prevents `ceil()` layer counts from changing at roundoff
 boundaries. The generated VTK coordinates use double precision so this
 topology quantization does not impose a six-decimal absolute geometry scale.
 
-See [the validation report](../../docs/MESH_CPP_VALIDATION.md) for regression
+See [the validation report](../../docs/validation/MESH_CPP_VALIDATION.md) for regression
 and large-case results.

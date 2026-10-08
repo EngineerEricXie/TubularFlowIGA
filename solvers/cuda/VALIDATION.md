@@ -93,7 +93,7 @@ imbalance and `1e-6` relative divergence-theorem error. With
 `IGA_CARDIAC_PERIOD`, `IGA_FLOW_DT`, and `IGA_FLOW_STEPS`, it also constructs a
 manifest for all generated snapshots and gates maximum cycle-to-cycle velocity
 relative L2 at `1e-3`. Each tolerance has a named environment override in the
-[Bridges-2 guide](../../docs/BRIDGES2.md).
+[Bridges-2 guide](../../docs/hpc/BRIDGES2.md).
 `IGA_WOMERSLEY_CONFIG` adds a physical-volume Womersley relative L2 gate
 (default `5e-2`) by evaluating the numerical spline and analytical solution at
 element quadrature points. The case-directory/manifest variables are retained

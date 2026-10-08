@@ -72,7 +72,7 @@ action.
 Send the warning to solver ranks and allow enough time for one macro-step plus
 checkpoint I/O. If the next step fails or the job is forcibly terminated,
 restart uses the previous complete generation. Signal forwarding is scheduler
-specific; see [HPC deployment](HPC_DEPLOYMENT.md).
+specific; see [HPC deployment](hpc/HPC_DEPLOYMENT.md).
 
 ## Compatibility and failure handling
 

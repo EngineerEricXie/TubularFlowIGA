@@ -120,7 +120,7 @@ make -C solvers/cpu native_tet_hydraulic_graph native_tet_species_transport \
   native_tet_ale_petsc_runtime_test PETSC_DIR=/path/to/petsc
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 mpiexec -np 2 \
   solvers/cpu/native_tet_ale_petsc_runtime_test
-python3 scripts/test_native_vtkhdf_cli.py --bin-dir solvers/cpu \
+python3 scripts/integration/test_native_vtkhdf_cli.py --bin-dir solvers/cpu \
   --work /tmp/tet-vtkhdf-mpi
 pvpython --no-mpi scripts/validate_native_vtkhdf_reader.py \
   /tmp/tet-vtkhdf-mpi/comparisons.json
