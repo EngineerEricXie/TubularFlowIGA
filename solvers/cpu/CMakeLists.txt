@@ -494,7 +494,7 @@ tfi_test(transport_budget_test COMMAND [==[./transport_budget_test]==]
 	REQUIRES iga_transport_validate transport_budget_test MAKE test transport-budget-test LABELS unit)
 tfi_test(vtkhdf_close_failure_test COMMAND [==[directory=$(mktemp -d) || exit 1; trap 'rm -rf "$directory"' EXIT; timeout 30 ./vtkhdf_close_failure_test "$directory/results"]==]
 	REQUIRES vtkhdf_close_failure_test MAKE vtkhdf-close-failure-test LABELS unit)
-tfi_test(vtkhdf-paraview-test COMMAND [==[(TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./temporal_vtkhdf_test) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py /tmp/tubularflowiga-temporal-vtkhdf-test/geometry.vtkhdf --times none --arrays none --value none) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py --unit-cube-interpolation)]==]
+tfi_test(vtkhdf-paraview-test COMMAND [==[(TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./temporal_vtkhdf_test) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py "${TMPDIR:-/tmp}/tubularflowiga-temporal-vtkhdf-test/geometry.vtkhdf" --times none --arrays none --value none) && ("${PVPYTHON:-pvpython}" tests/validate_temporal_vtkhdf.py --unit-cube-interpolation)]==]
 	REQUIRES temporal_vtkhdf_test MAKE vtkhdf-paraview-test LABELS paraview)
 tfi_test(weighted_work_partition_test COMMAND [==[./weighted_work_partition_test]==]
 	REQUIRES weighted_work_partition_test MAKE test weighted-work-partition-test LABELS unit)

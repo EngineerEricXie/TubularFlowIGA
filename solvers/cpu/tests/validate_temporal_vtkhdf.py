@@ -1,4 +1,6 @@
 import argparse
+import os
+import tempfile
 from pathlib import Path
 
 from paraview.simple import OpenDataFile
@@ -10,8 +12,8 @@ def require(condition, message):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("path", nargs="?", default=
-                    "/tmp/tubularflowiga-temporal-vtkhdf-test/bezier.vtkhdf")
+parser.add_argument("path", nargs="?", default=os.path.join(
+                    tempfile.gettempdir(), "tubularflowiga-temporal-vtkhdf-test", "bezier.vtkhdf"))
 parser.add_argument("--points", type=int, default=64)
 parser.add_argument("--cells", type=int, default=1)
 parser.add_argument("--times", default="0,0.5,1")
