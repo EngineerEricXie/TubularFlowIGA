@@ -38,7 +38,7 @@ def run(options):
         raise ValueError("case and output directories must be separate")
     provenance = [validator, cpu, policy_path, Path(__file__).resolve(),
                   ROOT / "solvers/cpu/include/TransportBudget.hpp", ROOT / "solvers/cpu/src/iga_transport_validate.cpp",
-                  ROOT / "solvers/cpu/tests/test_transport_budget.cpp", ROOT / "solvers/cpu/Makefile",
+                  ROOT / "solvers/cpu/tests/test_transport_budget.cpp", ROOT / "solvers/cpu/CMakeLists.txt",
                   options.cpu_matrix.resolve() / "matrix.json", options.cpu_matrix.resolve() / "summary.json"]
     # The independent integrator still shares geometry and configuration
     # primitives; record those sources as well as its own implementation.

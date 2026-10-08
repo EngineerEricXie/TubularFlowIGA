@@ -84,7 +84,7 @@ sudo apt install \
 ```
 
 On these systems Eigen is normally under `/usr/include/eigen3`, so the default
-spline Makefile works without setting `EIGEN_DIR`. The `metis` package must
+spline build finds it without setting `EIGEN_DIR`. The `metis` package must
 provide `mpmetis`; verify it with `command -v mpmetis`.
 
 ### RHEL, Rocky Linux, or AlmaLinux
@@ -195,10 +195,11 @@ make one-d-petsc
 make one-d-test
 ```
 
-The 1D Makefile first uses `pkg-config PETSc`, as supplied by many system PETSc
-packages. When pkg-config is unavailable, provide compatible `PETSC_CFLAGS` and
-`PETSC_LIBS`, or use the PETSc compiler/link flags from the selected
-installation. Multi-rank nonlinear tests use distributed MUMPS LU by default;
+The build reads PETSc's compile and link flags from its pkg-config file,
+`$PETSC_DIR/$PETSC_ARCH/lib/pkgconfig/PETSc.pc`. For a system PETSc package, set
+`PETSC_DIR` to the installed prefix (for example
+`/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`) and leave `PETSC_ARCH`
+empty. Multi-rank nonlinear tests use distributed MUMPS LU by default;
 include MUMPS in the PETSc build or provide alternate PETSc KSP/PC options.
 
 For an installed PETSc prefix whose configuration is directly under

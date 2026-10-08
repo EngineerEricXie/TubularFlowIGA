@@ -114,7 +114,7 @@ def main():
 
     sources = [repo/'solvers/cpu/src/iga_navier_stokes.cpp',
                repo/'solvers/cpu/src/iga_solve.cpp',
-               repo/'solvers/cpu/Makefile',
+               repo/'solvers/cpu/CMakeLists.txt',
                repo/'scripts/hpc/hpc_io_control_regression.py',
                repo/'scripts/integration/test_transport_pvtu_paraview.py',
                Path(__file__).resolve()]
