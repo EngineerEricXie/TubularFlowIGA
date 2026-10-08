@@ -90,9 +90,12 @@ under [`docs/validation/`](../docs/validation).
 - [`integration/`](integration): `test_native_tet_*.py` and
   `test_native_vtkhdf_cli.py` run built native Tet executables end to end.
   They are invoked by the `make t7-…` and `make t9-…` targets, not by unit-test
-  discovery.
+  discovery. `test_*_paraview.py` read solver output with ParaView's readers
+  (`pvpython script.py OUTPUT_DIRECTORY`).
 - [`hpc/`](hpc): test tiers, CPU/OpenMP/serial matrices, cross-node scaling,
-  reference states, and scheduler records. See
-  [HPC deployment](../docs/hpc/HPC_DEPLOYMENT.md) and
+  reference states, and scheduler records. `hpc_*_regression.py`,
+  `hpc_*_prefixes.py`, and `hpc_native_graph_checkpoint.py` drive the MPI
+  failure-injection, output, checkpoint, and solver-option regressions that no
+  make target runs. See [HPC deployment](../docs/hpc/HPC_DEPLOYMENT.md) and
   [HPC benchmarks](../docs/hpc/HPC_BENCHMARKS.md).
 - [`tests/`](tests): fast unit tests for the scripts above.
