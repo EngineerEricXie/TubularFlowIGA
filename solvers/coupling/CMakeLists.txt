@@ -222,7 +222,7 @@ tfi_test(straight_vessel_convergence_test.4 COMMAND [==[PATH="@TFI_PETSC_PREFIX@
 tfi_test(straight_vessel_convergence_test.5 COMMAND [==[PATH="@TFI_PETSC_PREFIX@/bin:$PATH" TUBULARFLOWIGA_LENGTH_ONLY=1 ./straight_vessel_convergence_test]==]
 	REQUIRES iga_1d_3d_explicit straight_vessel_convergence_test MAKE convergence-length-diagnostic LABELS petsc diagnostic)
 tfi_test(straight_vessel_convergence_test.6 COMMAND [==[PATH="@TFI_PETSC_PREFIX@/bin:$PATH" ./straight_vessel_convergence_test]==]
-	REQUIRES iga_1d_3d_explicit straight_vessel_convergence_test MAKE convergence-test LABELS petsc)
+	REQUIRES iga_1d_3d_explicit straight_vessel_convergence_test MAKE convergence-test LABELS petsc slow)
 tfi_test(fsi_runtime_contracts_test COMMAND [==[./fsi_runtime_contracts_test]==]
 	REQUIRES fsi_runtime_contracts_test MAKE fsi-runtime-contracts-test test LABELS unit)
 tfi_test(multidomain_flow_smoke_test COMMAND [==[./multidomain_flow_smoke_test --species-only]==]
@@ -238,7 +238,7 @@ tfi_test(simulation_graph_test COMMAND [==[./simulation_graph_test]==]
 tfi_test(distributed_surface_contracts_test COMMAND [==[./distributed_surface_contracts_test]==]
 	REQUIRES distributed_surface_contracts_test MAKE surface-contracts-test test LABELS unit)
 tfi_test(pulsatile_straight_vessel_temporal_test COMMAND [==[PATH="@TFI_PETSC_PREFIX@/bin:$PATH" ./pulsatile_straight_vessel_temporal_test]==]
-	REQUIRES iga_1d_3d_explicit pulsatile_straight_vessel_temporal_test MAKE temporal-convergence-test LABELS petsc)
+	REQUIRES iga_1d_3d_explicit pulsatile_straight_vessel_temporal_test MAKE temporal-convergence-test LABELS petsc slow)
 tfi_test(pulsatile_straight_vessel_temporal_test.2 COMMAND [==[TUBULARFLOWIGA_TEMPORAL_FIXTURE_ONLY=1 ./pulsatile_straight_vessel_temporal_test]==]
 	REQUIRES pulsatile_straight_vessel_temporal_test MAKE temporal-fixture-test LABELS unit)
 tfi_test(explicit_coupling_test COMMAND [==[./explicit_coupling_test]==]
@@ -265,3 +265,39 @@ tfi_test(zero_d_terminal_rcr_species_runtime_test COMMAND [==[./zero_d_terminal_
 	REQUIRES zero_d_terminal_rcr_species_runtime_test MAKE test zero-d-terminal-rcr-species-runtime-test LABELS unit)
 tfi_test(zero_d_terminal_rcr_species_graph_test COMMAND [==[./zero_d_terminal_rcr_species_graph_test]==]
 	REQUIRES zero_d_terminal_rcr_species_graph_test MAKE test zero-d-terminal-rcr-species-graph-test LABELS unit)
+
+# Coordinated-failure, checkpoint, and MPI tests that no make target ran before.
+# Each MPI test needs exactly the rank count shown; "$TMPDIR/out" is a fresh output path.
+tfi_test(collective_asset_input_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./collective_asset_input_test "$TMPDIR/out"]==]
+	REQUIRES collective_asset_input_test MAKE petsc-test collective-asset-input-test LABELS petsc mpi)
+tfi_test(domain_group_runtime_proxy_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./domain_group_runtime_proxy_test]==]
+	REQUIRES domain_group_runtime_proxy_test MAKE petsc-test domain-group-runtime-proxy-test LABELS petsc mpi)
+tfi_test(graph_checkpoint_history_test COMMAND [==[./graph_checkpoint_history_test]==]
+	REQUIRES graph_checkpoint_history_test MAKE test graph-checkpoint-history-test LABELS unit)
+tfi_test(hpc_duct_partition_test COMMAND [==[./hpc_duct_partition_test "$TMPDIR/out"]==]
+	REQUIRES hpc_duct_partition_test MAKE test hpc-duct-partition-test LABELS unit)
+tfi_test(multidomain_domain_groups_test COMMAND [==[@TFI_MPIEXEC@ -np 5 ./multidomain_domain_groups_test "$TMPDIR/out"]==]
+	REQUIRES multidomain_domain_groups_test MAKE petsc-test multidomain-domain-groups-test LABELS petsc mpi)
+tfi_test(pressure_flow_collective_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./pressure_flow_collective_failure_test]==]
+	REQUIRES pressure_flow_collective_failure_test MAKE petsc-test pressure-flow-collective-failure-test LABELS petsc mpi)
+tfi_test(registry_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./registry_failure_test]==]
+	REQUIRES registry_failure_test MAKE petsc-test registry-failure-test LABELS petsc mpi)
+tfi_test(sequential_text_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./sequential_text_failure_test "$TMPDIR/out"]==]
+	REQUIRES sequential_text_failure_test MAKE petsc-test sequential-text-failure-test LABELS petsc mpi)
+tfi_test(species_collective_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./species_collective_failure_test]==]
+	REQUIRES species_collective_failure_test MAKE petsc-test species-collective-failure-test LABELS petsc mpi)
+tfi_test(three_d_port_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./three_d_port_failure_test "$TMPDIR/out"]==]
+	REQUIRES three_d_port_failure_test MAKE petsc-test three-d-port-failure-test LABELS petsc mpi)
+tfi_test(zero_d_checkpoint_test COMMAND [==[./zero_d_checkpoint_test "$TMPDIR/out"]==]
+	REQUIRES zero_d_checkpoint_test MAKE test zero-d-checkpoint-test LABELS unit)
+
+# Multi-rank regression drivers from scripts/hpc that need no retained fixture.
+tfi_test(hpc-failure-regression COMMAND [==[python3 ../../scripts/hpc/hpc_failure_regression.py --output-dir "$TMPDIR/out"]==]
+	REQUIRES collective_failure_test collective_petsc_options_test multidomain_failure_test
+	MAKE hpc-regression-test LABELS petsc mpi)
+tfi_test(hpc-solver-views COMMAND [==[python3 ../../scripts/hpc/hpc_solver_views.py --output-dir "$TMPDIR/out"]==]
+	REQUIRES iga_multidomain_flow native_graph_checkpoint_fixture_test
+	MAKE hpc-regression-test LABELS petsc mpi)
+tfi_test(hpc-native-graph-checkpoint COMMAND [==[python3 ../../scripts/hpc/hpc_native_graph_checkpoint.py --output-root "$TMPDIR/out"]==]
+	REQUIRES iga_multidomain_flow native_graph_checkpoint_fault_test native_graph_checkpoint_fixture_test
+	MAKE hpc-regression-test LABELS petsc mpi slow)

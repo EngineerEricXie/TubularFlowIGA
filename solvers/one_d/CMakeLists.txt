@@ -65,3 +65,14 @@ tfi_test(one_d_petsc_test.mpi COMMAND [==[@TFI_MPIEXEC@ -np "${MPI_TEST_RANKS:-2
 	REQUIRES one_d_petsc_test MAKE test LABELS petsc mpi)
 tfi_test(vtkhdf-paraview-test COMMAND [==[(TUBULARFLOWIGA_KEEP_TEST_OUTPUT=1 ./one_d_output_test) && ("${PVPYTHON:-pvpython}" tests/validate_one_d_vtkhdf.py) && (./one_d_output_test)]==]
 	REQUIRES one_d_output_test MAKE vtkhdf-paraview-test LABELS paraview)
+
+# Coordinated-failure, checkpoint, and MPI tests that no make target ran before.
+# Each MPI test needs exactly the rank count shown; "$TMPDIR/out" is a fresh output path.
+tfi_test(one_d_accepted_checkpoint_test COMMAND [==[./one_d_accepted_checkpoint_test "$TMPDIR/out"]==]
+	REQUIRES one_d_accepted_checkpoint_test MAKE test one-d-accepted-checkpoint-test LABELS unit)
+tfi_test(one_d_solver_options_test COMMAND [==[./one_d_solver_options_test ../../examples/one_d/rigid_straight/skeleton_initial.swc && @TFI_MPIEXEC@ -np 2 ./one_d_solver_options_test ../../examples/one_d/rigid_straight/skeleton_initial.swc]==]
+	REQUIRES one_d_solver_options_test MAKE test one-d-solver-options-test LABELS petsc mpi)
+
+# Multi-rank output-name regression driver from scripts/hpc.
+tfi_test(hpc-one-d-filename-regression COMMAND [==[python3 ../../scripts/hpc/hpc_one_d_filename_regression.py --output-dir "$TMPDIR/out"]==]
+	REQUIRES one_d_filename_failure_test MAKE hpc-regression-test LABELS petsc mpi)
