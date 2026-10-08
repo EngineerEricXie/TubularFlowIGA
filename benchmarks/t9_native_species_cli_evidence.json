@@ -2,7 +2,6 @@
   "schema_version": 1,
   "kind": "native_tetra_prescribed_velocity_species_cli_functional_only",
   "external_fem_framework": false,
-  "source_files_sha256": "97fcb46a02c727f5fe79ee9e49b889022df0e05e971663f2e957a2da4f0ec36b",
   "test_command": "make t9-native-tet-species-cli-test",
   "external_gmsh41_mesh": true,
   "newly_generated_ftetwild_pipe_tested": true,

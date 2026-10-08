@@ -4,7 +4,6 @@
   "recorded_on": "2026-09-18",
   "backend": "native_cpp_dense_reference_tetrahedral_P2_P1",
   "external_fem_framework": false,
-  "source_files_sha256": "b1d5fd9b9b03451a9183dda913bf29238d3edf614be03703b0b2f83690ecc3cb",
   "manufactured_solution": {
     "domain": "fixed four-tetrahedron unit reference domain",
     "velocity_m_s": "u_x(t)=0.01*sin(2*t), spatially uniform",

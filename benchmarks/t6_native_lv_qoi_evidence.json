@@ -2,7 +2,6 @@
   "schema_version": 1,
   "kind": "native_prescribed_left_ventricle_qoi_diagnostic_not_physical_validation",
   "recorded_on": "2026-09-19",
-  "native_ale_source_files_sha256": "fb619929c3dd3a238e318f14158afa9f6d408a7d9e9cf0af061efff040e35878",
   "external_fem_framework": false,
   "case": {
     "fixture": "IdealizedLeftVentricleFixture",

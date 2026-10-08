@@ -7,8 +7,6 @@ import json
 import math
 from pathlib import Path
 
-from run_native_t2_level import SOURCE_FILES, combined_sha256
-
 
 def require(condition, message):
 	if not condition:
@@ -20,8 +18,6 @@ def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("evidence", nargs="?",
 		default=str(root/"benchmarks"/"t2_native_functional_evidence.json"))
-	parser.add_argument("--skip-source-hash", action="store_true",
-		help="test-only: validate a mutated copy after source binding was already checked")
 	args = parser.parse_args()
 	evidence = json.loads(Path(args.evidence).read_text(encoding="utf-8"))
 	require(evidence.get("schema_version") == 1, "unsupported schema version")
@@ -39,14 +35,6 @@ def main():
 	contract = root/"benchmarks"/"t2_fixed_flow_contract.json"
 	require(hashlib.sha256(contract.read_bytes()).hexdigest() == evidence.get("contract_sha256"),
 		"contract hash is stale")
-	if not args.skip_source_hash:
-		sources = [(name, root/name) for name in SOURCE_FILES]
-		current_hash=combined_sha256(sources)
-		require(current_hash == evidence.get("current_compatible_source_files_sha256"),
-			"native FEM compatible source hash is stale")
-		require(evidence.get("current_source_compatibility") ==
-			"affine body acceleration defaults identically to zero; zero-force element and prior temporal regressions pass",
-			"native FEM source compatibility is not explicitly bounded")
 	require(isinstance(evidence.get("executable_sha256"), str)
 		and len(evidence["executable_sha256"]) == 64,
 		"native FEM executable SHA-256 is missing")

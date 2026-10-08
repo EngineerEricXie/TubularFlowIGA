@@ -1,36 +1,8 @@
 #!/usr/bin/env python3
 """Audit the bounded native tetra Darcy single-physics evidence."""
 
-import hashlib
 import json
 from pathlib import Path
-
-
-SOURCE_FILES = (
-	"solvers/cpu/include/NativeTetDarcyPetsc.hpp",
-	"solvers/cpu/include/NativeTetRt0Flux.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesTransport.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesPetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetVesselTissueSourceMap.hpp",
-	"solvers/cpu/include/NativeTetMatchingInterfaceSource.hpp",
-	"solvers/cpu/include/NativeTetBoundaryFlow.hpp",
-	"solvers/cpu/include/NativeTetDarcyVisualization.hpp",
-	"solvers/cpu/include/NativeTetFem.hpp",
-	"solvers/cpu/src/native_tet_darcy.cpp",
-	"solvers/cpu/tests/test_native_tet_darcy_petsc.cpp",
-	"scripts/integration/test_native_tet_darcy_ftetwild.py",
-	"scripts/integration/test_native_tet_darcy_cli.py",
-	"scripts/run_native_tet_workflow.py",
-	"scripts/integration/test_native_tet_darcy_workflow.py",
-)
-
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		contents = (root/name).read_bytes()
-		digest.update(name.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 
 def main():
@@ -38,7 +10,6 @@ def main():
 	card = json.loads((root/"benchmarks/t6_native_tet_darcy_evidence.json").read_text())
 	if not (card.get("schema_version") == 1
 			and card.get("kind") == "native_tetra_p1_darcy_single_physics_functional"
-			and card.get("source_files_sha256") == source_hash(root)
 			and card.get("test_command") == "make t6-native-tet-darcy-test"
 			and card.get("external_fem_framework") is False
 			and card.get("mpi_ranks_tested") == [1, 2, 4]

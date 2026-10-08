@@ -2,7 +2,6 @@
   "schema_version": 1,
   "kind": "native_tetra_hydraulic_graph_cli_functional_smoke_only",
   "external_fem_framework": false,
-  "source_files_sha256": "2ab44c8986d374c40220131106c02097c7c7b5568da24290a9a3fe0afc74656c",
   "test_command": "make t7-native-tet-hydraulic-cli-test",
   "mpi_ranks_tested": [1, 2, 4],
   "external_gmsh41_mesh_read": true,

@@ -359,11 +359,11 @@ tfi_test(native_tet_ale_dense_runtime_test COMMAND [==[./native_tet_ale_dense_ru
 tfi_test(native_tet_ale_graph_ports_test COMMAND [==[./native_tet_ale_graph_ports_test]==]
 	REQUIRES native_tet_ale_graph_ports_test MAKE native-tet-ale-graph-ports-test LABELS unit)
 tfi_test(native_tet_ale_idealized_lv_backflow_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_backflow_flow_test]==]
-	REQUIRES native_tet_ale_idealized_lv_backflow_flow_test MAKE native-tet-ale-idealized-lv-backflow-flow-test LABELS petsc mpi)
+	REQUIRES native_tet_ale_idealized_lv_backflow_flow_test MAKE native-tet-ale-idealized-lv-backflow-flow-test lv-backflow-test LABELS petsc mpi)
 tfi_test(native_tet_ale_idealized_lv_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_flow_test]==]
 	REQUIRES native_tet_ale_idealized_lv_flow_test MAKE native-tet-ale-idealized-lv-flow-test LABELS petsc mpi)
 tfi_test(native_tet_ale_idealized_lv_radial_backflow_flow_test COMMAND [==[timeout --kill-after=10s 600s ./native_tet_ale_idealized_lv_radial_backflow_flow_test]==]
-	REQUIRES native_tet_ale_idealized_lv_radial_backflow_flow_test MAKE native-tet-ale-idealized-lv-radial-backflow-flow-test LABELS petsc)
+	REQUIRES native_tet_ale_idealized_lv_radial_backflow_flow_test MAKE native-tet-ale-idealized-lv-radial-backflow-flow-test lv-backflow-test LABELS petsc)
 tfi_test(native_tet_ale_idealized_lv_radial_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_radial_flow_test]==]
 	REQUIRES native_tet_ale_idealized_lv_radial_flow_test MAKE native-tet-ale-idealized-lv-radial-flow-test LABELS petsc mpi)
 tfi_test(native_tet_ale_immersed_chamber_motion_test COMMAND [==[./native_tet_ale_immersed_chamber_motion_test]==]
