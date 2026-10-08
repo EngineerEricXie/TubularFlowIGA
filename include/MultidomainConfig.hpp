@@ -284,13 +284,9 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 		domain.database = RelativePath(Required(object, "database", context),
 			context+".database");
 	} else if (dimension == "3d" && kind == "three_d_immersed_flow") {
-		domain.kind = DomainKind::ThreeDImmersedFlow;
-		if (Find(object, "inlet_policy"))
-			throw std::runtime_error("simulation_config.json: "+context
-				+" immersed 3D domain does not accept inlet_policy");
-		if (Find(object, "database"))
-			throw std::runtime_error("simulation_config.json: "+context
-			+" immersed 3D domain does not accept body-fitted database");
+		throw std::runtime_error("simulation_config.json: "+context
+			+" uses the removed three_d_immersed_flow kind; it is kept at git tag"
+			" archive/immersed-shell-2026-10");
 	} else if (dimension == "0d" && kind == "zero_d_flow") {
 		if (schema_version != 5)
 			throw std::runtime_error("simulation_config.json: schema_version 6 does not support zero_d_flow");
@@ -325,8 +321,6 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 		ValidateOneDFlowDomainMetadata(domain.id, domain.ports, domain.one_d_inlet_policy);
 	else if (domain.kind == DomainKind::ThreeDBodyFittedFlow)
 		ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
-	else if (domain.kind == DomainKind::ThreeDImmersedFlow)
-		ValidateThreeDImmersedFlowDomainMetadata(domain.id, domain.ports);
 	else {
 		// The referenced model chooses the source or terminal role.  Before the
 		// case file is read, accept only the two exact role-shaped port contracts.

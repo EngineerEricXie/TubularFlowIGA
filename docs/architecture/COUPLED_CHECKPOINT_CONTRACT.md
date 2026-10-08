@@ -39,7 +39,6 @@ boundary, restart uses the previous complete generation.
 | `macro_dt_s` and configured end step | Must match the case; bundle v1 does not silently change the schedule |
 | Next graph context | `step_index=N`, `start_time_s=accepted_time_s`; the first graph step uses index 0 |
 | 0D clock | `CommittedStepIndex=N-1`, `CommittedStepCount=N`, and the accepted time |
-| Immersed transient clock | Backend `index=N`, accepted time, and no active trial |
 | 1D clock | Per-domain `completed_step`, `physical_time`, and `internal_substeps`, validated against configured subcycling |
 | 3D transport clock | The runtime's actual `Steps()` value |
 | Epoch | One unique generation shared by metadata, shards, and history, with the previous complete generation recorded |
@@ -168,64 +167,15 @@ graph provider. Closed-loop 1D restart remains outside bundle-v1 graph support.
 Future replay/open-loop providers must resume from accepted time using a
 checksummed time series rather than a process-local file cursor.
 
-### 4.5 Fixed immersed flow
+### 4.5 Structures and FSI
 
-`ImmersedDistributedNewtonRuntime` requires its owned accepted vector,
-layout/partition, controller/gauge identity, port controls, and logical commit
-count. Newton candidates, updates, prepared vectors, ghosts, matrices, and KSP
-objects are rebuilt.
-
-`ImmersedTransientDistributedRuntime` additionally stores committed time and
-index. The next trial recreates history and freezes force/motion input for the
-new interval. Callback state must be reproducible from verified model inputs;
-arbitrary mutable process-local callback captures are not restartable.
-
-The graph adapter's accepted controls, publications, and clock are part of the
-payload. Trial inputs and rollback copies are not. Serial immersed runtimes
-retain their own lifecycle state and cannot be represented by omitting fields
-from the distributed schema.
-
-### 4.6 Moving geometry
-
-`MovingImmersedTransientFlowRuntime` stores the complete accepted
-`ImmersedGlobalFlowState`: time, index, geometry identity, stable node IDs,
-four field coefficients, port IDs/multipliers, gauge state, port controls, and
-all committed conservation transition primitives.
-
-Material-surface state includes reference vertices, current source vertices
-and velocities, ordered triangle IDs/vertices/labels, canonical-corner
-provenance, evaluation time, step interval, and material/topology/content/epoch
-identities. The original reference and prescribed-motion model remain
-configuration inputs.
-
-Restore rebuilds cut geometry, quadrature, ghost, extension, layout, and
-integration catalogs, then recomputes geometry identity. Publication identity
-also includes predecessor geometry and old/new cell classifications. The
-loader validates and reconstructs that predecessor relationship; it cannot
-substitute a new genesis publication or accept an arbitrary hash override.
-
-Moving fields can be redistributed by stable node ID when the target rank
-count changes. The target receives a new partition identity after complete
-source coverage is verified.
-
-### 4.7 Structures and FSI
-
-`PretensionedMembrane` stores scalar displacement and velocity indexed by
-owned global surface-node IDs. Reference geometry, normals/areas, clamped mask,
-material constants, layout, partition, and model identity are verified inputs.
-Matrices, factorization, and trial handles are rebuilt.
-
-The FSI pair additionally stores committed material kinematics, traction and
-diagnostics, composition/patch identities, and the complete surface stamp.
-The stamp includes time, step, accepted coupling iteration, reference/layout/
-partition identities, and producer-state identities. Restore returns the trial
-lifecycle to Idle and restores only the committed output.
-
-Moving flow, rank-owned traction slices, and owner membrane state are published
-under one manifest. The pair becomes visible only after every candidate and
-clock validates. Surface ownership may be redistributed by stable node ID; the
-restored target receives a new partition provenance. Native graph CLI wiring
-for moving FSI is separate from this library-level bundle support.
+The native tetrahedral ALE-fluid/solid pair is single-partition.
+`NativeTetFsiCheckpoint.hpp` captures one payload between macro steps: the
+accepted step count and time, the fluid and solid model and committed-state
+identities, the fluid state, solid displacement and velocity, ALE mesh
+displacement, and interface displacement. Every scalar must be finite, and the
+model identities bind the payload to its configuration. It is not yet part of
+the graph bundle because the graph has no FSI-capable domain kinds.
 
 ## 5. Restore sequence
 

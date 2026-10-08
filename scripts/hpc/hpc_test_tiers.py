@@ -60,13 +60,13 @@ def mpi_commands(args):
     petsc = os.environ.get("PETSC_DIR")
     if not petsc:
         return [], "PETSC_DIR is unset"
-    build = ["make", "-C", "solvers/cpu", "distributed_immersed_extension_test",
+    build = ["make", "-C", "solvers/cpu", "native_tet_moving_species_petsc_runtime_test",
              f"PETSC_DIR={petsc}"]
     if os.environ.get("PETSC_ARCH"):
         build.append(f"PETSC_ARCH={os.environ['PETSC_ARCH']}")
     commands = [build]
     launcher = shlex.split(args.launcher or args.mpiexec)
-    binary = str(ROOT / "solvers/cpu/distributed_immersed_extension_test")
+    binary = str(ROOT / "solvers/cpu/native_tet_moving_species_petsc_runtime_test")
     for ranks in (1, 2, 4):
         commands.append(launcher + ["--bind-to", "core", "--oversubscribe",
                                     "-np", str(ranks), binary])
@@ -92,7 +92,7 @@ def scheduled_commands(args):
         return [], "invalid Slurm allocation metadata"
     if nodes < 2 or tasks < 2:
         return [], "scheduled tier requires a Slurm allocation with at least two nodes and two tasks"
-    binary = ROOT / "solvers/cpu/distributed_immersed_extension_test"
+    binary = ROOT / "solvers/cpu/native_tet_moving_species_petsc_runtime_test"
     if not binary.is_file():
         return [], "scheduled MPI test binary is missing"
     launcher = shlex.split(args.launcher or "mpiexec")

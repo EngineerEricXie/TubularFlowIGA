@@ -66,7 +66,7 @@ labels 0, 1, and 2. Each mesh level must refine both the axial/circumferential
 surface and the tetrahedral volume; the polygonal-cylinder volume error and the
 circle sagitta are analytic geometry-error evidence. The regression sends this
 surface through the same C++ manifold/orientation/self-intersection preflight
-used by the immersed and FEM routes.
+used by the FEM route.
 
 After building `surface_fem_preflight`, prepare the complete untracked mesh
 series with:

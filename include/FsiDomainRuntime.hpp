@@ -16,8 +16,6 @@
 
 namespace iga {
 
-class PretensionedMembraneFsiRuntime;
-class MovingImmersedTransientFlowFsiRuntime;
 class NativeTetSolidFsiRuntime;
 class NativeTetAleFsiRuntime;
 
@@ -236,8 +234,6 @@ public:
 	}
 
 private:
-	friend class PretensionedMembraneFsiRuntime;
-	friend class MovingImmersedTransientFlowFsiRuntime;
 	friend class NativeTetSolidFsiRuntime;
 	friend class NativeTetAleFsiRuntime;
 

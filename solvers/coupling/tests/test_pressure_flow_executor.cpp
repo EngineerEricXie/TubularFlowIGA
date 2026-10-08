@@ -438,22 +438,6 @@ int main()
 		assert(source_runtime->CommittedStepCount() == 1 && terminal_runtime->CommittedStepCount() == 1);
 	}
 	{
-		const auto body_fitted_graph = Chain(iga::DomainKind::ThreeDBodyFittedFlow);
-		const auto immersed_graph = Chain(iga::DomainKind::ThreeDImmersedFlow);
-		Fixture body_fitted(body_fitted_graph);
-		Fixture immersed(immersed_graph);
-		iga::PressureFlowExecutionControls controls;
-		iga::PressureFlowComponentExecutor body_fitted_executor(*body_fitted.registry, "up",
-			controls);
-		iga::PressureFlowComponentExecutor immersed_executor(*immersed.registry, "up", controls);
-		const auto body_fitted_result = body_fitted_executor.Advance(step,
-			{{"left", 0.0}, {"right", 0.0}});
-		const auto immersed_result = immersed_executor.Advance(step,
-			{{"left", 0.0}, {"right", 0.0}});
-		assert(body_fitted.trace == immersed.trace);
-		RequireSameStepResult(body_fitted_result, immersed_result);
-	}
-	{
 		Fixture fixture(graph);
 		iga::PressureFlowExecutionControls controls;
 		controls.method = iga::PressureFlowIterationMethod::Fixed;
@@ -697,14 +681,6 @@ int main()
 		auto runtimes = RuntimeSet(graph, iga::DomainKind::ThreeDBodyFittedFlow,
 			graph.Domain("up").ports);
 		RequireRejected([&] { iga::DomainRuntimeRegistry registry(graph, std::move(runtimes)); });
-	}
-	{
-		const auto immersed_graph = Chain(iga::DomainKind::ThreeDImmersedFlow);
-		auto runtimes = RuntimeSet(immersed_graph, iga::DomainKind::OneDFlow,
-			immersed_graph.Domain("up").ports);
-		RequireRejected([&] {
-			iga::DomainRuntimeRegistry registry(immersed_graph, std::move(runtimes));
-		});
 	}
 	{
 		auto ports = graph.Domain("up").ports;
