@@ -8,8 +8,8 @@ import tempfile
 import unittest
 
 
-SCRIPTS = Path(__file__).resolve().parents[1]
-ROOT = SCRIPTS.parent
+SCRIPTS = Path(__file__).resolve().parents[1] / "hpc"
+ROOT = SCRIPTS.parents[1]
 sys.path.insert(0, str(SCRIPTS))
 
 

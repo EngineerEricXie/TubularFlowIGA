@@ -17,8 +17,8 @@ checkpoint/restart, conservative species transfer, moving domains, and
 selected fluid--structure interaction workflows.
 
 Implementation coverage and numerical verification are documented in
-[Benchmarks](docs/BENCHMARKS.md) and the
-[technology matrix](TECHNOLOGY_MATRIX.md).
+[Benchmarks](docs/validation/BENCHMARKS.md) and the
+[technology matrix](docs/TECHNOLOGY_MATRIX.md).
 
 ## Capabilities
 
@@ -200,24 +200,37 @@ transfer from the arterial tree through porous tissue and into the venous tree.
 
 Reproduction commands are listed in the [examples catalog](examples/README.md).
 The coupled Darcy examples are documented in the
-[dual-tree FSI](docs/CUBE_DUAL_TREE_FSI.md) and
-[passive tracer](docs/CUBE_DUAL_TREE_OXYGEN.md) guides.
+[dual-tree FSI](docs/cases/CUBE_DUAL_TREE_FSI.md) and
+[passive tracer](docs/cases/CUBE_DUAL_TREE_OXYGEN.md) guides.
 
 ## Repository layout
 
-- `preprocessing/mesh/`: centerline smoothing and hexahedral control meshes
-- `preprocessing/tet/`: template-free skeleton-to-surface and tetrahedral meshes
-- `preprocessing/spline/`: spline construction and Bezier extraction
-- `meshgeneration/`: legacy MATLAB reference and mesh templates
-- `solvers/cpu/`: packing, validation, MPI/PETSc flow, transport, and FEM runtimes
-- `solvers/one_d/`: native 0D/1D flow and transport solvers
-- `solvers/coupling/`: multidomain graph runners and coupling tests
-- `solvers/cuda/`: FP64 single-GPU backend
-- `examples/`: source-only runnable cases
-- `cases/`: compact versioned cross-domain case definitions
-- `scripts/`: workflow, conversion, validation, and rendering tools
-- `docs/`: user guides, architecture contracts, and numerical evidence
-- `artifacts/`: ignored local builds, meshes, results, and benchmark output
+```text
+preprocessing/
+  mesh/          centerline smoothing and hexahedral control meshes (C++)
+  tet/           template-free skeleton-to-surface and tetrahedral meshes (Python)
+  spline/        spline construction and Bezier extraction (C++)
+meshgeneration/
+  template/      cross-section templates read by preprocessing/mesh at run time
+  *.m, function/ legacy MATLAB reference implementation
+include/         headers shared by all solvers: configs, coupling graph, I/O, checkpoints
+solvers/
+  cpu/           IGA packing/checks, MPI/PETSc IGA, immersed, and native Tet FEM runtimes
+  cuda/          FP64 single-GPU IGA and native Tet backends
+  one_d/         native 0D/1D flow and transport
+  coupling/      multidomain graph runners and coupling tests
+scripts/         entry points, meshing, case runners, validators (see scripts/README.md)
+  integration/   end-to-end tests of built native Tet binaries
+  hpc/           cluster deployment, scaling, and provenance tools
+  tests/         unit tests for the scripts
+examples/        source-only runnable cases
+cases/           compact versioned cross-domain case definitions
+benchmarks/      checked-in validation and performance evidence (JSON)
+docs/            guides, input reference, validation, HPC, architecture (see docs/README.md)
+Input/           your own source cases for scripts/run_cases.sh (ignored except README)
+artifacts/       ignored local builds, meshes, results, and benchmark output
+execution.conf   machine and launch profile for scripts/run_cases.sh
+```
 
 ## Documentation
 
@@ -234,8 +247,8 @@ The coupled Darcy examples are documented in the
 | Moving domains and FSI | [Moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md) and [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
 | PETSc configuration | [Solver options](docs/SOLVER_OPTIONS.md) |
 | Checkpoint/restart | [Coupled restart](docs/COUPLED_RESTART.md) |
-| Validation and performance | [Benchmarks](docs/BENCHMARKS.md) and [HPC benchmarks](docs/HPC_BENCHMARKS.md) |
-| Cluster execution | [HPC deployment](docs/HPC_DEPLOYMENT.md) and [Bridges-2](docs/BRIDGES2.md) |
+| Validation and performance | [Benchmarks](docs/validation/BENCHMARKS.md) and [HPC benchmarks](docs/hpc/HPC_BENCHMARKS.md) |
+| Cluster execution | [HPC deployment](docs/hpc/HPC_DEPLOYMENT.md) and [Bridges-2](docs/hpc/BRIDGES2.md) |
 
 The complete index is in [docs/README.md](docs/README.md).
 
@@ -243,7 +256,7 @@ The complete index is in [docs/README.md](docs/README.md).
 
 Numerical acceptance criteria, hardware, timings, conservation checks, and
 CPU/CUDA comparisons are kept with the corresponding validation reports rather
-than duplicated here. Start with [Benchmarks](docs/BENCHMARKS.md),
+than duplicated here. Start with [Benchmarks](docs/validation/BENCHMARKS.md),
 [CPU validation](solvers/cpu/VALIDATION.md), and
 [CUDA validation](solvers/cuda/VALIDATION.md).
 

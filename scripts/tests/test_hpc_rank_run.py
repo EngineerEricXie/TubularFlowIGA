@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "hpc_rank_run.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "hpc" / "hpc_rank_run.py"
 
 
 class RankRunTests(unittest.TestCase):

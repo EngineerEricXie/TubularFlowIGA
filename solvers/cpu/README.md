@@ -561,7 +561,7 @@ The generator configuration and pressure-gradient convention are documented in
 [`examples/validation/womersley`](../../examples/validation/womersley/README.md).
 
 For PSC module, interactive-node, and Slurm examples, see the
-[Bridges-2 guide](../../docs/BRIDGES2.md).
+[Bridges-2 guide](../../docs/hpc/BRIDGES2.md).
 
 ## Reproducibility notes
 

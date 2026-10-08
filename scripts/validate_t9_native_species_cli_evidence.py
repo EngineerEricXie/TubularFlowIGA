@@ -16,8 +16,8 @@ SOURCE_FILES = (
 	"solvers/cpu/tests/test_native_tet_moving_species_transport.cpp",
 	"solvers/cpu/tests/test_native_tet_moving_species_petsc_runtime.cpp",
 	"solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
-	"scripts/test_native_tet_species_cli.py",
-	"scripts/test_native_tet_species_workflow.py",
+	"scripts/integration/test_native_tet_species_cli.py",
+	"scripts/integration/test_native_tet_species_workflow.py",
 )
 
 

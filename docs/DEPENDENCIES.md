@@ -377,7 +377,7 @@ The CUDA reader ignores CPU ownership records, so a database packed for two CPU
 ranks can also be used by the single-GPU backend.
 
 Additional Bridges-2 scheduler and benchmarking notes are in
-[`docs/BRIDGES2.md`](BRIDGES2.md).
+[`docs/hpc/BRIDGES2.md`](hpc/BRIDGES2.md).
 
 ## Final verification
 
@@ -399,6 +399,6 @@ Successful dependency checks confirm that tools and headers are visible. The
 public straight-vessel example additionally confirms mesh generation, spline
 extraction, METIS partitioning, database packing, and boundary-condition
 resolution.
-See the [Bridges-2 guide](BRIDGES2.md) for allocation-aware validation and the
+See the [Bridges-2 guide](hpc/BRIDGES2.md) for allocation-aware validation and the
 [CPU](../solvers/cpu/VALIDATION.md) and
 [CUDA](../solvers/cuda/VALIDATION.md) reports for larger numerical gates.

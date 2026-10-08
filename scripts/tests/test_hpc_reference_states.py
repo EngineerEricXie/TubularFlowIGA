@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hpc"))
 from hpc_inventory import digest
 from hpc_reference_states import POLICY, compare_states, state_manifest, execution_configuration, assembly_diagnostics
 from types import SimpleNamespace

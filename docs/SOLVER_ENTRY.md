@@ -259,7 +259,7 @@ This inventory was checked against remote `main` at `dab5f25` on
 | FEM fields and restart | native `--output-dir`, `--checkpoint-dir`, `--restart-dir`, `--resume`, `--stop-after-step` | `output`, `options`, or workflow `--resume`/`--stop-after-step`; ParaView `series.pvd`; coupled flow/species has no restart |
 
 Native tetra flow, Darcy, and species cases use the labelled tetra mesh
-described in [the FEM workflow guide](T9_NATIVE_TET_WORKFLOW.md). A surface
+described in [the FEM workflow guide](NATIVE_TET_WORKFLOW.md). A surface
 route uses Gmsh or fTetWild through the same workflow. The editable
 `fem_darcy.json`, `fem_species.json`, and `fem_flow.json` examples use the
 small four-tetra functional fixture.
