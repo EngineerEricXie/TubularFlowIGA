@@ -87,6 +87,11 @@ function(tfi_executable name)
 		add_dependencies(${name} tfi_native_checkpoint_identity)
 		target_compile_options(${name} PRIVATE -include "${TFI_NATIVE_CHECKPOINT_IDENTITY_HEADER}")
 	endif()
+	if(arg_CUDA)
+		# nvcc's library directory counts as implicit, so CMake adds no RPATH
+		# for cuBLAS/cuSOLVER; a Conda toolkit would then need LD_LIBRARY_PATH.
+		set_target_properties(${name} PROPERTIES BUILD_RPATH "${CUDAToolkit_LIBRARY_DIR}")
+	endif()
 	_tfi_directory_key(key)
 	set_property(GLOBAL APPEND PROPERTY TFI_${key}_TARGETS ${name})
 	set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
