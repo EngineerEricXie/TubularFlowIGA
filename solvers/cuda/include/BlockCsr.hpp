@@ -18,18 +18,23 @@ struct BlockPattern {
 	std::vector<int> diagonal;
 
 	explicit BlockPattern(const FlatMesh& mesh)
+		: BlockPattern(static_cast<std::size_t>(mesh.nodes), mesh.element_offsets, mesh.connectivity) {}
+
+	// Node-to-node pattern of any element mesh: element e couples the nodes
+	// connectivity[element_offsets[e]] .. connectivity[element_offsets[e+1]-1].
+	BlockPattern(std::size_t nodes, const std::vector<int>& element_offsets, const std::vector<int>& connectivity)
 	{
-		std::vector<std::vector<int>> adjacency(static_cast<std::size_t>(mesh.nodes));
-		for (std::size_t element = 0; element < mesh.elements(); ++element) {
-			const int begin = mesh.element_offsets[element];
-			const int end = mesh.element_offsets[element + 1];
+		std::vector<std::vector<int>> adjacency(nodes);
+		for (std::size_t element = 0; element+1 < element_offsets.size(); ++element) {
+			const int begin = element_offsets[element];
+			const int end = element_offsets[element + 1];
 			for (int a = begin; a < end; ++a) {
-				auto& row = adjacency[static_cast<std::size_t>(mesh.connectivity[a])];
-				row.insert(row.end(), mesh.connectivity.begin() + begin, mesh.connectivity.begin() + end);
+				auto& row = adjacency[static_cast<std::size_t>(connectivity[a])];
+				row.insert(row.end(), connectivity.begin() + begin, connectivity.begin() + end);
 			}
 		}
-		row_offsets.reserve(static_cast<std::size_t>(mesh.nodes) + 1);
-		diagonal.resize(static_cast<std::size_t>(mesh.nodes), -1);
+		row_offsets.reserve(nodes + 1);
+		diagonal.resize(nodes, -1);
 		row_offsets.push_back(0);
 		for (std::size_t node = 0; node < adjacency.size(); ++node) {
 			auto& row = adjacency[node];

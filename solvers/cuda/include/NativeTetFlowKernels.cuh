@@ -1,6 +1,8 @@
 #ifndef IGA_CUDA_NATIVE_TET_FLOW_KERNELS_CUH
 #define IGA_CUDA_NATIVE_TET_FLOW_KERNELS_CUH
 
+#include "SparseKernels.cuh"
+
 #include <cuda_runtime.h>
 #include <cstddef>
 
@@ -138,7 +140,7 @@ __global__ void AssembleNativeTetFlowElements(
 
 __global__ void ScatterNativeTetFlowElements(
 	const int* rows,const double* element_residual,
-	const double* element_jacobian,int cells,int global_dofs,
+	const double* element_jacobian,int cells,DevicePatternView pattern,
 	double* residual,double* jacobian)
 {
 	const int index=blockIdx.x*blockDim.x+threadIdx.x;
@@ -151,20 +153,18 @@ __global__ void ScatterNativeTetFlowElements(
 	}else{
 		const int entry=slot-kTetFlowDofs;
 		const int row=entry/kTetFlowDofs,column=entry%kTetFlowDofs;
-		atomicAdd(jacobian+static_cast<std::size_t>(local[column])*global_dofs
-			+local[row],element_jacobian[cell*kTetFlowDofs*kTetFlowDofs+entry]);
+		atomicAdd(jacobian+FindBlock(pattern,local[row],local[column]),
+			element_jacobian[cell*kTetFlowDofs*kTetFlowDofs+entry]);
 	}
 }
 
 __global__ void ApplyNativeTetFlowBoundaryRows(
-	const int* constrained,int dofs,double* jacobian)
+	DevicePatternView pattern,const int* constrained,double* jacobian)
 {
-	const std::size_t index=static_cast<std::size_t>(blockIdx.x)*blockDim.x
-		+threadIdx.x;
-	if(index>=static_cast<std::size_t>(dofs)*dofs)return;
-	const int row=static_cast<int>(index%dofs);
-	const int column=static_cast<int>(index/dofs);
-	if(constrained[row])jacobian[index]=row==column?1.:0.;
+	const int row=blockIdx.x*blockDim.x+threadIdx.x;
+	if(row>=pattern.nodes||!constrained[row])return;
+	for(int entry=pattern.row_offsets[row];entry<pattern.row_offsets[row+1];++entry)
+		jacobian[entry]=pattern.columns[entry]==row?1.:0.;
 }
 
 __global__ void NativeTetFlowNewtonRightHandSide(

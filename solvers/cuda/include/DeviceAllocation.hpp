@@ -6,8 +6,9 @@
 
 namespace iga::cuda {
 
-// Requested bytes owned by DeviceBuffer, excluding driver-wide memory usage
-// and allocations internal to cuBLAS. A move transfers existing ownership.
+// Requested bytes owned by DeviceBuffer and by cuDSS (CudssSolver), excluding
+// driver-wide memory usage and allocations internal to cuBLAS. A move
+// transfers existing ownership.
 class DeviceAllocationCounter {
 public:
 	static void Add(std::size_t bytes) noexcept

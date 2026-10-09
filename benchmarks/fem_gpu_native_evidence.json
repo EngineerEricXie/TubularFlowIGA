@@ -83,5 +83,16 @@
       "maximum_zero_d_storage_residual_m3": 8.673617379884035e-19
     }
   ],
-  "scope": "Small single-GPU dense LU cases; timings are individual local runs and not throughput claims."
+  "scope": "Small single-GPU cases recorded with the dense-LU solvers; the sparse solvers (CSR with Jacobi CG/BiCGStab, cuDSS for flow and FSI) reproduce their fields to at most 2.2e-14 relative L2. Timings are individual local runs and not throughput claims.",
+  "sparse_benchmark": {
+    "command": "OMP_NUM_THREADS=1 python3 scripts/benchmark_fem_gpu.py --divisions 8 16 24 32 48 --flow-divisions 4 6 8 12 16 --reference-gpu-dir DENSE_BUILD --output-dir OUT",
+    "cpu_reference": "PETSc 3.22 on one core; solve time is KSPSolve from -log_view",
+    "cases": [
+      {"name": "P1 Darcy, box 48 (117649 vertices)", "cpu_solve_s": 0.368, "gpu_solve_s": 0.108, "cpu_iterations": 230, "gpu_iterations": 232, "cuda_peak_mib": 132, "cpu_gpu_pressure_relative_l2": 1.4e-12},
+      {"name": "P1 species, box 48, 4 steps", "cpu_solve_s": 2.43, "gpu_solve_s": 0.573, "cpu_iterations": 584, "gpu_iterations": 824, "cuda_peak_mib": 237, "cpu_gpu_concentration_relative_l2": 3.8e-12},
+      {"name": "P1 Darcy, box 24, sparse vs dense GPU", "sparse_solve_s": 0.0513, "dense_solve_s": 11.3, "sparse_cuda_peak_mib": 16.7, "dense_cuda_peak_mib": 1880},
+      {"name": "P2/P1 channel flow, 1296 cells, sparse vs dense GPU", "sparse_solve_s": 0.592, "dense_solve_s": 8.79, "sparse_cuda_peak_mib": 128, "dense_cuda_peak_mib": 422, "velocity_relative_l2": 1.0e-15},
+      {"name": "P2/P1 channel flow, 24576 cells, cuDSS", "solve_s": 36.2, "newton_iterations": 9, "cuda_peak_mib": 3390}
+    ]
+  }
 }

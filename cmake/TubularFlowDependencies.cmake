@@ -113,4 +113,7 @@ if(TFI_ENABLE_CUDA)
 	endif()
 	enable_language(CUDA)
 	find_package(CUDAToolkit REQUIRED)
+	# cuDSS (sparse direct LU) for the GPU flow and FSI solvers; set cudss_DIR
+	# to <prefix>/lib/cmake/cudss when it is not on the default search path.
+	find_package(cudss CONFIG QUIET)
 endif()

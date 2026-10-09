@@ -2,10 +2,9 @@
 #include "NativeTetDarcyKernels.cuh"
 #include "NativeTetDarcyVisualization.hpp"
 #include "NativeTetVesselTissueSourceMap.hpp"
+#include "ScalarKrylov.hpp"
 #include "VtkOutput.hpp"
 #include "CaseConfig.hpp"
-
-#include <cusolverDn.h>
 
 #include <array>
 #include <chrono>
@@ -133,13 +132,6 @@ Case ReadCase(const std::filesystem::path& path)
 	return result;
 }
 
-void CheckSolver(cusolverStatus_t status,const char* operation)
-{
-	if(status!=CUSOLVER_STATUS_SUCCESS)
-		throw std::runtime_error(std::string(operation)+" failed with status "
-			+std::to_string(static_cast<int>(status)));
-}
-
 void RunCase(const std::filesystem::path& case_path,
 	const std::filesystem::path& output,
 	const std::filesystem::path& source_map_path)
@@ -205,49 +197,52 @@ void RunCase(const std::filesystem::path& case_path,
 				boundary_source[node]-=flux->second*area/3.;
 		}
 	}
+	std::vector<int> cell_offsets(static_cast<std::size_t>(cell_count)+1),cell_nodes;
+	cell_nodes.reserve(static_cast<std::size_t>(cell_count)*4);
+	for(int index=0;index<cell_count;++index){
+		cell_offsets[index+1]=4*(index+1);
+		cell_nodes.insert(cell_nodes.end(),cells[index].nodes,cells[index].nodes+4);
+	}
+	const iga::cuda::DevicePattern pattern(iga::cuda::BlockPattern(
+		static_cast<std::size_t>(dofs),cell_offsets,cell_nodes));
+	iga::cuda::BlockMatrix<1> matrix(pattern);
 	iga::cuda::DeviceBuffer<iga::cuda::NativeTetDarcyCell> device_cells(cells.size());
-	iga::cuda::DeviceBuffer<double> matrix(static_cast<std::size_t>(dofs)*dofs);
-	iga::cuda::DeviceBuffer<double> right_hand_side(dofs),device_pressure(dofs);
+	iga::cuda::DeviceBuffer<double> right_hand_side(dofs),device_pressure(dofs),solution(dofs);
 	iga::cuda::DeviceBuffer<double> device_flux(static_cast<std::size_t>(cell_count)*3);
-	iga::cuda::DeviceBuffer<int> device_fixed(dofs),pivots(dofs),info(1);
+	iga::cuda::DeviceBuffer<int> device_fixed(dofs);
 	device_cells.CopyFromHost(cells.data(),cells.size());
 	device_fixed.CopyFromHost(fixed.data(),fixed.size());
 	device_pressure.CopyFromHost(prescribed.data(),prescribed.size());
-	matrix.Clear();
+	matrix.Clear();solution.Clear();
 	right_hand_side.CopyFromHost(boundary_source.data(),boundary_source.size());
 	const auto assembly_start=std::chrono::steady_clock::now();
 	iga::cuda::AssembleNativeTetDarcy<<<(cell_count*20+127)/128,128>>>(
-		device_cells.data(),cell_count,dofs,matrix.data(),right_hand_side.data());
-	iga::cuda::ApplyNativeTetDarcyBoundaryRows<<<
-		(static_cast<std::size_t>(dofs)*dofs+127)/128,128>>>(
-		device_fixed.data(),dofs,matrix.data());
-	iga::cuda::SetNativeTetDarcyBoundaryValues<<<(dofs+127)/128,128>>>(
-		device_fixed.data(),device_pressure.data(),dofs,right_hand_side.data());
+		device_cells.data(),cell_count,pattern.view(),matrix.values(),right_hand_side.data());
+	iga::cuda::EliminateNativeTetDarcyPressure<<<(dofs+127)/128,128>>>(
+		pattern.view(),device_fixed.data(),device_pressure.data(),matrix.values(),
+		right_hand_side.data());
 	iga::cuda::CheckKernel("FEM CUDA Darcy assembly");
 	iga::cuda::Check(cudaDeviceSynchronize(),"FEM CUDA Darcy assembly sync");
 	const double assembly_seconds=std::chrono::duration<double>(
 		std::chrono::steady_clock::now()-assembly_start).count();
-	cusolverDnHandle_t handle=nullptr;
-	CheckSolver(cusolverDnCreate(&handle),"Darcy cusolverDnCreate");
-	int workspace=0;
-	CheckSolver(cusolverDnDgetrf_bufferSize(handle,dofs,dofs,matrix.data(),dofs,
-		&workspace),"Darcy getrf buffer size");
-	iga::cuda::DeviceBuffer<double> work(workspace);
+	// CG with Jacobi and the tolerances of the CPU solver (NativeTetDarcyPetsc).
+	// Jacobi CG needs O(1/h) iterations, so the cap is far above the CPU's 1000.
+	iga::cuda::ScalarKrylovWorkspace workspace(dofs);
 	const auto solve_start=std::chrono::steady_clock::now();
-	CheckSolver(cusolverDnDgetrf(handle,dofs,dofs,matrix.data(),dofs,work.data(),
-		pivots.data(),info.data()),"Darcy getrf");
-	CheckSolver(cusolverDnDgetrs(handle,CUBLAS_OP_N,dofs,1,matrix.data(),dofs,
-		pivots.data(),right_hand_side.data(),dofs,info.data()),"Darcy getrs");
-	int result_info=0;info.CopyToHost(&result_info,1);
-	if(result_info!=0)throw std::runtime_error("FEM CUDA Darcy matrix is singular");
+	const auto linear=iga::cuda::SolveConjugateGradient(matrix,workspace,
+		right_hand_side.data(),solution.data(),20000,1e-12,1e-14);
+	iga::cuda::Check(cudaDeviceSynchronize(),"FEM CUDA Darcy solve sync");
+	if(!linear.converged)
+		throw std::runtime_error("FEM CUDA Darcy CG did not converge: iterations="
+			+std::to_string(linear.iterations)+" residual="+std::to_string(linear.residual));
 	const double solve_seconds=std::chrono::duration<double>(
 		std::chrono::steady_clock::now()-solve_start).count();
 	iga::cuda::EvaluateNativeTetDarcyCellFlux<<<(cell_count+127)/128,128>>>(
-		device_cells.data(),cell_count,right_hand_side.data(),device_flux.data());
+		device_cells.data(),cell_count,solution.data(),device_flux.data());
 	iga::cuda::CheckKernel("FEM CUDA Darcy flux");
 	iga::NativeTetDarcyResult result;
 	result.pressure_pa.resize(dofs);
-	right_hand_side.CopyToHost(result.pressure_pa.data(),result.pressure_pa.size());
+	solution.CopyToHost(result.pressure_pa.data(),result.pressure_pa.size());
 	std::vector<double> flat_flux(static_cast<std::size_t>(cell_count)*3);
 	device_flux.CopyToHost(flat_flux.data(),flat_flux.size());
 	result.cell_flux_m_s.resize(cell_count);
@@ -277,9 +272,9 @@ void RunCase(const std::filesystem::path& case_path,
 			?mapped_source->maximum_port_balance_defect_m3_s:0.)
 		<<" darcy_volume_source_m3_s="<<result.volume_source_m3_s
 		<<" assembly_s="<<assembly_seconds<<" solve_s="<<solve_seconds
+		<<" cg_iterations="<<linear.iterations<<" cg_residual="<<linear.residual
 		<<" host_peak_rss_kib="<<usage
 		<<" cuda_peak_bytes="<<iga::cuda::DeviceAllocationCounter::Peak()<<'\n';
-	CheckSolver(cusolverDnDestroy(handle),"Darcy cusolverDnDestroy");
 }
 
 } // namespace

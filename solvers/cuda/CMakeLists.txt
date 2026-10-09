@@ -10,12 +10,10 @@ tfi_test(cuda_execution_test COMMAND [==[./cuda_execution_test]==]
 
 set(cuda_options $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo -Xcompiler=-Wall,-Wextra>)
 if(TFI_ENABLE_CUDA)
-	set(cuda_libraries CUDA::cublas CUDA::cusolver)
+	set(cuda_libraries CUDA::cublas)
 endif()
 tfi_executable(iga_cuda SOURCES src/iga_cuda.cu CUDA HDF5 OPTIONS ${cuda_options}
 	LIBRARIES ${cuda_libraries})
-tfi_executable(native_tet_flow_cuda SOURCES src/native_tet_flow_cuda.cu CUDA
-	OPTIONS ${cuda_options} LIBRARIES ${cuda_libraries})
 tfi_executable(native_tet_species_cuda SOURCES src/native_tet_species_cuda.cu CUDA
 	OPTIONS ${cuda_options} LIBRARIES ${cuda_libraries})
 tfi_executable(cuda_stdout_failure_test SOURCES tests/test_stdout_failure.cu CUDA HDF5
@@ -23,16 +21,29 @@ tfi_executable(cuda_stdout_failure_test SOURCES tests/test_stdout_failure.cu CUD
 tfi_executable(device_allocation_test SOURCES tests/test_device_allocation.cu CUDA
 	OPTIONS ${cuda_options} LIBRARIES ${cuda_libraries})
 
+# The P2/P1 flow Newton systems are factorized with cuDSS.
+if(TFI_ENABLE_CUDA AND NOT TARGET cudss)
+	tfi_skip_target(native_tet_flow_cuda "cuDSS (set cudss_DIR to <prefix>/lib/cmake/cudss)")
+else()
+	tfi_executable(native_tet_flow_cuda SOURCES src/native_tet_flow_cuda.cu CUDA
+		OPTIONS ${cuda_options} LIBRARIES ${cuda_libraries} $<TARGET_NAME_IF_EXISTS:cudss>)
+endif()
+
 # Darcy and FSI share CPU headers that declare PETSc and MPI types; they use
-# those headers only and do not link PETSc.
+# those headers only and do not link PETSc. FSI reuses the cuDSS flow solve.
 foreach(name native_tet_darcy_cuda native_tet_fsi_cuda)
 	string(REPLACE "_cuda" "_cuda.cu" source "src/${name}")
 	if(TFI_ENABLE_CUDA AND NOT TARGET TubularFlow::PETSc)
 		tfi_skip_target(${name} "PETSc headers (pass PETSC_DIR and PETSC_ARCH)")
 		continue()
 	endif()
+	if(TFI_ENABLE_CUDA AND name STREQUAL "native_tet_fsi_cuda" AND NOT TARGET cudss)
+		tfi_skip_target(${name} "cuDSS (set cudss_DIR to <prefix>/lib/cmake/cudss)")
+		continue()
+	endif()
 	tfi_executable(${name} SOURCES ${source} CUDA OPTIONS ${cuda_options}
-		INCLUDES ${PETSC_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS} LIBRARIES ${cuda_libraries})
+		INCLUDES ${PETSC_INCLUDE_DIRS} ${MPI_CXX_INCLUDE_DIRS}
+		LIBRARIES ${cuda_libraries} $<$<STREQUAL:${name},native_tet_fsi_cuda>:$<TARGET_NAME_IF_EXISTS:cudss>>)
 endforeach()
 
 tfi_make_alias(all TARGETS iga_cuda native_tet_flow_cuda native_tet_darcy_cuda

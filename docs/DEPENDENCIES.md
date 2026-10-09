@@ -15,7 +15,7 @@ required only by the MPI CPU solvers. CUDA does not use PETSc.
 | Preprocessing-only | GNU Make, C++ compiler, Eigen 3, OpenMP, METIS/`mpmetis` | No | No |
 | CPU-only solver | Preprocessing requirements, MPI, optimized PETSc with C++, HDF5 | Yes | No |
 | Native 1D solver | C++17, OpenMP, MPI, PETSc, HDF5; MUMPS recommended for multi-rank nonlinear solves | Yes | No |
-| CUDA-only solver | Preprocessing requirements, CUDA Toolkit, cuBLAS, HDF5 | No | Yes at runtime |
+| CUDA-only solver | Preprocessing requirements, CUDA Toolkit, cuBLAS, HDF5; cuDSS for GPU flow/FSI | No | Yes at runtime |
 
 The CPU and CUDA solvers consume the same packed `.ntiga` database. Preparing
 that database requires Eigen and `mpmetis`, regardless of the selected solver.
@@ -243,19 +243,23 @@ conda run -n tubularflow-cuda nvcc --version
 make cuda CUDA_ARCHS=89 NVCC="$(conda run -n tubularflow-cuda which nvcc)"
 ```
 
-For runtime, activate the environment and expose its CUDA shared libraries:
+The GPU flow and FSI solvers factorize their Newton systems with cuDSS
+(NVIDIA's sparse direct solver, 0.8 or newer, CUDA 12 build). Install it into
+its own prefix and pass that prefix as `CUDSS_DIR`:
 
 ```bash
-conda activate tubularflow-cuda
-export LD_LIBRARY_PATH="$CONDA_PREFIX/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
+conda create -n tubularflow-cudss -c conda-forge libcudss-dev
+make cuda CUDA_ARCHS=89 NVCC="$(conda run -n tubularflow-cuda which nvcc)" \
+  CUDSS_DIR="$(conda run -n tubularflow-cudss printenv CONDA_PREFIX)"
 ./solvers/cuda/iga_cuda device-info
 ```
 
-Without this library path, a successfully compiled Conda CUDA executable may
-still fail at startup with `libcublas.so.12: cannot open shared object file`.
-The build pins the CUDA host compiler to the system C++ compiler, so the Conda
-environment does not need to be active while building; see
-[Building and testing](BUILD.md#cuda).
+Without cuDSS, `native_tet_flow_cuda` and `native_tet_fsi_cuda` are skipped with
+that reason; the other CUDA solvers do not need it. The CUDA executables carry
+an RPATH to the toolkit and cuDSS libraries, so they start without setting
+`LD_LIBRARY_PATH`. The build pins the CUDA host compiler to the system C++
+compiler, so the Conda environment does not need to be active while building;
+see [Building and testing](BUILD.md#cuda).
 
 This is also appropriate for WSL when `nvidia-smi` already works but `nvcc`
 does not: the Windows NVIDIA driver is exposed to WSL, while `nvcc` is supplied

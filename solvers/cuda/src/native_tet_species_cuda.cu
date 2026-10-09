@@ -1,11 +1,11 @@
 #include "CudaRuntime.hpp"
 #include "NativeTetSpeciesKernels.cuh"
 #include "NativeTetSpeciesVisualization.hpp"
+#include "ScalarKrylov.hpp"
 #include "VtkOutput.hpp"
 #include "CaseConfig.hpp"
 
-#include <cusolverDn.h>
-
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -88,12 +88,6 @@ Case ReadCase(const std::filesystem::path& path)
 	result.dt=number(time,"dt_s");
 	result.steps=RequireInteger(field(time,"steps"),"steps");
 	return result;
-}
-
-void CheckSolver(cusolverStatus_t status,const char* operation)
-{
-	if(status!=CUSOLVER_STATUS_SUCCESS)
-		throw std::runtime_error(std::string(operation)+" failed");
 }
 
 void RunCase(const std::filesystem::path& case_path,const std::filesystem::path& output,
@@ -202,12 +196,23 @@ void RunCase(const std::filesystem::path& case_path,const std::filesystem::path&
 	}
 	iga::cuda::DeviceBuffer<iga::cuda::NativeTetSpeciesCell> device_cells(cells.size());
 	iga::cuda::DeviceBuffer<iga::cuda::NativeTetSpeciesFace> device_faces(faces.size());
-	iga::cuda::DeviceBuffer<double> matrix(static_cast<std::size_t>(dofs)*dofs);
-	iga::cuda::DeviceBuffer<double> rhs(dofs),previous(dofs);
+	std::vector<int> cell_offsets(static_cast<std::size_t>(cell_count)+1),cell_nodes;
+	cell_nodes.reserve(static_cast<std::size_t>(cell_count)*4);
+	for(int index=0;index<cell_count;++index){
+		cell_offsets[index+1]=4*(index+1);
+		cell_nodes.insert(cell_nodes.end(),cells[index].nodes,cells[index].nodes+4);
+	}
+	const iga::cuda::DevicePattern pattern(iga::cuda::BlockPattern(
+		static_cast<std::size_t>(dofs),cell_offsets,cell_nodes));
+	iga::cuda::BlockMatrix<1> matrix(pattern);
+	// Left-Jacobi BiCGStab, warm-started from the last step, with the stopping
+	// test of the CPU GMRES solver (NativeTetMovingSpeciesPetscRuntime). Jacobi
+	// is weaker than the CPU's block Jacobi/ILU(0), so the cap is 5000, not 500.
+	iga::cuda::ScalarKrylovWorkspace workspace(dofs);
+	iga::cuda::DeviceBuffer<double> rhs(dofs),previous(dofs),solution(dofs);
 	iga::cuda::DeviceBuffer<double> device_velocity(static_cast<std::size_t>(velocity_nodes)*3);
 	iga::cuda::DeviceBuffer<double> device_moments(moments.size());
 	iga::cuda::DeviceBuffer<double> device_rt0(static_cast<std::size_t>(cell_count)*4);
-	iga::cuda::DeviceBuffer<int> pivots(dofs),info(1);
 	device_cells.CopyFromHost(cells.data(),cells.size());
 	device_faces.CopyFromHost(faces.data(),faces.size());
 	device_moments.CopyFromHost(moments.data(),moments.size());
@@ -220,17 +225,12 @@ void RunCase(const std::filesystem::path& case_path,const std::filesystem::path&
 			throw std::runtime_error("cannot read FEM CUDA Darcy RT0 face flow");
 		device_rt0.CopyFromHost(face_flow.data(),face_flow.size());
 	}
-	cusolverDnHandle_t handle=nullptr;
-	CheckSolver(cusolverDnCreate(&handle),"species cusolverDnCreate");
-	int workspace=0;
-	CheckSolver(cusolverDnDgetrf_bufferSize(handle,dofs,dofs,matrix.data(),dofs,
-		&workspace),"species getrf buffer size");
-	iga::cuda::DeviceBuffer<double> work(workspace);
 	std::filesystem::create_directories(output);
 	std::vector<std::pair<double,std::filesystem::path>> snapshots;
 	std::vector<double> concentration(dofs,specification.initial);
 	std::vector<double> velocity(static_cast<std::size_t>(velocity_nodes)*3);
 	double assembly_seconds=0.,solve_seconds=0.;
+	int krylov_iterations=0;double maximum_krylov_residual=0.;
 	for(int step=1;step<=specification.steps;++step){
 		if(velocity_series.empty()){
 			for(int node=0;node<velocity_nodes;++node)
@@ -248,30 +248,34 @@ void RunCase(const std::filesystem::path& case_path,const std::filesystem::path&
 		previous.CopyFromHost(concentration.data(),concentration.size());
 		device_velocity.CopyFromHost(velocity.data(),velocity.size());
 		iga::cuda::AssembleNativeTetSpeciesCells<<<(cell_count*16+127)/128,128>>>(
-			device_cells.data(),cell_count,dofs,specification.dt,
+			device_cells.data(),cell_count,pattern.view(),specification.dt,
 			specification.diffusivity,specification.source,specification.decay,
 			device_velocity.data(),device_moments.data(),
 			darcy_flux_directory.empty()?nullptr:device_rt0.data(),previous.data(),
-			matrix.data(),rhs.data());
+			matrix.values(),rhs.data());
 		iga::cuda::AssembleNativeTetSpeciesFaces<<<(faces.size()*9+127)/128,128>>>(
-			device_faces.data(),static_cast<int>(faces.size()),dofs,
+			device_faces.data(),static_cast<int>(faces.size()),pattern.view(),
 			device_velocity.data(),
 			darcy_flux_directory.empty()?nullptr:device_rt0.data(),
-			matrix.data(),rhs.data());
+			matrix.values(),rhs.data());
 		iga::cuda::CheckKernel("FEM CUDA species assembly");
 		iga::cuda::Check(cudaDeviceSynchronize(),"FEM CUDA species assembly sync");
 		assembly_seconds+=std::chrono::duration<double>(
 			std::chrono::steady_clock::now()-assembly_start).count();
 		const auto solve_start=std::chrono::steady_clock::now();
-		CheckSolver(cusolverDnDgetrf(handle,dofs,dofs,matrix.data(),dofs,work.data(),
-			pivots.data(),info.data()),"species getrf");
-		CheckSolver(cusolverDnDgetrs(handle,CUBLAS_OP_N,dofs,1,matrix.data(),dofs,
-			pivots.data(),rhs.data(),dofs,info.data()),"species getrs");
-		int result_info=0;info.CopyToHost(&result_info,1);
-		if(result_info!=0)throw std::runtime_error("FEM CUDA species matrix is singular");
+		solution.CopyFromHost(concentration.data(),concentration.size());
+		const auto linear=iga::cuda::SolveBiCgStab(matrix,workspace,rhs.data(),solution.data(),
+			5000,1e-12,1e-14);
+		if(!linear.converged)
+			throw std::runtime_error("FEM CUDA species BiCGStab did not converge at step "
+				+std::to_string(step)+": iterations="+std::to_string(linear.iterations)
+				+" residual="+std::to_string(linear.residual)
+				+" tolerance="+std::to_string(linear.tolerance));
+		krylov_iterations+=linear.iterations;
+		maximum_krylov_residual=std::max(maximum_krylov_residual,linear.residual);
 		solve_seconds+=std::chrono::duration<double>(
 			std::chrono::steady_clock::now()-solve_start).count();
-		rhs.CopyToHost(concentration.data(),concentration.size());
+		solution.CopyToHost(concentration.data(),concentration.size());
 		const auto snapshot=output/("species_step_"+std::to_string(step)+".vtu");
 		const auto piece=iga::BuildNativeTetSpeciesVtkPartition(mesh,mesh,
 			concentration,0,1);
@@ -284,9 +288,10 @@ void RunCase(const std::filesystem::path& case_path,const std::filesystem::path&
 	std::cout<<"native_tet_species_cuda_complete species="<<specification.species_id
 		<<" cells="<<cell_count<<" steps="<<specification.steps
 		<<" assembly_s="<<assembly_seconds<<" solve_s="<<solve_seconds
+		<<" krylov_iterations="<<krylov_iterations
+		<<" max_krylov_residual="<<maximum_krylov_residual
 		<<" host_peak_rss_kib="<<usage
 		<<" cuda_peak_bytes="<<iga::cuda::DeviceAllocationCounter::Peak()<<'\n';
-	CheckSolver(cusolverDnDestroy(handle),"species cusolverDnDestroy");
 }
 
 } // namespace
