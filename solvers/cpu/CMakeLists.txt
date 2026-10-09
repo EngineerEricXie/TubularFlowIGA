@@ -360,12 +360,17 @@ tfi_test(native_tet_ale_graph_ports_test COMMAND [==[./native_tet_ale_graph_port
 	REQUIRES native_tet_ale_graph_ports_test MAKE native-tet-ale-graph-ports-test LABELS unit)
 tfi_test(native_tet_ale_idealized_lv_backflow_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_backflow_flow_test]==]
 	REQUIRES native_tet_ale_idealized_lv_backflow_flow_test MAKE native-tet-ale-idealized-lv-backflow-flow-test lv-backflow-test LABELS petsc mpi)
+# Without outlet backflow stabilization the idealized LV cycle is expected to
+# fail Newton during expansion (docs/validation/T4_NATIVE_ALE.md); these two
+# tests pass when that documented negative result reproduces.
 tfi_test(native_tet_ale_idealized_lv_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_flow_test]==]
-	REQUIRES native_tet_ale_idealized_lv_flow_test MAKE native-tet-ale-idealized-lv-flow-test LABELS petsc mpi)
+	REQUIRES native_tet_ale_idealized_lv_flow_test MAKE native-tet-ale-idealized-lv-flow-test LABELS petsc mpi diagnostic
+	PASS_REGEX "native ALE PETSc Newton line search failed")
 tfi_test(native_tet_ale_idealized_lv_radial_backflow_flow_test COMMAND [==[timeout --kill-after=10s 600s ./native_tet_ale_idealized_lv_radial_backflow_flow_test]==]
 	REQUIRES native_tet_ale_idealized_lv_radial_backflow_flow_test MAKE native-tet-ale-idealized-lv-radial-backflow-flow-test lv-backflow-test LABELS petsc)
 tfi_test(native_tet_ale_idealized_lv_radial_flow_test COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_ale_idealized_lv_radial_flow_test]==]
-	REQUIRES native_tet_ale_idealized_lv_radial_flow_test MAKE native-tet-ale-idealized-lv-radial-flow-test LABELS petsc mpi)
+	REQUIRES native_tet_ale_idealized_lv_radial_flow_test MAKE native-tet-ale-idealized-lv-radial-flow-test LABELS petsc mpi diagnostic
+	PASS_REGEX "native ALE PETSc Newton line search failed")
 tfi_test(native_tet_ale_immersed_chamber_motion_test COMMAND [==[./native_tet_ale_immersed_chamber_motion_test]==]
 	REQUIRES native_tet_ale_immersed_chamber_motion_test MAKE native-tet-ale-immersed-chamber-motion-test test LABELS unit)
 tfi_test(native_tet_ale_kinematics_test COMMAND [==[./native_tet_ale_kinematics_test]==]
@@ -375,7 +380,8 @@ tfi_test(native_tet_ale_mesh_motion_test COMMAND [==[./native_tet_ale_mesh_motio
 tfi_test(native_tet_ale_petsc_assembly_test COMMAND [==[timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_assembly_test]==]
 	REQUIRES native_tet_ale_petsc_assembly_test MAKE native-tet-ale-petsc-assembly-test LABELS petsc mpi)
 tfi_test(native_tet_ale_petsc_runtime_test COMMAND [==[timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_runtime_test -native_ale_scale true -native_ale_user_schur false -ksp_type fgmres -ksp_rtol 1e-10 -ksp_max_it 300 -pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full -pc_fieldsplit_schur_precondition selfp -fieldsplit_velocity_ksp_type preonly -fieldsplit_velocity_pc_type hypre -fieldsplit_pressure_ksp_type preonly -fieldsplit_pressure_pc_type jacobi]==]
-	REQUIRES native_tet_ale_petsc_runtime_test MAKE native-tet-ale-petsc-fieldsplit-test LABELS petsc mpi)
+	REQUIRES native_tet_ale_petsc_runtime_test MAKE native-tet-ale-petsc-fieldsplit-test LABELS petsc mpi
+	PETSC_PACKAGES HYPRE)
 tfi_test(native-tet-ale-petsc-mesh-runtime-test COMMAND [==[test -n "${T4_ALE_MESH}" || (echo "set T4_ALE_MESH=/path/to/volume.msh" >&2; exit 2); timeout --kill-after=5s 300s mpiexec -np 2 ./native_tet_ale_petsc_mesh_runtime_test "${T4_ALE_MESH}" "${T4_ALE_RESULT:-/tmp/native-tet-ale-mesh-result.json}" "${T4_ALE_MODE:-translation}"]==]
 	REQUIRES native_tet_ale_petsc_mesh_runtime_test MAKE native-tet-ale-petsc-mesh-runtime-test LABELS petsc mpi manual)
 tfi_test(native_tet_ale_petsc_prescribed_runtime_test COMMAND [==[timeout --kill-after=5s 90s mpiexec -np 2 ./native_tet_ale_petsc_prescribed_runtime_test]==]

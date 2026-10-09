@@ -61,7 +61,7 @@ Makefiles did; the tests rely on `assert`.
 | `gpu` | Needs an NVIDIA GPU |
 | `paraview` | Needs `pvpython` (override with `PVPYTHON`) |
 | `manual` | Needs a user-supplied input, for example `T4_ALE_MESH` |
-| `diagnostic` | Long convergence diagnostics, not acceptance gates |
+| `diagnostic` | Convergence studies and documented negative results, not acceptance gates |
 | `slow` | Runs for more than about a minute; left out of CI |
 | `make=<name>` | The historical make target that ran this test |
 | `cpu`, `coupling`, `one_d`, `mesh`, `cuda` | Source directory |
