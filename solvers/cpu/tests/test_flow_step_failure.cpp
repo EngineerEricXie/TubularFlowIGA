@@ -48,7 +48,7 @@ void TestFlowStep(MPI_Comm communicator, const fs::path& fixture, const fs::path
 	auto healthy_input = [&] {
 		iga::VcaExternalCircuit circuit(base->coupling);
 		const auto input = PrepareFlowStepInput(communicator, "flow step input", true, true,
-			*base, local, 0.01, 0.0, &circuit, &system, -1.0);
+			*base, local, 0.01, 0.0, &circuit, &system, -1.0, "");
 		iga::CollectiveLocalStage(communicator, "step test inlet values", [&] {
 			CheckStep(input.inlet.time_s == 0.0 && input.inlet.species.at("oxygen") == concentration,
 				"VCA inlet lag or species changed");
@@ -84,7 +84,7 @@ void TestFlowStep(MPI_Comm communicator, const fs::path& fixture, const fs::path
 		const char* stage = cases%2 == 0 ? "flow initial VCA input" : "flow step input";
 		StepFailure(communicator, stage, [&] {
 			PrepareFlowStepInput(communicator, stage, true, true, configuration, local,
-				0.01, inlet_time, &circuit, &transport, reference);
+				0.01, inlet_time, &circuit, &transport, reference, "");
 		});
 		healthy_input();
 		++cases;
@@ -92,11 +92,11 @@ void TestFlowStep(MPI_Comm communicator, const fs::path& fixture, const fs::path
 	// Standalone flow materializes the current physical time; steady and legacy
 	// paths retain their existing copy/default behavior.
 	const auto standalone = PrepareFlowStepInput(communicator, "flow step input", true, true,
-		*base, local, .01, 0, nullptr, nullptr, 0);
+		*base, local, .01, 0, nullptr, nullptr, 0, "");
 	const auto steady = PrepareFlowStepInput(communicator, "flow step input", true, false,
-		*base, local, .01, 0, nullptr, nullptr, 0);
+		*base, local, .01, 0, nullptr, nullptr, 0, "");
 	const auto legacy = PrepareFlowStepInput(communicator, "flow step input", false, false,
-		*base, local, .01, 0, nullptr, nullptr, 0);
+		*base, local, .01, 0, nullptr, nullptr, 0, "");
 	iga::CollectiveLocalStage(communicator, "step test standalone modes", [&] {
 		CheckStep(std::abs(standalone.configuration.boundaries.front().conditions.front().scale-.00105) < 1e-15,
 			"waveform used the wrong physical time");

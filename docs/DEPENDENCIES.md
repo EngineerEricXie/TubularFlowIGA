@@ -77,14 +77,14 @@ assuming that a package installation supplied every command.
 ```bash
 sudo apt update
 sudo apt install \
-  build-essential git \
+  build-essential cmake git \
   libeigen3-dev metis \
   openmpi-bin libopenmpi-dev \
   libblas-dev liblapack-dev libhdf5-dev pkg-config
 ```
 
 On these systems Eigen is normally under `/usr/include/eigen3`, so the default
-spline Makefile works without setting `EIGEN_DIR`. The `metis` package must
+spline build finds it without setting `EIGEN_DIR`. The `metis` package must
 provide `mpmetis`; verify it with `command -v mpmetis`.
 
 ### RHEL, Rocky Linux, or AlmaLinux
@@ -93,7 +93,7 @@ Enable the repositories used by your site for development packages, then run:
 
 ```bash
 sudo dnf install \
-  gcc-c++ make git \
+  gcc-c++ make cmake git \
   eigen3-devel metis \
   openmpi openmpi-devel \
   blas-devel lapack-devel hdf5-devel pkgconf-pkg-config
@@ -195,10 +195,11 @@ make one-d-petsc
 make one-d-test
 ```
 
-The 1D Makefile first uses `pkg-config PETSc`, as supplied by many system PETSc
-packages. When pkg-config is unavailable, provide compatible `PETSC_CFLAGS` and
-`PETSC_LIBS`, or use the PETSc compiler/link flags from the selected
-installation. Multi-rank nonlinear tests use distributed MUMPS LU by default;
+The build reads PETSc's compile and link flags from its pkg-config file,
+`$PETSC_DIR/$PETSC_ARCH/lib/pkgconfig/PETSc.pc`. For a system PETSc package, set
+`PETSC_DIR` to the installed prefix (for example
+`/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`) and leave `PETSC_ARCH`
+empty. Multi-rank nonlinear tests use distributed MUMPS LU by default;
 include MUMPS in the PETSc build or provide alternate PETSc KSP/PC options.
 
 For an installed PETSc prefix whose configuration is directly under
@@ -229,7 +230,7 @@ Without root access, install the toolkit (not a driver) in a Conda environment:
 ```bash
 conda create -n tubularflow-cuda -c nvidia cuda-toolkit=12.6
 conda run -n tubularflow-cuda nvcc --version
-conda run -n tubularflow-cuda make cuda CUDA_ARCHS=89
+make cuda CUDA_ARCHS=89 NVCC="$(conda run -n tubularflow-cuda which nvcc)"
 ```
 
 For runtime, activate the environment and expose its CUDA shared libraries:
@@ -242,6 +243,9 @@ export LD_LIBRARY_PATH="$CONDA_PREFIX/targets/x86_64-linux/lib:${LD_LIBRARY_PATH
 
 Without this library path, a successfully compiled Conda CUDA executable may
 still fail at startup with `libcublas.so.12: cannot open shared object file`.
+The build pins the CUDA host compiler to the system C++ compiler, so the Conda
+environment does not need to be active while building; see
+[Building and testing](BUILD.md#cuda).
 
 This is also appropriate for WSL when `nvidia-smi` already works but `nvcc`
 does not: the Windows NVIDIA driver is exposed to WSL, while `nvcc` is supplied
@@ -280,6 +284,7 @@ export PROJECT_ROOT=/ocean/projects/${PROJECT_ACCOUNT}/${USER}
 
 module load anaconda3
 module load openmpi/4.0.5-gcc10.2.0
+module load cmake        # any CMake 3.20 or newer; check with cmake --version
 
 cd "$PROJECT_ROOT/TubularFlowIGA"
 ./scripts/check_dependencies.sh preprocessing

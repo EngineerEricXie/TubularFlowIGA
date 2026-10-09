@@ -24,9 +24,25 @@ have_command() {
 	fi
 }
 
+check_cmake() {
+	if ! command -v cmake >/dev/null 2>&1; then
+		fail "cmake 3.20 or newer"
+		return
+	fi
+	local version
+	version=$(cmake --version | awk 'NR == 1 {print $3}')
+	if [[ $(printf '%s\n' 3.20 "$version" | sort -V | head -n 1) == 3.20 ]]; then
+		pass "cmake $version: $(command -v cmake)"
+	else
+		fail "cmake 3.20 or newer (found $version)"
+	fi
+}
+
 check_base() {
 	have_command make
 	have_command "${CXX:-g++}"
+	have_command python3
+	check_cmake
 }
 
 check_preprocessing() {

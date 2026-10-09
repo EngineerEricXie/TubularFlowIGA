@@ -1,0 +1,105 @@
+# Locate optional external dependencies. Each one becomes an INTERFACE target
+# in the TubularFlow:: namespace; targets that need a missing dependency are
+# skipped and reported instead of failing the whole configuration.
+include_guard(GLOBAL)
+
+find_package(PkgConfig QUIET)
+find_package(OpenMP COMPONENTS CXX)
+find_package(MPI COMPONENTS CXX)
+
+# PETSc: PETSC_DIR/PETSC_ARCH as in the PETSc documentation, or an installed
+# prefix (PETSC_ARCH empty). PETSc's pkg-config file supplies compile and link
+# flags; its petscvariables file supplies the matching MPI launcher.
+set(PETSC_DIR "$ENV{PETSC_DIR}" CACHE PATH "PETSc source or installation directory")
+set(PETSC_ARCH "$ENV{PETSC_ARCH}" CACHE STRING "PETSc architecture (empty for an installed prefix)")
+set(TFI_PETSC_PREFIX "")
+if(PETSC_DIR)
+	if(PETSC_ARCH)
+		set(TFI_PETSC_PREFIX "${PETSC_DIR}/${PETSC_ARCH}")
+	else()
+		set(TFI_PETSC_PREFIX "${PETSC_DIR}")
+	endif()
+	if(NOT EXISTS "${TFI_PETSC_PREFIX}/lib/pkgconfig/PETSc.pc")
+		message(FATAL_ERROR "PETSc pkg-config file not found under ${TFI_PETSC_PREFIX}/lib/pkgconfig")
+	endif()
+	if(NOT PkgConfig_FOUND OR NOT MPI_CXX_FOUND)
+		message(FATAL_ERROR "PETSc requires pkg-config and an MPI C++ installation")
+	endif()
+	set(ENV{PKG_CONFIG_PATH} "${TFI_PETSC_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+	pkg_check_modules(PETSC REQUIRED IMPORTED_TARGET GLOBAL PETSc)
+	add_library(TubularFlow::PETSc INTERFACE IMPORTED GLOBAL)
+	target_link_libraries(TubularFlow::PETSc INTERFACE PkgConfig::PETSC MPI::MPI_CXX)
+	set(TFI_MPIEXEC "${MPIEXEC_EXECUTABLE}")
+	set(petsc_variables "${TFI_PETSC_PREFIX}/lib/petsc/conf/petscvariables")
+	if(EXISTS "${petsc_variables}")
+		file(STRINGS "${petsc_variables}" petsc_mpiexec REGEX "^MPIEXEC = ")
+		if(petsc_mpiexec)
+			string(REGEX REPLACE "^MPIEXEC = " "" TFI_MPIEXEC "${petsc_mpiexec}")
+		endif()
+	endif()
+	message(STATUS "PETSc ${PETSC_VERSION} at ${TFI_PETSC_PREFIX}; MPI launcher: ${TFI_MPIEXEC}")
+else()
+	set(TFI_MPIEXEC "${MPIEXEC_EXECUTABLE}")
+	message(STATUS "PETSc not configured (set PETSC_DIR/PETSC_ARCH); PETSc targets are skipped")
+endif()
+if(NOT TFI_MPIEXEC)
+	set(TFI_MPIEXEC mpiexec)
+endif()
+
+# HDF5: explicit flags (TFI_HDF5_CFLAGS/TFI_HDF5_LIBS, matching the historical
+# HDF5_CFLAGS/HDF5_LIBS overrides) take precedence. Otherwise headers and library
+# come from one installation, preferring serial HDF5 when both are installed.
+set(TFI_HDF5_CFLAGS "$ENV{HDF5_CFLAGS}" CACHE STRING "Explicit HDF5 compile flags")
+set(TFI_HDF5_LIBS "$ENV{HDF5_LIBS}" CACHE STRING "Explicit HDF5 link flags")
+if(TFI_HDF5_CFLAGS OR TFI_HDF5_LIBS)
+	add_library(TubularFlow::HDF5 INTERFACE IMPORTED GLOBAL)
+	separate_arguments(hdf5_cflags UNIX_COMMAND "${TFI_HDF5_CFLAGS}")
+	separate_arguments(hdf5_libs UNIX_COMMAND "${TFI_HDF5_LIBS}")
+	target_compile_options(TubularFlow::HDF5 INTERFACE ${hdf5_cflags})
+	target_link_libraries(TubularFlow::HDF5 INTERFACE ${hdf5_libs})
+else()
+	set(HDF5_PREFER_PARALLEL FALSE)
+	find_package(HDF5 COMPONENTS C)
+	if(HDF5_FOUND)
+		add_library(TubularFlow::HDF5 INTERFACE IMPORTED GLOBAL)
+		target_include_directories(TubularFlow::HDF5 INTERFACE ${HDF5_C_INCLUDE_DIRS})
+		target_compile_definitions(TubularFlow::HDF5 INTERFACE ${HDF5_C_DEFINITIONS})
+		target_link_libraries(TubularFlow::HDF5 INTERFACE ${HDF5_C_LIBRARIES})
+		# A parallel HDF5's public headers include mpi.h even for serial use.
+		if(HDF5_IS_PARALLEL AND MPI_CXX_FOUND)
+			target_include_directories(TubularFlow::HDF5 INTERFACE ${MPI_CXX_INCLUDE_DIRS})
+		endif()
+	else()
+		message(STATUS "HDF5 not found; VTKHDF targets are skipped")
+	endif()
+endif()
+
+# Eigen is needed only by the spline preprocessor.
+set(EIGEN_DIR "$ENV{EIGEN_DIR}" CACHE PATH "Eigen 3 include directory")
+if(EIGEN_DIR)
+	set(TFI_EIGEN_INCLUDE_DIR "${EIGEN_DIR}")
+else()
+	find_package(Eigen3 3.3 QUIET NO_MODULE)
+	if(TARGET Eigen3::Eigen)
+		get_target_property(TFI_EIGEN_INCLUDE_DIR Eigen3::Eigen INTERFACE_INCLUDE_DIRECTORIES)
+	else()
+		find_path(TFI_EIGEN_INCLUDE_DIR Eigen/Dense PATH_SUFFIXES eigen3)
+	endif()
+endif()
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+# CUDA is opt-in: -DTFI_ENABLE_CUDA=ON with CMAKE_CUDA_ARCHITECTURES (for
+# example 89). The host compiler is pinned to the C++ compiler so that a Conda
+# nvcc does not pull in a different linker or sysroot.
+option(TFI_ENABLE_CUDA "Build the single-GPU CUDA backend" OFF)
+if(TFI_ENABLE_CUDA)
+	if(NOT CMAKE_CUDA_HOST_COMPILER)
+		set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "CUDA host compiler")
+	endif()
+	if(NOT CMAKE_CUDA_ARCHITECTURES)
+		set(CMAKE_CUDA_ARCHITECTURES 70 80 89 90 CACHE STRING "CUDA architectures")
+	endif()
+	enable_language(CUDA)
+	find_package(CUDAToolkit REQUIRED)
+endif()

@@ -1,9 +1,9 @@
 # Targets and tests for this directory are defined in CMakeLists.txt. This file
-# keeps every historical `make -C preprocessing/mesh <target>` command working: executables
+# keeps every historical `make -C preprocessing/spline <target>` command working: executables
 # are built with CMake and test targets run through CTest (see docs/BUILD.md).
 .DEFAULT_GOAL := all
 .PHONY: FORCE
 Makefile: ;
 FORCE: ;
 %: FORCE
-	+@python3 ../../cmake/forward.py preprocessing/mesh $@
+	+@python3 ../../cmake/forward.py preprocessing/spline $@
