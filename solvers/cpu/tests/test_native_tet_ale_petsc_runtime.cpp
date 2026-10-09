@@ -9,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <sstream>
 #include <vector>
 
 int main(int argc,char** argv)
@@ -63,57 +64,65 @@ int main(int argc,char** argv)
 			for(int component=0;component<3;++component)
 				if(std::abs(steady.replicated_state[3*node+component]-velocity[component])>2e-11)
 					throw std::runtime_error("native steady PETSc velocity differs from exact translation");
-		auto port_mesh=mesh;
-		port_mesh.boundary_triangles[0].boundary_label=1;
-		for(std::size_t triangle=1;triangle<port_mesh.boundary_triangles.size();++triangle)
-			port_mesh.boundary_triangles[triangle].boundary_label=2;
-		const auto port_topology=iga::BuildNativeTaylorHoodTopology(port_mesh);
-		const auto port_operators=iga::BuildNativeTetAleBoundaryFluxOperators(
-			port_mesh,port_topology);
-		iga::NativeTetAleBoundaryConditions port_conditions;
-		port_conditions.prescribed_pressure_pa[2]=0.0;
-		port_conditions.flow_rate_controls.push_back({1,
-			port_operators.at(1).OutwardFlowM3S(committed)});
-		auto port_trial=committed;
-		for(std::size_t node=0;node<velocity_nodes;++node)
-			port_trial[3*node]+=(node%2?1.0:-1.0)*0.003;
-		const auto port_result=iga::SolveNativeTetAlePetscTransient(port_mesh,grid,
-			committed,port_trial,{},std::numeric_limits<std::uint32_t>::max(),
-			{1000.0,0.004},dt,1e-10,8,port_conditions);
-		const double controlled_flow=port_operators.at(1).OutwardFlowM3S(
-			port_result.replicated_state);
-		if(!(port_result.newton_iterations>0&&port_result.final_residual_l2<1e-10
-			&&std::abs(controlled_flow-port_conditions.flow_rate_controls[0]
-				.target_outward_flow_m3_s)<1e-13
-			&&port_result.flow_controller_multipliers_pa.size()==1
-			&&std::isfinite(port_result.flow_controller_multipliers_pa[0])))
-			throw std::runtime_error("native ALE PETSc pressure/flow boundary solve failed");
-		auto pressurized=port_conditions;
-		pressurized.prescribed_pressure_pa[2]=5.0;
-		auto pressurized_trial=port_result.replicated_state;
-		for(std::size_t node=0;node<port_mesh.points.size();++node)
-			pressurized_trial[3*velocity_nodes+node]+=5.0;
-		const auto shifted=iga::SolveNativeTetAlePetscTransient(port_mesh,grid,
-			committed,pressurized_trial,{},std::numeric_limits<std::uint32_t>::max(),
-			{1000.0,0.004},dt,1e-10,8,pressurized);
-		if(!(shifted.final_residual_l2<1e-10
-			&&std::abs(port_operators.at(1).OutwardFlowM3S(shifted.replicated_state)
-				-pressurized.flow_rate_controls[0].target_outward_flow_m3_s)<1e-13
-			&&std::abs(shifted.flow_controller_multipliers_pa.at(0)
-				-port_result.flow_controller_multipliers_pa.at(0)-5.0)<1e-8))
-			throw std::runtime_error("native ALE natural-pressure shift invariance failed");
-		for(std::size_t dof=0;dof<3*velocity_nodes;++dof)
-			if(std::abs(shifted.replicated_state[dof]-port_result.replicated_state[dof])>1e-8)
-				throw std::runtime_error("native ALE outlet pressure shift changed velocity");
+		// Flow-rate controllers do not support -native_ale_scale yet, and their exact
+		// flow and pressure-shift checks assume a direct solve; the iterative
+		// fieldsplit run turns them off with -native_ale_test_controllers false.
+		PetscBool controllers=PETSC_TRUE;
+		PetscOptionsGetBool(nullptr,nullptr,"-native_ale_test_controllers",&controllers,nullptr);
+		std::ostringstream controller_summary;
+		if(controllers){
+			auto port_mesh=mesh;
+			port_mesh.boundary_triangles[0].boundary_label=1;
+			for(std::size_t triangle=1;triangle<port_mesh.boundary_triangles.size();++triangle)
+				port_mesh.boundary_triangles[triangle].boundary_label=2;
+			const auto port_topology=iga::BuildNativeTaylorHoodTopology(port_mesh);
+			const auto port_operators=iga::BuildNativeTetAleBoundaryFluxOperators(
+				port_mesh,port_topology);
+			iga::NativeTetAleBoundaryConditions port_conditions;
+			port_conditions.prescribed_pressure_pa[2]=0.0;
+			port_conditions.flow_rate_controls.push_back({1,
+				port_operators.at(1).OutwardFlowM3S(committed)});
+			auto port_trial=committed;
+			for(std::size_t node=0;node<velocity_nodes;++node)
+				port_trial[3*node]+=(node%2?1.0:-1.0)*0.003;
+			const auto port_result=iga::SolveNativeTetAlePetscTransient(port_mesh,grid,
+				committed,port_trial,{},std::numeric_limits<std::uint32_t>::max(),
+				{1000.0,0.004},dt,1e-10,8,port_conditions);
+			const double controlled_flow=port_operators.at(1).OutwardFlowM3S(
+				port_result.replicated_state);
+			if(!(port_result.newton_iterations>0&&port_result.final_residual_l2<1e-10
+				&&std::abs(controlled_flow-port_conditions.flow_rate_controls[0]
+					.target_outward_flow_m3_s)<1e-13
+				&&port_result.flow_controller_multipliers_pa.size()==1
+				&&std::isfinite(port_result.flow_controller_multipliers_pa[0])))
+				throw std::runtime_error("native ALE PETSc pressure/flow boundary solve failed");
+			auto pressurized=port_conditions;
+			pressurized.prescribed_pressure_pa[2]=5.0;
+			auto pressurized_trial=port_result.replicated_state;
+			for(std::size_t node=0;node<port_mesh.points.size();++node)
+				pressurized_trial[3*velocity_nodes+node]+=5.0;
+			const auto shifted=iga::SolveNativeTetAlePetscTransient(port_mesh,grid,
+				committed,pressurized_trial,{},std::numeric_limits<std::uint32_t>::max(),
+				{1000.0,0.004},dt,1e-10,8,pressurized);
+			if(!(shifted.final_residual_l2<1e-10
+				&&std::abs(port_operators.at(1).OutwardFlowM3S(shifted.replicated_state)
+					-pressurized.flow_rate_controls[0].target_outward_flow_m3_s)<1e-13
+				&&std::abs(shifted.flow_controller_multipliers_pa.at(0)
+					-port_result.flow_controller_multipliers_pa.at(0)-5.0)<1e-8))
+				throw std::runtime_error("native ALE natural-pressure shift invariance failed");
+			for(std::size_t dof=0;dof<3*velocity_nodes;++dof)
+				if(std::abs(shifted.replicated_state[dof]-port_result.replicated_state[dof])>1e-8)
+					throw std::runtime_error("native ALE outlet pressure shift changed velocity");
+			controller_summary<<" controlled_flow="<<controlled_flow
+				<<" controller_pa="<<port_result.flow_controller_multipliers_pa[0]
+				<<" pressure_shift_controller_pa="<<shifted.flow_controller_multipliers_pa[0];
+		}
 		if(rank==0) std::cout<<"native tetrahedral ALE PETSc runtime passed ranks="<<ranks
 			<<" transient_newton="<<result.newton_iterations
 			<<" transient_residual="<<result.final_residual_l2
 			<<" steady_newton="<<steady.newton_iterations
 			<<" steady_residual="<<steady.final_residual_l2
-			<<" controlled_flow="<<controlled_flow
-			<<" controller_pa="<<port_result.flow_controller_multipliers_pa[0]
-			<<" pressure_shift_controller_pa="
-			<<shifted.flow_controller_multipliers_pa[0]<<'\n';
+			<<controller_summary.str()<<'\n';
 	} catch(const std::exception& error) {
 		int rank=0;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 		if(rank==0) std::cerr<<error.what()<<'\n';
