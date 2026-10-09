@@ -8,6 +8,7 @@ Make command-line variables arrive through the environment:
 
   PETSC_DIR, PETSC_ARCH   PETSc to configure with (kept once configured)
   CUDA_ARCHS, NVCC        enable the CUDA backend for these architectures/compiler
+  CUDSS_DIR               cuDSS installation prefix for the GPU flow and FSI solvers
   EIGEN_DIR               Eigen 3 include directory for the spline preprocessor
   HDF5_CFLAGS, HDF5_LIBS  explicit HDF5 flags instead of find_package(HDF5)
   TFI_BUILD_DIR           build directory (default: <repository>/build)
@@ -78,6 +79,8 @@ def desired_settings(directory, goal):
 	if environment.get('PETSC_DIR'):
 		settings['PETSC_DIR'] = environment['PETSC_DIR']
 		settings['PETSC_ARCH'] = environment.get('PETSC_ARCH', '')
+	if environment.get('CUDSS_DIR'):
+		settings['cudss_DIR'] = str(Path(environment['CUDSS_DIR'])/'lib/cmake/cudss')
 	if environment.get('EIGEN_DIR'):
 		settings['EIGEN_DIR'] = environment['EIGEN_DIR']
 	if environment.get('HDF5_CFLAGS'):
