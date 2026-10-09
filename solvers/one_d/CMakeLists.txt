@@ -76,3 +76,9 @@ tfi_test(one_d_solver_options_test COMMAND [==[./one_d_solver_options_test ../..
 # Multi-rank output-name regression driver from scripts/hpc.
 tfi_test(hpc-one-d-filename-regression COMMAND [==[python3 ../../scripts/hpc/hpc_one_d_filename_regression.py --output-dir "$TMPDIR/out"]==]
 	REQUIRES one_d_filename_failure_test MAKE hpc-regression-test LABELS petsc mpi)
+
+# Coordinated 1D adapter and trial failures on the multispecies example network.
+foreach(test one_d_adapter_failure_test one_d_trial_failure_test)
+	tfi_test(${test} COMMAND "@TFI_MPIEXEC@ -np 3 ./${test} ../../examples/one_d/multispecies_physiology"
+		REQUIRES ${test} MAKE test LABELS petsc mpi)
+endforeach()

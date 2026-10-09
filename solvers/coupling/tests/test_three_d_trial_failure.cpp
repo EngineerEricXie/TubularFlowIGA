@@ -18,7 +18,7 @@ void Failure(MPI_Comm comm, const std::string& stage, Work&& work)
 	try { work(); } catch (const std::exception& error) { diagnostic = error.what(); }
 	iga::CollectiveLocalStage(comm, "test failure check", [&] {
 		if (diagnostic.find(stage) == std::string::npos)
-			throw std::runtime_error("missing/wrong failure: "+diagnostic);
+			throw std::runtime_error("missing/wrong failure for "+stage+": "+diagnostic);
 	});
 	iga::RequireCollectiveSameText(comm, "test failure diagnostic", diagnostic);
 }
@@ -44,7 +44,8 @@ void Near(double expected, double actual)
 	if (!std::isfinite(actual) || !std::isfinite(expected)
 		|| (expected == 0.0 ? std::abs(actual) > 1e-12
 			: std::abs((actual-expected)/expected) > 1e-6))
-		throw std::runtime_error("trial quantity differs from reference");
+		throw std::runtime_error("trial quantity differs from reference: expected "
+			+std::to_string(expected)+", actual "+std::to_string(actual));
 }
 
 class FailingOutput : private std::streambuf {
@@ -171,7 +172,8 @@ std::vector<double> Run(const fs::path& root, const fs::path& path, MPI_Comm com
 		KSP local_solver = nullptr;
 		KSPCreate(PETSC_COMM_SELF, &local_solver);
 		PetscPushErrorHandler(PetscReturnErrorHandler, nullptr);
-		const auto status = KSPSetTolerances(local_solver, rank == ranks-1 ? -1.0 : 1e-8,
+		// rtol must lie in [0, 1); -1 would mean PETSC_DETERMINE since PETSc 3.22.
+		const auto status = KSPSetTolerances(local_solver, rank == ranks-1 ? 2.0 : 1e-8,
 			PETSC_DEFAULT, PETSC_DEFAULT, 10);
 		PetscPopErrorHandler();
 		Failure(comm, "returned status", [&] {

@@ -301,3 +301,22 @@ tfi_test(hpc-solver-views COMMAND [==[python3 ../../scripts/hpc/hpc_solver_views
 tfi_test(hpc-native-graph-checkpoint COMMAND [==[python3 ../../scripts/hpc/hpc_native_graph_checkpoint.py --output-root "$TMPDIR/out"]==]
 	REQUIRES iga_multidomain_flow native_graph_checkpoint_fault_test native_graph_checkpoint_fixture_test
 	MAKE hpc-regression-test LABELS petsc mpi slow)
+
+# Coordinated-failure tests whose reference values assume an exact flow solve:
+# with an iterative solve the discrete velocity is only approximately
+# divergence-free, so a uniform tracer drifts by about 1e-6.
+set(lu "PETSC_OPTIONS='-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps'")
+foreach(test three_d_trial_failure_test three_d_staged_failure_test graph_registry_failure_test)
+	tfi_test(${test} COMMAND "${lu} @TFI_MPIEXEC@ -np 3 ./${test} \"$TMPDIR/out\""
+		REQUIRES ${test} MAKE petsc-test LABELS petsc mpi PETSC_PACKAGES MUMPS)
+endforeach()
+tfi_test(sequential_strong_failure_test COMMAND "${lu} @TFI_MPIEXEC@ -np 3 ./sequential_strong_failure_test \"$TMPDIR/out\""
+	REQUIRES sequential_strong_failure_test MAKE petsc-test LABELS petsc mpi slow PETSC_PACKAGES MUMPS)
+tfi_test(runtime_construction_failure_test COMMAND [==[@TFI_MPIEXEC@ -np 3 ./runtime_construction_failure_test "$TMPDIR/out"]==]
+	REQUIRES runtime_construction_failure_test MAKE petsc-test LABELS petsc mpi)
+# The close-failure injection needs the text_close_preload.so shim.
+tfi_test(memory_report_test COMMAND [==[@TFI_MPIEXEC@ -np 3 env LD_PRELOAD="$PWD/text_close_preload.so" ../cpu/memory_report_test "$TMPDIR/world" world && @TFI_MPIEXEC@ -np 3 env LD_PRELOAD="$PWD/text_close_preload.so" ../cpu/memory_report_test "$TMPDIR/split" split]==]
+	REQUIRES memory_report_test text_close_preload.so MAKE petsc-test LABELS petsc mpi)
+tfi_test(native_graph_checkpoint_groups_test COMMAND [==[PETSC_OPTIONS='-ksp_type preonly -pc_type lu -pc_factor_mat_solver_type mumps' python3 tests/run_native_graph_checkpoint_groups.py "$TMPDIR/out" --launcher "@TFI_MPIEXEC@"]==]
+	REQUIRES native_graph_checkpoint_groups_test native_graph_checkpoint_fixture_test
+	MAKE petsc-test LABELS petsc mpi PETSC_PACKAGES MUMPS)
