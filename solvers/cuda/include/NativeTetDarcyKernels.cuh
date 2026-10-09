@@ -1,6 +1,8 @@
 #ifndef IGA_CUDA_NATIVE_TET_DARCY_KERNELS_CUH
 #define IGA_CUDA_NATIVE_TET_DARCY_KERNELS_CUH
 
+#include "SparseKernels.cuh"
+
 #include <cuda_runtime.h>
 #include <cstddef>
 
@@ -16,7 +18,7 @@ struct NativeTetDarcyCell
 };
 
 __global__ void AssembleNativeTetDarcy(
-	const NativeTetDarcyCell* cells,int cell_count,int dofs,
+	const NativeTetDarcyCell* cells,int cell_count,DevicePatternView pattern,
 	double* matrix,double* right_hand_side)
 {
 	const int index=blockIdx.x*blockDim.x+threadIdx.x;
@@ -29,8 +31,8 @@ __global__ void AssembleNativeTetDarcy(
 		for(int axis=0;axis<3;++axis)
 			stiffness+=element.gradient[row][axis]*element.gradient[column][axis];
 		stiffness*=element.mobility*element.volume;
-		atomicAdd(matrix+static_cast<std::size_t>(element.nodes[column])*dofs
-			+element.nodes[row],stiffness);
+		atomicAdd(matrix+FindBlock(pattern,element.nodes[row],element.nodes[column]),
+			stiffness);
 	}else{
 		const int row=local-16;
 		atomicAdd(right_hand_side+element.nodes[row],
@@ -38,22 +40,28 @@ __global__ void AssembleNativeTetDarcy(
 	}
 }
 
-__global__ void SetNativeTetDarcyBoundaryValues(
-	const int* fixed,const double* pressure,int dofs,double* right_hand_side)
+// Impose pressure on fixed nodes symmetrically, keeping the matrix SPD for CG:
+// a fixed row becomes an identity row with the prescribed value, and a free
+// row moves its fixed-column entries to the right-hand side. Each thread owns
+// one row, so no atomics are needed.
+__global__ void EliminateNativeTetDarcyPressure(
+	DevicePatternView pattern,const int* fixed,const double* pressure,
+	double* matrix,double* right_hand_side)
 {
-	const int index=blockIdx.x*blockDim.x+threadIdx.x;
-	if(index<dofs&&fixed[index])right_hand_side[index]=pressure[index];
-}
-
-__global__ void ApplyNativeTetDarcyBoundaryRows(
-	const int* fixed,int dofs,double* matrix)
-{
-	const std::size_t index=static_cast<std::size_t>(blockIdx.x)*blockDim.x
-		+threadIdx.x;
-	if(index>=static_cast<std::size_t>(dofs)*dofs)return;
-	const int row=static_cast<int>(index%dofs);
-	const int column=static_cast<int>(index/dofs);
-	if(fixed[row])matrix[index]=row==column?1.:0.;
+	const int row=blockIdx.x*blockDim.x+threadIdx.x;
+	if(row>=pattern.nodes)return;
+	if(fixed[row]){
+		for(int entry=pattern.row_offsets[row];entry<pattern.row_offsets[row+1];++entry)
+			matrix[entry]=pattern.columns[entry]==row?1.:0.;
+		right_hand_side[row]=pressure[row];
+		return;
+	}
+	for(int entry=pattern.row_offsets[row];entry<pattern.row_offsets[row+1];++entry){
+		const int column=pattern.columns[entry];
+		if(!fixed[column])continue;
+		right_hand_side[row]-=matrix[entry]*pressure[column];
+		matrix[entry]=0.;
+	}
 }
 
 __global__ void EvaluateNativeTetDarcyCellFlux(
