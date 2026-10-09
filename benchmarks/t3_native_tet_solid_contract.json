@@ -3,7 +3,6 @@
   "card_id": "T3-B-native-tetrahedral-solid-v1",
   "contract_status": "frozen",
   "implementation_status": "native_small_dense_compressible_and_stabilized_mixed_static_plus_inverse_prestress_vertical_slice",
-  "source_files_sha256": "06580070439dd9c0e7d9992833a9d782007ce85af762d7904511768c5f438c06",
   "backend": "native_cpp_total_lagrangian_tetrahedral_solid",
   "external_discretization_or_assembly_framework": false,
   "algebra_backend": "PETSc_optional_for_future_global_runtime",

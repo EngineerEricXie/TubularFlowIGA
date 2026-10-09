@@ -10,8 +10,6 @@
   "source_commit": "19e73d7062e8d4f4a01d9e5e2950ae2e8994d49b",
   "source_tree_state": "dirty_with_source_manifest",
   "source_files_sha256": "1ad63956bc1f551d1374cc2313572f3eaf1fa32407b28fae4be600fe613934a4",
-  "current_compatible_source_files_sha256": "79630dc4e740e2c98d0e80b53b09fa7b7876ca536dcc412c1cee2903f255fcc4",
-  "current_source_compatibility": "affine body acceleration defaults identically to zero; zero-force element and prior temporal regressions pass",
   "executable_sha256": "bf4803468fb23776705f19e5e0ee9eb95fcbc8137ad84d7f6d50c3a75ef2e745",
   "host": {
     "logical_cpus": 16,

@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "kind": "native_tetra_p1_to_fixed_volume_0d_wall_exchange_functional",
-  "source_files_sha256": "ded38a693fb76b7db18fc2376af4b1a8f81282e1449c180bcfc5e62e545b9904",
   "test_command": "make t6-native-wall-reservoir-exchange-test",
   "external_fem_framework": false,
   "mpi_ranks_tested": [1, 2, 4],

@@ -199,7 +199,9 @@ void CleanupFailures(MPI_Comm comm, const std::vector<const char*>& operations,
 		runtime.reset();
 		iga::RuntimeCleanupProbeForTesting() = nullptr;
 		iga::CollectiveLocalStage(comm, "cleanup release coverage", [&] {
-			RequireConstruction(cleanup_calls == static_cast<int>(operations.size()), "cleanup skipped or repeated a release");
+			if (cleanup_calls != static_cast<int>(operations.size()))
+				throw std::runtime_error(std::string(stage)+" cleanup skipped or repeated a release: "
+					+std::to_string(cleanup_calls)+" releases for "+std::to_string(operations.size())+" objects");
 			RequireConstruction(cleanup_injected == (cleanup_rank == cleanup_target_rank), "cleanup injection missed target");
 		});
 		retained.VerifyAndRelease(comm);
@@ -508,7 +510,7 @@ void RunConstructionGroup(MPI_Comm comm, const fs::path& root)
 		[&] { auto transport = MakeConstructionTransport(empty_database, comm, empty_input); }, retry_empty_scalar);
 	const std::vector<const char*> flow_cleanup = {"flow solver", "flow scatter", "flow destination_rows",
 		"flow ghost_previous", "flow ghost_state", "flow source_rows", "flow rhs", "flow update",
-		"flow previous", "flow committed_state", "flow state", "flow jacobian"};
+		"flow previous", "flow committed_state", "flow reuse backup", "flow state", "flow jacobian"};
 	const std::vector<const char*> transport_cleanup = {"transport solver", "transport scatter", "transport destination_rows",
 		"transport ghost_state", "transport source_rows", "transport rhs", "transport next", "transport committed",
 		"transport current", "transport forcing", "transport previous", "transport left"};

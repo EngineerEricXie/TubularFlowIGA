@@ -5,8 +5,6 @@ import json
 import math
 from pathlib import Path
 
-from validate_t4_native_ale_evidence import source_hash
-
 
 def require(condition, message):
 	if not condition:
@@ -37,9 +35,6 @@ def main():
 		"native_prescribed_left_ventricle_qoi_diagnostic_not_physical_validation"
 		and card.get("external_fem_framework") is False,
 		"native LV QoI card misclassifies its solver or evidence")
-	require(card.get("native_ale_source_files_sha256") == source_hash(root)
-		== native.get("source_files_sha256"),
-		"native LV QoI source identity is stale")
 	case = card["case"]
 	require(case.get("fixture") == "IdealizedLeftVentricleFixture"
 		and case.get("steps") == 16 and close(case.get("period_s"), 0.8)

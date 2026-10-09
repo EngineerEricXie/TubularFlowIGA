@@ -2,7 +2,6 @@
   "schema_version": 1,
   "kind": "native_tetra_ale_0d_hydraulic_functional_not_physiological_validation",
   "external_fem_framework": false,
-  "source_files_sha256": "4ca4aec37afc51213154b9bfd7844827f3d19403595f454d42ab6f6cb4e14494",
   "test_command": "make t7-native-ale-flow-0d-graph-test",
   "source_rcr_explicit_mpi_ranks_tested": [1, 2, 4],
   "source_rcr_strong_mpi_ranks_tested": [1, 2, 4],

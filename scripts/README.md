@@ -52,10 +52,26 @@ scripts/
 
 ## Evidence validators
 
-`validate_*.py` scripts check the checked-in evidence under
-[`benchmarks/`](../benchmarks) against its contract and source files. The
-`t<N>` milestone codes match the root `make t<N>-…` targets and the documents
-under [`docs/validation/`](../docs/validation).
+Each evidence card under [`benchmarks/`](../benchmarks) is a contract: what was
+tested, the expected values and tolerances, and what must not be claimed. A
+`validate_*.py` script checks the card itself; the tests behind it run through a
+make target. [`evidence.py`](evidence.py) ties the two together:
+
+```bash
+python3 scripts/evidence.py list               # cards, validators, test commands
+python3 scripts/evidence.py check              # all validators (no solver runs)
+python3 scripts/evidence.py run t7_native_hydraulic_cli_evidence
+python3 scripts/evidence.py check --require-run t7_native_hydraulic_cli_evidence
+```
+
+`run` executes a card's test command and writes a run record to
+`artifacts/evidence/<card>.json`: commit, uncommitted changes, host, compiler,
+MPI, PETSc, exit status, and log. `check --require-run` also requires a passing
+run of the clean `HEAD` commit. Cards no longer store source-file hashes, so
+editing code does not invalidate them; rerunning the tests does that job. To
+freeze evidence for a paper or report, tag the commit and keep its run records.
+The `t<N>` milestone codes match the root `make t<N>-…` targets and the
+documents under [`docs/validation/`](../docs/validation).
 
 | Script | Make target |
 |---|---|
@@ -66,7 +82,7 @@ under [`docs/validation/`](../docs/validation).
 | `validate_t4_*` | `make t4-contract-audit` |
 | `validate_t5_*` | `make t5-matching-interface-audit` |
 | `validate_t6_*`, `validate_t7_*`, `validate_t9_*` | the matching `make t6-…`, `t7-…`, and `t9-…` targets |
-| `validate_liver_roi_functional_evidence.py` | run directly after the liver ROI case |
+| `validate_liver_roi_functional_evidence.py` | `make t6-native-tet-darcy-test` |
 | `validate_native_vtkhdf_reader.py` | run with `pvpython` against native VTKHDF output |
 
 ## Visualization

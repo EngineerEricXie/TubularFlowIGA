@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-import hashlib
 import json
 import math
 from pathlib import Path
 import sys
-
-def source_hash(root):
-	paths=[root/"solvers/cpu/include/NativeTetFem.hpp",
-		root/"solvers/cpu/include/NativeTetAleTransient.hpp",
-		root/"solvers/cpu/include/NativeTetAleDenseRuntime.hpp",
-		root/"solvers/cpu/tests/test_native_tet_fixed_temporal_convergence.cpp"]
-	digest=hashlib.sha256()
-	for path in paths:
-		label=str(path.relative_to(root));contents=path.read_bytes()
-		digest.update(label.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 def require(condition,message):
 	if not condition:raise RuntimeError(message)
@@ -26,7 +14,6 @@ def main():
 	require(data.get("kind")=="native_fixed_domain_temporal_manufactured_validation",
 		"T2 temporal evidence kind changed")
 	require(data.get("external_fem_framework") is False,"external FEM cannot count as native evidence")
-	require(data.get("source_files_sha256")==source_hash(root),"T2 temporal source hash is stale")
 	require(data.get("classification")=="fixed_geometry_temporal_validation_not_spatial_or_physiological_validation",
 		"T2 temporal evidence is overclaimed")
 	convergence=data["convergence"];dt=convergence["time_steps_s"]
