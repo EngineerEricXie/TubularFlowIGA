@@ -139,6 +139,12 @@ It writes `flow_step_N.vtu` and `flow.pvd`; the final ledger reports assembly
 time, solve time, host peak RSS, and requested CUDA peak allocation. Each
 Newton system is stored in CSR and factorized with cuDSS (sparse direct LU):
 the pattern is analysed once per run and later iterations only refactorize.
+Setting `"linear_solver": "iterative"` in `fluid` replaces cuDSS with FGMRES
+and a block upper-triangular preconditioner (the `selfp` Schur approximation
+`C - B diag(A)^-1 B'` and Jacobi BiCGStab inner solves, as in the CPU Schur
+fieldsplit without multigrid). It needs about half the memory of cuDSS at
+25k cells and keeps working on meshes whose LU factors do not fit on the GPU;
+convergence relies on mass-dominated transient steps.
 Local assembly, solve, memory, and CPU comparison measurements are in
 [`benchmarks/fem_gpu_native_evidence.json`](../benchmarks/fem_gpu_native_evidence.json).
 

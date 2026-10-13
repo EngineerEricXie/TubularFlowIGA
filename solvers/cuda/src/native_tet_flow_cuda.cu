@@ -1,5 +1,6 @@
 #include "CudaRuntime.hpp"
 #include "CudssSolver.hpp"
+#include "SaddlePointSolver.hpp"
 #include "NativeTetFlowKernels.cuh"
 #include "NativeTetAleTransient.hpp"
 #include "NativeTetBoundaryFlow.hpp"
@@ -17,6 +18,7 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -84,6 +86,8 @@ struct FlowCase
 	std::filesystem::path mesh_file;
 	double density=0.,viscosity=0.,dt_s=0.,tolerance=0.;
 	int steps=0,maximum_iterations=0;
+	// "direct" (cuDSS) or "iterative" (block-preconditioned FGMRES).
+	std::string linear_solver="direct";
 	std::array<double,3> initial_velocity{};
 	std::map<int,std::array<double,3>> velocity_by_label;
 	std::map<int,double> pressure_by_label;
@@ -137,6 +141,10 @@ FlowCase ParseCase(const std::filesystem::path& path)
 		"maximum_iterations");
 	if(const auto* initial=Find(fluid,"initial_velocity_m_s"))
 		result.initial_velocity=Vector3(*initial,"initial_velocity_m_s");
+	if(const auto* linear=Find(fluid,"linear_solver"))
+		result.linear_solver=RequireString(*linear,"linear_solver");
+	if(result.linear_solver!="direct"&&result.linear_solver!="iterative")
+		throw std::invalid_argument("fluid.linear_solver must be direct or iterative");
 	const auto& boundaries=RequireObject(required(root,"boundaries"),"boundaries");
 	const auto& velocities=RequireObject(required(boundaries,"velocity_by_label_m_s"),
 		"velocity_by_label_m_s");
@@ -432,7 +440,8 @@ void RunCase(const std::filesystem::path& case_path,
 	iga::cuda::DeviceBuffer<double> device_element_residual(cells*34);
 	iga::cuda::DeviceBuffer<double> device_element_jacobian(cells*34*34);
 	iga::cuda::DeviceBuffer<double> device_residual(dofs),device_rhs(dofs);
-	const iga::cuda::DevicePattern pattern(FlowPattern(rows,dofs));
+	const auto host_pattern=FlowPattern(rows,dofs);
+	const iga::cuda::DevicePattern pattern(host_pattern);
 	iga::cuda::BlockMatrix<1> jacobian(pattern);
 	iga::cuda::DeviceBuffer<double> device_prescribed(dofs),device_boundary_load(dofs);
 	device_quadrature.CopyFromHost(quadrature.data(),quadrature.size());
@@ -443,7 +452,11 @@ void RunCase(const std::filesystem::path& case_path,
 	device_acceleration.CopyFromHost(acceleration.data(),acceleration.size());
 	device_prescribed.CopyFromHost(prescribed.data(),prescribed.size());
 	device_boundary_load.CopyFromHost(boundary_load.data(),boundary_load.size());
-	iga::cuda::CudssSolver solver(jacobian);
+	std::optional<iga::cuda::CudssSolver> direct;
+	std::optional<iga::cuda::SaddlePointSolver> iterative;
+	if(specification.linear_solver=="iterative")iterative.emplace(host_pattern,jacobian,3*velocity_nodes);
+	else direct.emplace(jacobian);
+	int linear_iterations=0;
 	std::vector<double> increment(dofs);
 	std::vector<std::pair<double,std::filesystem::path>> snapshots;
 	std::filesystem::create_directories(output);
@@ -509,7 +522,8 @@ void RunCase(const std::filesystem::path& case_path,
 			assembly_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-assembly_start).count();
 			const auto solve_start=std::chrono::steady_clock::now();
-			solver.Solve(device_rhs.data());
+			if(iterative)linear_iterations+=iterative->Solve(device_rhs.data()).iterations;
+			else direct->Solve(device_rhs.data());
 			device_rhs.CopyToHost(increment.data(),increment.size());
 			solve_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-solve_start).count();
@@ -574,7 +588,8 @@ void RunCase(const std::filesystem::path& case_path,
 	const auto usage=[](){struct rusage value{};getrusage(RUSAGE_SELF,&value);
 		return value.ru_maxrss;}();
 	std::cout<<"native_tet_flow_cuda_complete assembly_s="<<assembly_seconds
-		<<" solve_s="<<solve_seconds<<" host_peak_rss_kib="<<usage
+		<<" solve_s="<<solve_seconds<<" linear_solver="<<specification.linear_solver
+		<<" linear_iterations="<<linear_iterations<<" host_peak_rss_kib="<<usage
 		<<" cuda_peak_bytes="<<iga::cuda::DeviceAllocationCounter::Peak()<<'\n';
 }
 
