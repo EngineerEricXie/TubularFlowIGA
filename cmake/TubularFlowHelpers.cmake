@@ -118,13 +118,17 @@ function(tfi_preload_library name)
 	set_property(GLOBAL PROPERTY TFI_OUTPUT_${name} "${output}.so")
 endfunction()
 
-# tfi_test(<name> COMMAND <shell command> REQUIRES <target>... [MAKE <make target>...] [LABELS <label>...])
+# tfi_test(<name> COMMAND <shell command> REQUIRES <target>... [MAKE <make target>...] [LABELS <label>...]
+#          [PETSC_PACKAGES <package>...] [PASS_REGEX <regex>])
 #
 # The command runs with `sh -c` in the source directory, exactly as the former
 # Makefile recipe did, but with a private TMPDIR (see run_test.sh). @TFI_PETSC_PREFIX@ and @TFI_MPIEXEC@ are substituted at
 # configure time; shell variables such as ${MPI_TEST_RANKS:-2} stay overridable.
+# PETSC_PACKAGES skips the test unless PETSc was built with those packages
+# (for example HYPRE). PASS_REGEX makes the test pass when its output matches,
+# whatever the exit status; it is for documented negative results.
 function(tfi_test name)
-	cmake_parse_arguments(PARSE_ARGV 1 arg "" "COMMAND" "REQUIRES;MAKE;LABELS")
+	cmake_parse_arguments(PARSE_ARGV 1 arg "" "COMMAND;PASS_REGEX" "REQUIRES;MAKE;LABELS;PETSC_PACKAGES")
 	_tfi_directory_key(key)
 	get_filename_component(directory_label "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
 	set(reason "")
@@ -135,6 +139,11 @@ function(tfi_test name)
 				message(FATAL_ERROR "test ${name} requires unknown target ${required}")
 			endif()
 			break()
+		endif()
+	endforeach()
+	foreach(package IN LISTS arg_PETSC_PACKAGES)
+		if(NOT reason AND NOT package IN_LIST TFI_PETSC_PACKAGES)
+			set(reason "needs PETSc built with ${package}")
 		endif()
 	endforeach()
 	foreach(make_target IN LISTS arg_MAKE)
@@ -156,6 +165,9 @@ function(tfi_test name)
 		list(APPEND labels "make=${make_target}")
 	endforeach()
 	set_tests_properties(${test_name} PROPERTIES LABELS "${labels}")
+	if(arg_PASS_REGEX)
+		set_tests_properties(${test_name} PROPERTIES PASS_REGULAR_EXPRESSION "${arg_PASS_REGEX}")
+	endif()
 endfunction()
 
 # tfi_make_alias(<make target> TARGETS <target>...): a build-only aggregate such

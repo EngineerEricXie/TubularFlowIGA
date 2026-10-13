@@ -64,7 +64,10 @@ Runnable inputs and their three-file contract are indexed in
 
 The `T1`–`T7` prefixes are validation milestones. Each matches a
 `make t<N>-…` audit target in the root `Makefile` and, where applicable, an
-evidence file under [`benchmarks/`](../benchmarks).
+evidence file under [`benchmarks/`](../benchmarks). `python3 scripts/evidence.py
+check` validates every evidence file, and `evidence.py run` reruns the tests
+behind one and records the commit they ran on (see
+[scripts/README.md](../scripts/README.md#evidence-validators)).
 
 | Milestone | Topic | Document |
 |---|---|---|

@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "kind": "native_tetra_p1_darcy_single_physics_functional",
-  "source_files_sha256": "fab004bf6c8d7f48844ca6d4a68f0e2886ba0fe93f76a3c8b215b1a8284ca382",
   "test_command": "make t6-native-tet-darcy-test",
   "external_fem_framework": false,
   "mpi_ranks_tested": [1, 2, 4],

@@ -1,56 +1,9 @@
 #!/usr/bin/env python3
 """Audit the native moving-tetra species reference path and its scope."""
 
-import hashlib
 import json
 import math
 from pathlib import Path
-
-
-SOURCE_FILES = (
-	"solvers/cpu/include/NativeTetMovingSpeciesTransport.hpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_transport.cpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesPetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetSpeciesVisualization.hpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_petsc_runtime.cpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_spatial_convergence.cpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesCheckpoint.hpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_checkpoint.cpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesPorts.hpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_ports.cpp",
-	"solvers/cpu/include/NativeTetAleGraphPorts.hpp",
-	"solvers/cpu/tests/test_native_tet_ale_graph_ports.cpp",
-	"solvers/cpu/tests/test_native_tet_ale_graph_petsc_runtime.cpp",
-	"solvers/cpu/include/NativeTetAleFlowTransportDomainAdapter.hpp",
-	"solvers/cpu/tests/test_native_tet_ale_flow_transport_domain_adapter.cpp",
-	"solvers/cpu/tests/test_native_tet_ale_species_graph_1d.cpp",
-	"scripts/integration/test_native_tet_species_ftetwild.py",
-	"include/SpeciesCoupling.hpp",
-	"include/ZeroDSpeciesReservoir.hpp",
-	"include/ZeroDFlowSpeciesCheckpoint.hpp",
-	"include/SpeciesGraphCheckpointIdentity.hpp",
-	"include/ZeroDSourceReservoirSpecies.hpp",
-	"include/ZeroDSourceReservoirSpeciesDomainRuntime.hpp",
-	"include/ZeroDTerminalRcrSpecies.hpp",
-	"include/ZeroDTerminalRcrSpeciesDomainRuntime.hpp",
-	"solvers/coupling/tests/test_zero_d_species_reservoir.cpp",
-	"solvers/coupling/tests/test_zero_d_source_reservoir_species.cpp",
-	"solvers/coupling/tests/test_zero_d_source_reservoir_species_runtime.cpp",
-	"solvers/coupling/tests/test_zero_d_flow_species_checkpoint.cpp",
-	"solvers/coupling/tests/test_zero_d_terminal_rcr_species.cpp",
-	"solvers/coupling/tests/test_zero_d_terminal_rcr_species_runtime.cpp",
-	"solvers/coupling/tests/test_zero_d_terminal_rcr_species_graph.cpp",
-	"include/OneDFlowDomainAdapter.hpp",
-	"solvers/one_d/tests/test_one_d_runtime.cpp",
-)
-
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		contents = (root/name).read_bytes()
-		digest.update(name.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 
 def require(condition, message):
@@ -65,8 +18,6 @@ def main():
 		and card.get("kind") == "native_moving_tetra_species_functional_reference_not_production_validation"
 		and card.get("external_fem_framework") is False,
 		"native moving species evidence is misclassified")
-	require(card.get("source_files_sha256") == source_hash(root),
-		"native moving species source identity is stale")
 	require(card.get("test_command") == "make t7-native-moving-species-test"
 		and card.get("two_tetra_test") is True
 		and card.get("previous_and_current_mass_matrices") is True

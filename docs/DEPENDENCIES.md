@@ -201,6 +201,16 @@ The build reads PETSc's compile and link flags from its pkg-config file,
 `/usr/lib/petscdir/petsc3.15/x86_64-linux-gnu-real`) and leave `PETSC_ARCH`
 empty. Multi-rank nonlinear tests use distributed MUMPS LU by default;
 include MUMPS in the PETSc build or provide alternate PETSc KSP/PC options.
+The iterative Schur fieldsplit test also needs hypre; tests whose PETSc
+packages are missing are skipped with the reason. A PETSc build that runs every
+test:
+
+```bash
+./configure PETSC_ARCH=arch-linux-c-opt --with-debugging=0 \
+  --with-cc=mpicc --with-cxx=mpicxx --with-fc=mpif90 \
+  --download-mumps --download-scalapack --download-metis --download-parmetis \
+  --download-hypre
+```
 
 For an installed PETSc prefix whose configuration is directly under
 `$PETSC_DIR/lib/petsc/conf`, leave `PETSC_ARCH` unset:

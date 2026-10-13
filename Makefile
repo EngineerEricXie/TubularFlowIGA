@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc contract-audit t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t2-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
+.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc contract-audit evidence-check t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t2-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -19,6 +19,10 @@ cpu:
 
 cpu-test:
 	$(MAKE) -C solvers/cpu test
+
+# Check every evidence card without running solvers (see scripts/README.md).
+evidence-check:
+	python3 scripts/evidence.py check
 
 contract-audit:
 	python3 scripts/validate_supported_input_contract.py

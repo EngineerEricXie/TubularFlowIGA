@@ -8,7 +8,7 @@
       "device": "CPU",
       "backend": "idealized_cube_dual_tree",
       "physics": ["flow", "darcy", "solid", "species"],
-      "case_file": "../../cases/idealized_cube_dual_tree_refined.json",
+      "case_file": "../../cases/idealized_cube_dual_tree_smooth.json",
       "species_case_file": "../../cases/idealized_cube_dual_tree_oxygen.json"
     }
   ],

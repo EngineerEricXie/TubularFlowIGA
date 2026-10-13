@@ -2,7 +2,6 @@
   "schema_version": 1,
   "card_id": "T5-native-matching-ALE-solid-interface-v1",
   "contract_status": "frozen",
-  "source_files_sha256": "52e025a131ce6b5911ebae1ae37aadd2776b02b06516a6bc91d78cb665ecd699",
   "implementation_status": "matching_transfer_native_ALE_fluid_native_solid_and_idealized_compliant_channel_functional_vertical_slice_verified",
   "external_coupling_framework": false,
   "geometry": {

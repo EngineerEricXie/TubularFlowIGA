@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
 import json
-import hashlib
 from pathlib import Path
 import sys
-
-def source_hash(root):
-	paths=[
-		root/"include/FsiDomainRuntime.hpp",
-		root/"solvers/cpu/include/StrongFluidStructureCoupling.hpp",
-		root/"solvers/cpu/include/NativeTetMatchingFsiInterface.hpp",
-		root/"solvers/cpu/include/NativeTetAleFsiRuntime.hpp",
-		root/"solvers/cpu/include/NativeTetAleKinematics.hpp",
-		root/"solvers/cpu/include/NativeTetSolidFsiRuntime.hpp",
-		root/"solvers/cpu/include/NativeTetFsiCheckpoint.hpp",
-		root/"solvers/cpu/tests/test_native_tet_matching_fsi_interface.cpp",
-		root/"solvers/cpu/tests/test_native_tet_solid_fsi_runtime.cpp",
-		root/"solvers/cpu/tests/test_native_tet_ale_solid_fsi.cpp",
-		root/"solvers/cpu/tests/test_native_tet_compliant_channel_fsi.cpp",
-	]
-	digest=hashlib.sha256()
-	for path in paths:
-		label=str(path.relative_to(root));contents=path.read_bytes()
-		digest.update(label.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 def main():
 	root=Path(__file__).resolve().parents[1]
@@ -30,8 +9,6 @@ def main():
 	except (OSError,json.JSONDecodeError) as error:print(f"T5 matching interface contract error: {error}",file=sys.stderr);return 1
 	if data.get("schema_version")!=1 or data.get("contract_status")!="frozen" or data.get("external_coupling_framework") is not False:
 		print("T5 matching interface contract error: schema/ownership changed",file=sys.stderr);return 1
-	if data.get("source_files_sha256")!=source_hash(root):
-		print("T5 matching interface contract error: source hash is stale; rerun tests and update evidence",file=sys.stderr);return 1
 	if data.get("kinematics",{}).get("fluid_velocity_is_not_mesh_velocity_away_from_the_no_slip_interface") is not True:
 		print("T5 matching interface contract error: velocity semantics changed",file=sys.stderr);return 1
 	gates=data.get("conservation_gates",{})

@@ -4,7 +4,6 @@
   "recorded_on": "2026-09-18",
   "backend": "native_cpp_dense_reference_tetrahedral_P2_P1",
   "external_fem_framework": false,
-  "source_files_sha256": "4206ba0b7ceb947fd0644a6fdbe9439669c3a95c00376c6098ee6ea617f1cd30",
   "manufactured_solution": {
     "domain": "fixed unit cube split into six tetrahedra per Cartesian subcell",
     "velocity_m_s": "u_x=1e-4*y^3; u_y=u_z=0",

@@ -1,32 +1,8 @@
 #!/usr/bin/env python3
 """Audit the bounded external-mesh native species CLI evidence."""
 
-import hashlib
 import json
 from pathlib import Path
-
-
-SOURCE_FILES = (
-	"solvers/cpu/src/native_tet_species_transport.cpp",
-	"solvers/cpu/include/NativeTetSpeciesVisualization.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesCheckpoint.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesPetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesTransport.hpp",
-	"solvers/cpu/include/NativeTetWallReservoirExchange.hpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_transport.cpp",
-	"solvers/cpu/tests/test_native_tet_moving_species_petsc_runtime.cpp",
-	"solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
-	"scripts/integration/test_native_tet_species_cli.py",
-	"scripts/integration/test_native_tet_species_workflow.py",
-)
-
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		contents = (root/name).read_bytes()
-		digest.update(name.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 
 def main():
@@ -35,7 +11,6 @@ def main():
 	if not (card.get("schema_version") == 1
 			and card.get("kind") == "native_tetra_prescribed_velocity_species_cli_functional_only"
 			and card.get("external_fem_framework") is False
-			and card.get("source_files_sha256") == source_hash(root)
 			and card.get("test_command") == "make t9-native-tet-species-cli-test"
 			and card.get("external_gmsh41_mesh") is True
 			and card.get("newly_generated_ftetwild_pipe_tested") is True

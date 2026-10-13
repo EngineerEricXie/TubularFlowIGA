@@ -1,0 +1,48 @@
+name: CI
+
+# Fast checks for every pull request. PETSc, multi-rank, GPU, ParaView, and
+# slow tests run locally or on a cluster (see docs/BUILD.md).
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Build and unit tests (no PETSc)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ make pkg-config \
+            libopenmpi-dev openmpi-bin libhdf5-openmpi-dev libeigen3-dev python3
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel 4
+      - name: Unit tests
+        env:
+          OMP_NUM_THREADS: "1"
+        run: ctest --test-dir build -L unit -LE slow --output-on-failure --parallel 4
+
+  python:
+    name: Python tests and evidence cards
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install Python packages
+        run: python -m pip install numpy scipy h5py vtk
+      - name: Evidence cards
+        run: python scripts/evidence.py check
+      - name: Python unit tests
+        run: python -m unittest $(grep -l 'unittest.TestCase' scripts/tests/test_*.py | sed 's|/|.|g; s|\.py$||')

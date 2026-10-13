@@ -1,34 +1,13 @@
 #!/usr/bin/env python3
 """Validate the native FEM Y-bifurcation functional evidence."""
 
-import hashlib
 import json
 from pathlib import Path
 
-SOURCE_FILES = (
-	"solvers/cpu/include/NativeTetFem.hpp",
-	"solvers/cpu/include/NativeTetAleTransient.hpp",
-	"solvers/cpu/include/NativeTetAlePetscAssembly.hpp",
-	"solvers/cpu/include/NativeTetAlePetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetBoundaryFlow.hpp",
-	"solvers/cpu/include/NativeTetDarcyPetsc.hpp",
-	"solvers/cpu/include/NativeTetMatchingInterfaceSource.hpp",
-	"solvers/cpu/tests/test_native_tet_bifurcation_runtime.cpp",
-	"scripts/generate_y_pipe_surface.py",
-	"scripts/prepare_t2_bifurcation_meshes.py",
-	"scripts/surface_to_fem_volume.py",
-)
 
 def require(condition, message):
 	if not condition:
 		raise RuntimeError(message)
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		contents = (root/name).read_bytes()
-		digest.update(name.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 def main():
 	root = Path(__file__).resolve().parents[1]
@@ -38,8 +17,6 @@ def main():
 		"bifurcation evidence is misclassified")
 	require(data.get("external_fem_framework") is False,
 		"external FEM output cannot count as native bifurcation evidence")
-	require(data.get("current_source_files_sha256") == source_hash(root),
-		"native bifurcation current source hash is stale")
 	require(data.get("current_source_status") ==
 		"historical_natural_outlet_qoi_not_current_zero_pressure_outlet_regression",
 		"historical bifurcation QoI must not be claimed as current-source validation")

@@ -10,38 +10,8 @@ import sys
 import xml.etree.ElementTree as ET
 
 
-SOURCE_FILES = (
-	"scripts/audit_dicom_seg_region_overlap.py",
-	"scripts/audit_seg_exposed_vessel_faces.py",
-	"scripts/dicom_seg_to_multiregion_tet.py",
-	"scripts/split_multiregion_tet_for_native.py",
-	"scripts/run_native_matching_roi_functional.py",
-	"scripts/time_native_mpi_rank.py",
-	"scripts/run_liver_roi_functional_case.py",
-	"scripts/run_liver_roi_from_raw.py",
-	"cases/liver_roi_functional.json",
-	"solvers/cpu/src/native_tet_matching_solved_roi_smoke.cpp",
-	"solvers/cpu/include/NativeTetMatchingInterfaceSource.hpp",
-	"solvers/cpu/include/NativeTetMeshComponents.hpp",
-	"solvers/cpu/include/NativeTetAlePetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetDarcyPetsc.hpp",
-	"solvers/cpu/include/NativeTetDarcyVisualization.hpp",
-	"solvers/cpu/include/NativeTetHydraulicVisualization.hpp",
-	"solvers/cpu/include/ParallelVtkOutput.hpp",
-	"include/PartitionedVtkOutput.hpp",
-)
-
-
 def reject(message):
 	raise ValueError(message)
-
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		digest.update(name.encode("utf-8")+b"\0")
-		digest.update((root/name).read_bytes())
-	return digest.hexdigest()
 
 
 def check_metrics(metrics):
@@ -369,9 +339,8 @@ def validate(root, card_path, results_dir=None, field_results_dir=None,
 	if data.get("schema_version") != 1 \
 			or data.get("kind") != "patient_derived_liver_roi_functional_not_physiological" \
 			or data.get("full_liver_case") is not False \
-			or data.get("physiological_validation") is not False \
-			or data.get("source_files_sha256") != source_hash(root):
-		reject("ROI card classification or current source hash is invalid")
+			or data.get("physiological_validation") is not False:
+		reject("ROI card classification is invalid")
 	if data.get("case_file_sha256") != hashlib.sha256((root/
 			"cases/liver_roi_functional.json").read_bytes()).hexdigest():
 		reject("ROI versioned case file differs from evidence card")

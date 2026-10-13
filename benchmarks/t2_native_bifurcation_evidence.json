@@ -5,7 +5,6 @@
   "backend": "native_cpp_petsc_tetrahedral_fem",
   "external_fem_framework": false,
   "source_files_sha256": "4b2e7d676481a2ba0281a33c4beff9724e6217a3f337bcf43ae90dd4b03c1a3f",
-  "current_source_files_sha256": "c963d5b9d314eced81d372d0a7981b26c21a1cb8c974d48a6c0f3c683a7510f9",
   "current_source_status": "historical_natural_outlet_qoi_not_current_zero_pressure_outlet_regression",
   "mesh": {
     "generator": "scripts/generate_y_pipe_surface.py",

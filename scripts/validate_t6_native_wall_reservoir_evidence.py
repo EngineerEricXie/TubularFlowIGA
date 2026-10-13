@@ -1,26 +1,8 @@
 #!/usr/bin/env python3
 """Audit source-bound, functional vessel–0D wall exchange evidence."""
 
-import hashlib
 import json
 from pathlib import Path
-
-
-SOURCE_FILES = (
-	"solvers/cpu/include/NativeTetWallReservoirExchange.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesPetscRuntime.hpp",
-	"solvers/cpu/include/NativeTetMovingSpeciesTransport.hpp",
-	"solvers/cpu/tests/test_native_tet_wall_reservoir_exchange.cpp",
-	"scripts/integration/test_native_tet_wall_reservoir_ftetwild.py",
-)
-
-
-def source_hash(root):
-	digest = hashlib.sha256()
-	for name in SOURCE_FILES:
-		contents = (root/name).read_bytes()
-		digest.update(name.encode()+b"\0"+str(len(contents)).encode()+b"\0"+contents)
-	return digest.hexdigest()
 
 
 def main():
@@ -28,7 +10,6 @@ def main():
 	card = json.loads((root/"benchmarks/t6_native_wall_reservoir_evidence.json").read_text())
 	if not (card.get("schema_version") == 1
 			and card.get("kind") == "native_tetra_p1_to_fixed_volume_0d_wall_exchange_functional"
-			and card.get("source_files_sha256") == source_hash(root)
 			and card.get("test_command") == "make t6-native-wall-reservoir-exchange-test"
 			and card.get("external_fem_framework") is False
 			and card.get("mpi_ranks_tested") == [1, 2, 4]

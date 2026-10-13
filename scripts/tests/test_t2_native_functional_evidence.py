@@ -31,7 +31,7 @@ def main():
 			mutate(candidate)
 			path = Path(directory)/f"{name}.json"
 			path.write_text(json.dumps(candidate), encoding="utf-8")
-			failed = run(["python3", str(validator), str(path), "--skip-source-hash"], 2)
+			failed = run(["python3", str(validator), str(path)], 2)
 			assert expected_text in failed.stdout
 	print("t2_native_functional_evidence_test: PASS")
 	return 0
