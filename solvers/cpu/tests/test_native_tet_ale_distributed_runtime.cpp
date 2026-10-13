@@ -61,7 +61,7 @@ int main(int argc,char** argv)
 	PetscInitialize(&argc,&argv,nullptr,nullptr);int status=0;
 	try{
 		int rank=0,ranks=1;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
-		const auto mesh=ChannelMesh(6,2,3,0.02,0.004,0.004);
+		const auto mesh=ChannelMesh(12,3,4,0.02,0.004,0.004);
 		const auto topology=iga::BuildNativeTaylorHoodTopology(mesh);
 		const std::size_t velocity_nodes=mesh.points.size()+topology.edges.size();
 		std::vector<double> committed(3*velocity_nodes+mesh.points.size(),0.0);
@@ -74,30 +74,38 @@ int main(int argc,char** argv)
 		const iga::NativeNavierStokesParameters parameters{1000.0,0.004};
 		const std::vector<std::array<double,3>> mesh_velocity(mesh.points.size(),{{0.0,0.0,0.0}});
 		const double dt=0.01,tolerance=1e-10;
-		const auto reference=iga::SolveNativeTetAlePetscTransient(mesh,mesh_velocity,committed,trial,prescribed,
-			std::numeric_limits<std::uint32_t>::max(),parameters,dt,tolerance,12,conditions);
 		const iga::NativeTetAleDistributedMesh distributed(mesh,PETSC_COMM_WORLD);
-		const auto result=iga::SolveNativeTetAleDistributed(distributed,topology,mesh.points,mesh_velocity,committed,trial,
-			prescribed,std::numeric_limits<std::uint32_t>::max(),parameters,dt,false,tolerance,12,conditions);
-		double difference=0.0,scale=0.0;
-		for(std::size_t dof=0;dof<reference.replicated_state.size();++dof){
-			const double d=reference.replicated_state[dof]-result.replicated_state[dof];
-			difference+=d*d;scale+=reference.replicated_state[dof]*reference.replicated_state[dof];
+		// Two steps: the second starts from the first step's state, so the
+		// committed field is non-uniform and exercises every ghost and edge map.
+		double relative=0.0;std::size_t newton_total=0;
+		for(int step=0;step<2;++step){
+			const auto reference=iga::SolveNativeTetAlePetscTransient(mesh,mesh_velocity,committed,trial,prescribed,
+				std::numeric_limits<std::uint32_t>::max(),parameters,dt,tolerance,12,conditions);
+			const auto result=iga::SolveNativeTetAleDistributed(distributed,topology,mesh.points,mesh_velocity,committed,trial,
+				prescribed,std::numeric_limits<std::uint32_t>::max(),parameters,dt,false,tolerance,12,conditions);
+			double difference=0.0,scale=0.0;
+			for(std::size_t dof=0;dof<reference.replicated_state.size();++dof){
+				const double d=reference.replicated_state[dof]-result.replicated_state[dof];
+				difference+=d*d;scale+=reference.replicated_state[dof]*reference.replicated_state[dof];
+			}
+			relative=std::max(relative,std::sqrt(difference/scale));
+			if(result.newton_iterations!=reference.newton_iterations)
+				throw std::runtime_error("distributed Newton iteration count differs at step "+std::to_string(step+1));
+			if(step==0&&result.global_rows!=static_cast<PetscInt>(reference.replicated_state.size()))
+				throw std::runtime_error("distributed row count differs from the replicated layout");
+			newton_total+=result.newton_iterations;
+			committed=reference.replicated_state;trial=committed;
 		}
-		const double relative=std::sqrt(difference/scale);
+		const std::size_t owned_rows_report=distributed.dofs.OwnedRows();
 		std::uint32_t owned_cells=0;
 		for(const auto owned:distributed.partition.local_cell_owned)owned_cells+=owned;
 		std::uint32_t total_owned=0;
 		MPI_Allreduce(&owned_cells,&total_owned,1,MPI_UINT32_T,MPI_SUM,PETSC_COMM_WORLD);
 		if(total_owned!=mesh.cells.size())throw std::runtime_error("partition does not cover every cell once");
-		if(result.global_rows!=static_cast<PetscInt>(reference.replicated_state.size()))
-			throw std::runtime_error("distributed row count differs from the replicated layout");
-		if(result.newton_iterations!=reference.newton_iterations)
-			throw std::runtime_error("distributed Newton iteration count differs");
 		if(!(relative<1e-10))throw std::runtime_error("distributed state differs from the replicated runtime: "+std::to_string(relative));
 		if(rank==0)std::cout<<"native ALE distributed runtime passed ranks="<<ranks<<" cells="<<mesh.cells.size()
-			<<" local_cells="<<distributed.partition.local.cells.size()<<" owned_rows="<<result.owned_rows
-			<<" newton="<<result.newton_iterations<<" relative_difference="<<relative<<'\n';
+			<<" local_cells="<<distributed.partition.local.cells.size()<<" owned_rows="<<owned_rows_report
+			<<" newton_total="<<newton_total<<" relative_difference="<<relative<<'\n';
 	}catch(const std::exception& error){
 		int rank=0;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 		if(rank==0)std::cerr<<"native ALE distributed runtime test: "<<error.what()<<'\n';
