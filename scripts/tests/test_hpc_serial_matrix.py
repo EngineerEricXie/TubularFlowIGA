@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hpc"))
 from hpc_inventory import digest
 from hpc_profile_summary import summarize
 from hpc_serial_matrix import aggregate_serial, cpu_reference, device_allocation, native_diagnostics

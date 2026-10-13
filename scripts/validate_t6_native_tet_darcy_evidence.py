@@ -18,10 +18,10 @@ SOURCE_FILES = (
 	"solvers/cpu/include/NativeTetFem.hpp",
 	"solvers/cpu/src/native_tet_darcy.cpp",
 	"solvers/cpu/tests/test_native_tet_darcy_petsc.cpp",
-	"scripts/test_native_tet_darcy_ftetwild.py",
-	"scripts/test_native_tet_darcy_cli.py",
+	"scripts/integration/test_native_tet_darcy_ftetwild.py",
+	"scripts/integration/test_native_tet_darcy_cli.py",
 	"scripts/run_native_tet_workflow.py",
-	"scripts/test_native_tet_darcy_workflow.py",
+	"scripts/integration/test_native_tet_darcy_workflow.py",
 )
 
 

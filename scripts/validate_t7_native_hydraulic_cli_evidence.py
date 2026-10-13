@@ -16,7 +16,7 @@ SOURCE_FILES = (
 	"solvers/cpu/tests/test_native_tet_fem.cpp",
 	"solvers/cpu/tests/data/native_tet_hydraulic_star.msh",
 	"solvers/cpu/tests/data/native_tet_hydraulic_star.json",
-	"scripts/test_native_tet_hydraulic_cli.py",
+	"scripts/integration/test_native_tet_hydraulic_cli.py",
 )
 
 

@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t1-immersed-manifest-test t2-contract-audit t3-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
+.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc contract-audit t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t1-immersed-manifest-test t2-contract-audit t3-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -19,6 +19,9 @@ cpu:
 
 cpu-test:
 	$(MAKE) -C solvers/cpu test
+
+contract-audit:
+	python3 scripts/validate_supported_input_contract.py
 
 t1-audit: t1-fem-mesh-test t1-ftetwild-mesh-test t1-multiregion-audit-test t1-iga-manifest-test
 	python3 scripts/validate_t1_geometry_inventory.py
@@ -204,18 +207,18 @@ t7-native-ale-flow-0d-cross-process-test:
 .PHONY: t7-native-tet-hydraulic-cli-test
 t7-native-tet-hydraulic-cli-test:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_hydraulic_cli.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
+	python3 scripts/integration/test_native_tet_hydraulic_cli.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
 	python3 scripts/validate_t7_native_hydraulic_cli_evidence.py
 
 .PHONY: t7-native-tet-ftetwild-smoke
 t7-native-tet-ftetwild-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_hydraulic_ftetwild.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --ftetwild $(FTETWILD_BIN)
+	python3 scripts/integration/test_native_tet_hydraulic_ftetwild.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --ftetwild $(FTETWILD_BIN)
 
 .PHONY: t7-native-tet-species-ftetwild-test
 t7-native-tet-species-ftetwild-test:
 	$(MAKE) -C solvers/cpu native_tet_ale_species_graph_1d_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_species_ftetwild.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_ale_species_graph_1d_test --ftetwild $(FTETWILD_BIN)
+	python3 scripts/integration/test_native_tet_species_ftetwild.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_ale_species_graph_1d_test --ftetwild $(FTETWILD_BIN)
 
 .PHONY: t9-native-tet-species-cli-test
 t9-native-tet-species-cli-test:
@@ -224,7 +227,7 @@ t9-native-tet-species-cli-test:
 	mpiexec -np 1 solvers/cpu/native_tet_moving_species_petsc_runtime_test
 	mpiexec -np 2 solvers/cpu/native_tet_moving_species_petsc_runtime_test
 	mpiexec -np 4 solvers/cpu/native_tet_moving_species_petsc_runtime_test
-	python3 scripts/test_native_tet_species_cli.py --binary solvers/cpu/native_tet_species_transport $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+	python3 scripts/integration/test_native_tet_species_cli.py --binary solvers/cpu/native_tet_species_transport $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
 	python3 scripts/validate_t9_native_species_cli_evidence.py
 
 .PHONY: t6-native-wall-reservoir-exchange-test
@@ -233,7 +236,7 @@ t6-native-wall-reservoir-exchange-test:
 	mpiexec -np 1 solvers/cpu/native_tet_wall_reservoir_exchange_test
 	mpiexec -np 2 solvers/cpu/native_tet_wall_reservoir_exchange_test
 	mpiexec -np 4 solvers/cpu/native_tet_wall_reservoir_exchange_test
-	$(if $(strip $(FTETWILD_BIN)),python3 scripts/test_native_tet_wall_reservoir_ftetwild.py --binary solvers/cpu/native_tet_wall_reservoir_exchange_test --ftetwild $(FTETWILD_BIN) --ranks 2,)
+	$(if $(strip $(FTETWILD_BIN)),python3 scripts/integration/test_native_tet_wall_reservoir_ftetwild.py --binary solvers/cpu/native_tet_wall_reservoir_exchange_test --ftetwild $(FTETWILD_BIN) --ranks 2,)
 	python3 scripts/validate_t6_native_wall_reservoir_evidence.py
 
 .PHONY: t6-native-tet-darcy-test
@@ -244,9 +247,9 @@ t6-native-tet-darcy-test:
 	mpiexec -np 1 solvers/cpu/native_tet_darcy_petsc_test
 	mpiexec -np 2 solvers/cpu/native_tet_darcy_petsc_test
 	mpiexec -np 4 solvers/cpu/native_tet_darcy_petsc_test
-	$(if $(strip $(FTETWILD_BIN)),python3 scripts/test_native_tet_darcy_ftetwild.py --binary solvers/cpu/native_tet_darcy_petsc_test --ftetwild $(FTETWILD_BIN) --ranks 2,)
-	python3 scripts/test_native_tet_darcy_cli.py --binary solvers/cpu/native_tet_darcy $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
-	python3 scripts/test_native_tet_darcy_workflow.py --solver solvers/cpu/native_tet_darcy $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
+	$(if $(strip $(FTETWILD_BIN)),python3 scripts/integration/test_native_tet_darcy_ftetwild.py --binary solvers/cpu/native_tet_darcy_petsc_test --ftetwild $(FTETWILD_BIN) --ranks 2,)
+	python3 scripts/integration/test_native_tet_darcy_cli.py --binary solvers/cpu/native_tet_darcy $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+	python3 scripts/integration/test_native_tet_darcy_workflow.py --solver solvers/cpu/native_tet_darcy $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
 	python3 -m unittest scripts.tests.test_run_native_matching_roi_functional
 	python3 -m unittest scripts.tests.test_run_liver_roi_functional_case
 	python3 -m unittest scripts.tests.test_liver_roi_facet_ledger
@@ -260,27 +263,27 @@ t6-native-tet-darcy-test:
 .PHONY: t7-native-tet-species-ftetwild-same-mesh-mpi-test
 t7-native-tet-species-ftetwild-same-mesh-mpi-test:
 	$(MAKE) -C solvers/cpu native_tet_ale_species_graph_1d_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_species_ftetwild.py --compare-ranks --binary solvers/cpu/native_tet_ale_species_graph_1d_test --ftetwild $(FTETWILD_BIN)
+	python3 scripts/integration/test_native_tet_species_ftetwild.py --compare-ranks --binary solvers/cpu/native_tet_ale_species_graph_1d_test --ftetwild $(FTETWILD_BIN)
 
 .PHONY: t9-native-tet-workflow-test
 t9-native-tet-workflow-test:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_workflow.py --solver solvers/cpu/native_tet_hydraulic_graph $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
+	python3 scripts/integration/test_native_tet_workflow.py --solver solvers/cpu/native_tet_hydraulic_graph $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
 
 .PHONY: t9-native-tet-species-workflow-test
 t9-native-tet-species-workflow-test:
 	$(MAKE) -C solvers/cpu native_tet_species_transport surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_species_workflow.py --solver solvers/cpu/native_tet_species_transport $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
+	python3 scripts/integration/test_native_tet_species_workflow.py --solver solvers/cpu/native_tet_species_transport $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN) --gmsh,)
 
 .PHONY: t9-native-y-rcr-smoke
 t9-native-y-rcr-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
 
 .PHONY: t9-native-y-rcr-strong-smoke
 t9-native-y-rcr-strong-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-	python3 scripts/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) --coupling fixed $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) --coupling fixed $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
 
 t4-petsc-assembly-test:
 	$(MAKE) -C solvers/cpu native-tet-ale-petsc-assembly-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
@@ -326,7 +329,7 @@ HPC_SCALING_CASES ?= $(CURDIR)/hpc-scaling-cases
 HPC_SCALING_RANKS ?= 1 64 128 256
 hpc-prepare-scaling:
 	$(MAKE) -C solvers/coupling hpc_duct_solver_fixture
-	python3 scripts/hpc_prepare_scaling_cases.py --output-dir $(HPC_SCALING_CASES) --ranks $(HPC_SCALING_RANKS)
+	python3 scripts/hpc/hpc_prepare_scaling_cases.py --output-dir $(HPC_SCALING_CASES) --ranks $(HPC_SCALING_RANKS)
 
 hpc-cross-node-binaries:
 	$(MAKE) -C solvers/cpu petsc iga_flow_validate immersed_moving_distributed_fsi_runtime_test distributed_immersed_extension_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
@@ -335,13 +338,13 @@ hpc-cross-node-binaries:
 HPC_TEST_OUTPUT ?= $(CURDIR)/hpc-test-results
 HPC_TEST_TIMEOUT ?= 300
 hpc-test-unit:
-	python3 scripts/hpc_test_tiers.py --tier unit --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/unit
+	python3 scripts/hpc/hpc_test_tiers.py --tier unit --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/unit
 
 hpc-test-mpi:
-	python3 scripts/hpc_test_tiers.py --tier mpi --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/mpi
+	python3 scripts/hpc/hpc_test_tiers.py --tier mpi --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/mpi
 
 hpc-test-gpu:
-	python3 scripts/hpc_test_tiers.py --tier gpu --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/gpu
+	python3 scripts/hpc/hpc_test_tiers.py --tier gpu --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/gpu
 
 fluid-surface-traction-test:
 	$(MAKE) -C solvers/cpu fluid-surface-traction-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))

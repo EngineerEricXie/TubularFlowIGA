@@ -5,10 +5,10 @@
 The following `generate_case.sh` command is the established centerline→IGA
 route. For the separately implemented surface/volume→native tetra FEM
 source–RCR route, use the explicit
-[native tetra workflow](T9_NATIVE_TET_WORKFLOW.md); it does not call DOLFIN.
+[native tetra workflow](NATIVE_TET_WORKFLOW.md); it does not call DOLFIN.
 For prescribed-velocity P1 species transport, select the separate native
 species backend in the same explicit workflow or use its
-[standalone CLI](T9_NATIVE_TET_SPECIES_CLI.md). Neither uses DOLFIN or solves
+[standalone CLI](NATIVE_TET_SPECIES_CLI.md). Neither uses DOLFIN or solves
 fluid equations as part of the species route.
 
 Run the complete 3D workflow through one command:
@@ -324,7 +324,7 @@ stage. CPU runs use `mpiexec`; CUDA execution is one process on one GPU.
 
 Platform-specific examples:
 
-- [PSC Bridges-2](BRIDGES2.md)
+- [PSC Bridges-2](hpc/BRIDGES2.md)
 
 Record the case snapshot, compiler, MPI/PETSc or CUDA versions, rank count or
 GPU, scheduler job ID when applicable, solver tolerances, numerical norms,

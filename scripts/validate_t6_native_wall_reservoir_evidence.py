@@ -11,7 +11,7 @@ SOURCE_FILES = (
 	"solvers/cpu/include/NativeTetMovingSpeciesPetscRuntime.hpp",
 	"solvers/cpu/include/NativeTetMovingSpeciesTransport.hpp",
 	"solvers/cpu/tests/test_native_tet_wall_reservoir_exchange.cpp",
-	"scripts/test_native_tet_wall_reservoir_ftetwild.py",
+	"scripts/integration/test_native_tet_wall_reservoir_ftetwild.py",
 )
 
 

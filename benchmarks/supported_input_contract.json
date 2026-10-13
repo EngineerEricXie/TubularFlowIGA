@@ -104,7 +104,7 @@
         "solvers/cpu/include/SurfaceReaders.hpp",
         "scripts/surface_to_fem_volume.py",
         "scripts/ftetwild_to_fem_volume.py",
-        "docs/T1_FEM_VOLUME_MESH.md"
+        "docs/validation/T1_FEM_VOLUME_MESH.md"
       ]
     },
     {

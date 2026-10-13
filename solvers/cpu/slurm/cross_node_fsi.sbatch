@@ -15,7 +15,7 @@ if [[ -z ${repo_root} ]]; then
 	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 fi
 repo_root=$(cd -- "${repo_root}" && pwd)
-if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+if [[ ! -f ${repo_root}/scripts/hpc/hpc_scheduler_record.py ]]; then
 	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
 	exit 2
 fi
@@ -31,7 +31,7 @@ record_failure()
 	local status=$?
 	trap - EXIT
 	if (( status != 0 )); then
-		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+		python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" \
 			--output "${output}/scheduler.json" --status failed --returncode "${status}" -- "$0" || true
 	fi
 	exit "${status}"
@@ -57,9 +57,9 @@ export OMP_DYNAMIC=FALSE
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
-python3 "${repo_root}/scripts/hpc_build_manifest.py" --component cpu \
+python3 "${repo_root}/scripts/hpc/hpc_build_manifest.py" --component cpu \
 	--dependency-status passed --output "${output}/build.json" --binary "${binary}"
-python3 "${repo_root}/scripts/hpc_test_tiers.py" --tier scheduled --timeout 1800 \
+python3 "${repo_root}/scripts/hpc/hpc_test_tiers.py" --tier scheduled --timeout 1800 \
 	--output-dir "${output}/scheduled"
 
 run_fsi()
@@ -71,26 +71,26 @@ run_fsi()
 	shift 2
 	mkdir "${destination}"
 	mpiexec --map-by "ppr:${ranks_per_node}:node" --bind-to core --report-bindings -np "${ranks}" \
-		python3 "${repo_root}/scripts/hpc_rank_run.py" \
+		python3 "${repo_root}/scripts/hpc/hpc_rank_run.py" \
 		--output-dir "${destination}" --expected-ranks "${ranks}" --timeout 7200 -- \
 		"${binary}" strong -immersed_moving_mat_mumps_icntl_14 100 "$@"
 }
 
 run_fsi 1 "${output}/reference-1"
 run_fsi 4 "${output}/writer-4" -moving_fsi_checkpoint_root "${checkpoint}"
-python3 "${repo_root}/scripts/hpc_check_strong_fsi.py" \
+python3 "${repo_root}/scripts/hpc/hpc_check_strong_fsi.py" \
 	--reference-run "${output}/reference-1" --run "${output}/reference-1" \
 	--run "${output}/writer-4" >"${output}/strong-fsi.json"
 
-python3 "${repo_root}/scripts/hpc_hash_tree.py" --root "${checkpoint}" \
+python3 "${repo_root}/scripts/hpc/hpc_hash_tree.py" --root "${checkpoint}" \
 	--output "${output}/checkpoint-input-hashes.json"
 run_fsi 2 "${output}/reader-2" -moving_fsi_checkpoint_root "${checkpoint}" \
 	-moving_fsi_checkpoint_read_only true -moving_fsi_checkpoint_source_ranks 4
-python3 "${repo_root}/scripts/hpc_check_paired_fsi_restart.py" \
+python3 "${repo_root}/scripts/hpc/hpc_check_paired_fsi_restart.py" \
 	--run "${output}/reader-2" --source-ranks 4 \
 	--input-hashes "${output}/checkpoint-input-hashes.json" \
 	>"${output}/paired-restart.json"
 
-python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" \
 	--output "${output}/scheduler.json" --status passed --returncode 0 -- \
 	"${binary}" strong

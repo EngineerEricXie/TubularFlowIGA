@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hpc"))
 from hpc_cpu_matrix import aggregate, hybrid_execution, launch, samples, thread_plan
 
 

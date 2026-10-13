@@ -17,7 +17,7 @@ if [[ -z ${repo_root} ]]; then
 	repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
 fi
 repo_root=$(cd -- "${repo_root}" && pwd)
-if [[ ! -f ${repo_root}/scripts/hpc_scheduler_record.py ]]; then
+if [[ ! -f ${repo_root}/scripts/hpc/hpc_scheduler_record.py ]]; then
 	echo "submit from the repository root or set IGA_REPO_ROOT" >&2
 	exit 2
 fi
@@ -41,7 +41,7 @@ record_failure()
 	local status=$?
 	trap - EXIT
 	if (( status != 0 )); then
-		python3 "${repo_root}/scripts/hpc_scheduler_record.py" \
+		python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" \
 			--output "${result}" --status failed --returncode "${status}" -- "${command[@]}" || true
 	fi
 	exit "${status}"
@@ -98,7 +98,7 @@ srun --nodes="${SLURM_JOB_NUM_NODES}" --ntasks="${SLURM_JOB_NUM_NODES}" \
 	bash -c 'mkdir -p "$SLURM_TMPDIR/tubularflowiga-graph"; rsync -a --delete "$IGA_STAGE_SOURCE/" "$SLURM_TMPDIR/tubularflowiga-graph/"'
 staged_case=${SLURM_TMPDIR}/tubularflowiga-graph
 
-python3 "${repo_root}/scripts/hpc_build_manifest.py" --component cpu \
+python3 "${repo_root}/scripts/hpc/hpc_build_manifest.py" --component cpu \
 	--dependency-status passed --output "${attempt_root}/build.json" \
 	--binary "${repo_root}/solvers/coupling/iga_multidomain_flow"
 
@@ -113,7 +113,7 @@ command=(mpiexec --mca ess_base_forward_signals SIGUSR1 --map-by \
 	--graph-case "${staged_case}" --output-dir "${attempt_root}/results" \
 	--checkpoint-dir "${checkpoint_root}" --checkpoint-every "${IGA_CHECKPOINT_EVERY:-10}" \
 	"${restart[@]}")
-python3 "${repo_root}/scripts/hpc_scheduler_record.py" --output "${result}" \
+python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" --output "${result}" \
 	--status starting -- "${command[@]}"
 
 checkpoint_requested=0
@@ -152,12 +152,12 @@ trap - USR1
 record_args=(--output "${result}" --returncode "${status}")
 if (( checkpoint_requested )); then record_args+=(--checkpoint-requested); fi
 if (( status != 0 )); then
-	python3 "${repo_root}/scripts/hpc_scheduler_record.py" "${record_args[@]}" \
+	python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" "${record_args[@]}" \
 		--status failed -- "${command[@]}"
 	exit "${status}"
 fi
 if (( checkpoint_requested )); then
-	python3 "${repo_root}/scripts/hpc_scheduler_record.py" "${record_args[@]}" \
+	python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" "${record_args[@]}" \
 		--status checkpointed -- "${command[@]}"
 	if [[ ${IGA_REQUEUE_ON_SIGNAL:-1} == 1 ]]; then
 		# Launcher startup may reset the flag; enable it after the accepted checkpoint.
@@ -166,6 +166,6 @@ if (( checkpoint_requested )); then
 		exit 0
 	fi
 else
-	python3 "${repo_root}/scripts/hpc_scheduler_record.py" "${record_args[@]}" \
+	python3 "${repo_root}/scripts/hpc/hpc_scheduler_record.py" "${record_args[@]}" \
 		--status passed -- "${command[@]}"
 fi

@@ -4,7 +4,7 @@ The authoritative machine-readable contract is
 [`benchmarks/supported_input_contract.json`](../benchmarks/supported_input_contract.json).
 It records the locally implemented input routes, exact minimum case assets,
 source-to-SI conversions, boundary-label rules, generated solver interfaces,
-and explicit rejection policy. `make t0-audit` checks both its schema and a
+and explicit rejection policy. `make contract-audit` checks both its schema and a
 small set of high-risk claims directly against the production readers.
 
 The short operational rules are:

@@ -117,5 +117,3 @@ fresh simulation when restart was requested.
 Shard processing uses a 64 KiB buffer, without gathering full fields into a
 root vector. The coordinator currently verifies all shard bytes serially;
 parallel verification/aggregators and retention are later I/O scaling work.
-See the [05B report](../progress/HPC_05B_CHECKPOINT_BUNDLE_REPORT.md) for exact
-process/fault/streaming evidence and remaining graph integration gates.
