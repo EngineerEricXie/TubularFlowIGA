@@ -2,7 +2,6 @@
 #define NAVIER_STOKES_ELEMENT_HPP
 
 #include "IgaDatabase.hpp"
-#include "ImmersedTransientState.hpp"
 #include "Quadrature.hpp"
 #include "TransportElement.hpp"
 
@@ -70,16 +69,16 @@ inline void ValidateTransientNavierStokesHistory(const Element& element,
 inline double CheckedTransientTargetTime(double source_time_s, double dt)
 {
 	if (!std::isfinite(source_time_s) || source_time_s < 0.0)
-		throw std::invalid_argument("immersed velocity history source time is invalid");
+		throw std::invalid_argument("transient velocity history source time is invalid");
 	const double expected_target = source_time_s+dt;
 	if (!std::isfinite(expected_target) || !(expected_target > source_time_s))
-		throw std::invalid_argument("immersed velocity history time step does not advance source time");
+		throw std::invalid_argument("transient velocity history time step does not advance source time");
 	return expected_target;
 }
 
 // The established body-fitted weak form integrates the resolved mixed pair by
-// parts in the volume.  Immersed cut cells can instead retain the resolved
-// gradients in the volume and supply the cancelling physical trace explicitly.
+// parts in the volume.  The conservative form instead retains the resolved
+// gradients in the volume and supplies the cancelling physical trace explicitly.
 // VMS/PSPG remains identical in both forms.
 enum class NavierStokesResolvedMixedForm {
 	LegacyBodyFitted,
@@ -96,9 +95,8 @@ enum class NavierStokesAssemblyRequest { ResidualOnly, ResidualAndJacobian };
 using NavierStokesBodyForceEvaluator = std::function<std::array<double, 3>(
 	const std::array<double, 3>& physical)>;
 
-// Geometry/rule-only data for one volume point.  Moving immersed runtimes may
-// build these entries once per immutable geometry epoch and share them read-only
-// across workers.  State, history, coefficients, ports and body-force values are
+// Geometry/rule-only data for one volume point.  Callers may build these
+// entries once per immutable geometry and share them read-only across workers.  State, history, coefficients, ports and body-force values are
 // deliberately absent, so they can never be retained by this cache.
 struct NavierStokesVolumePointCacheEntry {
 	VolumeQuadraturePoint point;
@@ -362,8 +360,7 @@ inline NavierStokesSystem BuildNavierStokesElement(const Element& element,
 		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; }, request);
 }
 
-// Low-level callers that already own element-local data retain this explicit
-// path.  Immersed assembly must use the global-ID keyed named path below.
+// Low-level callers that already own element-local data use this explicit path.
 inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const Element& element,
 	const std::vector<std::array<double, 4>>& nodal_state,
 	const NavierStokesVelocityHistory& previous_velocity,
@@ -388,45 +385,6 @@ inline NavierStokesSystem BuildNavierStokesElementFromLocalVelocityHistory(const
 {
 	return BuildNavierStokesElementFromLocalVelocityHistory(element, nodal_state, previous_velocity, parameters, quadrature,
 		[](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; });
-}
-
-// The public immersed transient entry point accepts only global-ID keyed
-// history.  It localizes through element.connectivity after proving fixed
-// layout/geometry/time identity, so a different cell's 64-entry vector cannot
-// be mistaken for this element's history.
-inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& element,
-	const std::vector<std::array<double, 4>>& nodal_state,
-	const ImmersedVelocityHistory& previous_velocity, const ImmersedActiveLayout& layout,
-	double target_time_s, const NavierStokesParameters& parameters,
-	const VolumeQuadratureRule& quadrature, const NavierStokesBodyForceEvaluator& body_force,
-	NavierStokesResolvedMixedForm resolved_mixed_form = NavierStokesResolvedMixedForm::LegacyBodyFitted)
-{
-	ValidateTransientNavierStokesPreflight(parameters);
-	if (!previous_velocity.Valid() || !layout.Valid()
-		|| previous_velocity.SourceGeometryIdentity() != layout.GeometryIdentity()
-		|| previous_velocity.TargetGeometryIdentity() != layout.GeometryIdentity())
-		throw std::invalid_argument("immersed velocity history does not match fixed geometry layout");
-	for (const auto provenance : previous_velocity.Provenance())
-		if (provenance != ImmersedVelocityHistoryProvenance::Committed)
-			throw std::invalid_argument("fixed-geometry immersed velocity history must be committed");
-	const double expected_target = CheckedTransientTargetTime(previous_velocity.SourceTimeS(), parameters.dt);
-	if (previous_velocity.TargetTimeS() != expected_target)
-		throw std::invalid_argument("immersed velocity history target time does not match transient time step");
-	if (target_time_s != expected_target)
-		throw std::invalid_argument("immersed velocity history target time does not match assembly time");
-	return BuildNavierStokesElementFromLocalVelocityHistory(element, nodal_state,
-		LocalizeImmersedVelocityHistory(element, layout, previous_velocity, target_time_s), parameters, quadrature, body_force,
-		resolved_mixed_form);
-}
-
-inline NavierStokesSystem BuildTransientNavierStokesElement(const Element& element,
-	const std::vector<std::array<double, 4>>& nodal_state,
-	const ImmersedVelocityHistory& previous_velocity, const ImmersedActiveLayout& layout,
-	double target_time_s, const NavierStokesParameters& parameters,
-	const VolumeQuadratureRule& quadrature)
-{
-	return BuildTransientNavierStokesElement(element, nodal_state, previous_velocity, layout, target_time_s,
-		parameters, quadrature, [](const std::array<double, 3>&) { return std::array<double, 3>{{0.0, 0.0, 0.0}}; });
 }
 
 inline NavierStokesSystem BuildNavierStokesElement(const Element& element,

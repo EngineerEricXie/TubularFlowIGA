@@ -39,7 +39,7 @@ reported as a pass.
 | Tier | Scope | Typical command |
 |---|---|---|
 | `unit` | mesh core, coupling contracts, CUDA host execution contract | `make hpc-test-unit HPC_TEST_OUTPUT=/path/unit` |
-| `mpi` | distributed immersed numerical test at 1, 2, and 4 ranks | `make hpc-test-mpi PETSC_DIR="$PETSC_DIR" HPC_TEST_OUTPUT=/path/mpi` |
+| `mpi` | native Tet moving-species PETSc runtime test at 1, 2, and 4 ranks | `make hpc-test-mpi PETSC_DIR="$PETSC_DIR" HPC_TEST_OUTPUT=/path/mpi` |
 | `gpu` | CUDA host contract and real `device-info` probe | `make hpc-test-gpu HPC_TEST_OUTPUT=/path/gpu` |
 | `scheduled` | two-node MPI execution inside an existing Slurm allocation | `python3 scripts/hpc/hpc_test_tiers.py --tier scheduled --output-dir /path/scheduled` |
 
@@ -113,31 +113,6 @@ larger packed case. Slurm's `B:` signal form targets only the batch shell, which
 is why the explicit trap and Open MPI forwarding are both present; see the
 [Slurm sbatch signal contract](https://slurm.schedmd.com/sbatch.html) and
 [Open MPI launcher options](https://docs.open-mpi.org/en/main/man-openmpi/man1/mpirun.1.html).
-
-## Cross-node moving FSI and pair restart
-
-`solvers/cpu/slurm/cross_node_fsi.sbatch` closes the scheduled acceptance path
-for the current bounded moving-FSI library runtime. In one two-node allocation
-it runs a one-rank reference, a four-rank strong-coupling writer distributed as
-two ranks per node, and a new two-rank read-only process restored from the
-four-rank pair bundle. The existing checkers enforce fields, unique owned rows
-and surface IDs, force/traction, Aitken history, ports, conservation, iteration
-counts, 4-to-2 repartition provenance, and immutable checkpoint bytes.
-It first runs the `scheduled` test tier with one MPI rank on each node, so the
-same job also provides the required small cross-node test result and skip-free
-`result.json`.
-
-```bash
-export IGA_FSI_OUTPUT=/shared/results/fsi-cross-node-${USER}
-sbatch -A "$PROJECT_ACCOUNT" \
-  --export=ALL,IGA_FSI_OUTPUT,PETSC_DIR,PETSC_ARCH \
-  solvers/cpu/slurm/cross_node_fsi.sbatch
-```
-
-The fixture is intentionally long and is a correctness/restart workload. Its
-timings do not replace the body-fitted strong/weak scaling study. The membrane
-matrix remains on one bounded owner even though fluid rows, moving geometry,
-surface publications, convergence checks, and checkpoint shards span ranks.
 
 ## Strong and weak scaling
 

@@ -1,128 +1,46 @@
-# FSI Architecture
+# FSI architecture
 
-The foundational compliant-channel path combines a bounded strong
-Dirichlet--Neumann coordinator, a moving immersed-flow adapter, a
-pre-tensioned membrane adapter, patch-to-closed-material composition, and
-traction extraction/projection. The reference benchmark remains a sequential
-`PETSC_COMM_SELF`, one-partition configuration.
+Fluid--structure interaction couples a native tetrahedral ALE fluid to a
+native tetrahedral hyperelastic solid through a matching interface. A strong
+Dirichlet--Neumann coordinator with dynamic weighted Aitken relaxation drives
+the reference runtime, which runs on a single partition (one MPI rank).
 
-## Scope and first benchmark
+The earlier immersed-flow and pre-tensioned-membrane path was removed on
+2026-10-08. Its code, tests, and documentation are preserved at the git tag
+`archive/immersed-shell-2026-10`.
 
-The first vertical slice is a small-displacement, pre-tensioned compliant
-membrane patch over a rectangular immersed-flow channel. It is intentionally a
-benchmark-sized coupling problem: full Cartesian interface fields are carried
-even though the initial membrane relaxes only the normal generalized traction.
+## Components
 
-## Separate surface contracts
+| Layer | Implementation | Role |
+|---|---|---|
+| Surface contract | [`DistributedSurfaceInterface.hpp`](../../include/DistributedSurfaceInterface.hpp) | Interface IDs, boundary labels, reference mesh/layout/partition identities, and provided/required surface fields |
+| Edge | [`FsiCouplingEdge.hpp`](../../include/FsiCouplingEdge.hpp) | Typed directional fluid/structure edge |
+| Runtime capabilities | [`FsiDomainRuntime.hpp`](../../include/FsiDomainRuntime.hpp) | Fluid and structure capability mixins and the `FsiTrialLifecycle` owner |
+| Coordinator | [`StrongFluidStructureCoupling.hpp`](../../solvers/cpu/include/StrongFluidStructureCoupling.hpp) | Strong Dirichlet--Neumann iteration and paired commit |
+| Relaxation | [`DynamicWeightedAitkenRelaxation.hpp`](../../include/DynamicWeightedAitkenRelaxation.hpp) | Area-weighted dynamic Aitken factor |
+| Interface transfer | [`NativeTetMatchingFsiInterface.hpp`](../../solvers/cpu/include/NativeTetMatchingFsiInterface.hpp) | Matching-vertex kinematics and traction transfer |
+| Fluid adapter | [`NativeTetAleFsiRuntime.hpp`](../../solvers/cpu/include/NativeTetAleFsiRuntime.hpp) | Harmonic ALE mesh motion and P2/P1 flow |
+| Structure adapter | [`NativeTetSolidFsiRuntime.hpp`](../../solvers/cpu/include/NativeTetSolidFsiRuntime.hpp) | Hyperelastic tetrahedral solid |
+| Checkpoint | [`NativeTetFsiCheckpoint.hpp`](../../solvers/cpu/include/NativeTetFsiCheckpoint.hpp) | Single-payload checkpoint of the single-partition pair |
 
-`MaterialSurfaceKinematics.hpp` is the immutable producer-neutral geometry
-payload consumed by the moving cut geometry, moving-wall Nitsche path, and
-moving immersed runtime.  One payload binds exact material/topology identities,
-immutable reference material vertices kept separately from current canonical
-geometry and current material vertices, wall-velocity provenance, and
-the exact time/step interval.  It owns neither an FSI graph endpoint nor a
-distributed field layout.  The public neutral factory recomputes and verifies
-domain-separated material, topology, and complete current-content digests from
-its owned fields.  The material digest binds immutable reference coordinates,
-source connectivity, labels, and topology provenance; current displacement
-cannot change it.  The factory accepts reference geometry separately from the
-current state and recomputes every supplied digest, so a producer cannot claim
-an unrelated material identity.  It rejects incomplete, non-bijective,
-mislabeled, split-coincident, or orientation-reversed canonical/material
-provenance (while accepting cyclic/even triangle permutations).  The content digest
-binds current coordinates and wall velocity and is included in downstream cut
-geometry/publication identities, so equal claimed producer strings cannot
-alias numerically different Nitsche inputs.  Prescribed motion currently
-produces the payload through the legacy `PrescribedSurfaceMotion::Evaluation`
-spelling; its historical evaluation hash remains the separately verified
-geometry-epoch identity byte-for-byte, while the new content digest provides
-neutral integrity.  A later membrane producer can use the same public factory
-by supplying its immutable reference material geometry independently of its
-evaluated displacement state.
-Consumers reject stale time/dt/content or changed material/topology before
-trial geometry is built.
+The CPU executable is `solvers/cpu/native_tet_fsi_steps` (one MPI rank). The
+CUDA executable `solvers/cuda/native_tet_fsi_cuda` uses explicit sequential
+coupling instead of the strong coordinator: the GPU fluid step supplies
+traction, the host solves the static solid, and the host updates the harmonic
+ALE mesh before the next fluid step.
 
-The implementation provides a producer-neutral `CreateFromSourceTopology` route and an
-immutable `MaterialSurfacePatchMap`.  The map is initially deliberately narrow:
-one fully-owned partition, one label, and an explicit conforming P1 subset of
-the directed source triangles.  It derives a patch-scoped reference digest,
-requires the layout and interface to carry it, accepts no coordinate-search
-authority, and proves exact source/canonical correspondence, orientation,
-connectivity, and the clamped one-sided seam.  Its reference digest is strictly
-patch-scoped: sorted global IDs, their mapped immutable reference positions,
-the directed/cyclic patch triangle layout, and exact selected triangle labels.
-It intentionally excludes whole-material/topology identities and clamp/mapping
-configuration, so an unchanged patch has a stable reference digest when an
-unrelated closed-surface remainder changes.  The distinct map identity binds
-that patch digest to complete material/topology identities, the full
-distributed-interface identity, explicit source mapping, triangle map, and
-clamps.  The endpoint is the exact structural role: it provides sorted
-`Displacement, Velocity` and requires only `TractionOnStructure`.
-`MaterialSurfacePatchKinematics` is stateless: it composes a context/stamp-exact
-patch trial into a newly validated whole closed surface, fixes the remainder at
-the immutable reference, requires zero seam fields and a roundoff-scaled
-backward-Euler check using actual SI terms and the patch geometry scale (with
-exact zero handled exactly, not a one-metre floor), and binds map, committed
-content, patch publication, context, and target content in its composition
-identity.
+## Matching interface
 
-`DistributedSurfaceInterface.hpp` is the dependency-free contract for
-field-valued interface exchange. It is separate from scalar P/Q
-`CouplingPort`: a fluid publishes traction on the structure and a structure
-publishes displacement and velocity. A surface layout identifies reference
-material nodes, owned IDs, reference triangles, and positive reference lumped
-areas. Every published field stamp also carries the immutable partition
-identity derived from its exact owned IDs and weights, so equal-sized ownership
-slices cannot cross-bind. Ghost values are local scratch only and never confer
-publication ownership. Material-surface interfaces require nonempty,
-canonical sorted boundary labels (label zero is valid). The first fluid and
-structure interfaces are bidirectional: each must declare a nonempty
-`provides` list and a nonempty `requires` list; both lists are canonical sorted,
-unique, and disjoint. Interface identities delimit and count each list
-explicitly.
-
-The sign convention for the fluid load is fluid-on-structure Cauchy traction:
-
-\[
-t_{\mathrm{on\ structure}}=-\sigma_f n_f.
-\]
-
-The first slice requires identical material topology and global node IDs on
-both sides. Nonmatching interpolation/projection is explicitly deferred.
-
-Fluid-side extraction is patch-authoritative: it requires the
-immutable `MaterialSurfacePatchMap`, accepts a fluid endpoint distinct from
-the map's structural endpoint, and requires the exact fluid role
-`TractionOnStructure <- Displacement, Velocity`.  The fluid interface and
-layout bind the map's patch-scoped reference digest, labels, layout and
-partition; full material/topology identities remain bound to the Cartesian
-domain and quadrature catalog.  Selected cut cells and points are determined
-only by mapped canonical-triangle membership.  Every retained point checks
-its canonical/source/map labels, and P1 barycentric coordinates are routed
-through the explicit mapped triangle/node permutation.  State and projection
-identities include map identity and membership.
-
-The immersed Cartesian path provides a read-only fluid-side kernel. It
-uses the catalog normal exactly as the closed-surface outward fluid normal (the
-catalog and moving-cut provenance audit compare it to
-`ClosedTriangulatedSurface::outward_unit_normal`), evaluates
-\(\sigma_f=-pI+\mu(\nabla u+\nabla u^T)\), then publishes
-\(-\sigma_f n_f\).  Retained points are filtered by the exact material
-boundary labels.  A bounded, single-partition consistent P1 surface-mass
-projection produces nodal traction while its unmodified right-hand side is the
-consistent nodal force; the kernel checks resultant and current-configuration
-moment conservation with compensated sums, explicit SI absolute tolerances,
-and a relative tolerance scaled by accumulated absolute force/moment
-contributions.  The selected interface must explicitly provide
-`TractionOnStructure`.  It rejects distributed layouts, incomplete/duplicate
-or reordered state-cell ownership, inconsistent coefficients at shared global
-IGA nodes, stale stamps, unrelated material/layout/current-content identity,
-and caller-supplied producer-state hashes that do not recompute from the
-supplied IGA state plus the bound Cartesian domain, element
-connectivity/extraction, and quadrature catalog.  Projection identity is
-derived from the projection form, exact field/material/layout identities,
-state, labels, and retained quadrature content.  Runtime publication and
-coupling remain deferred.
+"Matching" means that fluid ALE vertices and solid reference vertices share
+stable node IDs and the selected interface triangles have identical
+connectivity. Solid displacement defines the current boundary positions;
+solid velocity becomes the ALE boundary velocity and, under no slip, the fluid
+wall velocity. A native P2 fluid edge node takes the average of its two P1
+solid endpoint velocities, and the harmonic mesh-motion stage extends boundary
+motion into the interior. The fluid publishes `traction_on_structure_pa`
+(the negated area-averaged `sigma * n_fluid`), integrated as three equal P1
+nodal forces per current triangle. The contract and its regressions are in
+[T5 native matching interface](../validation/T5_NATIVE_MATCHING_INTERFACE.md).
 
 ## Typed FSI edges and runtime capabilities
 
@@ -180,81 +98,21 @@ This interface layer does **not** by itself wire FSI edges into `SimulationGraph
 production FSI runtime, or add a coordinator/executor. It made no claim of a
 running FSI solve or collective transaction.
 
-## Structure-side runtime adapter
+## Graph integration
 
-`PretensionedMembraneFsiRuntime.hpp` is the first production implementation of
-`FsiStructureDomainRuntime`. It composes exactly one `FsiTrialLifecycle` with
-exactly one `PretensionedMembrane`; construction independently binds both
-owners to the same directional edge, local structure endpoint/capability,
-fluid peer endpoint/capability, reference layout, and rank-local partition.
-The inherited membrane restriction remains explicit: this is a
-single-partition rank-local runtime and makes no MPI or collective claim.
+`SimulationGraph` stores typed `FsiCouplingEdge` values separately from scalar
+`CouplingEdge` values. `DomainNode` declares surface catalogs and exact
+per-surface layouts; graph construction validates directional fluid/structure
+capabilities, endpoint subsystem/interface identity, mesh, layout, rank-local
+partition, boundary labels, globally unique edge IDs, and one-to-one endpoint
+use. Declared surfaces may not be orphaned. `MakeFluidStructurePairPlan`
+returns the two directional field exchanges without changing scalar
+pressure/flow ordering or cycle checks.
 
-The public sequence is `BeginMacroStep`, `BeginCouplingIteration` with an exact
-traction stamp and producer-neutral kinematics envelope, `SetSurfaceTraction`, `SolveMembraneTrial`,
-`GetSurfaceKinematics`, then reject/abort or prepare/finalize. Inputs and
-outputs are value snapshots. Rejected iterations clear both owners, so every
-retry starts from the same committed membrane state. The generated kinematics
-stamp must match the declared envelope; its producer-state identity is created
-only by the membrane solve and becomes the exact stored output identity. The
-runtime exposes no membrane owner alias, only immutable value snapshots and
-diagnostic identity copies.
-
-Prepare copies the prospective committed public field and completes all
-fallible identity work. The lifecycle stores a prepared output stamp and the
-membrane stores a prepared committed-state identity. Finalize prevalidates both
-owners and then uses only noexcept exchanges for numerical state, committed
-kinematics, and lifecycle availability; neither owner can expose or commit a
-partial trial. The committed-field accessor therefore remains on its old
-snapshot until finalize.
-
-## Moving immersed-flow runtime adapter
-
-`MovingImmersedTransientFlowFsiRuntime.hpp` is the rank-local fluid-side
-implementation of `FsiFluidDomainRuntime`. It composes one moving immersed
-flow owner, one `FsiTrialLifecycle`, an immutable patch map, and value
-snapshots for accepted kinematics, target material state, traction, transition
-conservation, and force/moment projection audits. The accepted patch is
-composed into the closed material surface before moving cut geometry,
-moving-wall Nitsche assembly, state transfer, and patch-authoritative traction
-projection are evaluated.
-
-Input acceptance is one-shot: phase/duplicate guards precede snapshot
-mutation, all fallible validation and copying happen in a local candidate, and
-the lifecycle gate is opened immediately before noexcept publication. Stale,
-foreign, wrong-interface, or duplicate input therefore leaves an accepted
-input and its pending solve intact. Conservation is exposed only with solved
-trial traction or a committed transition; reject/abort retain committed flow,
-geometry, traction, and diagnostics. Prepare completes fallible preparation
-before publication, and finalize uses only prevalidated noexcept handoffs. The
-lifecycle's final handoff is private and friended only to the two production
-adapters.
-
-The solved transition follows the same rule: traction, target material state,
-composition identity, and value diagnostics are fully staged before
-`MarkSolved`. After that call succeeds, the adapter performs only noexcept
-swaps, so a projection/snapshot allocation failure cannot advertise a solved
-field without its matching numerical epoch. The focused channel fixture uses
-triangle-derived reference lumped areas `{.03,.045,.015,.045,.09,.045,.015,.045,.03}`
-(sum `.36 m^2`), a nonzero moving wall speed, and a normalized moving-mass
-acceptance bound below `.03`; these are a bounded regression check, not a
-general conservation claim.
-
-## In-memory graph integration
-
-`SimulationGraph` now stores typed `FsiCouplingEdge` values separately from
-scalar `CouplingEdge` values. `DomainNode` declares material-surface catalogs
-and exact per-surface layouts; graph construction validates the directional
-fluid/structure capabilities, endpoint subsystem/interface identity, mesh,
-layout, rank-local partition, boundary labels, globally unique edge IDs, and
-one-to-one endpoint use. Declared surfaces may not be orphaned. The initial
-topology is deliberately limited to one `ThreeDImmersedFlow` domain paired
-with one `SurfaceMembraneStructure` domain. A membrane has material topology
-dimension two and embedding dimension three; it is not a scalar-flow domain.
-`MakeFluidStructurePairPlan` returns the two directional field exchanges
-(structure displacement/velocity to fluid, fluid traction to structure)
-without changing scalar P/Q graph ordering or cycle checks. Parser and schema
-formats remain unchanged.
+No graph domain kind implements an FSI endpoint yet:
+`IsSupportedFsiDomainPair` accepts no pair, so every FSI edge is rejected at
+graph construction. Adding native tetrahedral ALE-fluid and solid domain kinds
+is the integration step that will enable graph FSI.
 
 ## Weighted Aitken
 
@@ -344,73 +202,24 @@ no Aitken proposal was applied; it does not invent an initial status or a
 factor of one. Immutable reference normals must already be unit length to
 roundoff, so scalar projection and Cartesian reconstruction cannot rescale a
 field.
-Focused coverage includes deterministic mock adapters and the controlled real
-compliant-channel benchmark.  The latter is closure evidence for this bounded
-single-partition slice, not a distributed performance or production-anatomy
-claim.
+Focused coverage includes deterministic mock adapters and the native
+tetrahedral compliant-channel benchmark (`make -C solvers/cpu
+native-tet-compliant-channel-fsi-test`). The latter is closure evidence for this
+bounded single-partition slice, not a distributed performance or
+production-anatomy claim.
 
 Performance measurements separate assembly and solve time, host peak RSS,
 CUDA peak allocation, rank/partition
 agreement, and CPU/CUDA field differences. Representative distributed solves
 belong on allocated resources rather than login nodes.
 
-## Distributed moving-FSI runtime and restart
+## Current limitations
 
-The current CPU path uses owned surface partitions and collective execution.
-`ImmersedMovingDistributedFsiRuntime`
-borrows a distributed moving-flow runtime and material patch map. It composes
-owned kinematics into the bounded replicated cut-surface geometry, solves only
-owned PETSc field rows, publishes traction and consistent nodal force slices,
-and checks five conservation gates before paired commit.
-
-`SingleOwnerMembraneRuntime` deliberately keeps the small dense membrane solve
-on one configured rank. Its input traction is gathered from unique surface
-owners; its committed displacement and velocity are redistributed to owned
-surface slices. This is an implemented distributed fluid/transfer path with a
-bounded centralized structure cost, not a claim of distributed structural
-assembly.
-
-`SolveDistributedStrongFsiStep` computes weighted Aitken reductions, RMS and
-maximum residuals globally. Every iteration either leaves both runtimes at the
-same accepted state or reaches the paired no-throw finalize tail. Rank-local
-errors, convergence failure and exhaustion collectively abort both candidates.
-
-`MovingFsiCheckpointBundle` publishes the accepted moving-flow shards, one
-traction slice per source rank, and owner-only membrane metadata/state under a
-single manifest. Restore constructs fresh flow, adapter and membrane owners;
-failure closes the unpublished flow candidate. For a changed rank count, all
-authenticated source surface records must cover every stable node exactly once.
-The target keeps only its owned records and receives new producer, projection
-and partition identities derived from the source payload set. Same-partition
-restore retains exact saved publication bytes. This bounded surface restore
-reads every source surface shard on each target rank; it does not gather the
-full fluid field and is not intended as a large distributed shell solver.
-
-Local regression targets cover 1/2/4-rank execution and restart. Cross-node
-execution, scaling measurements, nonmatching transfer, contact and
-native graph CLI integration remain outside the currently accepted scope.
-
-## Explicit exclusions
-
-The bounded single-partition path excludes MPI/collective strong execution, nonmatching transfer,
-contact, ALE/remeshing, monolithic coupling, and any distributed performance
-claim.  The closed compliant-channel benchmark does not close the subsequent
-compliant-tube, aneurysm-wall, thin-shell valve, valve opening/closing,
-leaflet-contact, or patient-specific valve work.
-The structure kernel is a bounded, dense, single-rank P1 pre-tensioned membrane
-model with normal scalar displacement, reference normals, explicit Dirichlet IDs,
-and backward-Euler trial/prepare/finalize state. Its local structure runtime and
-the bounded local fluid adapter do not by themselves add a coordinator or
-collective execution. Each successful solve issues
-one membrane-instance-owned generation capability from the unchanged committed
-state; it must be prepared and finalized, or explicitly rejected/aborted,
-before another solve. Rejected, aborted, stale, foreign, superseded, or
-modified capabilities cannot commit. Static coercivity and the dynamic SPD
-solve use scale-relative Cholesky checks; the dynamic solve also checks finite
-values and its backward-error residual. It excludes MPI structural
-assembly/collectives, nonmatching transfer, contact, ALE/remeshing, a
-monolithic FSI solve, a coordinator/executor, and any claim of a distributed
-operating FSI benchmark.
-The patch mapping excludes distributed patch ownership, multiple labels, nonmatching
-transfer, patch remeshing/contact, and any change to fluid traction/runtime
-paths.
+- The reference runtime is single-partition. Both the ALE fluid
+  (`NativeTetAleDenseRuntime`) and the solid static solver use dense direct
+  solves, so it is suitable only for small reference cases. The distributed
+  PETSc ALE flow runtime (`NativeTetAlePetscRuntime`) is not yet connected to
+  the FSI adapter.
+- The multidomain graph has no FSI-capable domain kinds.
+- Nonmatching interface transfer, contact, remeshing, and monolithic coupling
+  are not implemented.

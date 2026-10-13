@@ -26,6 +26,8 @@ work directory so that `examples/` stays small and reproducible.
 
 [`validation/womersley`](validation/womersley/) contains analytical validation
 inputs and is not a standalone geometry case.
+[`validation/aneurysm_surface`](validation/aneurysm_surface/) is a closed,
+boundary-labelled VTP surface used by the surface-to-FEM meshing tests.
 
 ## Common input contract
 

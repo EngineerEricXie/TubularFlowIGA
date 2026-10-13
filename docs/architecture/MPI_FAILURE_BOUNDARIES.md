@@ -34,8 +34,6 @@ failure.
 | [Native 1D CLI](../../solvers/one_d/src/iga_1d.cpp) | Input/assets, runtime, implicit solve, initial/step/final output, checkpoint | CLI, checkpoint, and stream failures |
 | [Multidomain runner](../../solvers/coupling/src/iga_1d_3d_bifurcation.cpp) | Catalog, registry, flow/species executors, histories, and manifest through a borrowed-communicator runner | Registry, pressure, and species executor regressions |
 | [Sequential coupling CLI](../../solvers/coupling/src/iga_1d_3d_explicit.cpp) | Input/runtime, fixed-point or Aitken loop, global convergence, abort outcomes, output, completion | Initialization, strong coupling, and output regressions |
-| [Immersed graph loader](../../include/ImmersedFlowCase.hpp) | Local preflight followed by collective steady/transient initialization, mode/clock agreement, rollback | Case and graph regressions; MPI callers use `InitializeDistributed` |
-| [FSI ParaView exporter](../../solvers/cpu/src/phase8_compliant_channel_fsi_paraview.cpp) | Rejects multi-rank execution before changing output; single-rank FSI and export | Exporter regression |
 | [CUDA CLI](../../solvers/cuda/src/iga_cuda.cu) | Single process and single GPU with top-level exception handling | CUDA CLI and stream regressions; multi-process launch is rejected |
 | [Mesh](../../preprocessing/mesh/src/main.cpp) and [spline](../../preprocessing/spline/main.cpp) | Serial entry points with optional OpenMP | Local and OpenMP worker failures |
 

@@ -116,13 +116,6 @@ Schema-v6/species execution continues to reject 0D domains. Restart, multirate,
 valves, 0D species, and distributed moving-geometry execution are outside this
 path's supported scope.
 
-Fixed stationary immersed flow now supports MPI through `ImmersedFlowCase`,
-including steady and backward-Euler schema-v5 graphs. The transient backend owns
-committed velocity history and accepted time; its graph adapter discards trial
-history and restores controls on coupling rollback. Domain and graph dt/step
-counts must match. Moving geometry and immersed species are rejected by this
-case path.
-
 ## Current runtime boundaries
 
 ### Three-dimensional flow
@@ -249,7 +242,7 @@ composition and multiple independently owned body-fitted 3D regions. Output
 adds per-3D-domain boundary-flow balances to the edge, iteration, port, and
 initialization records. Its final manifest records canonical assets and sorted
 edge endpoints and is published only after every CSV closes successfully.
-Cycles, disconnected components, same-kind edges, transport, moving/immersed
+Cycles, disconnected components, same-kind edges, transport, moving
 domains, FSI, 0D models, restart, per-edge relaxation, and active graph-driven
 3D outlet models remain outside this phase.
 

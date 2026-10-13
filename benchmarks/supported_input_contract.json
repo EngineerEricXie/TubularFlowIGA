@@ -108,39 +108,6 @@
       ]
     },
     {
-      "id": "surface_to_immersed_background",
-      "status": "implemented",
-      "minimum_case_inputs": [
-        "simulation_config.json",
-        "immersed_geometry.json",
-        "one closed triangular VTP reference surface named by immersed_geometry.json.surface",
-        "matching graph port metadata when open ports are used"
-      ],
-      "accepted_geometry": [
-        {
-          "extension": ".vtp",
-          "kind": "closed_triangle_surface",
-          "contract": "Same bounded VTP subset and per-cell nonnegative integer boundary array as SurfaceReaders; production ImmersedFlowCase always uses the VTP reader."
-        }
-      ],
-      "source_units": "Production immersed surfaces and grid bounds are already in metres; there is no runtime scale or unit inference. Prescribed material frames also require metre coordinates and prohibit welding.",
-      "labels": "wall_labels and positive graph/runtime port boundary labels must be unique, disjoint, and exactly partition all VTP boundary IDs; port IDs and control modes must agree between graph metadata and immersed_geometry.json.",
-      "optional_inputs": [
-        "prescribed_motion frames, each a topology-compatible material VTP with time_s"
-      ],
-      "limitations": [
-        "STL is supported by the reusable surface reader but not by the production ImmersedFlowCase entry point.",
-        "Paths must remain inside the case directory.",
-        "Topology-changing prescribed motion is not accepted."
-      ],
-      "implementation_evidence": [
-        "include/ImmersedFlowCase.hpp",
-        "solvers/cpu/include/SurfaceReaders.hpp",
-        "solvers/cpu/include/PrescribedSurfaceMotion.hpp",
-        "examples/vascular_flow/immersed_aneurysm_chain/immersed/immersed_geometry.json"
-      ]
-    },
-    {
       "id": "network_1d",
       "status": "implemented",
       "minimum_case_inputs": [

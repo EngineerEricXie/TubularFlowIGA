@@ -8,30 +8,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hpc"))
 from hpc_inventory import digest
 from hpc_profile_summary import summarize
-from hpc_serial_matrix import aggregate_serial, cpu_reference, device_allocation, native_diagnostics
+from hpc_serial_matrix import aggregate_serial, cpu_reference, device_allocation
 
 
 class SerialMatrixTests(unittest.TestCase):
-    def test_immersed_solve_only_duplicate_and_nonfinite_fd_rejected(self):
-        fd = [f"aneurysm zero-state centered-FD {direction} output-block {block} relative-defect=1e-12"
-              for direction in ("velocity", "pressure", "controller") for block in range(3)]
-        final = ["aneurysm static solve final-residual=1e-15", "aneurysm conservation open-normalized-balance=1e-12"]
-        native_diagnostics("immersed", "\n".join(fd + final))
-        for lines in (final, fd[:-1] + [fd[0]] + final, fd + fd[:1] + final,
-                      [fd[0].replace("1e-12", "nan")] + fd[1:] + final):
-            with self.subTest(lines=lines), self.assertRaises(ValueError):
-                native_diagnostics("immersed", "\n".join(lines))
-
-    def test_fsi_missing_convergence_or_iteration_is_rejected(self):
-        history = "fsi_iteration=0 residual_rms_m=1e-8 threshold_m=1e-7\n"
-        final = "compliant_channel_fsi converged=true iterations=1 center_displacement_m=1e-5"
-        native_diagnostics("fsi", history + final)
-        for log in (final, history, history + final + "\n" + final,
-                    history.replace("fsi_iteration=0", "fsi_iteration=1") + final,
-                    history + final.replace("1e-5", "inf")):
-            with self.subTest(log=log), self.assertRaises(ValueError):
-                native_diagnostics("fsi", log)
-
     def test_allocation_requires_scope_peak_and_no_live_buffers(self):
         line = "cuda_allocations scope=project_device_buffers requested_peak_bytes=1024 requested_live_bytes=0"
         self.assertEqual(device_allocation(line)["requested_peak_bytes"], 1024)
@@ -48,7 +28,7 @@ class SerialMatrixTests(unittest.TestCase):
                 for i, v in enumerate([1000, 9, 10, 11])]
 
     def test_first_run_excluded_from_host_and_device_statistics(self):
-        result = aggregate_serial(self.records(), 3, True)
+        result = aggregate_serial(self.records(), 3)
         self.assertEqual(result["process_wall_s"]["median"], 10)
         self.assertEqual(result["project_device_buffer_peak_bytes"]["count"], 3)
         self.assertEqual(result["phases_exclusive_s"]["assembly"]["values"], [7, 8, 9])
@@ -61,7 +41,7 @@ class SerialMatrixTests(unittest.TestCase):
         parallel[-1]["profile"]["ranks"] = 2
         for group in (records[:-1], records[:-1] + records[:1], failed, parallel):
             with self.subTest(group=group), self.assertRaises(ValueError):
-                aggregate_serial(group, 3, False)
+                aggregate_serial(group, 3)
 
     def reference(self, root):
         first = root / "first"

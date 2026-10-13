@@ -75,8 +75,8 @@ The coordinator no longer has to accept a step from displacement alone. Five
 new finite-or-disabled controls independently gate area-weighted traction,
 consistent nodal force, fluid nonlinear residual, solid free-DOF residual,
 and interface power defect in addition to the existing displacement gate.
-Their default is infinity so existing validated immersed cases retain their
-prior policy. The native invariant smoke explicitly enables finite (loose,
+Their default is infinity, which keeps the displacement-only acceptance
+policy. The native invariant smoke explicitly enables finite (loose,
 function-first) values and requires two publications before traction/force
 fixed-point convergence can pass. Added-mass-sensitive nontrivial cases are
 still required before these tolerances can be called physically calibrated.

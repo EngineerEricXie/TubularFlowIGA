@@ -62,7 +62,7 @@ under [`docs/validation/`](../docs/validation).
 | `validate_supported_input_contract.py` | `make contract-audit` |
 | `validate_t1_*` | `make t1-audit` |
 | `validate_t2_*` | `make t2-contract-audit`; `validate_t2_fixed_flow_result.py` checks a three-level solver result |
-| `validate_t3_*` | `make t3-contract-audit`, `make t3-solid-contract-audit` |
+| `validate_t3_*` | `make t3-solid-contract-audit` |
 | `validate_t4_*` | `make t4-contract-audit` |
 | `validate_t5_*` | `make t5-matching-interface-audit` |
 | `validate_t6_*`, `validate_t7_*`, `validate_t9_*` | the matching `make t6-…`, `t7-…`, and `t9-…` targets |
@@ -92,10 +92,10 @@ under [`docs/validation/`](../docs/validation).
   They are invoked by the `make t7-…` and `make t9-…` targets, not by unit-test
   discovery. `test_*_paraview.py` read solver output with ParaView's readers
   (`pvpython script.py OUTPUT_DIRECTORY`).
-- [`hpc/`](hpc): test tiers, CPU/OpenMP/serial matrices, cross-node scaling,
-  reference states, and scheduler records. `hpc_*_regression.py`,
-  `hpc_*_prefixes.py`, and `hpc_native_graph_checkpoint.py` drive the MPI
-  failure-injection, output, checkpoint, and solver-option regressions that no
-  make target runs. See [HPC deployment](../docs/hpc/HPC_DEPLOYMENT.md) and
+- [`hpc/`](hpc): test tiers, CPU and single-GPU matrices, cross-node scaling,
+  and scheduler records. `hpc_*_regression.py`, `hpc_*_prefixes.py`, and
+  `hpc_native_graph_checkpoint.py` drive the MPI failure-injection, output,
+  checkpoint, and solver-option regressions that no make target runs. See
+  [HPC deployment](../docs/hpc/HPC_DEPLOYMENT.md) and
   [HPC benchmarks](../docs/hpc/HPC_BENCHMARKS.md).
 - [`tests/`](tests): fast unit tests for the scripts above.

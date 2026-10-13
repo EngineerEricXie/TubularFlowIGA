@@ -51,6 +51,13 @@ struct PressureFlowComponentPlan {
 	std::vector<PressureFlowInterfacePlan> interfaces;
 };
 
+// The graph keeps its FSI edge validation for the native tetrahedral ALE-solid
+// pair; no graph domain kind implements an FSI endpoint yet.
+inline bool IsSupportedFsiDomainPair(DomainKind, DomainKind)
+{
+	return false;
+}
+
 struct FluidStructureInterfacePlan {
 	std::string edge_id;
 	SurfaceInterfaceRef displacement_provider;
@@ -175,11 +182,6 @@ private:
 			throw std::runtime_error("simulation graph domain has an unsupported kind");
 		if (IsFlowDomainKind(domain.kind) && domain.ports.empty())
 			throw std::runtime_error("simulation graph flow domain requires at least one logical port");
-		if (domain.kind == DomainKind::SurfaceMembraneStructure && !domain.ports.empty())
-			throw std::runtime_error("simulation graph membrane structure cannot declare scalar ports");
-		if (domain.kind == DomainKind::SurfaceMembraneStructure
-			&& domain.surface_interfaces.empty())
-			throw std::runtime_error("simulation graph membrane structure requires a material-surface interface");
 		ValidateCouplingPorts(domain.ports);
 		std::set<std::pair<std::string, std::string>> locators;
 		for (const auto& port : domain.ports) {
@@ -227,9 +229,8 @@ private:
 				throw std::runtime_error("simulation graph edge IDs must be unique across scalar and FSI edges");
 			const auto& fluid_domain = Domain(edge.fluid.domain_id);
 			const auto& structure_domain = Domain(edge.structure.domain_id);
-			if (fluid_domain.kind != DomainKind::ThreeDImmersedFlow
-				|| structure_domain.kind != DomainKind::SurfaceMembraneStructure)
-				throw std::runtime_error("simulation graph FSI edges require an immersed-flow fluid and membrane-structure endpoint");
+			if (!IsSupportedFsiDomainPair(fluid_domain.kind, structure_domain.kind))
+				throw std::runtime_error("simulation graph FSI edge joins an unsupported fluid/structure domain pair");
 			const auto& fluid_surface = SurfaceInterface(edge.fluid);
 			const auto& structure_surface = SurfaceInterface(edge.structure);
 			ValidateFsiCouplingEdgeInterfaces(edge, fluid_surface, structure_surface);
@@ -244,7 +245,7 @@ private:
 			structure_domains.insert(edge.structure.domain_id);
 		}
 		if (!fsi_edges_.empty() && (fluid_domains.size() != 1 || structure_domains.size() != 1))
-			throw std::runtime_error("simulation graph initially supports one immersed-flow and membrane-structure FSI pair");
+			throw std::runtime_error("simulation graph supports one fluid/structure FSI domain pair");
 		for (const auto& domain : domains_)
 			for (const auto& surface : domain.second.surface_interfaces)
 				if (!bound_endpoints.count(surface.id))
@@ -432,9 +433,8 @@ inline FluidStructurePairPlan MakeFluidStructurePairPlan(const SimulationGraph& 
 	for (const auto& edge : graph.FsiEdges()) {
 		const auto& fluid = graph.Domain(edge.fluid.domain_id);
 		const auto& structure = graph.Domain(edge.structure.domain_id);
-		if (fluid.kind != DomainKind::ThreeDImmersedFlow
-			|| structure.kind != DomainKind::SurfaceMembraneStructure)
-			throw std::runtime_error("fluid-structure pair plan requires immersed flow and membrane structure domains");
+		if (!IsSupportedFsiDomainPair(fluid.kind, structure.kind))
+			throw std::runtime_error("fluid-structure pair plan joins an unsupported fluid/structure domain pair");
 		fluid_domains.insert(fluid.id);
 		structure_domains.insert(structure.id);
 		plan.interfaces.push_back({edge.id, edge.structure, edge.fluid,

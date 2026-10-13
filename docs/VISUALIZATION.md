@@ -13,22 +13,6 @@ Use `--visualization-format pvtu` for legacy XML output. See
 restart rules, offline conversion and validation. Other backends retain the
 formats documented below.
 
-## Moving immersed snapshots
-
-Moving immersed flow snapshots are published as recoverable `<stem>.epoch…`
-directories. Each complete epoch contains `fields.vtu`, a typed unstructured
-grid of independent `VTK_VERTEX` cells at the volume-quadrature support points,
-and `metrics.json`; `<stem>.pvd` is rebuilt from complete epochs. These are
-point clouds supporting volume-field inspection, not boundary-conforming volume
-meshes. A completed epoch that survives an interruption before the PVD update
-is incorporated by the next rebuild. Static geometry continues to use the
-Bézier VTKHDF path described below.
-
-The standalone `phase8_compliant_channel_fsi_paraview` exporter requires one
-MPI rank and rejects larger communicators before creating or modifying output.
-It runs the single-process compliant-channel FSI fixture. Distributed FSI uses
-the runtime described in the [FSI architecture](architecture/FSI_ARCHITECTURE.md).
-
 ## Default format
 
 `--visualization-format auto` is the default:

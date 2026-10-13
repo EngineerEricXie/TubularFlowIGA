@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "scripts" / "surface_to_fem_volume.py"
-SURFACE = ROOT / "examples" / "vascular_flow" / "immersed_aneurysm_chain" / "immersed" / "surface.vtp"
+SURFACE = ROOT / "examples" / "validation" / "aneurysm_surface" / "surface.vtp"
 PREFLIGHT = ROOT / "solvers" / "cpu" / "surface_fem_preflight"
 
 

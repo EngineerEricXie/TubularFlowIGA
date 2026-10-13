@@ -48,7 +48,8 @@ class InventoryTests(unittest.TestCase):
     def test_catalog_references_exist(self):
         root = SCRIPT.parents[2]
         catalog = json.loads((root / "benchmarks/hpc_baselines.json").read_text())
-        self.assertEqual(len({case["id"] for case in catalog["cases"]}), 4)
+        self.assertEqual({case["id"] for case in catalog["cases"]},
+                         {"body_fitted_flow", "body_fitted_transport"})
         for case in catalog["cases"]:
             self.assertTrue(inventory.input_records(root, case["source_inputs"]))
             for path in case["native_gate_sources"] + case["reference_evidence"]:

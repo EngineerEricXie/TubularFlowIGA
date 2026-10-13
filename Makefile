@@ -1,4 +1,4 @@
-.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc contract-audit t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t1-immersed-manifest-test t2-contract-audit t3-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu fluid-surface-traction-test moving-immersed-transient-flow-fsi-runtime-test compliant-channel-fsi-test phase8-compliant-channel-fsi-paraview pretensioned-membrane-test pretensioned-membrane-fsi-runtime-test material-surface-patch-kinematics-test phase7-focused-test phase7-lv-closure-test one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
+.PHONY: all mesh mesh-test solver-test cpu cpu-test cpu-petsc contract-audit t1-audit t1-fem-mesh-test t1-multiregion-audit-test t1-iga-manifest-test t2-contract-audit t3-solid-contract-audit t4-contract-audit t4-petsc-assembly-test t5-matching-interface-audit hpc-build-manifest hpc-prepare-scaling hpc-cross-node-binaries hpc-test-unit hpc-test-mpi hpc-test-gpu one-d-petsc one-d-test zero-d-petsc zero-d-test coupling coupling-test coupling-zero-d-flow-test coupling-simulation-graph-test coupling-surface-contracts-test coupling-fsi-runtime-contracts-test coupling-petsc-test coupling-convergence-test coupling-convergence-axial-diagnostic coupling-convergence-isotropic-diagnostic coupling-convergence-length-diagnostic coupling-convergence-bulk-diagnostic coupling-temporal-convergence-test coupling-temporal-fixture-test cuda spline workflow-test clean
 
 all: cpu
 
@@ -50,9 +50,6 @@ t1-iga-manifest-test:
 	$(MAKE) -C solvers/cpu iga_inspect
 	python3 scripts/tests/test_iga_geometry_manifest.py
 
-t1-immersed-manifest-test:
-	$(MAKE) -C solvers/cpu moving-cut-geometry-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-
 t2-contract-audit:
 	$(MAKE) -C solvers/cpu surface_fem_preflight native-tet-fem-test
 	python3 scripts/tests/test_circular_pipe_surface.py
@@ -68,16 +65,6 @@ t2-contract-audit:
 	python3 scripts/validate_t2_native_spatial_evidence.py
 	$(MAKE) -C solvers/cpu native-tet-fixed-temporal-convergence-test
 	$(MAKE) -C solvers/cpu native-tet-fixed-spatial-convergence-test
-
-t3-contract-audit:
-	python3 scripts/validate_t3_native_iga_shell_contract.py
-	$(MAKE) -C solvers/cpu native-iga-shell-surface-test
-	$(MAKE) -C solvers/cpu native-iga-kirchhoff-love-test
-	$(MAKE) -C solvers/cpu native-iga-shell-patch-system-test
-	$(MAKE) -C solvers/cpu native-iga-shell-static-solver-test
-	$(MAKE) -C solvers/cpu native-iga-shell-spatial-convergence-test
-	$(MAKE) -C solvers/cpu native-iga-shell-flat-plate-test
-	$(MAKE) -C solvers/cpu native-iga-shell-patch-interface-test
 
 t3-solid-contract-audit:
 	python3 scripts/validate_t3_native_tet_solid_contract.py
@@ -98,7 +85,6 @@ t5-matching-interface-audit:
 t4-contract-audit:
 	python3 scripts/validate_t4_native_ale_contract.py
 	python3 scripts/validate_t4_native_ale_evidence.py
-	python3 scripts/validate_t4_matched_lv_qoi_evidence.py
 	$(MAKE) -C solvers/cpu native-tet-ale-kinematics-test
 	$(MAKE) -C solvers/cpu native-tet-velocity-field-test
 	$(MAKE) -C solvers/cpu native-tet-ale-mesh-motion-test
@@ -332,7 +318,7 @@ hpc-prepare-scaling:
 	python3 scripts/hpc/hpc_prepare_scaling_cases.py --output-dir $(HPC_SCALING_CASES) --ranks $(HPC_SCALING_RANKS)
 
 hpc-cross-node-binaries:
-	$(MAKE) -C solvers/cpu petsc iga_flow_validate immersed_moving_distributed_fsi_runtime_test distributed_immersed_extension_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
+	$(MAKE) -C solvers/cpu petsc iga_flow_validate native_tet_moving_species_petsc_runtime_test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	$(MAKE) -C solvers/coupling petsc hpc_duct_solver_fixture PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 
 HPC_TEST_OUTPUT ?= $(CURDIR)/hpc-test-results
@@ -345,34 +331,6 @@ hpc-test-mpi:
 
 hpc-test-gpu:
 	python3 scripts/hpc/hpc_test_tiers.py --tier gpu --timeout $(HPC_TEST_TIMEOUT) --output-dir $(HPC_TEST_OUTPUT)/gpu
-
-fluid-surface-traction-test:
-	$(MAKE) -C solvers/cpu fluid-surface-traction-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-
-moving-immersed-transient-flow-fsi-runtime-test:
-	$(MAKE) -C solvers/cpu moving-immersed-transient-flow-fsi-runtime-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-
-compliant-channel-fsi-test:
-	$(MAKE) -C solvers/cpu compliant-channel-fsi-test PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
-
-PHASE8_PARAVIEW_DIR ?= $(CURDIR)/artifacts/visualization/compliant-channel-fsi
-phase8-compliant-channel-fsi-paraview:
-	$(MAKE) -C solvers/cpu phase8-compliant-channel-fsi-paraview PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH)) PHASE8_PARAVIEW_DIR=$(abspath $(PHASE8_PARAVIEW_DIR))
-
-pretensioned-membrane-test:
-	$(MAKE) -C solvers/cpu pretensioned-membrane-test
-
-pretensioned-membrane-fsi-runtime-test:
-	$(MAKE) -C solvers/cpu pretensioned-membrane-fsi-runtime-test
-
-material-surface-patch-kinematics-test:
-	$(MAKE) -C solvers/cpu material-surface-patch-kinematics-test
-
-phase7-focused-test:
-	$(MAKE) -C solvers/cpu phase7-focused-test PETSC_DIR=$(PETSC_DIR) PETSC_ARCH=$(PETSC_ARCH)
-
-phase7-lv-closure-test:
-	$(MAKE) -C solvers/cpu phase7-lv-closure-test PETSC_DIR=$(PETSC_DIR) PETSC_ARCH=$(PETSC_ARCH)
 
 one-d-petsc:
 	$(MAKE) -C solvers/one_d petsc

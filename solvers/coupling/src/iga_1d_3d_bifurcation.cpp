@@ -14,7 +14,6 @@
 #include "CollectiveDomainRuntimeRegistry.hpp"
 #include "ExplicitOneDThreeDCoupling.hpp"
 #include "IgaDatabase.hpp"
-#include "ImmersedFlowCase.hpp"
 #include "OneDFlowDomainAdapter.hpp"
 #include "OneDImplicit.hpp"
 #include "OneDRuntime.hpp"
@@ -24,7 +23,6 @@
 #include "SpeciesPressureFlowComponentExecutor.hpp"
 #include "ThreeDBodyFittedFlowDomainAdapter.hpp"
 #include "ThreeDBodyFittedFlowTransportDomainAdapter.hpp"
-#include "ThreeDImmersedFlowDomain.hpp"
 #include "ZeroDFlowDomain.hpp"
 #include "ThreeDFlowCoupling.hpp"
 #include "ThreeDVcaCoupling.hpp"
@@ -253,10 +251,6 @@ struct NativeThreeD {
 	std::optional<iga::CompiledLinearSystem> transport_system;
 };
 
-// The immersed production owner is itself a CoupledDomainRuntime and retains
-// every catalog, runtime, and internal adapter needed by the registry.
-using NativeImmersed = iga::ImmersedFlowCase;
-
 std::size_t CountThreeDDomains(const iga::SimulationGraph& graph)
 {
 	std::size_t count = 0;
@@ -269,7 +263,6 @@ const char* ManifestDomainKind(iga::DomainKind kind)
 {
 	if (kind == iga::DomainKind::OneDFlow) return "network_flow";
 	if (kind == iga::DomainKind::ThreeDBodyFittedFlow) return "body_fitted_iga_flow";
-	if (kind == iga::DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
 	if (kind == iga::DomainKind::ZeroDFlow) return "zero_d_flow";
 	throw std::runtime_error("unknown domain kind in output manifest");
 }
@@ -476,7 +469,6 @@ void WriteOutputs(const fs::path& directory,
 	const std::map<std::string, iga::ResolvedGraphDomainAssets>& assets,
 	const std::optional<iga::OneDThreeDBifurcationDefinition>& bifurcation,
 	const std::map<std::string, OneDInitialization>& one_d,
-	const std::map<std::string, const NativeImmersed*>& immersed,
 	const std::vector<AcceptedStep>& steps)
 {
 	if (!fs::create_directories(directory))
@@ -616,24 +608,6 @@ void WriteOutputs(const fs::path& directory,
 						<< iga::BuildZeroDFlowStepAccountingIdentitySha256(model, accounting->second)
 						<< "\"";
 				}
-			}
-			if (domain.second.kind == iga::DomainKind::ThreeDImmersedFlow) {
-				const auto& native = *immersed.at(domain.first);
-				const auto& grid = native.Grid();
-				const auto& classification = native.ClassificationDiagnostics();
-				const auto& volume = native.VolumeDiagnostics();
-				const auto& surface = native.SurfaceDiagnostics();
-				const auto& ghost = native.GhostDiagnostics();
-				marker << ",\"surface_hash\":\"" << JsonEscape(native.SurfaceHash())
-					<< "\",\"grid\":{\"lower_m\":[" << grid.lower_m[0] << ','
-					<< grid.lower_m[1] << ',' << grid.lower_m[2] << "],\"upper_m\":["
-					<< grid.upper_m[0] << ',' << grid.upper_m[1] << ',' << grid.upper_m[2]
-					<< "],\"cells\":[" << grid.cells[0] << ',' << grid.cells[1] << ','
-					<< grid.cells[2] << "]},\"catalog_audit\":{\"active_cells\":"
-					<< classification.inside_count+classification.cut_count
-					<< ",\"volume_points\":" << volume.output_points
-					<< ",\"surface_points\":" << surface.output_points
-					<< ",\"ghost_faces\":" << ghost.selected_faces << '}';
 			}
 			marker << '}'
 				<< (++domain_index == configuration.graph.Domains().size() ? "\n" : ",\n");
@@ -822,9 +796,6 @@ int RunGroupedMultidomain(const Options& options,
 		if (!options.checkpoint_directory.empty() || !options.restart_directory.empty())
 			throw std::runtime_error(
 				"domain_groups checkpoint/restart is not available; reconstruct the same mapping from the graph manifest");
-		for (const auto& domain : configuration.graph.Domains())
-			if (domain.second.kind == iga::DomainKind::ThreeDImmersedFlow)
-				throw std::runtime_error("domain_groups currently supports 0D, 1D and body-fitted 3D domains");
 	});
 	int local_group_index = -1;
 	for (std::size_t group = 0; group < resources.groups.size(); ++group)
@@ -1161,7 +1132,7 @@ int RunGroupedMultidomain(const Options& options,
 		if (species_mode) WriteSpeciesOutputs(options.output_directory, configuration,
 			options.graph_case, assets, accepted_species);
 		else WriteOutputs(options.output_directory, configuration, options.graph_case,
-			assets, std::nullopt, initialization, {}, accepted);
+			assets, std::nullopt, initialization, accepted);
 	});
 	if (local_group != MPI_COMM_NULL) MPI_Comm_free(&local_group);
 	if (rank == 0) std::cout << "completed domain-group multidomain steps=" << final_step
@@ -1173,7 +1144,7 @@ int FailureInjectionStep()
 {
 	// Share the explicit-coupling injection knob with the generic graph runner
 	// so a Phase-6 closure test can exercise the same precommit-failure
-	// contract through its production 1D--immersed--3D--1D entry point.
+	// contract through its production 1D--3D--1D entry point.
 	const char* value = std::getenv("TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP");
 	if (value) return PositiveInteger(value,
 		"TUBULARFLOWIGA_INJECT_EXPLICIT_COUPLING_FAILURE_STEP");
@@ -1223,8 +1194,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 		std::map<std::string, std::unique_ptr<iga::OneDPetscSolverContext>> one_d_solvers;
 		std::map<std::string, NativeOneD> one_d;
 		std::map<std::string, std::unique_ptr<NativeThreeD>> three_d;
-		std::map<std::string, std::unique_ptr<NativeImmersed>> immersed;
-		std::map<std::string, const NativeImmersed*> immersed_audit;
 		fs::path graph_root;
 		iga::CollectiveLocalStage(communicator, "graph input", [&] {
 			if (fs::exists(options.output_directory))
@@ -1364,18 +1333,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						configuration, plan, assets, domain_id, rank,
 						configuration.schema_version == 6,
 						input_texts.at("domain configuration "+domain_id)));
-			for (const auto& domain_id : plan.domain_order)
-				if (configuration.graph.Domain(domain_id).kind
-					== iga::DomainKind::ThreeDImmersedFlow) {
-					if (configuration.schema_version == 6)
-						throw std::runtime_error(
-							"schema-v6 transport is unsupported by the immersed flow backend");
-					immersed.emplace(domain_id, mpi_size == 1
-						? iga::ImmersedFlowCase::Load(assets.at(domain_id).case_directory,domain_id,
-							configuration.graph.Domain(domain_id).ports,mpi_size)
-						: iga::ImmersedFlowCase::Preflight(assets.at(domain_id).case_directory,domain_id,
-							configuration.graph.Domain(domain_id).ports));
-				}
 			for (const auto& volume : three_d)
 				for (const auto& line : one_d)
 					if (line.second.runtime->FlowSystem().density
@@ -1384,38 +1341,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 							!= iga::FirstNavierStokesSystem(volume.second->configuration).viscosity)
 						throw std::runtime_error(
 							"multidomain flow requires identical density and viscosity");
-			for (const auto& volume : immersed)
-				if (volume.second->IsTransient()
-					&& (volume.second->Configuration().time.dt != configuration.time.dt_s
-						|| volume.second->Configuration().time.steps != configuration.time.steps))
-					throw std::runtime_error("transient immersed domain and graph time grids must match");
-			for (const auto& volume : immersed)
-				for (const auto& line : one_d)
-					if (line.second.runtime->FlowSystem().density
-							!= volume.second->RuntimeParameters().density
-						|| line.second.runtime->FlowSystem().dynamic_viscosity
-							!= volume.second->RuntimeParameters().dynamic_viscosity)
-						throw std::runtime_error(
-							"multidomain flow requires identical density and viscosity");
 		});
-		for (const auto& domain_id : plan.domain_order) if (immersed.count(domain_id)) {
-			auto& native = *immersed.at(domain_id);
-			if (mpi_size > 1) native.InitializeDistributed(communicator);
-			if (!native.IsDistributed()) continue;
-			iga::CollectiveLocalStage(communicator,"immersed distribution diagnostics",[&] {
-				const char* profile = std::getenv("IGA_PROFILE");
-				if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0] != '1' || profile[1] != '\0')) return;
-				const auto distribution = native.Distribution();
-				std::cout << "hpc_immersed_distribution {\"domain\":\"" << JsonEscape(domain_id)
-					<< "\",\"rank\":" << rank << ",\"ranks\":" << mpi_size
-					<< ",\"time_integration\":\"" << (native.IsTransient() ? "backward_euler" : "steady") << "\""
-					<< ",\"global_rows\":" << distribution.global_rows
-					<< ",\"owned_rows\":" << distribution.owned_rows
-					<< ",\"owned_stencils\":" << distribution.owned_stencils
-					<< ",\"required_rows\":" << distribution.required_rows << "}\n";
-				iga::FlushCheckedText(std::cout);
-			});
-		}
 		for (const auto& domain_id : plan.domain_order) {
 			if (!three_d.count(domain_id)) continue;
 			auto& native = *three_d.at(domain_id);
@@ -1557,10 +1483,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						domain_id, *native.runtime, configuration.graph.Domain(domain_id).ports,
 						native.configuration, native.case_directory,
 						native.reference_outward_flow_m3_s, controls));
-				} else if (immersed.count(domain_id)) {
-					// Allocate the audit entry before transferring the complete owner.
-					immersed_audit.emplace(domain_id, immersed.at(domain_id).get());
-					runtimes.push_back(std::move(immersed.at(domain_id)));
 				} else {
 					const auto& definition = iga::GraphDomainDefinitionFor(configuration, domain_id);
 					if (definition.kind != iga::DomainKind::ZeroDFlow
@@ -1716,52 +1638,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 						pressure[edge.edge_id] = edge.measured_pressure_pa;
 				});
 			}
-			for (const auto& entry : immersed_audit) if (entry.second->IsTransient()) {
-				if (entry.second->IsMoving()) {
-					const auto& runtime = entry.second->MovingRuntime();
-					const auto conservation = runtime.ConservationDiagnostics();
-					iga::CollectiveLocalStage(communicator,"immersed accepted moving diagnostics",[&] {
-						const auto& clock=runtime.Clock();const auto& diagnostic=runtime.Diagnostics();
-						if (clock.time_s!=time || clock.index!=static_cast<std::uint64_t>(step) || clock.trial_active
-							|| diagnostic.commit_count!=1 || conservation.target_index!=clock.index)
-							throw std::logic_error("immersed moving graph accepted backend clock differs");
-						const char* profile=std::getenv("IGA_PROFILE");
-						if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0]!='1' || profile[1]!='\0')) return;
-						double minimum_damping=1.;
-						for(const auto& solve_step:diagnostic.newton_steps)if(solve_step.damping>0)minimum_damping=std::min(minimum_damping,solve_step.damping);
-						std::cout<<std::setprecision(17)<<"hpc_immersed_moving_step {\"domain\":\""<<JsonEscape(entry.first)
-							<<"\",\"rank\":"<<rank<<",\"ranks\":"<<mpi_size<<",\"time_s\":"<<clock.time_s<<",\"index\":"<<clock.index
-							<<",\"residual_norm\":"<<diagnostic.residual_norm
-							<<",\"newton_iterations\":"<<diagnostic.nonlinear_iterations<<",\"minimum_accepted_damping\":"<<minimum_damping
-							<<",\"assembly_s\":"<<diagnostic.aggregate_assembly_seconds<<",\"solve_s\":"<<diagnostic.aggregate_linear_solve_seconds
-							<<",\"reynolds\":"<<conservation.normalized_reynolds_defect
-							<<",\"moving_mass\":"<<conservation.normalized_moving_mass_defect
-							<<",\"wall_relative_leakage\":"<<conservation.normalized_wall_relative_leakage<<"}\n";
-						iga::FlushCheckedText(std::cout);
-					});
-					continue;
-				}
-				const auto& runtime = entry.second->TransientRuntime();
-				const auto conservation = runtime.ConservationDiagnostics();
-				iga::CollectiveLocalStage(communicator,"immersed accepted transient diagnostics",[&] {
-					const auto& clock = runtime.Clock(); const auto& diagnostic = runtime.Diagnostics();
-					if (clock.time_s != time || clock.index != static_cast<std::uint64_t>(step)
-						|| clock.trial_active || runtime.History().Active() || diagnostic.commit_count != static_cast<std::size_t>(step))
-						throw std::logic_error("immersed graph accepted backend clock differs");
-					const char* profile = std::getenv("IGA_PROFILE");
-					if (!iga::CurrentPhaseProfile().Enabled() && (!profile || profile[0] != '1' || profile[1] != '\0')) return;
-					std::cout << std::setprecision(17) << "hpc_immersed_transient_step {\"domain\":\"" << JsonEscape(entry.first)
-						<< "\",\"rank\":" << rank << ",\"ranks\":" << mpi_size << ",\"time_s\":" << clock.time_s
-						<< ",\"index\":" << clock.index << ",\"commits\":" << diagnostic.commit_count
-						<< ",\"residual_norm\":" << diagnostic.residual_norm
-						<< ",\"assembly_s\":" << diagnostic.aggregate_assembly_seconds
-						<< ",\"solve_s\":" << diagnostic.aggregate_linear_solve_seconds
-						<< ",\"surface_flow\":" << conservation.total_surface_outward_flow_m3_s
-						<< ",\"volume_divergence\":" << conservation.volume_divergence_integral_m3_s
-						<< ",\"wall_flow\":" << conservation.wall_outward_flow_m3_s << "}\n";
-					iga::FlushCheckedText(std::cout);
-				});
-			}
 			// Advance only after the executor's transactional commit and all
 			// accepted-result bookkeeping have completed.  A failed trial or
 			// precommit callback therefore leaves this accepted clock unchanged.
@@ -1785,7 +1661,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 					write(domain.first, "flow", domain.second->runtime->SolverConfiguration());
 					if (domain.second->transport_runtime) write(domain.first, "transport", domain.second->transport_runtime->SolverConfiguration());
 				}
-				for (const auto& domain : immersed_audit) write(domain.first, "flow", domain.second->SolverConfiguration());
 				iga::FlushCheckedText(std::cout);
 			});
 
@@ -1819,7 +1694,6 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 			if (native.transport_runtime) native.transport_runtime->Close();
 			native.runtime->Close();
 		}
-		for (const auto& entry : immersed_audit) entry.second->CloseDistributed();
 		iga::CollectiveLocalStage(communicator, "graph output", [&] {
 			if (rank != 0) return;
 			if (species_executor)
@@ -1831,7 +1705,7 @@ int iga::RunMultidomainFlow(int argc, char** argv, MPI_Comm communicator)
 					initialization.emplace(item.first, OneDInitialization{
 						item.second.inlet_policy, item.second.initial_native_inlet_flow_m3_s});
 				WriteOutputs(options.output_directory, configuration, graph_root, assets,
-					bifurcation_holder, initialization, immersed_audit, accepted);
+					bifurcation_holder, initialization, accepted);
 			}
 		});
 		iga::CollectiveLocalStage(communicator, "graph completion logging", [&] {

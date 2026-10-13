@@ -11,21 +11,18 @@
 
 namespace iga {
 
+// Values are hashed into graph checkpoint identities and must not change.
+// 2 and 3 belonged to the retired immersed-flow and surface-membrane kinds.
 enum class DomainKind {
-	OneDFlow,
-	ThreeDBodyFittedFlow,
-	ThreeDImmersedFlow,
-	SurfaceMembraneStructure,
-	// Appended to preserve the serialized identities of the pre-existing kinds.
-	ZeroDFlow
+	OneDFlow = 0,
+	ThreeDBodyFittedFlow = 1,
+	ZeroDFlow = 4
 };
 
 inline const char* DomainKindName(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return "one_d_flow";
 	if (kind == DomainKind::ThreeDBodyFittedFlow) return "three_d_body_fitted_flow";
-	if (kind == DomainKind::ThreeDImmersedFlow) return "three_d_immersed_flow";
-	if (kind == DomainKind::SurfaceMembraneStructure) return "surface_membrane_structure";
 	if (kind == DomainKind::ZeroDFlow) return "zero_d_flow";
 	return "unknown";
 }
@@ -33,31 +30,25 @@ inline const char* DomainKindName(DomainKind kind)
 inline bool IsKnownDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ThreeDImmersedFlow
-		|| kind == DomainKind::SurfaceMembraneStructure || kind == DomainKind::ZeroDFlow;
+		|| kind == DomainKind::ZeroDFlow;
 }
 
 inline bool IsFlowDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ThreeDImmersedFlow || kind == DomainKind::ZeroDFlow;
+		|| kind == DomainKind::ZeroDFlow;
 }
 
-// The membrane is a two-dimensional material topology.  Its embedding is
-// three-dimensional, but it must never be treated as a volumetric flow domain.
 inline int DomainTopologyDimensionOf(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return 1;
 	if (kind == DomainKind::ZeroDFlow) return 0;
-	if (kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ThreeDImmersedFlow) return 3;
-	if (kind == DomainKind::SurfaceMembraneStructure) return 2;
+	if (kind == DomainKind::ThreeDBodyFittedFlow) return 3;
 	throw std::runtime_error("domain kind has no topology dimension");
 }
 
 inline int DomainEmbeddingDimensionOf(DomainKind kind)
 {
-	if (kind == DomainKind::SurfaceMembraneStructure) return 3;
 	return DomainTopologyDimensionOf(kind);
 }
 

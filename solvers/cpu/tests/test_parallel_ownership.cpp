@@ -2,17 +2,9 @@
 #include "OwnedRowAssembler.hpp"
 #include "SurfaceOwnershipValidation.hpp"
 #include "DynamicWeightedAitkenRelaxation.hpp"
-#include "DistributedWeightedAitken.hpp"
-#include "DistributedFsiConvergence.hpp"
 #include "CollectiveFailure.hpp"
-#include "OwnedScalarContributions.hpp"
-#include "DistributedSurfaceForces.hpp"
-#include "DistributedSurfaceProjection.hpp"
-#include "DistributedSurfaceTractionAssembly.hpp"
-#include "DistributedSurfaceAreas.hpp"
 #include "OwnedPointValues.hpp"
 #include "SurfaceGhostKinematics.hpp"
-#include "DistributedSurfaceTriangleKinematics.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -232,172 +224,6 @@ void CheckOwnedPointValues(int rank)
 	if(rank==0)std::cout << "owned_point_values=passed failures=6 retries=6\n";
 }
 
-void CheckScalarContributions(int rank)
-{
-	const auto id = std::numeric_limits<std::uint64_t>::max()-1;
-	const std::vector<std::uint64_t> owned = rank == 1 ? std::vector<std::uint64_t>{id, 0} : std::vector<std::uint64_t>{};
-	const std::vector<std::pair<std::uint64_t,double>> values{{id, static_cast<double>(rank+1)}, {id, -.5}};
-	const auto expected = rank == 1 ? std::vector<double>{4.5, 0.} : std::vector<double>{};
-	Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, owned, values) == expected, "wrong owner scalar sum");
-	Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, {}, {}).empty(), "nonempty all-empty scalar sum");
-	for(int mode=0;mode<6;++mode) {
-		auto ids=owned;auto data=values;iga::PointIdentityLimits limits;
-		if(rank==2) {
-			if(mode==0)ids.push_back(id);
-			if(mode==1)data.push_back({17, 1.});
-			if(mode==2)data.push_back({id, std::numeric_limits<double>::infinity()});
-			if(mode==3)limits.max_wire_bytes=8;
-			if(mode==4)limits.max_local_occurrences=1;
-			if(mode==5) {data.push_back({id, std::numeric_limits<double>::max()});data.push_back({id, std::numeric_limits<double>::max()});}
-		}
-		RejectCollectively([&] { (void)iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, ids, data, limits); }, PETSC_COMM_WORLD);
-		Require(iga::SumOwnedScalarContributions(PETSC_COMM_WORLD, owned, values) == expected, "scalar retry failed");
-	}
-	if(rank==0)std::cout << "owned_scalar_contributions=passed failures=6 retries=6\n";
-}
-
-void CheckSurfaceForces(int rank)
-{
-	using Vector=std::array<double,3>;
-	using Corners=std::array<Vector,3>;
-	iga::SurfaceInterfaceRef reference{"fluid","flow","wall"};
-	iga::DistributedSurfaceLayout layout;
-	const auto last=std::numeric_limits<std::uint64_t>::max();
-	layout.reference_mesh_identity_sha256=std::string(64,'a');
-	layout.global_node_count=4;layout.partition_count=3;layout.partition_rank=rank;
-	layout.reference_positions={{0,{{0,0,0}}},{1,{{1,0,0}}},{2,{{0,1,0}}},{last,{{1,1,0}}}};
-	layout.reference_triangles={{{0,1,2}},{{1,last,2}}};
-	layout.owned_global_node_ids=rank==1?std::vector<std::uint64_t>{0,1,2,last}:std::vector<std::uint64_t>{};
-	layout.owned_reference_lumped_areas_m2.assign(layout.owned_global_node_ids.size(),1.);
-	layout.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(layout);
-	const std::vector<std::uint64_t> triangles=rank==0?std::vector<std::uint64_t>{0}:(rank==2?std::vector<std::uint64_t>{1}:std::vector<std::uint64_t>{});
-	const Corners first{{{{1,2,3}},{{4,5,6}},{{7,8,9}}}},second{{{{-1,2,-3}},{{4,-5,6}},{{-7,8,-9}}}};
-	const std::vector<Corners> forces=rank==0?std::vector<Corners>{first}:(rank==2?std::vector<Corners>{second}:std::vector<Corners>{});
-	const auto expected=rank==1?std::vector<Vector>{{{1,2,3}},{{3,7,3}},{{0,16,0}},{{4,-5,6}}}:std::vector<Vector>{};
-	std::vector<iga::SurfaceCellForces> cells;
-	for(std::size_t row=0;row<triangles.size();++row) {
-		iga::SurfaceCellForces cell;cell.cell_id=triangles[row];
-		for(int corner=0;corner<3;++corner)
-			cell.nodal_contributions_n.emplace_back(layout.reference_triangles[triangles[row]][corner],forces[row][corner]);
-		cells.push_back(cell);
-	}
-	// A cell without retained surface quadrature still participates in coverage.
-	if(rank==1)cells.push_back({2,{}});
-	const auto check=[&] {
-		Require(iga::AssembleOwnedSurfaceCellForces(PETSC_COMM_WORLD,reference,layout,3,cells)==expected,"wrong owned-cell forces");
-		const auto result=iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,triangles,forces);
-		Require(result==expected,"shared-node corner forces not conserved");
-		// Analytic resultant, moment about origin and power for v=(x,y,1).
-		double local[7]{},global[7]{};
-		for(std::size_t row=0;row<result.size();++row) {
-			const auto& x=layout.reference_positions[row].position_m;const auto& f=result[row];
-			for(int axis=0;axis<3;++axis)local[axis]+=f[axis];
-			local[3]+=x[1]*f[2];local[4]-=x[0]*f[2];local[5]+=x[0]*f[1]-x[1]*f[0];
-			local[6]+=x[0]*f[0]+x[1]*f[1]+f[2];
-		}
-		MPI_Allreduce(local,global,7,MPI_DOUBLE,MPI_SUM,PETSC_COMM_WORLD);
-		const double exact[7]{8,20,12,6,-9,-2,30};
-		for(int i=0;i<7;++i)Require(global[i]==exact[i],"surface force resultant/moment/power mismatch");
-	};
-	check();
-	for(int mode=0;mode<6;++mode) {
-		auto ids=triangles;auto data=forces;iga::PointIdentityLimits limits;
-		if(rank==2) {
-			if(mode==0){ids.push_back(0);data.push_back(first);}
-			if(mode==1){ids.clear();data.clear();}
-			if(mode==2)data.clear();
-			if(mode==3)data[0][0][2]=std::numeric_limits<double>::infinity();
-			if(mode==4)limits.max_local_occurrences=2;
-			if(mode==5){data[0][0][2]=std::numeric_limits<double>::max();data[0][2][2]=std::numeric_limits<double>::max();}
-		}
-		if(mode==5&&rank==0)data[0][1][2]=std::numeric_limits<double>::max();
-		RejectCollectively([&] {(void)iga::AssembleOwnedSurfaceForces(PETSC_COMM_WORLD,reference,layout,ids,data,limits);},PETSC_COMM_WORLD);
-		check();
-	}
-	for(int mode=0;mode<5;++mode) {
-		auto incoming=cells;
-		if(rank==1) {
-			if(mode==0)incoming.push_back({0,{}});
-			if(mode==1)incoming.clear();
-			if(mode==2)incoming[0].cell_id=3;
-			if(mode==3)incoming[0].nodal_contributions_n.push_back({17,{{1,2,3}}});
-			if(mode==4)incoming[0].nodal_contributions_n.push_back({0,{{0,0,std::numeric_limits<double>::infinity()}}});
-		}
-		RejectCollectively([&] {(void)iga::AssembleOwnedSurfaceCellForces(PETSC_COMM_WORLD,reference,layout,3,incoming);},PETSC_COMM_WORLD);
-		check();
-	}
-	if(rank==0)std::cout << "surface_cell_forces=passed failures=5 retries=5\n";
-	std::vector<iga::SurfaceMassEntry> mass;
-	for(auto triangle:triangles)for(int row=0;row<3;++row)for(int col=0;col<3;++col)
-		mass.push_back({layout.reference_triangles[triangle][row],layout.reference_triangles[triangle][col],row==col?1./12.:1./24.});
-	std::vector<Vector> rhs;
-	if(rank==1)rhs={{{5./24.,9./24.,14./24.}},{{13./24.,19./24.,32./24.}},{{11./24.,21./24.,32./24.}},{{7./24.,11./24.,18./24.}}};
-	const auto check_projection=[&](int owner) {
-		const auto projected=iga::ProjectDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,rhs,mass,owner);
-		Require(projected.size()==rhs.size(),"wrong projection local size");
-		for(std::size_t row=0;row<projected.size();++row) {
-			const auto& x=layout.reference_positions[row].position_m;
-			const Vector exact{{1+x[0],2+x[1],3+x[0]+x[1]}};
-			for(int axis=0;axis<3;++axis)Require(std::abs(projected[row][axis]-exact[axis])<1.e-13,"consistent projection manufactured field mismatch");
-		}
-	};
-	check_projection(0);check_projection(2);
-	for(int mode=0;mode<5;++mode) {
-		auto entries=mass;int owner=0;std::size_t cap=4096;
-		if(mode==0)entries.clear();
-		if(rank==2) {
-			if(mode==1)entries[0].row_node=17;
-			if(mode==2)entries[1].value_m2+=1.;
-			if(mode==3)cap=3;
-			if(mode==4)owner=2;
-		}
-		RejectCollectively([&] {(void)iga::ProjectDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,rhs,entries,owner,cap);},PETSC_COMM_WORLD);
-		check_projection(0);
-	}
-	std::vector<iga::SurfaceCellTractionPoints> point_cells;
-	for(auto triangle:triangles) {
-		iga::SurfaceCellTractionPoints cell;cell.cell_id=triangle;
-		for(int q=0;q<3;++q) {
-			iga::SurfaceP1TractionPoint point;
-			point.node_ids=layout.reference_triangles[triangle];point.barycentric={{1./6.,1./6.,1./6.}};
-			point.barycentric[q]=2./3.;point.weight_m2=1./6.;
-			for(int corner=0;corner<3;++corner) {
-				const auto id=point.node_ids[corner];const auto& x=layout.reference_positions[id==last?3:id].position_m;
-				const Vector value{{1+x[0],2+x[1],3+x[0]+x[1]}};
-				for(int axis=0;axis<3;++axis)point.traction_pa[axis]+=point.barycentric[corner]*value[axis];
-			}
-			cell.points.push_back(point);
-		}
-		point_cells.push_back(cell);
-	}
-	if(rank==1)point_cells.push_back({2,{}});
-	const auto check_assembly=[&] {
-		const auto values=iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,3,point_cells,0);
-		Require(values.owned_force_n.size()==rhs.size()&&values.owned_traction_pa.size()==rhs.size(),"wrong assembled surface field size");
-		for(std::size_t row=0;row<rhs.size();++row) {
-			const auto& x=layout.reference_positions[row].position_m;const Vector exact{{1+x[0],2+x[1],3+x[0]+x[1]}};
-			for(int axis=0;axis<3;++axis) {
-				Require(std::abs(values.owned_force_n[row][axis]-rhs[row][axis])<1.e-14,"integrated surface RHS mismatch");
-				Require(std::abs(values.owned_traction_pa[row][axis]-exact[axis])<1.e-13,"integrated surface projection mismatch");
-			}
-		}
-	};
-	check_assembly();
-	for(int mode=0;mode<3;++mode) {
-		auto incoming=point_cells;iga::PointIdentityLimits limits;
-		if(rank==2) {
-			if(mode==0)incoming[0].points[0].weight_m2=std::numeric_limits<double>::infinity();
-			if(mode==1)incoming[0].cell_id=0;
-			if(mode==2)limits.max_local_occurrences=26;
-		}
-		RejectCollectively([&] {(void)iga::AssembleDistributedSurfaceTraction(PETSC_COMM_WORLD,reference,layout,3,incoming,0,4096,limits);},PETSC_COMM_WORLD);
-		check_assembly();
-	}
-	if(rank==0)std::cout << "surface_traction_assembly=passed failures=3 retries=3\n";
-	if(rank==0)std::cout << "surface_consistent_projection=passed failures=5 retries=5\n";
-	if(rank==0)std::cout << "surface_corner_forces=passed failures=6 retries=6\n";
-}
-
 void CheckEmptyAitken(int rank)
 {
 	const std::string identity(64, static_cast<char>('a'+rank));
@@ -425,78 +251,6 @@ void CheckEmptyAitken(int rank)
 		iga::RequireCollectiveSameText(PETSC_COMM_WORLD, "empty Aitken accepted", distributed.ControlStateIdentitySha256());
 	}
 	if (rank == 0) std::cout << "empty_aitken_reduction=passed iterations=2 empty_ranks=2\n";
-}
-
-void CheckDistributedAitken(int rank)
-{
-	for(bool split:{false,true}) {
-		const std::string identity(64,static_cast<char>('a'+rank));
-		const std::vector<double> weights=split?(rank==0?std::vector<double>{}:std::vector<double>{rank==1?1.:3.}):
-			(rank==1?std::vector<double>{1.,3.}:std::vector<double>{});
-		iga::DistributedWeightedAitken distributed(PETSC_COMM_WORLD,identity,weights);
-		iga::DynamicWeightedAitkenRelaxation serial(std::string(64,'f'),{1.,3.},4.);
-		Require(distributed.GlobalWeightTotal()==4.,"wrong collective Aitken total");
-		for(const auto& full:{std::vector<double>{2.,-1.},std::vector<double>{1.,2.}}) {
-			const auto residual=split?(rank==0?std::vector<double>{}:std::vector<double>{full[rank-1]}):
-				(rank==1?full:std::vector<double>{});
-			const auto before=distributed.ControlIdentity();auto bad=residual;if(rank==0)bad.push_back(1.);
-			RejectCollectively([&] {(void)distributed.Propose(std::vector<double>(bad.size(),0.),bad,1.);},PETSC_COMM_WORLD);
-			Require(distributed.ControlIdentity()==before,"failed Aitken proposal mutated control");
-			const auto proposal=distributed.Propose(std::vector<double>(residual.size(),0.),residual,1.);
-			const auto reference=serial.Propose({0.,0.},full,1.,std::string(64,'f'));
-			Require(proposal.relaxation_factor==reference.relaxation_factor,"collective Aitken relaxation differs from serial");
-			const auto pending=distributed.ControlIdentity();auto foreign=proposal;if(rank==0)foreign.relaxation_factor+=.1;
-			RejectCollectively([&] {distributed.AcceptApplied(foreign,residual,foreign.relaxation_factor);},PETSC_COMM_WORLD);
-			Require(distributed.ControlIdentity()==pending,"failed Aitken acceptance consumed pending proposal");
-			distributed.AcceptApplied(proposal,residual,proposal.relaxation_factor);
-			serial.AcceptApplied(reference,full,reference.relaxation_factor,std::string(64,'f'));
-			Require(distributed.ControlIdentity()==serial.ControlStateIdentitySha256(),"collective Aitken control differs from serial");
-		}
-		distributed.Reset();serial.Reset();Require(distributed.ControlIdentity()==serial.ControlStateIdentitySha256(),"collective Aitken reset differs");
-	}
-	if(rank==0)std::cout << "distributed_aitken_transaction=passed partitions=2 iterations=2\n";
-}
-
-void CheckDistributedConvergence(int rank)
-{
-	for (bool split:{false,true}) {
-		auto local=[&](std::vector<double> full) {
-			return split ? (rank==0 ? std::vector<double>{} : std::vector<double>{full[rank-1]})
-				: (rank==1 ? full : std::vector<double>{});
-		};
-		const auto weights=local({1.,3.}), residual=local({2.,-4.});
-		const auto raw=local({7.,-1.}), current=local({5.,3.});
-		auto evaluate=[&](double absolute, double relative) {
-			return iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,weights,residual,raw,current,1.,absolute,relative);
-		};
-		const auto result=evaluate(0.,.5);
-		Require(std::abs(result.area_weighted_rms_residual_m-std::sqrt(13.))<1.e-14,"global FSI RMS mismatch");
-		Require(result.max_residual_m==4. && result.displacement_scale_m==7.,"global FSI extrema mismatch");
-		Require(result.convergence_threshold_m==3.5 && !result.converged,"premature global FSI convergence");
-		Require(evaluate(3.7,0.).converged,"RMS stopping rule changed to maximum");
-		for (int fault=0;fault<5;++fault) {
-			auto bad_weights=weights, bad_residual=residual;
-			if (rank==1 && fault==0) bad_residual[0]=std::numeric_limits<double>::infinity();
-			if (rank==1 && fault==1) bad_weights[0]=0.;
-			if (rank==0 && fault==2) bad_residual.push_back(1.);
-			RejectCollectively([&] {
-				(void)iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,bad_weights,bad_residual,raw,current,
-					1.,rank==0 && fault==3 ? 1. : 0.,fault==4 ? std::numeric_limits<double>::max() : .5);
-			},PETSC_COMM_WORLD);
-		}
-		Require(!evaluate(0.,.5).converged,"failed convergence check corrupted retry");
-		const double large=std::numeric_limits<double>::max()/4.;
-		const auto extreme=iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,local({large,large}),
-			local({large,-large}),local({large,large}),local({0.,0.}),1.,0.,1.);
-		Require(extreme.area_weighted_rms_residual_m==large && extreme.converged,"scaled global RMS overflow");
-		const auto zero=iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,weights,local({0.,0.}),
-			local({0.,0.}),local({0.,0.}),1.,0.,0.);
-		Require(zero.area_weighted_rms_residual_m==0. && zero.max_residual_m==0. && zero.converged,"zero residual rejected");
-	}
-	RejectCollectively([&] {
-		(void)iga::EvaluateDistributedFsiConvergence(PETSC_COMM_WORLD,{},{},{},{},1.,0.,0.);
-	},PETSC_COMM_WORLD);
-	if(rank==0)std::cout << "distributed_fsi_convergence=passed partitions=2 rejection_cases=11\n";
 }
 
 void CheckSurfaceOwnership(int rank)
@@ -566,59 +320,6 @@ void CheckSurfaceOwnership(int rank)
 	}
 	if(rank==0)std::cout << "surface_ghost_kinematics=passed failures=7 retries=7\n";
 
-	// Reference triangle owner need not own any of its material nodes.
-	const std::vector<std::uint64_t> triangles = rank == 2 ? std::vector<std::uint64_t>{0} : std::vector<std::uint64_t>{};
-	const auto check_triangles=[&] {
-		const auto local=iga::BuildDistributedSurfaceTriangleKinematics(PETSC_COMM_WORLD,sparse,publication,reference,expected_stamp,triangles);
-		Require(local.size()==triangles.size(),"wrong local triangle count");
-		if(rank==2) {
-			Require(local[0].reference_triangle_index==0 && local[0].node_ids==std::array<std::uint64_t,3>{{10,20,30}},"triangle identity changed");
-			Require(local[0].positions_m==std::array<std::array<double,3>,3>{{{{10,0,0}},{{21,0,0}},{{30,1,0}}}},"wrong deformed triangle positions");
-			Require(local[0].velocities_m_per_s==std::array<std::array<double,3>,3>{{{{0,10,0}},{{0,20,0}},{{0,30,0}}}},"wrong triangle velocities");
-		}
-	};
-	check_triangles();
-	for(int mode=0;mode<4;++mode) {
-		auto selected=triangles;auto incoming=publication;iga::PointIdentityLimits limits;
-		if(mode==0 && rank==0)selected.push_back(0);
-		if(mode==1)selected.clear();
-		if(mode==2 && rank==2)limits.max_local_occurrences=2;
-		if(mode==3 && rank==0)incoming.stamp.time_s=.5;
-		RejectCollectively([&] {(void)iga::BuildDistributedSurfaceTriangleKinematics(PETSC_COMM_WORLD,sparse,incoming,reference,expected_stamp,selected,limits);},PETSC_COMM_WORLD);
-		check_triangles();
-	}
-	if(rank==0)std::cout << "surface_triangle_kinematics=passed failures=4 retries=4\n";
-	for(const auto& partition : {layout, sparse}) {
-		const auto before=iga::BuildDistributedSurfacePartitionIdentitySha256(partition);
-		const auto areas=iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, partition, triangles);
-		Require(areas.global_area_m2==.5, "wrong reference surface area");
-		Require(areas.owned_lumped_areas_m2==std::vector<double>(partition.owned_global_node_ids.size(),1./6.), "wrong nodal areas");
-		Require(iga::BuildDistributedSurfacePartitionIdentitySha256(partition)==before, "area calculation mutated partition");
-	}
-	for(int mode=0;mode<3;++mode) {
-		auto selected=triangles;iga::PointIdentityLimits limits;
-		if(mode==0&&rank==0)selected.push_back(0);
-		if(mode==1)selected.clear();
-		if(mode==2&&rank==2)limits.max_local_occurrences=2;
-		RejectCollectively([&] { (void)iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, sparse, selected, limits); },PETSC_COMM_WORLD);
-		Require(iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD, reference, sparse, triangles).global_area_m2==.5,"surface area retry failed");
-	}
-	auto patch=layout;
-	patch.global_node_count=4;
-	patch.reference_positions.push_back({40,{{2.,1.,0.}}});
-	patch.reference_triangles.push_back({{20,40,30}});
-	patch.owned_global_node_ids=rank==0?std::vector<std::uint64_t>{10}:
-		(rank==1?std::vector<std::uint64_t>{20,30}:std::vector<std::uint64_t>{40});
-	patch.owned_reference_lumped_areas_m2.assign(patch.owned_global_node_ids.size(),1.);
-	patch.layout_identity_sha256=iga::BuildDistributedSurfaceLayoutIdentitySha256(patch);
-	const auto patch_triangles=rank==0?std::vector<std::uint64_t>{1}:
-		(rank==2?std::vector<std::uint64_t>{0}:std::vector<std::uint64_t>{});
-	const auto patch_areas=iga::ComputeDistributedSurfaceAreas(PETSC_COMM_WORLD,reference,patch,patch_triangles);
-	Require(patch_areas.global_area_m2==1.5,"wrong unequal triangle area total");
-	const auto expected_areas=rank==0?std::vector<double>{1./6.}:
-		(rank==1?std::vector<double>{.5,.5}:std::vector<double>{1./3.});
-	Require(patch_areas.owned_lumped_areas_m2==expected_areas,"shared node triangle areas were not accumulated");
-	if(rank==0)std::cout << "distributed_surface_areas=passed failures=3 retries=3\n";
 	auto duplicate = layout;
 	if (rank == 2) duplicate.owned_global_node_ids = {20};
 	RejectCollectively([&] { iga::ValidateSurfacePublicationOwnership(reference, duplicate,
@@ -661,10 +362,6 @@ int main(int argc, char** argv)
 		CheckIndependentCatalogs(rank);
 		CheckSurfaceOwnership(rank);
 		CheckEmptyAitken(rank);
-		CheckDistributedAitken(rank);
-		CheckDistributedConvergence(rank);
-		CheckScalarContributions(rank);
-		CheckSurfaceForces(rank);
 		CheckOwnedPointValues(rank);
 		std::vector<std::uint64_t> balanced;
 		for (std::uint64_t id = rank; id < 6; id += ranks) balanced.push_back(id);

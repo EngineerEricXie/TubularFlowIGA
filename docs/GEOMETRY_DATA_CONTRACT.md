@@ -1,13 +1,12 @@
 # Geometry data contract
 
-This contract gives the centerline/body-fitted IGA, surface/immersed, and
-surface/FEM routes the same vocabulary without pretending they use the same
+This contract gives the centerline/body-fitted IGA and surface/FEM routes the
+same vocabulary without pretending they use the same
 mesh type or already expose one common runtime API.
 
 ## Required concepts
 
-- `route` is explicit: `centerline_to_iga_volume`,
-  `surface_to_immersed_background`, or `surface_to_fem_volume`. An organ name
+- `route` is explicit: `centerline_to_iga_volume` or `surface_to_fem_volume`. An organ name
   must never choose it implicitly.
 - Coordinates are Cartesian. A manifest declares `length_unit`; coupling and
   solver-facing geometry uses metres.
@@ -55,13 +54,13 @@ traction publication whose reference identity does not match its bound domain.
 
 ## Route mappings
 
-| Contract concept | Body-fitted IGA | Immersed | FEM volume |
-|---|---|---|---|
-| Reference identity | packed/control geometry plus declared transform | `ClosedTriangulatedSurface::CanonicalSha256()` or moving material-map identity | canonical closed-surface SHA-256 |
-| Volume discretization | Bézier-extracted spline volume | Cartesian cubic B-spline background plus cut classification | labelled P1 tetrahedra in the initial adapter |
-| Stable surface IDs | packed boundary connectivity/labels | canonical surface IDs; material IDs for moving FSI | canonical surface MSH node/element tags |
-| Current configuration | fixed in the existing body-fitted route | fixed or explicitly evaluated material motion | same as reference in the initial fixed-wall route |
-| Region role | configured 3D fluid/transport domain | configured immersed fluid domain | `fluid` physical volume group |
+| Contract concept | Body-fitted IGA | FEM volume |
+|---|---|---|
+| Reference identity | packed/control geometry plus declared transform | canonical closed-surface SHA-256 |
+| Volume discretization | Bézier-extracted spline volume | labelled P1 tetrahedra in the initial adapter |
+| Stable surface IDs | packed boundary connectivity/labels | canonical surface MSH node/element tags |
+| Current configuration | fixed in the existing body-fitted route | same as reference in the initial fixed-wall route |
+| Region role | configured 3D fluid/transport domain | `fluid` physical volume group |
 
 The FEM manifest emitted by `surface_to_fem_volume.py` contains a
 `geometry_contract` object following this definition. For packed body-fitted
@@ -72,10 +71,3 @@ Bezier geometry, but deliberately excludes rank ownership; the local regression
 checks that two differently partitioned databases retain one geometry identity
 while their artifact hashes differ.
 
-For immersed geometry, `ImmersedGeometryContractJson` serializes the immutable
-material/reference identity, canonical surface, evaluated current identity and
-time, runtime cut-geometry identity, Cartesian background, stable material and
-background IDs, region role, and labelled boundary areas. Its focused test is
-available through `make t1-immersed-manifest-test PETSC_DIR=/path/to/petsc`.
-The caller still owns where this JSON is persisted alongside a run; this helper
-does not change checkpoint or solver output formats.

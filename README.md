@@ -26,10 +26,10 @@ Implementation coverage and numerical verification are documented in
 |---|---|
 | 0D flow | R, RC, RLC, and RCR circuits; source reservoirs; selected closed-loop VCA models |
 | 1D flow | Rigid Poiseuille and inertance networks; compliant A/Q formulations; explicit and PETSc implicit solvers |
-| 3D flow | Body-fitted IGA Navier--Stokes on CPU/CUDA; tetrahedral P2/P1 FEM; immersed and ALE formulations |
+| 3D flow | Body-fitted IGA Navier--Stokes on CPU/CUDA; tetrahedral P2/P1 FEM with fixed or ALE meshes |
 | Transport | Configurable multispecies advection, diffusion, reaction, sources, and wall exchange in 1D and 3D |
 | Porous flow | Tetrahedral P1 Darcy pressure with conservative RT0 flux recovery |
-| Structures and FSI | Tetrahedral solids, single-patch Kirchhoff--Love shells, membrane coupling, and matching ALE--solid workflows |
+| Structures and FSI | Tetrahedral hyperelastic solids and matching ALE--solid FSI (single-partition reference runtime) |
 | Coupling | Named 0D/1D/3D pressure-flow and species ports with explicit, fixed-point, or Aitken iteration where supported |
 | Execution | MPI/PETSc CPU solvers, OpenMP assembly paths, single-GPU CUDA, versioned output, and selected checkpoint/restart paths |
 
@@ -127,9 +127,8 @@ SWC or radius-annotated line-OBJ centerline
 ```
 
 The packed database rank count must match the CPU launch rank count. Native
-1D models read the centerline directly. Immersed 3D models use a closed
-triangulated surface and a Cartesian background grid instead of this
-control-mesh pipeline.
+1D models read the centerline directly. Tetrahedral FEM models start from a
+labelled surface or volume mesh instead of this control-mesh pipeline.
 
 ## Run a prepared 3D case
 
@@ -215,7 +214,7 @@ meshgeneration/
   *.m, function/ legacy MATLAB reference implementation
 include/         headers shared by all solvers: configs, coupling graph, I/O, checkpoints
 solvers/
-  cpu/           IGA packing/checks, MPI/PETSc IGA, immersed, and native Tet FEM runtimes
+  cpu/           IGA packing/checks, MPI/PETSc IGA, and native Tet FEM runtimes
   cuda/          FP64 single-GPU IGA and native Tet backends
   one_d/         native 0D/1D flow and transport
   coupling/      multidomain graph runners and coupling tests
@@ -244,7 +243,7 @@ execution.conf   machine and launch profile for scripts/run_cases.sh
 | Boundary labels and conditions | [Boundary conditions](docs/BOUNDARY_CONDITIONS.md) |
 | Native 0D and 1D models | [0D guide](docs/ZERO_D.md) and [1D guide](docs/ONE_D.md) |
 | Multidomain runtime | [Coupling architecture](docs/architecture/COUPLING_ARCHITECTURE.md) |
-| Moving domains and FSI | [Moving-domain architecture](docs/architecture/MOVING_DOMAIN_ARCHITECTURE.md) and [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
+| Fluid--structure interaction | [FSI architecture](docs/architecture/FSI_ARCHITECTURE.md) |
 | PETSc configuration | [Solver options](docs/SOLVER_OPTIONS.md) |
 | Checkpoint/restart | [Coupled restart](docs/COUPLED_RESTART.md) |
 | Validation and performance | [Benchmarks](docs/validation/BENCHMARKS.md) and [HPC benchmarks](docs/hpc/HPC_BENCHMARKS.md) |

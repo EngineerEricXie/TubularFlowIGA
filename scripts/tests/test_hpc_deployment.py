@@ -89,14 +89,12 @@ class DeploymentTests(unittest.TestCase):
 
     def test_slurm_wrappers_parse(self):
         for path in (ROOT / "solvers/cpu/slurm/multinode_graph.sbatch",
-                     ROOT / "solvers/cpu/slurm/cross_node_scaling.sbatch",
-                     ROOT / "solvers/cpu/slurm/cross_node_fsi.sbatch"):
+                     ROOT / "solvers/cpu/slurm/cross_node_scaling.sbatch"):
             result = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_spooled_wrappers_resolve_submission_checkout(self):
         for name, boundary in (("multinode_graph", "source_case="),
-                               ("cross_node_fsi", "output="),
                                ("cross_node_scaling", "source_root=")):
             script = ROOT / "solvers/cpu/slurm" / (name + ".sbatch")
             with tempfile.TemporaryDirectory() as directory:
@@ -112,7 +110,7 @@ class DeploymentTests(unittest.TestCase):
                 self.assertEqual(result.stdout, str(ROOT))
 
     def test_spooled_wrapper_preflight_failure_preserves_scheduler_record(self):
-        for name in ("multinode_graph", "cross_node_fsi", "cross_node_scaling"):
+        for name in ("multinode_graph", "cross_node_scaling"):
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 spool = root / "slurm_script"
@@ -130,7 +128,6 @@ class DeploymentTests(unittest.TestCase):
                                         env=environment, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 record = {"multinode_graph": root / "graph/attempt-0/scheduler.json",
-                          "cross_node_fsi": root / "fsi/scheduler.json",
                           "cross_node_scaling": root / "scaling.scheduler.json"}[name]
                 report = json.loads(record.read_text())
                 self.assertEqual(report["status"], "failed")

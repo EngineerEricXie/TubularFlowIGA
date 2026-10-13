@@ -3,8 +3,8 @@
 The initial external-mesher adapter combines the dependency-free
 `solvers/cpu/surface_fem_preflight` utility with
 `scripts/surface_to_fem_volume.py`. The C++ stage reads and canonicalizes a
-closed triangular VTP or STL surface using the same geometry contract as the
-immersed backend. The Python/Gmsh stage adds a first-order tetrahedral volume
+closed triangular VTP or STL surface using the shared surface geometry
+contract. The Python/Gmsh stage adds a first-order tetrahedral volume
 and publishes a provenance and quality manifest. It does not solve a fluid
 problem and does not repair or smooth the input anatomy.
 
@@ -12,7 +12,7 @@ problem and does not repair or smooth the input anatomy.
 
 ```bash
 python3 scripts/surface_to_fem_volume.py \
-  examples/vascular_flow/immersed_aneurysm_chain/immersed/surface.vtp \
+  examples/validation/aneurysm_surface/surface.vtp \
   /tmp/aneurysm-fem.msh \
   --manifest /tmp/aneurysm-fem.json \
   --target-size-m 0.12

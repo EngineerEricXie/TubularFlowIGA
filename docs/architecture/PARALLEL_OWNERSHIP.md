@@ -14,8 +14,8 @@ remote value must not silently become zero or refer to the first local entity.
 
 Repartitioning may change owner and local index but must preserve physical
 identity. Active-set changes additionally require an explicit state-transfer
-rule. Existing `.ntiga` IDs and file layout remain unchanged. New immersed and
-surface mappings must state how their stable IDs relate to geometry/history.
+rule. Existing `.ntiga` IDs and file layout remain unchanged. New tetrahedral
+and surface mappings must state how their stable IDs relate to geometry/history.
 
 ## Current body-fitted implementation
 
@@ -112,16 +112,9 @@ MPI entity ownership.
 - Small replicated 0D/1D domains must designate how an aggregate diagnostic is
   contributed once; summing identical replicas would multiply the result by
   communicator size.
-- Immersed and moving CPU runtimes now own PETSc rows across their injected
-  communicator, distribute active cell work, rebuild halo/history state when
-  the active set changes, and retain stable IDs for checkpoint repartitioning.
-  Geometry and bounded surface topology remain replicated where documented;
-  this is distinct from replicating the complete fluid solution.
-- Moving FSI now publishes owned surface slices, fetches ghost values by stable
-  node ID, assigns each triangle/cell contribution once, and uses collective
-  force/moment/work and Aitken acceptance. The current membrane solve is a
-  bounded dense single-owner model whose kinematics are redistributed; it is
-  not a distributed structural matrix solve.
+- Native tetrahedral FSI currently runs on one partition. Distributed surface
+  publication helpers (`SurfaceGhostKinematics.hpp`, `OwnedPointValues.hpp`)
+  fetch ghost values by stable node ID for a future distributed interface.
 - CUDA remains one process and one device; its local arrays are not MPI halo
   buffers. Multi-GPU ownership is outside this checklist's required scope.
 
@@ -132,8 +125,8 @@ construction validates the runtime scatter mapping. Shared elements, an empty
 rank and deliberately missing/duplicate IDs have executable tests; real-case
 halo/physical acceptance passed as recorded in the report.
 `SurfaceOwnershipValidation.hpp` additionally checks partition identity,
-reference-geometry agreement and unique surface-node publication. Add the immersed and surface
-adapters when their distributed catalogs exist. Serial/MPI physical baselines
+reference-geometry agreement and unique surface-node publication. Add the
+surface adapters when their distributed catalogs exist. Serial/MPI physical baselines
 remain independent acceptance gates.
 
 Sources: [OwnedRowAssembler](../../solvers/cpu/include/OwnedRowAssembler.hpp),

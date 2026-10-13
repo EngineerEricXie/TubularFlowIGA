@@ -7,9 +7,8 @@ from pathlib import Path
 import sys
 
 
-REQUIRED_CLASSES = {"tube", "bifurcation", "chamber"}
-REQUIRED_ROUTES = {"surface_to_fem_volume", "centerline_to_iga_volume",
-	"surface_to_immersed_background"}
+REQUIRED_CLASSES = {"tube", "bifurcation"}
+REQUIRED_ROUTES = {"surface_to_fem_volume", "centerline_to_iga_volume"}
 CASE_KEYS = {"id", "geometry_class", "route", "inputs", "implementation",
 	"evidence", "local_command", "gates", "limitations"}
 
@@ -59,7 +58,7 @@ def main():
 		return error(f"geometry classes are {sorted(classes)}, expected {sorted(REQUIRED_CLASSES)}")
 	if routes != REQUIRED_ROUTES:
 		return error(f"routes are {sorted(routes)}, expected {sorted(REQUIRED_ROUTES)}")
-	print(f"T1 geometry inventory: PASS ({len(identifiers)} cases, three routes)")
+	print(f"T1 geometry inventory: PASS ({len(identifiers)} cases, two routes)")
 	return 0
 
 

@@ -1,6 +1,6 @@
 # CoupledFlow technology matrix
 
-Updated 2026-09-21.
+Updated 2026-10-08.
 
 This matrix maps physical problems to the numerical routes available in the
 repository. It is an implementation index, not a development roadmap or a
@@ -16,8 +16,7 @@ general survey of CFD and biomechanics.
 
 `FEM`, `IGA`, and `FVM` describe spatial discretizations. `Body-fitted` means
 that the computational boundary follows the physical geometry. `ALE` uses a
-moving volume mesh, while an immersed method represents the physical boundary
-inside a background mesh. A shell or membrane is a structural surface model;
+moving volume mesh that follows the moving boundary.
 1D models discretize a path or network, and 0D models contain no spatial mesh.
 
 ## Three-dimensional models
@@ -25,12 +24,11 @@ inside a background mesh. A shell or membrane is a structural surface model;
 | Physical domain | Primary route | Required geometry/data | Status |
 |---|---|---|---|
 | Rigid vascular flow | Body-fitted IGA Navier--Stokes or tetrahedral P2/P1 FEM | IGA control mesh and Bezier extraction, or labeled tetrahedral lumen mesh | **Supported** IGA CPU/CUDA workflow; **Functional** native FEM workflow with manufactured and idealized tube/Y evidence |
-| Deforming vascular flow | Tetrahedral ALE coupled to a solid, or moving immersed flow | Fluid volume mesh plus wall/surface model and motion or material data | **Functional** ALE, moving immersed, and matching ALE--solid routes |
-| Thin vessel wall | NURBS Kirchhoff--Love shell or pre-tensioned membrane | Analysis-suitable midsurface, thickness, material, supports | **Functional** single-patch shell and membrane reference runtimes |
+| Deforming vascular flow | Tetrahedral ALE coupled to a tetrahedral solid | Fluid and wall volume meshes with matching interface, motion or material data | **Functional** prescribed-motion ALE and single-partition matching ALE--solid routes |
 | Thick vessel wall or local stress | Nonlinear tetrahedral solid FEM | Wall volume mesh, material, loads, and constraints | **Functional** compressible neo-Hookean and stabilized mixed P1/P1 formulations |
-| Prescribed chamber flow | ALE or immersed flow with supplied wall motion | Chamber volume/surface, motion law, and labeled ports | **Functional** idealized LV comparison cases |
+| Prescribed chamber flow | ALE flow with supplied wall motion | Chamber volume mesh, motion law, and labeled ports | **Functional** idealized LV cases |
 | Myocardium and active tissue | Nonlinear anisotropic solid with activation | Tissue volume, fibers, material, prestress, support, activation | **Planned**; current solids cover isotropic reference problems only |
-| Valves and contact | Shell/solid structure coupled to flow and contact | Leaflet geometry, material, contact, and support data | **Planned** beyond the shell/membrane foundations |
+| Valves and contact | Solid structure coupled to flow and contact | Leaflet geometry, material, contact, and support data | **Planned** |
 | Porous tissue perfusion | P1 Darcy pressure with RT0 conservative flux | Labeled tissue tetrahedra, mobility/permeability, sources, and boundaries | **Functional** single-compartment steady workflow, including matching-face source transfer |
 | Tissue deformation with fluid interaction | Poroelastic or biphasic FEM | Tissue solid/fluid material and boundary data | **Planned** |
 | Species transport | Advection--diffusion--reaction in the corresponding domain | Concentration fields, velocity/flux, diffusion, reactions, sources, interfaces | **Supported** body-fitted IGA multispecies transport; **Functional** native tetrahedral P1 ALE transport and wall/reservoir exchange |
@@ -75,9 +73,7 @@ See the [0D guide](ZERO_D.md),
 |---|---|---|
 | Radius-annotated centerline | 1D network | **Supported** SWC and line-OBJ validation |
 | Radius-annotated centerline | Body-fitted 3D IGA | **Supported** smoothing, hexahedral control mesh, spline/Bezier extraction, METIS, and `.ntiga` packing |
-| Closed triangulated surface | Immersed IGA | **Supported** Cartesian cubic B-spline background with cut volume/surface quadrature |
 | Closed triangulated surface | Body-fitted tetrahedral FEM | **Functional** Gmsh exact-boundary and fTetWild envelope-remesh adapters producing labeled Gmsh 4.1 meshes |
-| Surface or spline midsurface | IGA shell | **Functional** single-patch analysis-suitable input; no automatic triangle-to-NURBS fitting |
 | Organ exterior surface | Complete tissue/vessel model | **Planned**; an exterior alone does not define internal regions, ports, fibers, or materials |
 | Arbitrary surface | Body-fitted volume IGA | **Planned** general patch decomposition and positive-Jacobian parameterization |
 
@@ -91,9 +87,9 @@ not infer missing caps or boundary conditions.
 |---|---|---|
 | 0D/1D/3D pressure and flow | Named outward-positive SI ports; explicit or partitioned strong coupling | **Supported** for validated acyclic graph topologies |
 | 1D/3D species | Flow-direction-aware concentration and conservative mass transfer | **Supported** for native 1D/body-fitted 3D; **Functional** native tetra moving chains |
-| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** immersed membrane and native matching reference workflows |
+| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** single-partition native matching reference workflow; not yet a graph edge |
 | Vessel/tissue | Matching-face or named-port source transfer | **Functional** conservative flow and selected species exchange workflows |
-| Geometry motion | Fixed, ALE, or immersed | **Supported/Functional** by route; remeshing and general history transfer are not yet common services |
+| Geometry motion | Fixed or ALE | **Supported/Functional** by route; remeshing and general history transfer are not yet common services |
 | Time integration | Backward Euler plus formulation-specific 1D explicit/implicit schemes | **Supported**; no framework-wide multirate integrator |
 | CPU | C++, MPI/PETSc, and selected OpenMP assembly | **Supported** |
 | GPU | Single-GPU CUDA for the body-fitted IGA subset and native FEM workflows exposed by the shared entry | **Functional** by solver/case; no general multi-GPU graph runtime |
@@ -105,11 +101,10 @@ not infer missing caps or boundary conditions.
 | Goal | Recommended starting point |
 |---|---|
 | Rigid tubular flow with a smooth spline geometry | Body-fitted 3D IGA |
-| Surface-defined fixed flow | Tetrahedral FEM or immersed IGA |
+| Surface-defined fixed flow | Tetrahedral FEM |
 | Pulse propagation over a large vascular network | Compliant 1D A/Q |
 | Terminal impedance or storage | 0D R/RC/RLC/RCR |
-| Prescribed moving chamber | ALE and immersed comparison workflows |
-| Thin spline structure | Single-patch IGA shell foundation |
+| Prescribed moving chamber | Tetrahedral ALE workflows |
 | Conservative tissue source/sink flow | Tetrahedral Darcy with RT0 recovery |
 | Mixed-dimensional pressure/species coupling | Native graph runtime with named ports |
 
@@ -121,7 +116,6 @@ not infer missing caps or boundary conditions.
 - [CUDA solver](../solvers/cuda/README.md)
 - [0D guide](ZERO_D.md)
 - [1D guide](ONE_D.md)
-- [Moving-domain architecture](architecture/MOVING_DOMAIN_ARCHITECTURE.md)
 - [FSI architecture](architecture/FSI_ARCHITECTURE.md)
 - [Checkpoint/restart](COUPLED_RESTART.md)
 

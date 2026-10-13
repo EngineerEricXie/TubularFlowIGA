@@ -165,9 +165,6 @@ directories:
 - `solvers/cpu/slurm/cross_node_scaling.sbatch` runs repeated fixed-problem
   strong scaling and constant-elements-per-rank weak scaling in an exclusive
   allocation.
-- `solvers/cpu/slurm/cross_node_fsi.sbatch` compares one-rank and two-node
-  four-rank strong FSI, then restores the four-rank pair checkpoint in a new
-  two-rank process.
 
 The environment variables, preparation contract, submission commands, result
 schema, and interpretation rules are documented in

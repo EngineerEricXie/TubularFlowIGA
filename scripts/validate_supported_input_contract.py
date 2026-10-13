@@ -10,7 +10,6 @@ import sys
 ROUTES = {
 	"centerline_to_iga_volume": {".swc", ".obj"},
 	"surface_to_fem_volume": {".vtp", ".stl"},
-	"surface_to_immersed_background": {".vtp"},
 	"network_1d": {".swc", ".obj"},
 }
 RUNTIMES = {"native_tetrahedral_fem", "packed_body_fitted_iga"}
@@ -91,9 +90,6 @@ def main():
 			'surface input extension must be .vtp or .stl'):
 		if token not in surface_preflight:
 			return fail(f"surface preflight no longer proves {token!r}")
-	immersed = (root/"include/ImmersedFlowCase.hpp").read_text(encoding="utf-8")
-	if "SurfaceReaders::ReadVtpPath" not in immersed or "ValidateLabelPartition" not in immersed:
-		return fail("production immersed VTP/label-partition binding changed")
 	native = (root/"solvers/cpu/include/NativeTetFem.hpp").read_text(encoding="utf-8")
 	for token in ("ASCII Gmsh 4.1", '"boundary_label_"', 'name->second != "fluid"',
 			"boundary != labelled"):
@@ -102,7 +98,7 @@ def main():
 	mesh = (root/"preprocessing/mesh/src/MeshGenerator.cpp").read_text(encoding="utf-8")
 	if "mesh.labels.at(offset+index) = 0" not in mesh or "int tip_label = 1" not in mesh:
 		return fail("centerline-to-IGA label convention changed")
-	print("Supported input contract: PASS (4 routes, 2 runtime interfaces)")
+	print("Supported input contract: PASS (3 routes, 2 runtime interfaces)")
 	return 0
 
 
