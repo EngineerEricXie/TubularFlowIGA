@@ -1,33 +1,9 @@
-CXX ?= g++
-CPPFLAGS ?= -Iinclude -I../../include
-CXXFLAGS ?= -O3 -std=c++17 -Wall -Wextra -Wpedantic
-LDLIBS ?= -lstdc++fs
-
-TARGET := tubular_mesh
-CORE := src/SwcGraph.cpp src/BSpline.cpp src/GeometryDiagnostics.cpp src/HexMesh.cpp src/CrossSectionTemplate.cpp src/MeshGenerator.cpp
-OBJECTS := $(CORE:.cpp=.o)
-TEST_TARGET := mesh_core_test
-
-.PHONY: all test clean
-
-all: $(TARGET)
-
-$(TARGET): $(OBJECTS) src/main.o
-	$(CXX) $^ -o $@ $(LDLIBS)
-
-$(TEST_TARGET): $(OBJECTS) tests/test_core.o
-	$(CXX) $^ -o $@ $(LDLIBS)
-
-src/SwcGraph.o: include/SwcGraph.hpp ../../include/RadiusAnnotatedObj.hpp ../../include/SkeletonOutput.hpp
-$(OBJECTS) src/main.o tests/test_core.o: include/SwcGraph.hpp include/CrossSectionTemplate.hpp
-src/CrossSectionTemplate.o: ../../include/CheckedText.hpp
-src/main.o tests/test_core.o: ../../include/MeshConfig.hpp ../../include/CheckedText.hpp
-
-test: $(TEST_TARGET)
-	./$(TEST_TARGET) ../../meshgeneration/template
-
-%.o: %.cpp
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
-
-clean:
-	$(RM) $(TARGET) $(TEST_TARGET) $(OBJECTS) src/main.o tests/test_core.o
+# Targets and tests for this directory are defined in CMakeLists.txt. This file
+# keeps every historical `make -C preprocessing/mesh <target>` command working: executables
+# are built with CMake and test targets run through CTest (see docs/BUILD.md).
+.DEFAULT_GOAL := all
+.PHONY: FORCE
+Makefile: ;
+FORCE: ;
+%: FORCE
+	+@python3 ../../cmake/forward.py preprocessing/mesh $@

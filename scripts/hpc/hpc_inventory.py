@@ -104,9 +104,9 @@ def collect(root, catalog_path, ranks, threads, petsc_prefix=None, nvcc=None, co
     tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode().split("\0")
     untracked = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard", "-z"], cwd=root).decode().split("\0")
-    suffixes = {".cpp", ".hpp", ".h", ".cu", ".cuh", ".py", ".sh", ".json", ".md"}
+    suffixes = {".cpp", ".hpp", ".h", ".cu", ".cuh", ".py", ".sh", ".json", ".md", ".cmake"}
     added_sources = [name for name in untracked if name and
-                     (Path(name).suffix in suffixes or Path(name).name in ("Makefile", "makefile"))
+                     (Path(name).suffix in suffixes or Path(name).name in ("Makefile", "CMakeLists.txt"))
                      and not name.startswith("artifacts/")]
     source = file_records(root, [name for name in tracked if name] + added_sources)
     fixtures = []

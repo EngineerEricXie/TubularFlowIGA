@@ -25,8 +25,9 @@ introduced. Array names and physical units match the PVTU path.
 The implementation follows the VTKHDF 2.1
 [temporal unstructured-grid specification](https://docs.vtk.org/en/latest/vtk_file_formats/vtkhdf_file_format/vtkhdf_specifications.html#temporal-data).
 Open the `.vtkhdf` directly in a compatible ParaView and use the time controls.
-This format needs an HDF5 development library at build time, discovered through
-the existing Makefile settings `HDF5_ALL_CFLAGS` and `HDF5_LIBS`.
+This format needs an HDF5 development library at build time. CMake finds it with
+`find_package(HDF5)`; `HDF5_CFLAGS` and `HDF5_LIBS` override that (see
+[BUILD.md](BUILD.md)).
 
 ## MPI and memory
 

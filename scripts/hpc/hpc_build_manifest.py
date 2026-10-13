@@ -58,9 +58,9 @@ def cuda_architectures():
     configured = os.environ.get("CUDA_ARCHS", "").split()
     if configured:
         return {"source": "CUDA_ARCHS", "values": configured}
-    makefile = ROOT / "solvers/cuda/Makefile"
-    match = re.search(r"^CUDA_ARCHS\s*\?=\s*(.*)$", makefile.read_text(), re.MULTILINE)
-    return {"source": "solvers/cuda/Makefile default",
+    dependencies = ROOT / "cmake/TubularFlowDependencies.cmake"
+    match = re.search(r"set\(CMAKE_CUDA_ARCHITECTURES ([0-9 ]+) CACHE", dependencies.read_text())
+    return {"source": "cmake/TubularFlowDependencies.cmake default",
             "values": match.group(1).split() if match else []}
 
 

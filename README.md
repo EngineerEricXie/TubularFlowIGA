@@ -102,12 +102,17 @@ Simulation executables require a PETSc installation built against the same
 MPI implementation used at runtime. CUDA compilation requires the CUDA
 Toolkit; GPU hardware is required only when running the CUDA backend.
 
+These `make` targets forward to a CMake (3.20 or newer) build in `build/` and
+to CTest; executables are still written beside their sources. CMake and CTest
+can also be used directly, for example `ctest --test-dir build -L unit`. See
+[Building and testing](docs/BUILD.md).
+
 On Ubuntu or WSL Ubuntu, install the preprocessing dependencies with:
 
 ```bash
 sudo apt update
 sudo apt install \
-  build-essential git libeigen3-dev metis \
+  build-essential cmake git libeigen3-dev metis \
   openmpi-bin libopenmpi-dev libblas-dev liblapack-dev
 ```
 

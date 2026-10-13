@@ -52,7 +52,7 @@ inline CoupledCheckpointCompatibility BuildNativeGraphCheckpointIdentity(MPI_Com
 		if (const char* override_identity = std::getenv("IGA_NATIVE_CHECKPOINT_TEST_SOURCE_SHA256")) source_identity = override_identity;
 #endif
 		checkpoint_metadata::Require(source_identity.size() == 64 && source_identity.find_first_not_of("0123456789abcdef") == std::string::npos,
-			"checkpoint requires a build-time IGA_NATIVE_CHECKPOINT_SOURCE_SHA256; rebuild using the native Makefile");
+			"checkpoint requires a build-time IGA_NATIVE_CHECKPOINT_SOURCE_SHA256; rebuild with the CMake build (make -C solvers/coupling)");
 		execution.Text(source_identity);
 #ifdef _OPENMP
 		execution.Unsigned(_OPENMP);

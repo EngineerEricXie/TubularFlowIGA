@@ -175,7 +175,7 @@ def run(options):
         ROOT / "scripts" / "hpc" / name for name in ("hpc_cpu_matrix.py", "hpc_rank_run.py",
                                              "hpc_profile_summary.py", "hpc_compare_fields.py", "hpc_inventory.py")]
     provenance_files += list((ROOT / "include").glob("*.hpp")) + list((ROOT / "solvers/cpu/include").glob("*.hpp"))
-    provenance_files += [ROOT / "solvers/cpu/Makefile", ROOT / "solvers/cpu/src/iga_navier_stokes.cpp"]
+    provenance_files += [ROOT / "solvers/cpu/CMakeLists.txt", ROOT / "solvers/cpu/src/iga_navier_stokes.cpp"]
     before = snapshot(case, provenance_files)
     policy = json.loads((ROOT / "benchmarks/hpc_baselines.json").read_text())["comparison_policy"]
     environment = os.environ.copy()

@@ -51,7 +51,7 @@ class DeploymentTests(unittest.TestCase):
             header.write_text("#define PETSC_HAVE_MUMPS 1\n#define IGNORED 1\n")
             self.assertEqual(build.macros(header)["values"], {"PETSC_HAVE_MUMPS": "1"})
         architectures = build.cuda_architectures()
-        self.assertIn(architectures["source"], ("CUDA_ARCHS", "solvers/cuda/Makefile default"))
+        self.assertIn(architectures["source"], ("CUDA_ARCHS", "cmake/TubularFlowDependencies.cmake default"))
         self.assertTrue(architectures["values"])
 
     def test_tier_timeout_is_failed_and_preserved(self):

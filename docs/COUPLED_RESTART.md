@@ -11,7 +11,7 @@ described here.
 ## Save and resume
 
 Use the same inputs, build, thread configuration, PETSc options, rank count,
-and `.ntiga` partitions for both jobs. The Makefile embeds a SHA-256 identity
+and `.ntiga` partitions for both jobs. The build embeds a SHA-256 identity
 of the relevant source, including local modifications. Custom builds must set
 `IGA_NATIVE_CHECKPOINT_SOURCE_SHA256`; generate it with:
 
