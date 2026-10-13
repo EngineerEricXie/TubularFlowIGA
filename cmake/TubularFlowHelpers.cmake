@@ -89,8 +89,10 @@ function(tfi_executable name)
 	endif()
 	if(arg_CUDA)
 		# nvcc's library directory counts as implicit, so CMake adds no RPATH
-		# for cuBLAS/cuSOLVER; a Conda toolkit would then need LD_LIBRARY_PATH.
+		# for cuBLAS; a Conda toolkit would then need LD_LIBRARY_PATH. A DT_RPATH
+		# (not RUNPATH) also serves indirect dependencies such as cuDSS -> cuBLAS.
 		set_target_properties(${name} PROPERTIES BUILD_RPATH "${CUDAToolkit_LIBRARY_DIR}")
+		target_link_options(${name} PRIVATE "LINKER:--disable-new-dtags")
 	endif()
 	_tfi_directory_key(key)
 	set_property(GLOBAL APPEND PROPERTY TFI_${key}_TARGETS ${name})

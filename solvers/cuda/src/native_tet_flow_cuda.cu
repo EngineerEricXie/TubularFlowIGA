@@ -1,4 +1,5 @@
 #include "CudaRuntime.hpp"
+#include "CudssSolver.hpp"
 #include "NativeTetFlowKernels.cuh"
 #include "NativeTetAleTransient.hpp"
 #include "NativeTetBoundaryFlow.hpp"
@@ -7,8 +8,6 @@
 #include "VtkOutput.hpp"
 #include "CaseConfig.hpp"
 #include "ZeroDFlowDomain.hpp"
-
-#include <cusolverDn.h>
 
 #include <algorithm>
 #include <array>
@@ -380,44 +379,14 @@ void VerifyElement(const std::filesystem::path& mesh_path)
 		throw std::runtime_error("FEM CUDA element differs from CPU P2/P1 element");
 }
 
-void CheckSolver(cusolverStatus_t status,const char* operation)
+// The Newton Jacobian keeps the element-connectivity pattern of the 34
+// Taylor-Hood dofs of every cell, so cuDSS analyses it once per run.
+iga::cuda::BlockPattern FlowPattern(const std::vector<int>& rows,int dofs)
 {
-	if(status!=CUSOLVER_STATUS_SUCCESS)
-		throw std::runtime_error(std::string(operation)+" failed with status "
-			+std::to_string(static_cast<int>(status)));
+	std::vector<int> offsets(rows.size()/34+1);
+	for(std::size_t cell=0;cell+1<offsets.size();++cell)offsets[cell+1]=static_cast<int>(34*(cell+1));
+	return iga::cuda::BlockPattern(static_cast<std::size_t>(dofs),offsets,rows);
 }
-
-class DenseSolver
-{
-public:
-	DenseSolver(int dofs,double* matrix)
-	{
-		CheckSolver(cusolverDnCreate(&handle_),"cusolverDnCreate");
-		int workspace=0;
-		CheckSolver(cusolverDnDgetrf_bufferSize(handle_,dofs,dofs,matrix,dofs,
-			&workspace),"cusolverDnDgetrf_bufferSize");
-		work_.Allocate(workspace);
-		pivots_.Allocate(dofs);
-		info_.Allocate(1);
-	}
-	~DenseSolver(){if(handle_)cusolverDnDestroy(handle_);}
-	void Solve(int dofs,double* matrix,double* right_hand_side)
-	{
-		CheckSolver(cusolverDnDgetrf(handle_,dofs,dofs,matrix,dofs,work_.data(),
-			pivots_.data(),info_.data()),"cusolverDnDgetrf");
-		int info=0;info_.CopyToHost(&info,1);
-		if(info!=0)throw std::runtime_error("FEM CUDA Jacobian factorization failed");
-		CheckSolver(cusolverDnDgetrs(handle_,CUBLAS_OP_N,dofs,1,matrix,dofs,
-			pivots_.data(),right_hand_side,dofs,info_.data()),
-			"cusolverDnDgetrs");
-		info_.CopyToHost(&info,1);
-		if(info!=0)throw std::runtime_error("FEM CUDA Newton solve failed");
-	}
-private:
-	cusolverDnHandle_t handle_=nullptr;
-	iga::cuda::DeviceBuffer<double> work_;
-	iga::cuda::DeviceBuffer<int> pivots_,info_;
-};
 
 void RunCase(const std::filesystem::path& case_path,
 	const std::filesystem::path& output)
@@ -462,8 +431,9 @@ void RunCase(const std::filesystem::path& case_path,
 	iga::cuda::DeviceBuffer<double> device_acceleration(acceleration.size());
 	iga::cuda::DeviceBuffer<double> device_element_residual(cells*34);
 	iga::cuda::DeviceBuffer<double> device_element_jacobian(cells*34*34);
-	iga::cuda::DeviceBuffer<double> device_residual(dofs),device_jacobian(
-		static_cast<std::size_t>(dofs)*dofs),device_rhs(dofs);
+	iga::cuda::DeviceBuffer<double> device_residual(dofs),device_rhs(dofs);
+	const iga::cuda::DevicePattern pattern(FlowPattern(rows,dofs));
+	iga::cuda::BlockMatrix<1> jacobian(pattern);
 	iga::cuda::DeviceBuffer<double> device_prescribed(dofs),device_boundary_load(dofs);
 	device_quadrature.CopyFromHost(quadrature.data(),quadrature.size());
 	device_rows.CopyFromHost(rows.data(),rows.size());
@@ -473,7 +443,7 @@ void RunCase(const std::filesystem::path& case_path,
 	device_acceleration.CopyFromHost(acceleration.data(),acceleration.size());
 	device_prescribed.CopyFromHost(prescribed.data(),prescribed.size());
 	device_boundary_load.CopyFromHost(boundary_load.data(),boundary_load.size());
-	DenseSolver solver(dofs,device_jacobian.data());
+	iga::cuda::CudssSolver solver(jacobian);
 	std::vector<double> increment(dofs);
 	std::vector<std::pair<double,std::filesystem::path>> snapshots;
 	std::filesystem::create_directories(output);
@@ -514,7 +484,7 @@ void RunCase(const std::filesystem::path& case_path,
 		bool converged=false;
 		for(int iteration=1;iteration<=specification.maximum_iterations;++iteration){
 			const auto assembly_start=std::chrono::steady_clock::now();
-			device_residual.Clear();device_jacobian.Clear();
+			device_residual.Clear();jacobian.Clear();
 			const int field_count=static_cast<int>(quadrature.size());
 			const int entry_count=cells*iga::cuda::kTetFlowEntries;
 			iga::cuda::EvaluateNativeTetFlowFields<<<(field_count+127)/128,128>>>(
@@ -526,11 +496,10 @@ void RunCase(const std::filesystem::path& case_path,
 				cells,device_element_residual.data(),device_element_jacobian.data());
 			iga::cuda::ScatterNativeTetFlowElements<<<(entry_count+127)/128,128>>>(
 				device_rows.data(),device_element_residual.data(),
-				device_element_jacobian.data(),cells,dofs,
-				device_residual.data(),device_jacobian.data());
-			iga::cuda::ApplyNativeTetFlowBoundaryRows<<<
-				(static_cast<std::size_t>(dofs)*dofs+127)/128,128>>>(
-				device_constrained.data(),dofs,device_jacobian.data());
+				device_element_jacobian.data(),cells,pattern.view(),
+				device_residual.data(),jacobian.values());
+			iga::cuda::ApplyNativeTetFlowBoundaryRows<<<(dofs+127)/128,128>>>(
+				pattern.view(),device_constrained.data(),jacobian.values());
 			iga::cuda::NativeTetFlowNewtonRightHandSide<<<(dofs+127)/128,128>>>(
 				device_residual.data(),device_boundary_load.data(),
 				device_state.data(),device_constrained.data(),
@@ -540,7 +509,7 @@ void RunCase(const std::filesystem::path& case_path,
 			assembly_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-assembly_start).count();
 			const auto solve_start=std::chrono::steady_clock::now();
-			solver.Solve(dofs,device_jacobian.data(),device_rhs.data());
+			solver.Solve(device_rhs.data());
 			device_rhs.CopyToHost(increment.data(),increment.size());
 			solve_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-solve_start).count();

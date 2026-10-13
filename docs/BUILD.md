@@ -27,7 +27,7 @@ make cuda CUDA_ARCHS=89 NVCC=/path/to/nvcc
 - `all`, `petsc`, and `zero-d` build the same executable sets as before.
 - `clean` removes that directory's executables. Delete `build/` for a full reset.
 
-`PETSC_DIR`/`PETSC_ARCH`, `CUDA_ARCHS`/`NVCC`, `EIGEN_DIR`, and
+`PETSC_DIR`/`PETSC_ARCH`, `CUDA_ARCHS`/`NVCC`, `CUDSS_DIR`, `EIGEN_DIR`, and
 `HDF5_CFLAGS`/`HDF5_LIBS` are passed to the CMake configuration. Once set, the
 build directory remembers them; pass them again only to change them. Builds use
 `-j` from make when given (sharing make's job slots), otherwise up to eight
@@ -84,7 +84,10 @@ cmake --build build --target iga_cuda native_tet_flow_cuda
 The CUDA host compiler is pinned to the C++ compiler, so an `nvcc` from a Conda
 environment can be used without activating that environment's compilers or
 linker. `native_tet_darcy_cuda` and `native_tet_fsi_cuda` include PETSc headers
-(without linking PETSc) and therefore need `PETSC_DIR`. To change the CUDA
+(without linking PETSc) and therefore need `PETSC_DIR`. `native_tet_flow_cuda`
+and `native_tet_fsi_cuda` link cuDSS: pass `-Dcudss_DIR=<prefix>/lib/cmake/cudss`
+(or `CUDSS_DIR=<prefix>` to make). CUDA executables get an RPATH to the toolkit
+libraries, so a Conda toolkit needs no `LD_LIBRARY_PATH`. To change the CUDA
 compiler, remove the build directory or use another `TFI_BUILD_DIR`.
 
 ## Native graph checkpoint identity

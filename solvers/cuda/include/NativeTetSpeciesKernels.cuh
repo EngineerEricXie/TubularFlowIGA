@@ -1,6 +1,8 @@
 #ifndef IGA_CUDA_NATIVE_TET_SPECIES_KERNELS_CUH
 #define IGA_CUDA_NATIVE_TET_SPECIES_KERNELS_CUH
 
+#include "SparseKernels.cuh"
+
 #include <cuda_runtime.h>
 #include <cstddef>
 
@@ -61,7 +63,7 @@ __device__ inline void TaylorHoodFaceBasis(const double* lambda,double* shape)
 }
 
 __global__ void AssembleNativeTetSpeciesCells(
-	const NativeTetSpeciesCell* cells,int cell_count,int dofs,
+	const NativeTetSpeciesCell* cells,int cell_count,DevicePatternView pattern,
 	double dt,double diffusivity,double source,double decay,
 	const double* velocity,const double* velocity_moments,
 	const double* rt0_face_flow,
@@ -93,14 +95,14 @@ __global__ void AssembleNativeTetSpeciesCells(
 			advection-=cell.volume*cell.gradient[row][axis]*moment
 				*velocity[3*cell.velocity_nodes[local]+axis];
 	}
-	atomicAdd(matrix+static_cast<std::size_t>(cell.nodes[column])*dofs
-		+cell.nodes[row],mass/dt+decay*mass+diffusion+advection);
+	atomicAdd(matrix+FindBlock(pattern,cell.nodes[row],cell.nodes[column]),
+		mass/dt+decay*mass+diffusion+advection);
 	atomicAdd(rhs+cell.nodes[row],mass*previous[cell.nodes[column]]/dt);
 	if(column==0)atomicAdd(rhs+cell.nodes[row],source*cell.volume/4.);
 }
 
 __global__ void AssembleNativeTetSpeciesFaces(
-	const NativeTetSpeciesFace* faces,int face_count,int dofs,
+	const NativeTetSpeciesFace* faces,int face_count,DevicePatternView pattern,
 	const double* velocity,const double* rt0_face_flow,
 	double* matrix,double* rhs)
 {
@@ -130,8 +132,8 @@ __global__ void AssembleNativeTetSpeciesFaces(
 			inflow-=face_lambda[row]*fmin(normal_flux,0.)
 				*face.inlet_concentration;
 	}
-	atomicAdd(matrix+static_cast<std::size_t>(face.nodes[column])*dofs
-		+face.nodes[row],outflow+face.transfer*mass);
+	atomicAdd(matrix+FindBlock(pattern,face.nodes[row],face.nodes[column]),
+		outflow+face.transfer*mass);
 	if(column==0){
 		atomicAdd(rhs+face.nodes[row],inflow);
 		atomicAdd(rhs+face.nodes[row],

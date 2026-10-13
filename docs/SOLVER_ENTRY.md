@@ -134,19 +134,21 @@ for every step.
 The GPU computes the 64-point tetra element residual and Jacobian, assembles
 the global system, solves Newton updates, and advances backward-Euler steps.
 It writes `flow_step_N.vtu` and `flow.pvd`; the final ledger reports assembly
-time, solve time, host peak RSS, and requested CUDA peak allocation. The
-current GPU linear solve is dense and targets small single-GPU cases.
+time, solve time, host peak RSS, and requested CUDA peak allocation. Each
+Newton system is stored in CSR and factorized with cuDSS (sparse direct LU):
+the pattern is analysed once per run and later iterations only refactorize.
 Local assembly, solve, memory, and CPU comparison measurements are in
 [`benchmarks/fem_gpu_native_evidence.json`](../benchmarks/fem_gpu_native_evidence.json).
 
 For steady P1 Darcy on the same labelled tetra format, run
 `python3 scripts/solver.py examples/solver/fem_darcy_gpu.json`. The
 `native_tet_darcy_cuda` backend assembles the P1 matrix and source on the
-GPU, solves pressure with cuSOLVER, and evaluates cell flux on the GPU. It
+GPU, solves pressure with Jacobi-preconditioned CG, and evaluates cell flux
+on the GPU. It
 then recovers conservative face flows and RT0 fluxes and writes `tissue.vtu`
 and `tissue.pvd`. The case accepts the same mobility, source, pressure, flux,
-and per-cell override fields as the CPU Darcy CLI. The GPU solve is dense and
-targets small single-GPU meshes.
+and per-cell override fields as the CPU Darcy CLI. The matrix is stored in CSR and
+CG uses the CPU solver's tolerances (relative `1e-12`, absolute `1e-14`).
 
 For explicit sequential GPU fluid–structure coupling, generate the channel
 fixture and run `python3 scripts/solver.py DIRECTORY/gpu_fsi_solver.json`.
@@ -162,7 +164,8 @@ For fixed-mesh P1 species transport, run
 `python3 scripts/solver.py examples/solver/fem_species_gpu.json`. The
 `native_tet_species_cuda` backend assembles the backward-Euler P1 mass,
 diffusion, conservative advection, source, decay, and labelled boundary
-terms on the GPU, then solves with cuSOLVER. It accepts constant fluid
+terms on the GPU, then solves with Jacobi-preconditioned BiCGStab started from
+the previous step and stopped at the CPU solver's tolerances. It accepts constant fluid
 velocity, prescribed inflow concentrations, and wall exchange from the
 native species case. It writes `species_step_N.vtu` and `species.pvd`.
 The current GPU case excludes moving meshes, monotone correction, and finite

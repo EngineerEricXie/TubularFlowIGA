@@ -156,13 +156,14 @@ void RunFsi(const std::filesystem::path& case_path,
 	iga::cuda::DeviceBuffer<double> device_acceleration(acceleration.size());
 	iga::cuda::DeviceBuffer<double> device_element_residual(cells*34);
 	iga::cuda::DeviceBuffer<double> device_element_jacobian(cells*34*34);
-	iga::cuda::DeviceBuffer<double> device_residual(dofs),device_jacobian(
-		static_cast<std::size_t>(dofs)*dofs),device_rhs(dofs);
+	iga::cuda::DeviceBuffer<double> device_residual(dofs),device_rhs(dofs);
+	const iga::cuda::DevicePattern pattern(FlowPattern(rows,dofs));
+	iga::cuda::BlockMatrix<1> jacobian(pattern);
 	iga::cuda::DeviceBuffer<double> device_prescribed(dofs),device_boundary_load(dofs);
 	device_rows.CopyFromHost(rows.data(),rows.size());
 	device_state.CopyFromHost(state.data(),state.size());
 	device_acceleration.CopyFromHost(acceleration.data(),acceleration.size());
-	DenseSolver solver(dofs,device_jacobian.data());
+	iga::cuda::CudssSolver solver(jacobian);
 	std::map<std::size_t,double> solid_constraints;
 	for(const auto node:scenario.fixed_nodes)
 		for(int axis=0;axis<3;++axis)solid_constraints.emplace(3*node+axis,0.);
@@ -226,7 +227,7 @@ void RunFsi(const std::filesystem::path& case_path,
 		bool converged=false;
 		for(int iteration=1;iteration<=30;++iteration){
 			const auto assembly_start=std::chrono::steady_clock::now();
-			device_residual.Clear();device_jacobian.Clear();
+			device_residual.Clear();jacobian.Clear();
 			const int field_count=static_cast<int>(quadrature.size());
 			const int entry_count=cells*iga::cuda::kTetFlowEntries;
 			iga::cuda::EvaluateNativeTetFlowFields<<<(field_count+127)/128,128>>>(
@@ -238,11 +239,10 @@ void RunFsi(const std::filesystem::path& case_path,
 				device_element_residual.data(),device_element_jacobian.data());
 			iga::cuda::ScatterNativeTetFlowElements<<<(entry_count+127)/128,128>>>(
 				device_rows.data(),device_element_residual.data(),
-				device_element_jacobian.data(),cells,dofs,
-				device_residual.data(),device_jacobian.data());
-			iga::cuda::ApplyNativeTetFlowBoundaryRows<<<
-				(static_cast<std::size_t>(dofs)*dofs+127)/128,128>>>(
-				device_constrained.data(),dofs,device_jacobian.data());
+				device_element_jacobian.data(),cells,pattern.view(),
+				device_residual.data(),jacobian.values());
+			iga::cuda::ApplyNativeTetFlowBoundaryRows<<<(dofs+127)/128,128>>>(
+				pattern.view(),device_constrained.data(),jacobian.values());
 			iga::cuda::NativeTetFlowNewtonRightHandSide<<<(dofs+127)/128,128>>>(
 				device_residual.data(),device_boundary_load.data(),device_state.data(),
 				device_constrained.data(),device_prescribed.data(),dofs,device_rhs.data());
@@ -251,7 +251,7 @@ void RunFsi(const std::filesystem::path& case_path,
 			assembly_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-assembly_start).count();
 			const auto solve_start=std::chrono::steady_clock::now();
-			solver.Solve(dofs,device_jacobian.data(),device_rhs.data());
+			solver.Solve(device_rhs.data());
 			device_rhs.CopyToHost(increment.data(),increment.size());
 			solve_seconds+=std::chrono::duration<double>(
 				std::chrono::steady_clock::now()-solve_start).count();

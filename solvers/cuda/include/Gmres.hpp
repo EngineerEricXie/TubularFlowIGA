@@ -1,7 +1,7 @@
 #ifndef IGA_CUDA_GMRES_HPP
 #define IGA_CUDA_GMRES_HPP
 
-#include "IgaCudaKernels.cuh"
+#include "SparseKernels.cuh"
 #include "PhaseProfile.hpp"
 
 #include <algorithm>
