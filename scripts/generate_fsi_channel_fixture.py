@@ -10,10 +10,6 @@ from pathlib import Path
 LENGTH, HEIGHT, WIDTH = 0.02, 0.004, 0.004
 
 
-def node(i, j, k):
-	return (i*2+j)*3+k
-
-
 def determinant(points, nodes):
 	a, b, c, d = (points[index] for index in nodes)
 	x = [b[axis]-a[axis] for axis in range(3)]
@@ -31,19 +27,22 @@ def oriented(points, nodes):
 	return tuple(nodes)
 
 
-def fluid_mesh():
-	points = [(LENGTH*i/2, HEIGHT*j, WIDTH*k/2)
-		for i in range(3) for j in range(2) for k in range(3)]
+def fluid_mesh(nx=2, ny=1, nz=2):
+	def node(i, j, k):
+		return (i*(ny+1)+j)*(nz+1)+k
+	points = [(LENGTH*i/nx, HEIGHT*j/ny, WIDTH*k/nz)
+		for i in range(nx+1) for j in range(ny+1) for k in range(nz+1)]
 	cells = []
-	for i in range(2):
-		for k in range(2):
-			a, b, c, d = (node(i, 0, k), node(i+1, 0, k),
-				node(i, 1, k), node(i+1, 1, k))
-			e, f, g, h = (node(i, 0, k+1), node(i+1, 0, k+1),
-				node(i, 1, k+1), node(i+1, 1, k+1))
-			for vertices in ((a,b,d,h), (a,d,c,h), (a,c,g,h),
-					(a,g,e,h), (a,e,f,h), (a,f,b,h)):
-				cells.append(oriented(points, vertices))
+	for i in range(nx):
+		for j in range(ny):
+			for k in range(nz):
+				a, b, c, d = (node(i, j, k), node(i+1, j, k),
+					node(i, j+1, k), node(i+1, j+1, k))
+				e, f, g, h = (node(i, j, k+1), node(i+1, j, k+1),
+					node(i, j+1, k+1), node(i+1, j+1, k+1))
+				for vertices in ((a,b,d,h), (a,d,c,h), (a,c,g,h),
+						(a,g,e,h), (a,e,f,h), (a,f,b,h)):
+					cells.append(oriented(points, vertices))
 	uses = defaultdict(list)
 	for cell in cells:
 		for opposite in range(4):
@@ -123,10 +122,14 @@ def write_msh(path, points, cells, triangles):
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('output_directory', type=Path)
+	parser.add_argument('--divisions', type=int, nargs=3, default=[2, 1, 2], metavar=('NX', 'NY', 'NZ'),
+		help='fluid hexahedra along length, height, and width (each split into six tetrahedra)')
 	args = parser.parse_args()
+	if min(args.divisions) < 1:
+		parser.error('divisions must be positive')
 	output = args.output_directory
 	output.mkdir(parents=True, exist_ok=True)
-	fluid_points, fluid_cells, fluid_faces = fluid_mesh()
+	fluid_points, fluid_cells, fluid_faces = fluid_mesh(*args.divisions)
 	wall_points, wall_cells, wall_faces = wall_mesh(fluid_points, fluid_faces)
 	write_msh(output/'fluid.msh', fluid_points, fluid_cells, fluid_faces)
 	write_msh(output/'wall.msh', wall_points, wall_cells, wall_faces)
