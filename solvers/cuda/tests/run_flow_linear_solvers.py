@@ -2,7 +2,8 @@
 """Compare the cuDSS and iterative linear solvers of native_tet_flow_cuda.
 
 Channel flow on a small box mesh runs with fluid.linear_solver "direct" and
-"iterative"; the final velocities must agree to 1e-10 relative L2.
+"iterative" (Jacobi and AMG inner solves); the final velocities must agree
+with the direct solve to 1e-10 relative L2.
 """
 import argparse
 import array
@@ -28,25 +29,29 @@ def main():
 	points, cells, triangles = box_mesh(4, 0.01)
 	write_msh(root/"box.msh", points, cells, triangles)
 	velocities = {}
-	for solver in ("direct", "iterative"):
+	for name, solver, preconditioner in (("direct", "direct", "jacobi"), ("iterative", "iterative", "jacobi"),
+			("amg", "iterative", "amg")):
 		case = {"schema_version": 1, "mesh_file": "box.msh",
 			"fluid": {"density_kg_m3": 1000.0, "dynamic_viscosity_pa_s": 0.004,
 				"initial_velocity_m_s": [0.0, 0.0, 0.0], "nonlinear_tolerance": 1e-8,
-				"maximum_iterations": 12, "linear_solver": solver},
+				"maximum_iterations": 12, "linear_solver": solver, "preconditioner": preconditioner},
 			"boundaries": {"velocity_by_label_m_s": {"1": [0.01, 0.0, 0.0], "3": [0.0, 0.0, 0.0]},
 				"pressure_by_label_pa": {"2": 0.0}},
 			"time": {"dt_s": 0.05, "steps": 2}}
-		(root/f"{solver}.json").write_text(json.dumps(case))
-		subprocess.run([str(HERE.parent/"native_tet_flow_cuda"), str(root/f"{solver}.json"), str(root/solver)],
+		(root/f"{name}.json").write_text(json.dumps(case))
+		subprocess.run([str(HERE.parent/"native_tet_flow_cuda"), str(root/f"{name}.json"), str(root/name)],
 			check=True, stdout=subprocess.DEVNULL)
 		values = array.array("d")
-		values.frombytes((root/solver/"flow_velocity_step_2.bin").read_bytes())
-		velocities[solver] = values
-	direct, iterative = velocities["direct"], velocities["iterative"]
-	difference = math.sqrt(sum((a-b)**2 for a, b in zip(direct, iterative))/sum(a*a for a in direct))
-	if not difference < 1e-10:
-		raise SystemExit(f"iterative and direct velocities differ: relative L2 {difference:.3e}")
-	print(f"flow linear solvers agree: relative L2 {difference:.3e}")
+		values.frombytes((root/name/"flow_velocity_step_2.bin").read_bytes())
+		velocities[name] = values
+	direct = velocities["direct"]
+	report = []
+	for name in ("iterative", "amg"):
+		difference = math.sqrt(sum((a-b)**2 for a, b in zip(direct, velocities[name]))/sum(a*a for a in direct))
+		if not difference < 1e-10:
+			raise SystemExit(f"{name} and direct velocities differ: relative L2 {difference:.3e}")
+		report.append(f"{name} {difference:.3e}")
+	print("flow linear solvers agree with direct: relative L2 "+", ".join(report))
 
 
 if __name__ == "__main__":

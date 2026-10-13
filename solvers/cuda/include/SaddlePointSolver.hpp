@@ -1,10 +1,12 @@
 #ifndef IGA_CUDA_SADDLE_POINT_SOLVER_HPP
 #define IGA_CUDA_SADDLE_POINT_SOLVER_HPP
 
+#include "AggregationAmg.hpp"
 #include "ScalarKrylov.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -27,6 +29,12 @@ struct SaddlePointOptions {
 	double velocity_relative_tolerance = 1e-3;
 	double pressure_relative_tolerance = 1e-3;
 	int inner_maximum_iterations = 400;
+	// Inner solves: "jacobi" (left-Jacobi BiCGStab), "amg" (BiCGStab
+	// preconditioned by aggregation multigrid on the velocity block and on S),
+	// or "amg-velocity" / "amg-pressure" for multigrid on one block only.
+	std::string preconditioner = "jacobi";
+	int amg_cycles = 1;
+	AggregationAmgOptions amg;
 };
 
 struct SaddlePointResult {
@@ -92,8 +100,9 @@ public:
 	SaddlePointSolver(const BlockPattern& host, BlockMatrix<1>& matrix, int velocity, SaddlePointOptions options = {})
 		: matrix_(matrix), size_(static_cast<int>(host.diagonal.size())), velocity_(velocity),
 		  pressure_(size_-velocity), options_(options),
-		  velocity_pattern_(BuildVelocityPattern(host, velocity)), velocity_block_(velocity_pattern_),
-		  schur_pattern_(BuildSchurPattern(host, velocity)), schur_(schur_pattern_),
+		  velocity_host_(BuildVelocityPattern(host, velocity)), velocity_pattern_(velocity_host_),
+		  velocity_block_(velocity_pattern_), schur_host_(BuildSchurPattern(host, velocity)),
+		  schur_pattern_(schur_host_), schur_(schur_pattern_),
 		  velocity_source_(velocity_entries_.size()), velocity_workspace_(velocity), schur_workspace_(size_-velocity),
 		  basis_(static_cast<std::size_t>(options.restart+1)*size_), preconditioned_(static_cast<std::size_t>(options.restart)*size_),
 		  residual_(size_), work_(size_), solution_(size_), velocity_rhs_(velocity), product_(size_),
@@ -103,7 +112,20 @@ public:
 			throw std::invalid_argument("saddle-point solver needs velocity and pressure unknowns");
 		velocity_source_.CopyFromHost(velocity_entries_.data(), velocity_entries_.size());
 		Check(cublasSetPointerMode(blas_, CUBLAS_POINTER_MODE_HOST), "cublasSetPointerMode host");
+		const bool amg_velocity = options.preconditioner == "amg" || options.preconditioner == "amg-velocity";
+		const bool amg_pressure = options.preconditioner == "amg" || options.preconditioner == "amg-pressure";
+		if (amg_velocity) velocity_amg_ = std::make_unique<AggregationAmg>(velocity_host_, velocity_block_, 3, options.amg);
+		if (amg_pressure) pressure_amg_ = std::make_unique<AggregationAmg>(schur_host_, schur_, 1, options.amg);
+		if (!amg_velocity && !amg_pressure && options.preconditioner != "jacobi")
+			throw std::invalid_argument("saddle-point preconditioner must be jacobi, amg, amg-velocity, or amg-pressure");
 	}
+
+	int VelocityLevels() const { return velocity_amg_ ? velocity_amg_->Levels() : 1; }
+	int AmgFallbacks() const
+	{
+		return (velocity_amg_ ? velocity_amg_->FallbackCount() : 0)+(pressure_amg_ ? pressure_amg_->FallbackCount() : 0);
+	}
+	int PressureLevels() const { return pressure_amg_ ? pressure_amg_->Levels() : 1; }
 
 	// Solves J x = b for the current Jacobian values; b is overwritten with x.
 	SaddlePointResult Solve(double* right_hand_side)
@@ -273,6 +295,8 @@ private:
 		SelfpSchurKernel<<<(pressure_+255)/256,256>>>(matrix_.pattern(), matrix_.values(), velocity_,
 			velocity_workspace_.inverse.data(), schur_pattern_.view(), schur_.values());
 		CheckKernel("saddle-point blocks");
+		if (velocity_amg_) velocity_amg_->Update();
+		if (pressure_amg_) pressure_amg_->Update();
 	}
 
 	void ApplyPreconditioner(const double* v, double* z)
@@ -280,26 +304,42 @@ private:
 		double* z_velocity = z;
 		double* z_pressure = z+velocity_;
 		Check(cudaMemset(z, 0, static_cast<std::size_t>(size_)*sizeof(double)), "clear preconditioned vector");
-		const auto pressure = SolveBiCgStab(schur_, schur_workspace_, v+velocity_, z_pressure,
-			options_.inner_maximum_iterations, options_.pressure_relative_tolerance, 0.0);
-		pressure_iterations_ += pressure.iterations;
+		if (pressure_amg_) {
+			const auto pressure = SolvePreconditionedBiCgStab(schur_, schur_workspace_, v+velocity_, z_pressure,
+				options_.inner_maximum_iterations, options_.pressure_relative_tolerance, 0.0,
+				[&](const double* in, double* out) { pressure_amg_->Cycle(in, out, options_.amg_cycles); });
+			pressure_iterations_ += pressure.iterations;
+		} else {
+			const auto pressure = SolveBiCgStab(schur_, schur_workspace_, v+velocity_, z_pressure,
+				options_.inner_maximum_iterations, options_.pressure_relative_tolerance, 0.0);
+			pressure_iterations_ += pressure.iterations;
+		}
 		// velocity rhs = r_u - B' y_p
 		RangeSpmvKernel<<<(velocity_+255)/256,256>>>(matrix_.pattern(), matrix_.values(), 0, velocity_,
 			velocity_, size_, z_pressure, velocity_rhs_.data());
 		Check(cudaMemcpy(work_.data(), v, static_cast<std::size_t>(velocity_)*sizeof(double),
 			cudaMemcpyDeviceToDevice), "copy velocity residual");
 		SubtractKernel<<<(velocity_+255)/256,256>>>(velocity_, velocity_rhs_.data(), work_.data());
-		const auto velocity = SolveBiCgStab(velocity_block_, velocity_workspace_, work_.data(), z_velocity,
-			options_.inner_maximum_iterations, options_.velocity_relative_tolerance, 0.0);
-		velocity_iterations_ += velocity.iterations;
+		if (velocity_amg_) {
+			const auto velocity = SolvePreconditionedBiCgStab(velocity_block_, velocity_workspace_, work_.data(),
+				z_velocity, options_.inner_maximum_iterations, options_.velocity_relative_tolerance, 0.0,
+				[&](const double* in, double* out) { velocity_amg_->Cycle(in, out, options_.amg_cycles); });
+			velocity_iterations_ += velocity.iterations;
+		} else {
+			const auto velocity = SolveBiCgStab(velocity_block_, velocity_workspace_, work_.data(), z_velocity,
+				options_.inner_maximum_iterations, options_.velocity_relative_tolerance, 0.0);
+			velocity_iterations_ += velocity.iterations;
+		}
 	}
 
 	BlockMatrix<1>& matrix_;
 	int size_, velocity_, pressure_;
 	SaddlePointOptions options_;
 	std::vector<int> velocity_entries_;
+	BlockPattern velocity_host_;
 	DevicePattern velocity_pattern_;
 	BlockMatrix<1> velocity_block_;
+	BlockPattern schur_host_;
 	DevicePattern schur_pattern_;
 	BlockMatrix<1> schur_;
 	DeviceBuffer<int> velocity_source_;
@@ -308,6 +348,7 @@ private:
 	DeviceBuffer<double> basis_, preconditioned_, residual_, work_, solution_, velocity_rhs_, product_;
 	DeviceBuffer<double> projection_;
 	int velocity_iterations_ = 0, pressure_iterations_ = 0;
+	std::unique_ptr<AggregationAmg> velocity_amg_, pressure_amg_;
 };
 
 } // namespace iga::cuda

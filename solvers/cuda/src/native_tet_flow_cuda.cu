@@ -86,8 +86,9 @@ struct FlowCase
 	std::filesystem::path mesh_file;
 	double density=0.,viscosity=0.,dt_s=0.,tolerance=0.;
 	int steps=0,maximum_iterations=0;
-	// "direct" (cuDSS) or "iterative" (block-preconditioned FGMRES).
-	std::string linear_solver="direct";
+	// "direct" (cuDSS) or "iterative" (block-preconditioned FGMRES) with
+	// inner "jacobi" (BiCGStab) or "amg" (aggregation multigrid) solves.
+	std::string linear_solver="direct",preconditioner="jacobi";
 	std::array<double,3> initial_velocity{};
 	std::map<int,std::array<double,3>> velocity_by_label;
 	std::map<int,double> pressure_by_label;
@@ -145,6 +146,11 @@ FlowCase ParseCase(const std::filesystem::path& path)
 		result.linear_solver=RequireString(*linear,"linear_solver");
 	if(result.linear_solver!="direct"&&result.linear_solver!="iterative")
 		throw std::invalid_argument("fluid.linear_solver must be direct or iterative");
+	if(const auto* preconditioner=Find(fluid,"preconditioner"))
+		result.preconditioner=RequireString(*preconditioner,"preconditioner");
+	if(result.preconditioner!="jacobi"&&result.preconditioner!="amg"
+		&&result.preconditioner!="amg-velocity"&&result.preconditioner!="amg-pressure")
+		throw std::invalid_argument("fluid.preconditioner must be jacobi, amg, amg-velocity, or amg-pressure");
 	const auto& boundaries=RequireObject(required(root,"boundaries"),"boundaries");
 	const auto& velocities=RequireObject(required(boundaries,"velocity_by_label_m_s"),
 		"velocity_by_label_m_s");
@@ -454,7 +460,11 @@ void RunCase(const std::filesystem::path& case_path,
 	device_boundary_load.CopyFromHost(boundary_load.data(),boundary_load.size());
 	std::optional<iga::cuda::CudssSolver> direct;
 	std::optional<iga::cuda::SaddlePointSolver> iterative;
-	if(specification.linear_solver=="iterative")iterative.emplace(host_pattern,jacobian,3*velocity_nodes);
+	if(specification.linear_solver=="iterative"){
+		iga::cuda::SaddlePointOptions options;
+		options.preconditioner=specification.preconditioner;
+		iterative.emplace(host_pattern,jacobian,3*velocity_nodes,options);
+	}
 	else direct.emplace(jacobian);
 	int linear_iterations=0;
 	std::vector<double> increment(dofs);
@@ -589,6 +599,11 @@ void RunCase(const std::filesystem::path& case_path,
 		return value.ru_maxrss;}();
 	std::cout<<"native_tet_flow_cuda_complete assembly_s="<<assembly_seconds
 		<<" solve_s="<<solve_seconds<<" linear_solver="<<specification.linear_solver
+		<<" preconditioner="<<specification.preconditioner
+		<<" amg_levels="<<(iterative?iterative->VelocityLevels():1)
+		<<" inner_velocity_iterations="<<(iterative?iterative->VelocityIterations():0)
+		<<" inner_pressure_iterations="<<(iterative?iterative->PressureIterations():0)
+		<<" amg_fallbacks="<<(iterative?iterative->AmgFallbacks():0)
 		<<" linear_iterations="<<linear_iterations<<" host_peak_rss_kib="<<usage
 		<<" cuda_peak_bytes="<<iga::cuda::DeviceAllocationCounter::Peak()<<'\n';
 }

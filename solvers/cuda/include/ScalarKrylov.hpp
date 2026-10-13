@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 
@@ -36,7 +37,7 @@ struct KrylovScalars {
 class ScalarKrylovWorkspace {
 public:
 	explicit ScalarKrylovWorkspace(int size)
-		: size(size), inverse(size), r(size), z(size), p(size), v(size), s(size), t(size), shadow(size),
+		: size(size), inverse(size), r(size), z(size), p(size), v(size), s(size), t(size), shadow(size), w(size),
 		  scalars(1), singular(1)
 	{
 		if (size <= 0) throw std::invalid_argument("Krylov workspace size must be positive");
@@ -45,7 +46,7 @@ public:
 
 	int size;
 	BlasHandle blas;
-	DeviceBuffer<double> inverse, r, z, p, v, s, t, shadow;
+	DeviceBuffer<double> inverse, r, z, p, v, s, t, shadow, w;
 	DeviceBuffer<KrylovScalars> scalars;
 	DeviceBuffer<unsigned int> singular;
 };
@@ -289,6 +290,91 @@ inline KrylovResult SolveBiCgStab(const BlockMatrix<1>& matrix, ScalarKrylovWork
 		if (host.breakdown) throw std::runtime_error("BiCGStab broke down");
 		if (!std::isfinite(host.norm)) break;
 		if (host.norm <= result.tolerance) {
+			result.converged = true;
+			break;
+		}
+	}
+	return result;
+}
+
+// Right-preconditioned BiCGStab for a general matrix with an arbitrary
+// preconditioner `apply(in, out)` (out = K^-1 in), for example AMG cycles.
+// Scalars live on the host, so each iteration synchronizes; the stopping test
+// is the unpreconditioned residual, ||b - A x|| <= max(rtol*||b||, atol).
+inline KrylovResult SolvePreconditionedBiCgStab(const BlockMatrix<1>& matrix, ScalarKrylovWorkspace& workspace,
+	const double* rhs, double* solution, int maximum_iterations, double relative_tolerance,
+	double absolute_tolerance, const std::function<void(const double*, double*)>& apply)
+{
+	const auto pattern = matrix.pattern();
+	const int size = pattern.nodes, blocks = (size+255)/256;
+	if (workspace.size != size) throw std::invalid_argument("Krylov workspace size does not match matrix");
+	auto& blas = workspace.blas;
+	Check(cublasSetPointerMode(blas, CUBLAS_POINTER_MODE_HOST), "cublasSetPointerMode host");
+	struct RestoreMode {
+		cublasHandle_t handle;
+		~RestoreMode() { cublasSetPointerMode(handle, CUBLAS_POINTER_MODE_DEVICE); }
+	} restore{blas};
+	double *r = workspace.r.data(), *p = workspace.p.data(), *v = workspace.v.data(), *s = workspace.s.data();
+	double *t = workspace.t.data(), *shadow = workspace.shadow.data(), *phat = workspace.z.data();
+	double* shat = workspace.w.data();
+	const auto bytes = static_cast<std::size_t>(size)*sizeof(double);
+	KrylovResult result;
+	double load = 0.0;
+	Check(cublasDnrm2(blas, size, rhs, 1, &load), "cublasDnrm2 PBiCGStab load");
+	result.tolerance = std::max(relative_tolerance*load, absolute_tolerance);
+	BlockSpmvKernel<1><<<blocks,256>>>(pattern, matrix.values(), solution, v);
+	Check(cudaMemcpy(r, rhs, bytes, cudaMemcpyDeviceToDevice), "copy PBiCGStab rhs");
+	const double minus_one = -1.0;
+	Check(cublasDaxpy(blas, size, &minus_one, v, 1, r, 1), "cublasDaxpy PBiCGStab residual");
+	Check(cublasDnrm2(blas, size, r, 1, &result.residual), "cublasDnrm2 PBiCGStab initial");
+	if (result.residual <= result.tolerance) {
+		result.converged = true;
+		return result;
+	}
+	Check(cudaMemcpy(shadow, r, bytes, cudaMemcpyDeviceToDevice), "copy PBiCGStab shadow");
+	Check(cudaMemset(p, 0, bytes), "clear PBiCGStab p");
+	Check(cudaMemset(v, 0, bytes), "clear PBiCGStab v");
+	double rho = 1.0, alpha = 1.0, omega = 1.0;
+	while (result.iterations < maximum_iterations) {
+		double rho_next = 0.0;
+		Check(cublasDdot(blas, size, shadow, 1, r, 1, &rho_next), "cublasDdot PBiCGStab rho");
+		if (rho_next == 0.0 || !std::isfinite(rho_next)) throw std::runtime_error("preconditioned BiCGStab broke down");
+		const double beta = (rho_next/rho)*(alpha/omega), minus_omega = -omega, one = 1.0;
+		// p = r + beta (p - omega v)
+		Check(cublasDaxpy(blas, size, &minus_omega, v, 1, p, 1), "cublasDaxpy PBiCGStab p");
+		Check(cublasDscal(blas, size, &beta, p, 1), "cublasDscal PBiCGStab p");
+		Check(cublasDaxpy(blas, size, &one, r, 1, p, 1), "cublasDaxpy PBiCGStab p+r");
+		apply(p, phat);
+		BlockSpmvKernel<1><<<blocks,256>>>(pattern, matrix.values(), phat, v);
+		double shadow_v = 0.0;
+		Check(cublasDdot(blas, size, shadow, 1, v, 1, &shadow_v), "cublasDdot PBiCGStab shadow.v");
+		if (shadow_v == 0.0 || !std::isfinite(shadow_v)) throw std::runtime_error("preconditioned BiCGStab broke down");
+		alpha = rho_next/shadow_v;
+		const double minus_alpha = -alpha;
+		Check(cudaMemcpy(s, r, bytes, cudaMemcpyDeviceToDevice), "copy PBiCGStab s");
+		Check(cublasDaxpy(blas, size, &minus_alpha, v, 1, s, 1), "cublasDaxpy PBiCGStab s");
+		Check(cublasDaxpy(blas, size, &alpha, phat, 1, solution, 1), "cublasDaxpy PBiCGStab half step");
+		Check(cublasDnrm2(blas, size, s, 1, &result.residual), "cublasDnrm2 PBiCGStab half");
+		++result.iterations;
+		if (result.residual <= result.tolerance) {
+			result.converged = true;
+			break;
+		}
+		apply(s, shat);
+		BlockSpmvKernel<1><<<blocks,256>>>(pattern, matrix.values(), shat, t);
+		double ts = 0.0, tt = 0.0;
+		Check(cublasDdot(blas, size, t, 1, s, 1, &ts), "cublasDdot PBiCGStab t.s");
+		Check(cublasDdot(blas, size, t, 1, t, 1, &tt), "cublasDdot PBiCGStab t.t");
+		if (tt == 0.0 || !std::isfinite(tt)) throw std::runtime_error("preconditioned BiCGStab broke down");
+		omega = ts/tt;
+		const double minus_omega_next = -omega;
+		Check(cublasDaxpy(blas, size, &omega, shat, 1, solution, 1), "cublasDaxpy PBiCGStab solution");
+		Check(cudaMemcpy(r, s, bytes, cudaMemcpyDeviceToDevice), "copy PBiCGStab r");
+		Check(cublasDaxpy(blas, size, &minus_omega_next, t, 1, r, 1), "cublasDaxpy PBiCGStab r");
+		Check(cublasDnrm2(blas, size, r, 1, &result.residual), "cublasDnrm2 PBiCGStab");
+		rho = rho_next;
+		if (!std::isfinite(result.residual)) break;
+		if (result.residual <= result.tolerance) {
 			result.converged = true;
 			break;
 		}

@@ -144,7 +144,12 @@ and a block upper-triangular preconditioner (the `selfp` Schur approximation
 `C - B diag(A)^-1 B'` and Jacobi BiCGStab inner solves, as in the CPU Schur
 fieldsplit without multigrid). It needs about half the memory of cuDSS at
 25k cells and keeps working on meshes whose LU factors do not fit on the GPU;
-convergence relies on mass-dominated transient steps.
+convergence relies on mass-dominated transient steps. `"preconditioner":
+"amg"` (or `"amg-velocity"` / `"amg-pressure"`) replaces the Jacobi inner
+solves with BiCGStab preconditioned by plain aggregation multigrid
+(`AggregationAmg.hpp`). It is experimental: it cuts inner iterations 3-5x but,
+being launch-bound on meshes up to about 25k cells, it took 1.3-2.5x longer in
+every measured case, so `"jacobi"` remains the default.
 Local assembly, solve, memory, and CPU comparison measurements are in
 [`benchmarks/fem_gpu_native_evidence.json`](../benchmarks/fem_gpu_native_evidence.json).
 
