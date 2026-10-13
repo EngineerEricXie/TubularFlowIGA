@@ -17,6 +17,8 @@ struct BlockPattern {
 	std::vector<int> columns;
 	std::vector<int> diagonal;
 
+	BlockPattern() = default;
+
 	explicit BlockPattern(const FlatMesh& mesh)
 		: BlockPattern(static_cast<std::size_t>(mesh.nodes), mesh.element_offsets, mesh.connectivity) {}
 

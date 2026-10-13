@@ -48,5 +48,7 @@ endforeach()
 
 tfi_make_alias(all TARGETS iga_cuda native_tet_flow_cuda native_tet_darcy_cuda
 	native_tet_species_cuda native_tet_fsi_cuda)
+tfi_test(flow_linear_solvers COMMAND [==[python3 tests/run_flow_linear_solvers.py "$TMPDIR/out"]==]
+	REQUIRES native_tet_flow_cuda MAKE flow-linear-solver-test LABELS gpu)
 tfi_test(device_allocation_test COMMAND [==[./device_allocation_test]==]
 	REQUIRES device_allocation_test MAKE allocation-test LABELS gpu)
