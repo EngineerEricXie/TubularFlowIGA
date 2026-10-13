@@ -261,3 +261,17 @@ interface and layout identities, and the FSI edge identity.
 Scalar pressure/flow ports on the FSI pair are not accepted yet: driving
 strong coupling inside the pressure/flow executor of `iga_multidomain_flow` is
 the next graph step, so an FSI-only graph holds exactly its two domains.
+
+## Partitioned fluid
+
+`-fsi_distributed_fluid` partitions the fluid mesh over the ranks with
+ParMETIS (`NativeTetMeshPartition.hpp`): each rank keeps its owned cells plus
+the halo cells touching its owned vertices, numbers its owned vertices and
+edges into one contiguous PETSc row block (`NativeTetDistributedDofs.hpp`), and
+assembles only its own cells and boundary faces into a ghosted PETSc system
+(`NativeTetAleDistributedRuntime.hpp`). The replicated runtime instead keeps
+the whole mesh on every rank and assembles cells round-robin. Both produce the
+same discrete system, so results agree to round-off (`native_tet_fsi_ranks`
+checks this); the coupling and the outputs still receive the replicated state
+through one reduction per Newton solve. Flow-rate controllers and
+`-native_ale_scale` are not supported on the partitioned path yet.

@@ -65,9 +65,13 @@ def main():
 	one = run("petsc-1", 1, TIGHT)
 	two = run("petsc-2", 2, TIGHT)
 	dense = run("dense", 1, TIGHT+["-fsi_dense_solvers"])
+	distributed = run("distributed-2", 2, TIGHT+["-fsi_distributed_fluid"])
 	compare("PETSc 1 vs 2 ranks", one, two, 1e-10)
 	compare("dense vs PETSc", dense, one, 1e-6)
-	print(f"native FSI ranks: PETSc 1/2 ranks and dense agree over {len(one)} ledger values")
+	# A different MUMPS distribution changes round-off; cancellation-prone
+	# residuals in the ledger then agree to about 1e-9 relative.
+	compare("distributed fluid vs replicated", distributed, one, 1e-6)
+	print(f"native FSI ranks: PETSc 1/2 ranks, distributed fluid, and dense agree over {len(one)} ledger values")
 
 
 if __name__ == "__main__":
