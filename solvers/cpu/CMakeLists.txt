@@ -577,3 +577,7 @@ tfi_test(reference_state_output_test COMMAND [==[./reference_state_output_test "
 	REQUIRES reference_state_output_test MAKE test reference-state-output-test LABELS unit)
 tfi_test(temporal_unstructured_vtkhdf_test COMMAND [==[./temporal_unstructured_vtkhdf_test "$TMPDIR/out"]==]
 	REQUIRES temporal_unstructured_vtkhdf_test MAKE test temporal-unstructured-vtkhdf-test LABELS unit)
+
+# native_tet_fsi_steps: PETSc on one and two ranks and the dense solvers agree.
+tfi_test(native_tet_fsi_ranks COMMAND [==[python3 tests/run_native_tet_fsi_ranks.py "$TMPDIR/out" --launcher "@TFI_MPIEXEC@"]==]
+	REQUIRES native_tet_fsi_steps MAKE petsc-test native-tet-fsi-ranks-test LABELS petsc mpi PETSC_PACKAGES MUMPS)

@@ -3,7 +3,10 @@
 Fluid--structure interaction couples a native tetrahedral ALE fluid to a
 native tetrahedral hyperelastic solid through a matching interface. A strong
 Dirichlet--Neumann coordinator with dynamic weighted Aitken relaxation drives
-the reference runtime, which runs on a single partition (one MPI rank).
+the reference runtime. The CPU runtime solves the fluid, the harmonic mesh
+motion, and the solid with PETSc on any number of MPI ranks; every rank holds
+the whole fluid and solid meshes, so memory per rank does not yet shrink with
+more ranks.
 
 The earlier immersed-flow and pre-tensioned-membrane path was removed on
 2026-10-08. Its code, tests, and documentation are preserved at the git tag
@@ -23,7 +26,13 @@ The earlier immersed-flow and pre-tensioned-membrane path was removed on
 | Structure adapter | [`NativeTetSolidFsiRuntime.hpp`](../../solvers/cpu/include/NativeTetSolidFsiRuntime.hpp) | Hyperelastic tetrahedral solid |
 | Checkpoint | [`NativeTetFsiCheckpoint.hpp`](../../solvers/cpu/include/NativeTetFsiCheckpoint.hpp) | Single-payload checkpoint of the single-partition pair |
 
-The CPU executable is `solvers/cpu/native_tet_fsi_steps` (one MPI rank). The
+The CPU executable is `solvers/cpu/native_tet_fsi_steps`. Its PETSc solves use
+LU with MUMPS for the P2/P1 fluid (unprefixed KSP options) and the solid
+(`-fsi_solid_` options), and CG with Jacobi for the mesh motion (`-fsi_mesh_`
+options); `-fsi_fluid_tolerance` and `-fsi_solid_rtol` set the fluid absolute
+and solid relative Newton tolerances (defaults `1e-6` and `1e-5`).
+`-fsi_dense_solvers` keeps the earlier one-rank dense solvers for comparison.
+Each coupling iteration yields the same result on any rank count. The
 CUDA executable `solvers/cuda/native_tet_fsi_cuda` uses explicit sequential
 coupling instead of the strong coordinator: the GPU fluid step supplies
 traction, the host solves the static solid, and the host updates the harmonic

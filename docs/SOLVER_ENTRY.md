@@ -102,8 +102,10 @@ labelled fluid and wall tetra meshes, `interface_label`, fluid density and
 viscosity, optional `boundary_velocity_by_label_m_s` and
 `natural_boundary_labels`, solid Young modulus, Poisson ratio, density and
 `fixed_nodes`, plus `time.dt_s` and `time.steps`. Matching interface facets
-are aligned by coordinates even when the mesh node IDs differ. This current
-dense FSI runtime uses one CPU rank. Each step writes flow and wall `.pvtu`
+are aligned by coordinates even when the mesh node IDs differ. The runtime
+solves with PETSc on `resources.mpi_ranks` ranks (each holding the whole
+meshes); see [FSI architecture](architecture/FSI_ARCHITECTURE.md) for its
+solver options. Each step writes flow and wall `.pvtu`
 snapshots and updates `flow.pvd` and `wall.pvd`. Its step ledger reports
 interface force and power, wall displacement, moving volume and flux, and ALE
 GCL residual.
@@ -258,7 +260,7 @@ This inventory was checked against remote `main` at `dab5f25` on
 | FEM GPU P1 species | native species case with fixed mesh, constant or connected P2 velocity or Darcy RT0 flux, inflow and wall exchange | `method: FEM`, `device: GPU`, `backend: native_tet_species_cuda`, `case_file`; one GPU or sequential flow→species or Darcy→species graph |
 | Idealized FEM artery–Darcy–vein–wall–species reference | `cases/idealized_cube_dual_tree_refined.json` or the template-free `cases/idealized_cube_dual_tree_smooth.json`, matching oxygen case, four terminal pairs | `backend: idealized_cube_dual_tree`, `case_file`, optional `species_case_file`; one `solver-v1` command |
 | FEM artery–Darcy–vein transfer with optional species | labelled tetra meshes; arbitrary arrays of matching arterial and venous port labels | three `role` domains with named `flow_rate` connections, or direct `native_tet_flow_darcy_chain` case; optional three-region species time loop |
-| FEM multi-step fluid–solid ALE with optional species | `native_tet_fsi_steps` case with labelled fluid and wall meshes, material, BC, time, and optional `species` array | direct case import or single FEM domain with `backend: native_tet_fsi_steps`; one CPU rank |
+| FEM multi-step fluid–solid ALE with optional species | `native_tet_fsi_steps` case with labelled fluid and wall meshes, material, BC, time, and optional `species` array | direct case import or single FEM domain with `backend: native_tet_fsi_steps`; any MPI rank count (replicated meshes) |
 | FEM fields and restart | native `--output-dir`, `--checkpoint-dir`, `--restart-dir`, `--resume`, `--stop-after-step` | `output`, `options`, or workflow `--resume`/`--stop-after-step`; ParaView `series.pvd`; coupled flow/species has no restart |
 
 Native tetra flow, Darcy, and species cases use the labelled tetra mesh

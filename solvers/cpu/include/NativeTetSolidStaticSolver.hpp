@@ -1,6 +1,7 @@
 #ifndef IGA_NATIVE_TET_SOLID_STATIC_SOLVER_HPP
 #define IGA_NATIVE_TET_SOLID_STATIC_SOLVER_HPP
 
+#include "NativeTetCsrMatrix.hpp"
 #include "NativeTetHyperelasticSolid.hpp"
 
 #include <algorithm>
@@ -19,7 +20,10 @@ struct NativeTetSolidStaticOptions
 	double relative_tolerance=1.0e-8;
 	double absolute_tolerance_n=1.0e-10;
 	double minimum_line_search=1.0/1024.0;
+	// The cap applies to the dense fallback only.
 	std::size_t maximum_dofs=1200;
+	// Solves the reduced Newton system (free DOFs); empty uses dense elimination.
+	NativeTetLinearSolve linear_solve;
 };
 
 struct NativeTetSolidStaticResult
@@ -40,7 +44,7 @@ namespace native_tet_solid_static_detail {
 struct Assembly
 {
 	std::vector<double> residual;
-	std::vector<double> tangent;
+	NativeTetCsrMatrix tangent;
 	double energy=0.0;
 	double minimum_jacobian=std::numeric_limits<double>::infinity();
 };
@@ -55,11 +59,13 @@ inline void ValidateOptions(const NativeTetSolidStaticOptions& options)
 		throw std::invalid_argument("native tetrahedral solid static options are invalid");
 }
 
+// The tangent is assembled on the free DOFs only (pattern with reduced rows).
 inline Assembly Assemble(const NativeTetMesh& mesh,const std::vector<double>& displacement,
-	const std::vector<double>& external_force,const NativeTetSolidMaterial& material)
+	const std::vector<double>& external_force,const NativeTetSolidMaterial& material,
+	const NativeTetCsrMatrix& pattern,const std::vector<std::size_t>& reduced_index)
 {
 	const std::size_t dofs=3*mesh.points.size();
-	Assembly result;result.residual.assign(dofs,0.0);result.tangent.assign(dofs*dofs,0.0);
+	Assembly result;result.residual.assign(dofs,0.0);result.tangent=pattern;result.tangent.Clear();
 	for(const auto& cell:mesh.cells){
 		std::array<double,12> local{};
 		for(std::size_t a=0;a<4;++a)for(int component=0;component<3;++component)
@@ -70,9 +76,12 @@ inline Assembly Assemble(const NativeTetMesh& mesh,const std::vector<double>& di
 		for(std::size_t a=0;a<4;++a)for(int i=0;i<3;++i){
 			const std::size_t row=3*cell.nodes[a]+i,local_row=3*a+i;
 			result.residual[row]+=element.residual_n[local_row];
+			const std::size_t reduced_row=reduced_index[row];
+			if(reduced_row==kNativeTetConstrainedDof)continue;
 			for(std::size_t b=0;b<4;++b)for(int k=0;k<3;++k){
-				const std::size_t column=3*cell.nodes[b]+k,local_column=3*b+k;
-				result.tangent[row*dofs+column]+=element.tangent_n_m[local_row*12+local_column];
+				const std::size_t reduced_column=reduced_index[3*cell.nodes[b]+k],local_column=3*b+k;
+				if(reduced_column!=kNativeTetConstrainedDof)
+					result.tangent.At(reduced_row,reduced_column)+=element.tangent_n_m[local_row*12+local_column];
 			}
 		}
 	}
@@ -119,7 +128,7 @@ inline NativeTetSolidStaticResult SolveNativeTetSolidStatic(const NativeTetMesh&
 	using namespace native_tet_solid_static_detail;
 	ValidateNativeTetSolidMaterial(material);ValidateOptions(options);
 	const std::size_t dofs=3*mesh.points.size();
-	if(mesh.points.empty()||mesh.cells.empty()||dofs>options.maximum_dofs)
+	if(mesh.points.empty()||mesh.cells.empty()||(!options.linear_solve&&dofs>options.maximum_dofs))
 		throw std::invalid_argument("native tetrahedral solid static mesh is empty or exceeds the DOF cap");
 	if(external_force_n.size()!=dofs)throw std::invalid_argument("native tetrahedral solid external-force size mismatch");
 	for(double value:external_force_n)if(!std::isfinite(value))throw std::invalid_argument("native tetrahedral solid external force is nonfinite");
@@ -130,23 +139,30 @@ inline NativeTetSolidStaticResult SolveNativeTetSolidStatic(const NativeTetMesh&
 	std::vector<std::size_t> free;free.reserve(dofs-prescribed_displacement_m.size());
 	for(std::size_t dof=0;dof<dofs;++dof)if(!prescribed_displacement_m.count(dof))free.push_back(dof);
 	if(free.empty())throw std::invalid_argument("native tetrahedral solid static solve has no free DOF");
+	std::vector<std::size_t> reduced_index(dofs,kNativeTetConstrainedDof);
+	for(std::size_t i=0;i<free.size();++i)reduced_index[free[i]]=i;
+	const auto pattern=BuildNativeTetCsrPattern(mesh,3,reduced_index,free.size());
 	auto displacement=std::move(initial_displacement_m);
 	for(const auto& item:prescribed_displacement_m)displacement[item.first]=item.second;
-	auto assembly=Assemble(mesh,displacement,external_force_n,material);
+	auto assembly=Assemble(mesh,displacement,external_force_n,material,pattern,reduced_index);
 	NativeTetSolidStaticResult result;result.initial_free_residual_n=FreeNorm(assembly.residual,free);
 	const double threshold=options.absolute_tolerance_n+options.relative_tolerance*result.initial_free_residual_n;
 	for(int iteration=0;iteration<=options.maximum_iterations;++iteration){
 		const double norm=FreeNorm(assembly.residual,free);
 		if(norm<=threshold){result.iterations=iteration;result.converged=true;break;}
 		if(iteration==options.maximum_iterations)break;
-		const std::size_t n=free.size();std::vector<double> reduced(n*n),rhs(n);
-		for(std::size_t i=0;i<n;++i){rhs[i]=-assembly.residual[free[i]];for(std::size_t j=0;j<n;++j)reduced[i*n+j]=assembly.tangent[free[i]*dofs+free[j]];}
-		const auto update=SolveDense(std::move(reduced),std::move(rhs));
+		const std::size_t n=free.size();std::vector<double> rhs(n);
+		for(std::size_t i=0;i<n;++i)rhs[i]=-assembly.residual[free[i]];
+		const auto update=options.linear_solve?options.linear_solve(assembly.tangent,rhs)
+			:SolveDense(DenseNativeTetCsrMatrix(assembly.tangent),std::move(rhs));
+		if(update.size()!=n)throw std::runtime_error("native tetrahedral solid static update has the wrong size");
+		for(const double value:update)if(!std::isfinite(value))
+			throw std::runtime_error("native tetrahedral solid static update is nonfinite");
 		bool accepted=false;
 		for(double scale=1.0;scale>=options.minimum_line_search;scale*=0.5){
 			auto trial=displacement;for(std::size_t i=0;i<n;++i)trial[free[i]]+=scale*update[i];
 			try{
-				auto candidate=Assemble(mesh,trial,external_force_n,material);
+				auto candidate=Assemble(mesh,trial,external_force_n,material,pattern,reduced_index);
 				if(FreeNorm(candidate.residual,free)<norm){displacement=std::move(trial);assembly=std::move(candidate);accepted=true;break;}
 			}catch(const std::runtime_error&){}
 		}

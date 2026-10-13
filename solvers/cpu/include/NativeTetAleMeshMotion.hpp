@@ -1,6 +1,7 @@
 #ifndef IGA_NATIVE_TET_ALE_MESH_MOTION_HPP
 #define IGA_NATIVE_TET_ALE_MESH_MOTION_HPP
 
+#include "NativeTetCsrMatrix.hpp"
 #include "NativeTetFem.hpp"
 
 #include <algorithm>
@@ -66,29 +67,19 @@ inline std::vector<double> SolveDense(std::vector<double> matrix,
 
 // Componentwise P1 harmonic extension on the reference tetrahedral mesh.
 // The caller supplies all moving/fixed/sliding Dirichlet values explicitly.
+// linear_solve solves the free-node Laplacian (SPD); empty uses dense elimination.
 inline NativeTetAleHarmonicResult SolveNativeTetAleHarmonicMotion(
 	const NativeTetMesh& mesh,
-	const std::map<std::uint32_t,std::array<double,3>>& prescribed_displacement_m)
+	const std::map<std::uint32_t,std::array<double,3>>& prescribed_displacement_m,
+	const NativeTetLinearSolve& linear_solve = {})
 {
 	if (mesh.points.empty() || mesh.cells.empty() || prescribed_displacement_m.empty())
 		throw std::invalid_argument("native ALE harmonic motion requires a mesh and constraints");
 	const std::size_t node_count = mesh.points.size();
-	std::vector<double> stiffness(node_count*node_count,0.0);
-	for (const auto& cell : mesh.cells) {
+	for (const auto& cell : mesh.cells)
 		for (const auto node : cell.nodes)
 			if (node >= node_count)
 				throw std::invalid_argument("native ALE harmonic cell index is out of range");
-		const auto geometry = EvaluateNativeTetGeometry(mesh,cell);
-		const double volume = geometry.determinant/6.0;
-		for (std::size_t row = 0; row < 4; ++row)
-			for (std::size_t column = 0; column < 4; ++column) {
-				double value = 0.0;
-				for (int component = 0; component < 3; ++component)
-					value += geometry.barycentric_gradients[row][component]
-						*geometry.barycentric_gradients[column][component];
-				stiffness[cell.nodes[row]*node_count+cell.nodes[column]] += volume*value;
-			}
-	}
 	std::vector<bool> constrained(node_count,false);
 	NativeTetAleHarmonicResult result;
 	result.displacement_m.assign(node_count,{{0,0,0}});
@@ -101,38 +92,73 @@ inline NativeTetAleHarmonicResult SolveNativeTetAleHarmonicMotion(
 		constrained[prescribed.first] = true;
 		result.displacement_m[prescribed.first] = prescribed.second;
 	}
-	std::vector<std::size_t> free_nodes;
+	std::vector<std::size_t> free_nodes, reduced_index(node_count,kNativeTetConstrainedDof);
 	for (std::size_t node = 0; node < node_count; ++node)
-		if (!constrained[node]) free_nodes.push_back(node);
+		if (!constrained[node]) {
+			reduced_index[node] = free_nodes.size();
+			free_nodes.push_back(node);
+		}
 	result.constrained_nodes = prescribed_displacement_m.size();
 	result.free_nodes = free_nodes.size();
 	if (free_nodes.empty()) return result;
 	const std::size_t free_count = free_nodes.size();
-	std::vector<double> reduced(free_count*free_count,0.0);
-	for (std::size_t row = 0; row < free_count; ++row)
-		for (std::size_t column = 0; column < free_count; ++column)
-			reduced[row*free_count+column] =
-				stiffness[free_nodes[row]*node_count+free_nodes[column]];
+	// Element stiffness volume * grad(N_a).grad(N_b), shared by assembly and check.
+	const auto element_stiffness = [&](const NativeTetCell& cell) {
+		const auto geometry = EvaluateNativeTetGeometry(mesh,cell);
+		const double volume = geometry.determinant/6.0;
+		std::array<double,16> local{};
+		for (std::size_t row = 0; row < 4; ++row)
+			for (std::size_t column = 0; column < 4; ++column) {
+				double value = 0.0;
+				for (int component = 0; component < 3; ++component)
+					value += geometry.barycentric_gradients[row][component]
+						*geometry.barycentric_gradients[column][component];
+				local[4*row+column] = volume*value;
+			}
+		return local;
+	};
+	auto matrix = BuildNativeTetCsrPattern(mesh,1,reduced_index,free_count);
+	std::array<std::vector<double>,3> right_hand_side;
+	for (auto& component : right_hand_side) component.assign(free_count,0.0);
+	for (const auto& cell : mesh.cells) {
+		const auto local = element_stiffness(cell);
+		for (std::size_t row = 0; row < 4; ++row) {
+			const auto reduced_row = reduced_index[cell.nodes[row]];
+			if (reduced_row == kNativeTetConstrainedDof) continue;
+			for (std::size_t column = 0; column < 4; ++column) {
+				const auto node = cell.nodes[column];
+				const auto reduced_column = reduced_index[node];
+				if (reduced_column != kNativeTetConstrainedDof)
+					matrix.At(reduced_row,reduced_column) += local[4*row+column];
+				else for (int component = 0; component < 3; ++component)
+					right_hand_side[component][reduced_row] -= local[4*row+column]
+						*result.displacement_m[node][component];
+			}
+		}
+	}
+	std::vector<double> dense;
+	if (!linear_solve) dense = DenseNativeTetCsrMatrix(matrix);
 	for (int component = 0; component < 3; ++component) {
-		std::vector<double> right_hand_side(free_count,0.0);
-		for (std::size_t row = 0; row < free_count; ++row)
-			for (const auto& prescribed : prescribed_displacement_m)
-				right_hand_side[row] -= stiffness[free_nodes[row]*node_count+prescribed.first]
-					*prescribed.second[component];
-		const auto solution = native_tet_ale_motion_detail::SolveDense(
-			reduced,right_hand_side);
+		const auto solution = linear_solve ? linear_solve(matrix,right_hand_side[component])
+			: native_tet_ale_motion_detail::SolveDense(dense,right_hand_side[component]);
+		if (solution.size() != free_count)
+			throw std::runtime_error("native ALE harmonic solve returned the wrong size");
 		for (std::size_t row = 0; row < free_count; ++row)
 			result.displacement_m[free_nodes[row]][component] = solution[row];
 	}
+	std::vector<std::array<double,3>> residual(node_count,{{0,0,0}});
+	for (const auto& cell : mesh.cells) {
+		const auto local = element_stiffness(cell);
+		for (std::size_t row = 0; row < 4; ++row)
+			for (std::size_t column = 0; column < 4; ++column)
+				for (int component = 0; component < 3; ++component)
+					residual[cell.nodes[row]][component] += local[4*row+column]
+						*result.displacement_m[cell.nodes[column]][component];
+	}
 	for (const auto node : free_nodes)
-		for (int component = 0; component < 3; ++component) {
-			double residual = 0.0;
-			for (std::size_t column = 0; column < node_count; ++column)
-				residual += stiffness[node*node_count+column]
-					*result.displacement_m[column][component];
+		for (int component = 0; component < 3; ++component)
 			result.maximum_free_residual = std::max(result.maximum_free_residual,
-				std::abs(residual));
-		}
+				std::abs(residual[node][component]));
 	return result;
 }
 
