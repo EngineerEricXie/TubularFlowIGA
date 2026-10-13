@@ -1,5 +1,7 @@
 #define main native_tet_flow_cuda_standalone_main
 #include "native_tet_flow_cuda.cu"
+
+#include "CudssLinearSolve.hpp"
 #undef main
 
 #include "NativeTetAleConservation.hpp"
@@ -169,6 +171,14 @@ void RunFsi(const std::filesystem::path& case_path,
 		for(int axis=0;axis<3;++axis)solid_constraints.emplace(3*node+axis,0.);
 	iga::NativeTetSolidStaticOptions solid_options;
 	solid_options.maximum_iterations=40;
+	// The solid tangent and the harmonic mesh motion are factorized with cuDSS
+	// (NativeTetLinearSolve), so the solid is no longer bound by the dense
+	// DOF cap and both solves run on the GPU.
+	iga::cuda::CudssLinearSolve solid_linear_solve,motion_linear_solve;
+	solid_options.linear_solve=[&](const iga::NativeTetCsrMatrix& matrix,
+		const std::vector<double>& rhs){return solid_linear_solve(matrix,rhs);};
+	const iga::NativeTetLinearSolve mesh_motion_solve=[&](const iga::NativeTetCsrMatrix& matrix,
+		const std::vector<double>& rhs){return motion_linear_solve(matrix,rhs);};
 	std::vector<std::pair<double,std::filesystem::path>> flow_series,wall_series;
 	std::filesystem::create_directories(output);
 	double assembly_seconds=0.,solve_seconds=0.;
@@ -308,7 +318,7 @@ void RunFsi(const std::filesystem::path& case_path,
 				ale_boundary[item.first][axis]=solid_displacement[3*item.second+axis];
 		previous_ale=ale_displacement;
 		ale_displacement=iga::SolveNativeTetAleHarmonicMotion(reference,
-			ale_boundary).displacement_m;
+			ale_boundary,mesh_motion_solve).displacement_m;
 		const auto next=Deformed(reference,ale_displacement);
 		std::vector<std::array<double,3>> next_mesh_velocity(reference.points.size());
 		for(std::size_t node=0;node<reference.points.size();++node)
