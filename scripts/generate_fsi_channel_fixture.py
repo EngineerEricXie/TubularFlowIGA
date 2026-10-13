@@ -4,6 +4,7 @@
 import argparse
 from collections import defaultdict
 import json
+import shutil
 from pathlib import Path
 
 
@@ -119,6 +120,38 @@ def write_msh(path, points, cells, triangles):
 	path.write_text('\n'.join(lines)+'\n', encoding='utf-8')
 
 
+def write_graph_case(root, case):
+	"""Write the same FSI problem as a multidomain graph case.
+
+	The graph has a native_tet_ale_flow domain and a native_tet_solid_structure
+	domain joined by one FSI coupling on their shared interface label; each
+	domain directory holds its mesh and its half of the case.
+	"""
+	for name in ('fluid', 'solid'):
+		(root/name).mkdir(parents=True, exist_ok=True)
+	shutil.copyfile(root.parent/case['fluid_mesh_file'], root/'fluid'/case['fluid_mesh_file'])
+	shutil.copyfile(root.parent/case['solid_mesh_file'], root/'solid'/case['solid_mesh_file'])
+	fluid = {'schema_version': 1, 'mesh_file': case['fluid_mesh_file'], 'fluid': case['fluid']}
+	if 'species' in case:
+		fluid['species'] = case['species']
+	solid = {'schema_version': 1, 'mesh_file': case['solid_mesh_file'], 'solid': case['solid']}
+	(root/'fluid'/'fluid.json').write_text(json.dumps(fluid, indent=2)+'\n', encoding='utf-8')
+	(root/'solid'/'solid.json').write_text(json.dumps(solid, indent=2)+'\n', encoding='utf-8')
+	label = case['interface_label']
+	configuration = {'schema_version': 5, 'start_domain': 'fluid',
+		'time': {'dt': case['time']['dt_s'], 'steps': case['time']['steps']},
+		'execution': {'kind': 'explicit'},
+		'domains': [
+			{'id': 'fluid', 'dimension': '3d', 'kind': 'native_tet_ale_flow', 'case': 'fluid',
+				'ports': [], 'surface_interfaces': [{'id': 'wall', 'boundary_labels': [label]}]},
+			{'id': 'solid', 'dimension': '3d', 'kind': 'native_tet_solid_structure', 'case': 'solid',
+				'ports': [], 'surface_interfaces': [{'id': 'wall', 'boundary_labels': [label]}]}],
+		'couplings': [],
+		'fsi_couplings': [{'id': 'wall', 'fluid': {'domain': 'fluid', 'interface': 'wall'},
+			'structure': {'domain': 'solid', 'interface': 'wall'}}]}
+	(root/'simulation_config.json').write_text(json.dumps(configuration, indent=2)+'\n', encoding='utf-8')
+
+
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('output_directory', type=Path)
@@ -147,6 +180,7 @@ def main():
 			'density_kg_m3': 1000.0, 'fixed_nodes': fixed},
 		'time': {'dt_s': 0.01, 'steps': 2}}
 	(output/'case.json').write_text(json.dumps(case, indent=2)+'\n', encoding='utf-8')
+	write_graph_case(output/'graph', case)
 	fsi_species_case = {**case, 'species': [{
 		'id': 'tracer', 'initial_concentration_mol_m3': 0.2,
 		'diffusivity_m2_s': 0.01, 'source_mol_m3_s': 0.0,

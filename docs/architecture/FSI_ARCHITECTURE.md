@@ -232,3 +232,32 @@ belong on allocated resources rather than login nodes.
 - The multidomain graph has no FSI-capable domain kinds.
 - Nonmatching interface transfer, contact, remeshing, and monolithic coupling
   are not implemented.
+
+## Graph case
+
+The same pair runs as a multidomain graph case through
+`solvers/coupling/native_tet_fsi_graph --graph-case ROOT --output-dir DIR`.
+`ROOT/simulation_config.json` declares a `native_tet_ale_flow` domain and a
+`native_tet_solid_structure` domain (schema 5, `couplings: []`), each with a
+`surface_interfaces` entry naming the interface and its boundary label, and one
+entry in `fsi_couplings` joining them:
+
+```json
+{"id": "wall", "fluid": {"domain": "fluid", "interface": "wall"},
+ "structure": {"domain": "solid", "interface": "wall"}}
+```
+
+Each domain's `case` directory holds its mesh and its half of the FSI case:
+`fluid/fluid.json` (`mesh_file`, `fluid`, optional `species`) and
+`solid/solid.json` (`mesh_file`, `solid`); `time` comes from the graph.
+`python3 scripts/generate_fsi_channel_fixture.py DIRECTORY` writes such a case
+under `DIRECTORY/graph`. The runner reads the meshes, builds the matching
+interface layout, constructs the `SimulationGraph` (which validates the pair,
+the surface catalog, and the FSI edge), and then drives the same
+`NativeTetFsiSession` as `native_tet_fsi_steps`, so both produce identical
+step ledgers; `graph_binding_manifest.json` records the domain kinds, the
+interface and layout identities, and the FSI edge identity.
+
+Scalar pressure/flow ports on the FSI pair are not accepted yet: driving
+strong coupling inside the pressure/flow executor of `iga_multidomain_flow` is
+the next graph step, so an FSI-only graph holds exactly its two domains.

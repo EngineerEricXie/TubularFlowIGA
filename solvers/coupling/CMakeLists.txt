@@ -149,6 +149,9 @@ tfi_executable(sequential_text_failure_test
 	PETSC OPENMP
 	OPTIONS -UNDEBUG)
 tfi_executable(simulation_graph_test SOURCES tests/test_simulation_graph.cpp MPI OPTIONS -UNDEBUG)
+tfi_executable(native_fsi_graph_test SOURCES tests/test_native_fsi_graph.cpp MPI OPTIONS -UNDEBUG)
+# Graph case of a native ALE fluid and a tetrahedral solid joined by one FSI coupling.
+tfi_executable(native_tet_fsi_graph SOURCES src/native_tet_fsi_graph.cpp PETSC OPENMP)
 tfi_executable(species_collective_failure_test
 	SOURCES tests/test_species_collective_failure.cpp
 	PETSC
@@ -235,6 +238,11 @@ tfi_test(phase9_multiscale_closure_test COMMAND [==[PATH="@TFI_PETSC_PREFIX@/bin
 	REQUIRES iga_multidomain_flow phase9_multiscale_closure_test MAKE phase9-multiscale-closure-test LABELS petsc)
 tfi_test(simulation_graph_test COMMAND [==[./simulation_graph_test]==]
 	REQUIRES simulation_graph_test MAKE simulation-graph-test test LABELS unit)
+tfi_test(native_fsi_graph_test COMMAND [==[./native_fsi_graph_test]==]
+	REQUIRES native_fsi_graph_test MAKE test LABELS unit)
+tfi_test(native_tet_fsi_graph COMMAND [==[python3 tests/run_native_tet_fsi_graph.py "$TMPDIR/out" --launcher "@TFI_MPIEXEC@"]==]
+	REQUIRES native_tet_fsi_graph native_tet_fsi_steps MAKE petsc-test native-tet-fsi-graph-test
+	LABELS petsc mpi PETSC_PACKAGES MUMPS)
 tfi_test(distributed_surface_contracts_test COMMAND [==[./distributed_surface_contracts_test]==]
 	REQUIRES distributed_surface_contracts_test MAKE surface-contracts-test test LABELS unit)
 tfi_test(pulsatile_straight_vessel_temporal_test COMMAND [==[PATH="@TFI_PETSC_PREFIX@/bin:$PATH" ./pulsatile_straight_vessel_temporal_test]==]

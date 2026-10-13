@@ -16,7 +16,11 @@ namespace iga {
 enum class DomainKind {
 	OneDFlow = 0,
 	ThreeDBodyFittedFlow = 1,
-	ZeroDFlow = 4
+	ZeroDFlow = 4,
+	// Native tetrahedral FSI pair: P2/P1 ALE fluid and hyperelastic solid.
+	// Values are pinned because checkpoint identities hash them.
+	NativeTetAleFlow = 5,
+	NativeTetSolidStructure = 6
 };
 
 inline const char* DomainKindName(DomainKind kind)
@@ -24,26 +28,35 @@ inline const char* DomainKindName(DomainKind kind)
 	if (kind == DomainKind::OneDFlow) return "one_d_flow";
 	if (kind == DomainKind::ThreeDBodyFittedFlow) return "three_d_body_fitted_flow";
 	if (kind == DomainKind::ZeroDFlow) return "zero_d_flow";
+	if (kind == DomainKind::NativeTetAleFlow) return "native_tet_ale_flow";
+	if (kind == DomainKind::NativeTetSolidStructure) return "native_tet_solid_structure";
 	return "unknown";
 }
 
 inline bool IsKnownDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ZeroDFlow;
+		|| kind == DomainKind::ZeroDFlow || kind == DomainKind::NativeTetAleFlow
+		|| kind == DomainKind::NativeTetSolidStructure;
 }
 
 inline bool IsFlowDomainKind(DomainKind kind)
 {
 	return kind == DomainKind::OneDFlow || kind == DomainKind::ThreeDBodyFittedFlow
-		|| kind == DomainKind::ZeroDFlow;
+		|| kind == DomainKind::ZeroDFlow || kind == DomainKind::NativeTetAleFlow;
+}
+
+inline bool IsStructureDomainKind(DomainKind kind)
+{
+	return kind == DomainKind::NativeTetSolidStructure;
 }
 
 inline int DomainTopologyDimensionOf(DomainKind kind)
 {
 	if (kind == DomainKind::OneDFlow) return 1;
 	if (kind == DomainKind::ZeroDFlow) return 0;
-	if (kind == DomainKind::ThreeDBodyFittedFlow) return 3;
+	if (kind == DomainKind::ThreeDBodyFittedFlow || kind == DomainKind::NativeTetAleFlow
+		|| kind == DomainKind::NativeTetSolidStructure) return 3;
 	throw std::runtime_error("domain kind has no topology dimension");
 }
 

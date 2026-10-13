@@ -105,7 +105,9 @@ viscosity, optional `boundary_velocity_by_label_m_s` and
 are aligned by coordinates even when the mesh node IDs differ. The runtime
 solves with PETSc on `resources.mpi_ranks` ranks (each holding the whole
 meshes); see [FSI architecture](architecture/FSI_ARCHITECTURE.md) for its
-solver options. Each step writes flow and wall `.pvtu`
+solver options and for the equivalent multidomain graph case
+(`native_tet_ale_flow` + `native_tet_solid_structure` domains with an
+`fsi_couplings` entry, run by `solvers/coupling/native_tet_fsi_graph`). Each step writes flow and wall `.pvtu`
 snapshots and updates `flow.pvd` and `wall.pvd`. Its step ledger reports
 interface force and power, wall displacement, moving volume and flux, and ALE
 GCL residual.
