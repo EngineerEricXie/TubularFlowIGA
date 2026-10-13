@@ -1,9 +1,11 @@
 #include "CaseConfig.hpp"
 #include "NativeTetAleConservation.hpp"
 #include "NativeTetAleFsiRuntime.hpp"
+#include "NativeTetAlePetscRuntime.hpp"
 #include "NativeTetHydraulicVisualization.hpp"
 #include "NativeTetLinearElasticVisualization.hpp"
 #include "NativeTetMovingSpeciesPetscRuntime.hpp"
+#include "NativeTetPetscLinearSolve.hpp"
 #include "NativeTetSpeciesVisualization.hpp"
 #include "NativeTetSolidFsiRuntime.hpp"
 #include "ParallelVtkOutput.hpp"
@@ -287,8 +289,22 @@ int main(int argc,char** argv)
 	int rank=0,ranks=1,status=0;
 	MPI_Comm_rank(PETSC_COMM_WORLD,&rank);MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
 	try{
-		if(argc!=3||ranks!=1)throw std::invalid_argument(
-			"usage: native_tet_fsi_steps case.json output_dir (one MPI rank)");
+		// PETSc options follow the two positional arguments.
+		if(argc<3||argv[1][0]=='-'||argv[2][0]=='-')throw std::invalid_argument(
+			"usage: native_tet_fsi_steps case.json output_dir [PETSc options]");
+		// The fluid, mesh motion, and solid solve with PETSc on all ranks (each
+		// rank holds the whole mesh); -fsi_dense_solvers keeps the single-rank
+		// dense solvers for comparison. Options prefixed fsi_mesh_ and fsi_solid_
+		// tune the mesh-motion (CG/Jacobi) and solid (LU) solves; unprefixed KSP
+		// options tune the fluid, as for the other native ALE solvers.
+		PetscBool dense_solvers=PETSC_FALSE;
+		PetscOptionsGetBool(nullptr,nullptr,"-fsi_dense_solvers",&dense_solvers,nullptr);
+		if(dense_solvers&&ranks!=1)
+			throw std::invalid_argument("-fsi_dense_solvers runs on one MPI rank");
+		// Newton tolerances of the fluid (absolute residual) and solid (relative).
+		PetscReal fluid_tolerance=1e-6,solid_relative_tolerance=1e-5;
+		PetscOptionsGetReal(nullptr,nullptr,"-fsi_fluid_tolerance",&fluid_tolerance,nullptr);
+		PetscOptionsGetReal(nullptr,nullptr,"-fsi_solid_rtol",&solid_relative_tolerance,nullptr);
 		const auto scenario=Parse(argv[1]);
 		auto fluid_mesh=ReadMesh(scenario.fluid_mesh);
 		auto solid_mesh=ReadMesh(scenario.solid_mesh);
@@ -334,18 +350,38 @@ int main(int argc,char** argv)
 			for(auto node:topology.boundary_velocity_nodes.at(boundary.first))
 				essential_velocity.emplace(node,interface_nodes.count(node)
 					?std::array<double,3>{{0.,0.,0.}}:boundary.second);
+		iga::NativeTetAleFsiSolvers solvers;
+		if(!dense_solvers){
+			solvers.fluid=[](const iga::NativeTetMesh& mesh,
+				const std::vector<std::array<double,3>>& mesh_velocity,
+				const std::vector<double>& committed,const std::vector<double>& trial,
+				const std::map<std::uint32_t,std::array<double,3>>& prescribed,
+				std::uint32_t gauge,const iga::NativeNavierStokesParameters& parameters,
+				double dt,double tolerance,std::size_t iterations){
+				auto solve=iga::SolveNativeTetAlePetscTransient(mesh,mesh_velocity,committed,trial,
+					prescribed,gauge,parameters,dt,tolerance,iterations);
+				iga::NativeTetAleDenseSolveResult result;
+				result.state=std::move(solve.replicated_state);
+				result.newton_iterations=solve.newton_iterations;
+				result.final_free_residual_l2=solve.final_residual_l2;
+				return result;};
+			iga::NativeTetPetscLinearSolveDefaults motion;
+			motion.ksp_type=KSPCG;motion.pc_type=PCJACOBI;motion.factor_package.clear();
+			solvers.mesh_motion=iga::MakeNativeTetPetscLinearSolve("fsi_mesh_",motion);
+		}
 		iga::NativeTetAleFsiRuntime fluid("fluid","native-ale",edge,fluid_surface,
 			solid_surface,layout,layout,fluid_mesh,scenario.interface_label,
-			{scenario.density,scenario.viscosity},0,initial,0.,1e-6,30,
-			essential_velocity,scenario.natural_labels);
+			{scenario.density,scenario.viscosity},0,initial,0.,fluid_tolerance,30,
+			essential_velocity,scenario.natural_labels,{},{},std::move(solvers));
 		std::map<std::size_t,double> constraints;
 		for(auto node:scenario.fixed_nodes)
 			for(int axis=0;axis<3;++axis)
 				constraints.emplace(3*solid_node_map.at(node)+axis,0.);
 		iga::NativeTetSolidStaticOptions solid_options;
-		solid_options.relative_tolerance=1e-5;
+		solid_options.relative_tolerance=solid_relative_tolerance;
 		solid_options.absolute_tolerance_n=1e-8;
 		solid_options.maximum_iterations=40;
+		if(!dense_solvers)solid_options.linear_solve=iga::MakeNativeTetPetscLinearSolve("fsi_solid_");
 		iga::NativeTetSolidFsiRuntime solid("solid","native-solid",edge,solid_surface,
 			fluid_surface,layout,layout,solid_mesh,scenario.interface_label,
 			{scenario.young,scenario.poisson,scenario.solid_density},constraints,

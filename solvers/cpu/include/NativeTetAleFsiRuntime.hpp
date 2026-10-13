@@ -14,6 +14,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -24,6 +25,23 @@
 #include <vector>
 
 namespace iga {
+
+// One fluid Newton solve of an ALE step, with the arguments of
+// SolveNativeTetAleDenseTransient (current mesh, vertex mesh velocity,
+// committed and trial states, prescribed velocity, pressure gauge node,
+// parameters, dt, absolute tolerance, iteration limit).
+using NativeTetAleFluidSolve=std::function<NativeTetAleDenseSolveResult(const NativeTetMesh&,
+	const std::vector<std::array<double,3>>&,const std::vector<double>&,const std::vector<double>&,
+	const std::map<std::uint32_t,std::array<double,3>>&,std::uint32_t,const NativeNavierStokesParameters&,
+	double,double,std::size_t)>;
+
+// Solvers for the fluid step and the harmonic mesh motion; empty members use
+// the dense single-process solvers.
+struct NativeTetAleFsiSolvers
+{
+	NativeTetAleFluidSolve fluid;
+	NativeTetLinearSolve mesh_motion;
+};
 
 class NativeTetAleFsiRuntime final : public FsiFluidDomainRuntime {
 public:
@@ -41,13 +59,15 @@ public:
 		std::map<std::uint32_t,std::array<double,3>> prescribed_noninterface_velocity={},
 		std::set<int> natural_velocity_labels={},
 		std::vector<std::array<double,3>> initial_ale_displacement_m={},
-		std::vector<std::array<double,3>> initial_interface_displacement_m={})
+		std::vector<std::array<double,3>> initial_interface_displacement_m={},
+		NativeTetAleFsiSolvers solvers={})
 		:domain_id_(std::move(domain_id)),subsystem_id_(std::move(subsystem_id)),edge_(std::move(edge)),
 		 catalog_{std::move(fluid_surface)},structure_surface_(std::move(structure_surface)),
 		 fluid_layout_(std::move(fluid_layout)),structure_layout_(std::move(structure_layout)),
 		 reference_mesh_(std::move(reference_mesh)),topology_(BuildNativeTaylorHoodTopology(reference_mesh_)),
 		 interface_label_(interface_label),parameters_(parameters),pressure_gauge_node_(pressure_gauge_node),
 		 nonlinear_tolerance_(nonlinear_tolerance),maximum_iterations_(maximum_iterations),
+		 solvers_(std::move(solvers)),
 		 prescribed_noninterface_velocity_(std::move(prescribed_noninterface_velocity)),
 		 natural_velocity_labels_(std::move(natural_velocity_labels)),
 		 ale_(reference_mesh_.points,reference_mesh_.cells,initial_time_s,std::move(initial_ale_displacement_m)),
@@ -145,13 +165,15 @@ public:
 	{
 		lifecycle_.RequireSolveAllowed();if(!kinematics_)throw std::runtime_error("native tetrahedral ALE FSI input is unavailable");
 		const auto boundary_displacement=BuildBoundaryDisplacement(*kinematics_);
-		const auto motion=SolveNativeTetAleHarmonicMotion(reference_mesh_,boundary_displacement);
+		const auto motion=SolveNativeTetAleHarmonicMotion(reference_mesh_,boundary_displacement,
+			solvers_.mesh_motion);
 		const auto& geometry=ale_.BeginTrial(motion.displacement_m,lifecycle_.Context().EndTime());
 		try{
 			const auto current_mesh=BuildNativeTetAleCurrentMesh(reference_mesh_,geometry);
 			const auto prescribed_velocity=BuildFluidBoundaryVelocity(geometry);
 			NativeTetAleFsiTrial candidate;
-			candidate.solve=SolveNativeTetAleDenseTransient(current_mesh,geometry.mesh_velocity_m_s,
+			const auto& solve=solvers_.fluid?solvers_.fluid:NativeTetAleFluidSolve(SolveNativeTetAleDenseTransient);
+			candidate.solve=solve(current_mesh,geometry.mesh_velocity_m_s,
 				committed_fluid_state_,committed_fluid_state_,prescribed_velocity,pressure_gauge_node_,
 				parameters_,geometry.dt_s,nonlinear_tolerance_,maximum_iterations_);
 			const auto triangle_traction=EvaluateNativeTetFluidTractionOnMatchingStructure(current_mesh,
@@ -343,6 +365,7 @@ private:
 	NativeTetMesh reference_mesh_;NativeTaylorHoodTopology topology_;int interface_label_=-1;
 	NativeNavierStokesParameters parameters_;std::uint32_t pressure_gauge_node_=0;
 	double nonlinear_tolerance_=1e-8;std::size_t maximum_iterations_=12;
+	NativeTetAleFsiSolvers solvers_;
 	std::map<std::uint32_t,std::array<double,3>> prescribed_noninterface_velocity_;
 	std::set<int> natural_velocity_labels_;
 	NativeTetAleKinematics ale_;

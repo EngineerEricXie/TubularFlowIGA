@@ -715,14 +715,14 @@ def run_one(base, domain, output, dry_run, ranks, args, time, waveforms, every_s
 		if device != "CPU":
 			raise ValueError("the selected FEM backend has no GPU route")
 		if domain.get("backend") == "native_tet_fsi_steps":
-			if ranks != 1 or waveforms or every_steps not in (None, 1):
-				raise ValueError("native FEM FSI uses one CPU rank and every-step output")
+			if waveforms or every_steps not in (None, 1):
+				raise ValueError("native FEM FSI uses every-step output and no waveforms")
 			case = domain_case(base, domain)
 			case_time = read_json(case)["time"]
 			if any(case_time.get(key) != time[key]
 					for key in ("dt_s", "steps") if key in time):
 				raise ValueError("FEM FSI outer time must match the referenced case")
-			run(["mpiexec", "-np", "1", ROOT / "solvers/cpu/native_tet_fsi_steps",
+			run(["mpiexec", "-np", str(ranks), ROOT / "solvers/cpu/native_tet_fsi_steps",
 				case, output], dry_run)
 			return
 		if domain.get("backend") == "native_tet_flow_darcy_chain":
