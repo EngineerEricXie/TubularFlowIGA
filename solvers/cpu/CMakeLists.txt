@@ -581,3 +581,11 @@ tfi_test(temporal_unstructured_vtkhdf_test COMMAND [==[./temporal_unstructured_v
 # native_tet_fsi_steps: PETSc on one and two ranks and the dense solvers agree.
 tfi_test(native_tet_fsi_ranks COMMAND [==[python3 tests/run_native_tet_fsi_ranks.py "$TMPDIR/out" --launcher "@TFI_MPIEXEC@"]==]
 	REQUIRES native_tet_fsi_steps MAKE petsc-test native-tet-fsi-ranks-test LABELS petsc mpi PETSC_PACKAGES MUMPS)
+tfi_test(native_tet_fsi_iterative COMMAND [==[python3 tests/run_native_tet_fsi_ranks.py "$TMPDIR/out" --iterative --launcher "@TFI_MPIEXEC@"]==]
+	REQUIRES native_tet_fsi_steps MAKE petsc-test native-tet-fsi-iterative-test LABELS petsc mpi PETSC_PACKAGES MUMPS HYPRE)
+
+# Partitioned ALE fluid: each rank assembles its own cells; the result matches
+# the replicated runtime on one, two, and three ranks.
+tfi_executable(native_tet_ale_distributed_runtime_test SOURCES tests/test_native_tet_ale_distributed_runtime.cpp PETSC)
+tfi_test(native_tet_ale_distributed_runtime_test COMMAND [==[./native_tet_ale_distributed_runtime_test && @TFI_MPIEXEC@ -np 2 ./native_tet_ale_distributed_runtime_test && @TFI_MPIEXEC@ -np 3 ./native_tet_ale_distributed_runtime_test]==]
+	REQUIRES native_tet_ale_distributed_runtime_test MAKE petsc-test native-tet-ale-distributed-runtime-test LABELS petsc mpi PETSC_PACKAGES MUMPS)

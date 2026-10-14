@@ -7,6 +7,7 @@
 
 #include "CaseConfig.hpp"
 #include "NativeTetAleConservation.hpp"
+#include "NativeTetAleDistributedRuntime.hpp"
 #include "NativeTetAleFsiRuntime.hpp"
 #include "NativeTetAlePetscRuntime.hpp"
 #include "NativeTetHydraulicVisualization.hpp"
@@ -389,9 +390,14 @@ inline std::vector<std::array<double,3>> NativeTetFsiVertexVelocity(
 // for comparison. Options prefixed fsi_mesh_ and fsi_solid_ tune the
 // mesh-motion (CG/Jacobi) and solid (LU) solves; unprefixed KSP options tune
 // the fluid, as for the other native ALE solvers.
+// -fsi_distributed_fluid partitions the fluid mesh over the ranks (ParMETIS)
+// and assembles each rank's own cells (NativeTetAleDistributedRuntime) instead
+// of replicating the assembly; the coupling and output still see the
+// replicated state, so results are identical to round-off.
 struct NativeTetFsiSolverOptions
 {
 	bool dense_solvers=false;
+	bool distributed_fluid=false;
 	double fluid_tolerance=1e-6;       // fluid Newton absolute residual
 	double solid_relative_tolerance=1e-5;
 };
@@ -404,6 +410,11 @@ inline NativeTetFsiSolverOptions ReadNativeTetFsiSolverOptions(int ranks)
 	options.dense_solvers=dense;
 	if(options.dense_solvers&&ranks!=1)
 		throw std::invalid_argument("-fsi_dense_solvers runs on one MPI rank");
+	PetscBool distributed=PETSC_FALSE;
+	PetscOptionsGetBool(nullptr,nullptr,"-fsi_distributed_fluid",&distributed,nullptr);
+	options.distributed_fluid=distributed;
+	if(options.distributed_fluid&&options.dense_solvers)
+		throw std::invalid_argument("-fsi_distributed_fluid and -fsi_dense_solvers exclude each other");
 	PetscReal fluid_tolerance=options.fluid_tolerance,solid_tolerance=options.solid_relative_tolerance;
 	PetscOptionsGetReal(nullptr,nullptr,"-fsi_fluid_tolerance",&fluid_tolerance,nullptr);
 	PetscOptionsGetReal(nullptr,nullptr,"-fsi_solid_rtol",&solid_tolerance,nullptr);
@@ -477,7 +488,30 @@ public:
 				essential_velocity.emplace(node,interface_nodes.count(node)
 					?std::array<double,3>{{0.,0.,0.}}:boundary.second);
 		NativeTetAleFsiSolvers solvers;
-		if(!options.dense_solvers){
+		if(options.distributed_fluid){
+			distributed_fluid_=std::make_unique<NativeTetAleDistributedMesh>(fluid_mesh_,PETSC_COMM_WORLD);
+			const auto* distributed=distributed_fluid_.get();const auto* replicated_topology=&topology_;
+			solvers.fluid=[distributed,replicated_topology](const NativeTetMesh& mesh,
+				const std::vector<std::array<double,3>>& mesh_velocity,
+				const std::vector<double>& committed,const std::vector<double>& trial,
+				const std::map<std::uint32_t,std::array<double,3>>& prescribed,
+				std::uint32_t gauge,const NativeNavierStokesParameters& parameters,
+				double dt,double tolerance,std::size_t iterations){
+				auto solve=SolveNativeTetAleDistributed(*distributed,*replicated_topology,mesh.points,mesh_velocity,
+					committed,trial,prescribed,gauge,parameters,dt,false,tolerance,iterations);
+				NativeTetAleDenseSolveResult result;
+				result.state=std::move(solve.replicated_state);
+				result.newton_iterations=solve.newton_iterations;
+				result.final_free_residual_l2=solve.final_residual_l2;
+				return result;};
+			NativeTetPetscLinearSolveDefaults motion;
+			motion.ksp_type=KSPCG;motion.pc_type=PCJACOBI;motion.factor_package.clear();
+			solvers.mesh_motion=MakeNativeTetPetscLinearSolve("fsi_mesh_",motion);
+			int rank=0;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
+			if(rank==0)std::cout<<"native_fsi_distributed_fluid ranks="<<distributed->partition.ranks
+				<<" global_cells="<<fluid_mesh_.cells.size()<<" rank0_local_cells="<<distributed->partition.local.cells.size()
+				<<" rank0_owned_rows="<<distributed->dofs.OwnedRows()<<" global_rows="<<distributed->dofs.global_rows<<'\n';
+		}else if(!options.dense_solvers){
 			solvers.fluid=[](const NativeTetMesh& mesh,
 				const std::vector<std::array<double,3>>& mesh_velocity,
 				const std::vector<double>& committed,const std::vector<double>& trial,
@@ -659,6 +693,7 @@ private:
 	std::unique_ptr<FsiCouplingEdge> edge_;
 	NativeTaylorHoodTopology topology_;
 	std::size_t velocity_nodes_=0;
+	std::unique_ptr<NativeTetAleDistributedMesh> distributed_fluid_;
 	std::unique_ptr<NativeTetAleFsiRuntime> fluid_;
 	std::unique_ptr<NativeTetSolidFsiRuntime> solid_;
 	std::unique_ptr<Coordinator> coordinator_;

@@ -261,3 +261,63 @@ interface and layout identities, and the FSI edge identity.
 Scalar pressure/flow ports on the FSI pair are not accepted yet: driving
 strong coupling inside the pressure/flow executor of `iga_multidomain_flow` is
 the next graph step, so an FSI-only graph holds exactly its two domains.
+
+## Partitioned fluid
+
+`-fsi_distributed_fluid` partitions the fluid mesh over the ranks with
+ParMETIS (`NativeTetMeshPartition.hpp`): each rank keeps its owned cells plus
+the halo cells touching its owned vertices, numbers its owned vertices and
+edges into one contiguous PETSc row block (`NativeTetDistributedDofs.hpp`), and
+assembles only its own cells and boundary faces into a ghosted PETSc system
+(`NativeTetAleDistributedRuntime.hpp`). The replicated runtime instead keeps
+the whole mesh on every rank and assembles cells round-robin. Both produce the
+same discrete system, so results agree to round-off (`native_tet_fsi_ranks`
+checks this); the coupling and the outputs still receive the replicated state
+through one reduction per Newton solve. `-native_ale_scale` applies the same
+row/column scaling as the replicated runtime, so the fluid can also be solved
+iteratively on the partitioned mesh. Flow-rate controllers are not supported
+on the partitioned path yet.
+
+### Iterative fluid solver
+
+The direct solver (MUMPS) dominates per-rank memory; the option set below
+replaces it with FGMRES and a full Schur fieldsplit on the scaled system,
+GMRES with block ILU on the velocity block and an LSC Schur preconditioner
+(BoomerAMG inside) on the pressure block. It is the set `native_tet_fsi_iterative`
+checks against MUMPS:
+
+```
+-native_ale_scale true -native_ale_user_schur false
+-ksp_type fgmres -ksp_rtol 1e-6 -ksp_max_it 500
+-pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full
+-pc_fieldsplit_schur_precondition self
+-fieldsplit_pressure_ksp_type gmres -fieldsplit_pressure_ksp_max_it 30 -fieldsplit_pressure_ksp_rtol 1e-3
+-fieldsplit_pressure_pc_type lsc -fieldsplit_pressure_lsc_pc_type hypre
+-fieldsplit_velocity_ksp_type gmres -fieldsplit_velocity_ksp_max_it 50 -fieldsplit_velocity_ksp_rtol 1e-3
+-fieldsplit_velocity_pc_type bjacobi -fieldsplit_velocity_sub_pc_type ilu
+```
+
+A single BoomerAMG cycle on the velocity block (`-fieldsplit_velocity_ksp_type
+preonly -fieldsplit_velocity_pc_type hypre`) is not a usable preconditioner for
+these transient ALE systems: the outer FGMRES then stagnates at a few percent of
+the initial residual on some Newton systems, on both runtimes and any rank
+count, and whether a run survives the iteration cap is luck. With an exact
+velocity solve the `selfp` Schur preconditioner needs up to ~50 outer
+iterations and LSC at most 3, which is why the set above combines LSC with the
+block-ILU velocity solve (inner velocity solves converge in ≤ 13 iterations).
+
+Wall time of a 2-step run of the generated channel case
+(`generate_fsi_channel_fixture.py --divisions`) and maximum resident set of one
+process, PETSc 3.22 with MUMPS and hypre, `OMP_NUM_THREADS=1`, default
+coupling tolerances:
+
+| Fluid cells | Ranks | Replicated + MUMPS | Partitioned + MUMPS | Replicated + iterative | Partitioned + iterative |
+|---|---|---|---|---|---|
+| 3,072 | 1 | 50.6 s, 206 MiB | — | 42.7 s, 101 MiB | — |
+| 3,072 | 4 | 28.0 s, 130 MiB | 23.1 s, 102 MiB | 22.8 s, 85 MiB | 14.0 s, 55 MiB |
+| 24,576 | 4 | 518 s, 1,147 MiB | 542 s, 890 MiB | 288 s, 443 MiB | 157 s, 185 MiB |
+
+The partitioned fluid with the iterative solver is where the two reductions
+combine: on the 24,576-cell case it runs 3.3× faster than the replicated MUMPS
+fluid in a sixth of the memory per rank. The interface forces agree with the
+MUMPS runs of the same runtime to 1e-8 relative or better.
