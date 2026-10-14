@@ -5,6 +5,11 @@ On the generated FSI channel fixture, the PETSc solvers on one and on two
 ranks must give the same step ledger to round-off (every rank holds the whole
 problem), and with tight Newton tolerances they must agree with the dense
 one-rank solvers to 1e-6 relative.
+
+With --iterative, the partitioned fluid (-fsi_distributed_fluid) is solved on
+two ranks with the scaled Schur-fieldsplit options (block-ILU velocity, LSC
+pressure with BoomerAMG) instead of MUMPS and must reproduce the one-rank MUMPS
+ledger to 1e-6 relative (needs hypre).
 """
 import argparse
 import re
@@ -16,6 +21,18 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 TIGHT = ["-fsi_fluid_tolerance", "1e-11", "-fsi_solid_rtol", "1e-11"]
+# Fluid Newton systems through FGMRES with a full Schur fieldsplit on the
+# row/column-scaled system: GMRES/block-ILU on the velocity block and an LSC
+# Schur preconditioner (BoomerAMG inside) on the pressure block. A single
+# BoomerAMG cycle on the velocity block stagnates on these systems.
+ITERATIVE = shlex.split(
+	"-native_ale_scale true -native_ale_user_schur false -ksp_type fgmres -ksp_rtol 1e-6 -ksp_max_it 500 "
+	"-pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full "
+	"-pc_fieldsplit_schur_precondition self -fieldsplit_pressure_ksp_type gmres "
+	"-fieldsplit_pressure_ksp_max_it 30 -fieldsplit_pressure_ksp_rtol 1e-3 -fieldsplit_pressure_pc_type lsc "
+	"-fieldsplit_pressure_lsc_pc_type hypre -fieldsplit_velocity_ksp_type gmres "
+	"-fieldsplit_velocity_ksp_max_it 50 -fieldsplit_velocity_ksp_rtol 1e-3 -fieldsplit_velocity_pc_type bjacobi "
+	"-fieldsplit_velocity_sub_pc_type ilu")
 
 
 def ledger(text):
@@ -47,6 +64,8 @@ def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("root", type=Path, help="new output directory")
 	parser.add_argument("--launcher", default="mpiexec --oversubscribe")
+	parser.add_argument("--iterative", action="store_true",
+		help="check only the partitioned fluid with the iterative solver against one MUMPS rank")
 	args = parser.parse_args()
 	root = args.root.resolve()
 	root.mkdir(parents=True)
@@ -63,6 +82,11 @@ def main():
 		return ledger(result.stdout)
 
 	one = run("petsc-1", 1, TIGHT)
+	if args.iterative:
+		iterative = run("distributed-iterative-2", 2, TIGHT+ITERATIVE+["-fsi_distributed_fluid"])
+		compare("partitioned iterative fluid vs MUMPS", iterative, one, 1e-6)
+		print(f"native FSI iterative: partitioned fieldsplit/hypre fluid matches MUMPS over {len(one)} ledger values")
+		return
 	two = run("petsc-2", 2, TIGHT)
 	dense = run("dense", 1, TIGHT+["-fsi_dense_solvers"])
 	distributed = run("distributed-2", 2, TIGHT+["-fsi_distributed_fluid"])

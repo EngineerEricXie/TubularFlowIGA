@@ -8,7 +8,8 @@
 // replicated layout of the serial runtime (velocity of every vertex and edge
 // node, then pressure of every vertex), so callers can switch between the two
 // runtimes; the replicated result costs one Allreduce of that layout.
-// Flow-rate controllers and system scaling are not supported here.
+// Flow-rate controllers are not supported here; -native_ale_scale applies the
+// replicated runtime's row/column scaling to the owned rows.
 
 #include "NativeTetAleBoundaryControl.hpp"
 #include "NativeTetAleBackflow.hpp"
@@ -40,6 +41,7 @@ struct NativeTetAleDistributedResult
 	double final_residual_l2=0.0;
 	PetscInt total_linear_iterations=0;
 	std::string linear_solver_type,preconditioner_type;
+	bool system_scaling_enabled=false;
 	PetscInt owned_rows=0,global_rows=0;
 };
 
@@ -69,10 +71,13 @@ struct Objects
 {
 	Mat matrix=nullptr;
 	Vec state=nullptr,residual=nullptr,right=nullptr,update=nullptr,base_state=nullptr;
+	Vec row_scale=nullptr,column_scale=nullptr;
 	KSP solver=nullptr;
 	~Objects()
 	{
 		if(solver)KSPDestroy(&solver);
+		if(column_scale)VecDestroy(&column_scale);
+		if(row_scale)VecDestroy(&row_scale);
 		if(base_state)VecDestroy(&base_state);
 		if(update)VecDestroy(&update);
 		if(right)VecDestroy(&right);
@@ -139,7 +144,6 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 		throw std::invalid_argument("native ALE distributed runtime input is invalid");
 	PetscBool scale_system=PETSC_FALSE;
 	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_scale",&scale_system,nullptr);
-	if(scale_system)throw std::invalid_argument("native ALE distributed runtime does not support -native_ale_scale");
 	// Current local mesh and the replicated-layout index of every local unknown.
 	NativeTetMesh current=partition.local;
 	for(std::size_t local=0;local<current.points.size();++local)
@@ -200,6 +204,46 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 	NativeTetAlePetscCheck(VecDuplicate(petsc.residual,&petsc.right),"VecDuplicate right distributed");
 	NativeTetAlePetscCheck(VecDuplicate(petsc.residual,&petsc.update),"VecDuplicate update distributed");
 	NativeTetAlePetscCheck(VecDuplicate(petsc.residual,&petsc.base_state),"VecDuplicate base distributed");
+	// Row/column scaling as in the replicated runtime: the same characteristic
+	// velocity, length (shortest extent of the whole mesh), and pressure on
+	// every rank, applied to the owned velocity and pressure rows.
+	if(scale_system){
+		double characteristic_velocity=0.0;
+		for(const auto& prescribed:prescribed_velocity){
+			const auto& value=prescribed.second;
+			characteristic_velocity=std::max(characteristic_velocity,
+				std::sqrt(value[0]*value[0]+value[1]*value[1]+value[2]*value[2]));
+		}
+		if(!(characteristic_velocity>0.0))characteristic_velocity=1.0;
+		std::array<double,3> minimum=current_points_m.front(),maximum=minimum;
+		for(const auto& point:current_points_m)
+			for(int component=0;component<3;++component){
+				minimum[component]=std::min(minimum[component],point[component]);
+				maximum[component]=std::max(maximum[component],point[component]);
+			}
+		double characteristic_length=std::numeric_limits<double>::max();
+		for(int component=0;component<3;++component){
+			const double extent=maximum[component]-minimum[component];
+			if(extent>0.0)characteristic_length=std::min(characteristic_length,extent);
+		}
+		if(!std::isfinite(characteristic_length)||!(characteristic_length>0.0))
+			throw std::runtime_error("native ALE distributed scaling cannot determine a length scale");
+		const double pressure_scale=(steady?0.0:parameters.density*characteristic_velocity*characteristic_length/dt_s)
+			+parameters.dynamic_viscosity*characteristic_velocity/characteristic_length
+			+parameters.density*characteristic_velocity*characteristic_velocity;
+		NativeTetAlePetscCheck(VecDuplicate(petsc.residual,&petsc.row_scale),"VecDuplicate row scale distributed");
+		NativeTetAlePetscCheck(VecDuplicate(petsc.residual,&petsc.column_scale),"VecDuplicate column scale distributed");
+		PetscScalar* row_values=nullptr;PetscScalar* column_values=nullptr;
+		NativeTetAlePetscCheck(VecGetArray(petsc.row_scale,&row_values),"VecGetArray row scale distributed");
+		NativeTetAlePetscCheck(VecGetArray(petsc.column_scale,&column_values),"VecGetArray column scale distributed");
+		for(PetscInt row=begin;row<end;++row){
+			const bool velocity=row<dofs.velocity_rows_end;
+			row_values[row-begin]=velocity?1.0/(pressure_scale*characteristic_length):1.0/(characteristic_velocity*characteristic_length);
+			column_values[row-begin]=velocity?characteristic_velocity:pressure_scale;
+		}
+		NativeTetAlePetscCheck(VecRestoreArray(petsc.row_scale,&row_values),"VecRestoreArray row scale distributed");
+		NativeTetAlePetscCheck(VecRestoreArray(petsc.column_scale,&column_values),"VecRestoreArray column scale distributed");
+	}
 	// Initial owned state from the replicated trial state.
 	{
 		PetscScalar* owned=nullptr;NativeTetAlePetscCheck(VecGetArray(petsc.state,&owned),"VecGetArray state distributed");
@@ -280,6 +324,7 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 	NativeTetAleDistributedResult result;
 	KSPType ksp_type=nullptr;KSPGetType(petsc.solver,&ksp_type);
 	result.linear_solver_type=ksp_type?ksp_type:"unknown";result.preconditioner_type=pc_type?pc_type:"unknown";
+	result.system_scaling_enabled=scale_system==PETSC_TRUE;
 	result.owned_rows=local_rows;result.global_rows=global_rows;
 	bool line_search_pending=false;double base_residual_norm=0.0,step_length=1.0;
 	for(std::size_t iteration=0;iteration<=maximum_iterations;++iteration){
@@ -392,7 +437,10 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 		if(norm<=absolute_tolerance)break;
 		if(iteration==maximum_iterations)
 			throw std::runtime_error("native ALE distributed Newton did not converge: residual="+std::to_string(static_cast<double>(norm)));
-		NativeTetAlePetscCheck(VecCopy(petsc.residual,petsc.right),"VecCopy right distributed");
+		if(scale_system){
+			NativeTetAlePetscCheck(MatDiagonalScale(petsc.matrix,petsc.row_scale,petsc.column_scale),"MatDiagonalScale distributed");
+			NativeTetAlePetscCheck(VecPointwiseMult(petsc.right,petsc.residual,petsc.row_scale),"VecPointwiseMult right distributed");
+		}else NativeTetAlePetscCheck(VecCopy(petsc.residual,petsc.right),"VecCopy right distributed");
 		NativeTetAlePetscCheck(VecScale(petsc.right,-1.0),"VecScale right distributed");
 		NativeTetAlePetscCheck(KSPSetOperators(petsc.solver,petsc.matrix,petsc.matrix),"KSPSetOperators distributed");
 		NativeTetAlePetscCheck(KSPSolve(petsc.solver,petsc.right,petsc.update),"KSPSolve distributed");
@@ -400,6 +448,7 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 		PetscInt iterations=0;KSPGetIterationNumber(petsc.solver,&iterations);result.total_linear_iterations+=iterations;
 		if(reason<=0)throw std::runtime_error("native ALE distributed linear solve did not converge: reason="
 			+std::to_string(static_cast<int>(reason))+" iterations="+std::to_string(static_cast<long long>(iterations)));
+		if(scale_system)NativeTetAlePetscCheck(VecPointwiseMult(petsc.update,petsc.update,petsc.column_scale),"VecPointwiseMult update distributed");
 		NativeTetAlePetscCheck(VecCopy(petsc.state,petsc.base_state),"VecCopy base distributed");
 		base_residual_norm=norm;step_length=1.0;line_search_pending=true;
 		NativeTetAlePetscCheck(VecAXPY(petsc.state,step_length,petsc.update),"VecAXPY update distributed");

@@ -77,12 +77,19 @@ int main(int argc,char** argv)
 		const iga::NativeTetAleDistributedMesh distributed(mesh,PETSC_COMM_WORLD);
 		// Two steps: the second starts from the first step's state, so the
 		// committed field is non-uniform and exercises every ghost and edge map.
+		// The pass with -native_ale_scale solves the scaled system with the same
+		// direct solver, so it must reproduce the unscaled reference as well.
 		double relative=0.0;std::size_t newton_total=0;
-		for(int step=0;step<2;++step){
+		for(int pass=0;pass<4;++pass){
+			const int step=pass%2;const bool scaled=pass>=2;
+			if(step==0){committed.assign(committed.size(),0.0);trial=committed;
+				for(const auto& item:prescribed)for(int component=0;component<3;++component)trial[3*item.first+component]=item.second[component];}
+			PetscOptionsSetValue(nullptr,"-native_ale_scale",scaled?"true":"false");
 			const auto reference=iga::SolveNativeTetAlePetscTransient(mesh,mesh_velocity,committed,trial,prescribed,
 				std::numeric_limits<std::uint32_t>::max(),parameters,dt,tolerance,12,conditions);
 			const auto result=iga::SolveNativeTetAleDistributed(distributed,topology,mesh.points,mesh_velocity,committed,trial,
 				prescribed,std::numeric_limits<std::uint32_t>::max(),parameters,dt,false,tolerance,12,conditions);
+			if(result.system_scaling_enabled!=scaled)throw std::runtime_error("distributed runtime ignored -native_ale_scale");
 			double difference=0.0,scale=0.0;
 			for(std::size_t dof=0;dof<reference.replicated_state.size();++dof){
 				const double d=reference.replicated_state[dof]-result.replicated_state[dof];
