@@ -25,6 +25,12 @@
 namespace iga {
 
 enum class GraphExecutionKind { Explicit, Fixed, Aitken };
+struct FsiCouplingDefinition {
+	std::string id;
+	std::string fluid_domain_id, fluid_interface_id;
+	std::string structure_domain_id, structure_interface_id;
+};
+
 struct GraphTimeDefinition {
 	double dt_s = 0.0;
 	int steps = 0;
@@ -50,6 +56,8 @@ struct GraphDomainDefinition {
 	std::filesystem::path database;
 	std::filesystem::path zero_d_model;
 	std::optional<ZeroDFlowModelConfiguration> zero_d_flow_model;
+	// Native FSI domains: interface id and the boundary labels it covers.
+	std::vector<std::pair<std::string, std::set<int>>> surface_interfaces;
 	OneDInletPolicy one_d_inlet_policy = OneDInletPolicy::ConfiguredOpenLoop;
 	std::vector<CouplingPort> ports;
 	std::map<std::string, std::string> species_bindings;
@@ -64,6 +72,9 @@ struct MultidomainConfiguration {
 	std::vector<GraphDomainDefinition> domains;
 	std::map<std::string, double> initial_pressure_pa;
 	SimulationGraph graph;
+	// FSI couplings between native_tet_ale_flow and native_tet_solid_structure
+	// domains; the graph's FSI edges are built once the meshes supply layouts.
+	std::vector<FsiCouplingDefinition> fsi_couplings;
 
 	MultidomainConfiguration(int schema, GraphTimeDefinition time_value, std::string start_domain,
 		GraphExecutionDefinition execution_value, DomainResourceDefinition resource_value,
@@ -240,7 +251,7 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 	const auto context = "domains["+std::to_string(index)+"]";
 	const auto& object = RequireObject(value, context);
 	auto keys = std::set<std::string>{"id", "dimension", "kind", "case", "database",
-		"inlet_policy", "ports"};
+		"inlet_policy", "ports", "surface_interfaces"};
 	if (schema_version == 5) keys.insert("zero_d_model");
 	if (schema_version == 6) {
 		keys.insert("species_bindings");
@@ -287,6 +298,13 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 		throw std::runtime_error("simulation_config.json: "+context
 			+" uses the removed three_d_immersed_flow kind; it is kept at git tag"
 			" archive/immersed-shell-2026-10");
+	} else if (dimension == "3d"
+		&& (kind == "native_tet_ale_flow" || kind == "native_tet_solid_structure")) {
+		domain.kind = kind == "native_tet_ale_flow" ? DomainKind::NativeTetAleFlow
+			: DomainKind::NativeTetSolidStructure;
+		if (Find(object, "database") || Find(object, "inlet_policy"))
+			throw std::runtime_error("simulation_config.json: "+context
+				+" native FSI domain does not accept database or inlet_policy");
 	} else if (dimension == "0d" && kind == "zero_d_flow") {
 		if (schema_version != 5)
 			throw std::runtime_error("simulation_config.json: schema_version 6 does not support zero_d_flow");
@@ -305,6 +323,32 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 	const auto& ports = RequireArray(Required(object, "ports", context), context+".ports");
 	for (std::size_t port = 0; port < ports.size(); ++port)
 		domain.ports.push_back(ParsePort(ports[port], domain.id, port, schema_version));
+	const bool native_fsi = domain.kind == DomainKind::NativeTetAleFlow
+		|| domain.kind == DomainKind::NativeTetSolidStructure;
+	if (const auto* surfaces = Find(object, "surface_interfaces")) {
+		if (!native_fsi)
+			throw std::runtime_error("simulation_config.json: "+context
+				+" surface_interfaces are only valid for native FSI domains");
+		std::set<std::string> ids;
+		const auto& items = RequireArray(*surfaces, context+".surface_interfaces");
+		for (std::size_t i = 0; i < items.size(); ++i) {
+			const auto surface_context = context+".surface_interfaces["+std::to_string(i)+"]";
+			const auto& surface = RequireObject(items[i], surface_context);
+			RequireKnownKeys(surface, {"id", "boundary_labels"}, surface_context);
+			const auto id = RequireString(Required(surface, "id", surface_context), surface_context+".id");
+			std::set<int> labels;
+			for (const auto& label : RequireArray(Required(surface, "boundary_labels", surface_context),
+					surface_context+".boundary_labels"))
+				labels.insert(RequireInteger(label, surface_context+".boundary_labels"));
+			if (id.empty() || labels.empty() || !ids.insert(id).second)
+				throw std::runtime_error("simulation_config.json: "+surface_context
+					+" needs a unique id and at least one boundary label");
+			domain.surface_interfaces.emplace_back(id, std::move(labels));
+		}
+	}
+	if (native_fsi && domain.surface_interfaces.empty())
+		throw std::runtime_error("simulation_config.json: "+context
+			+" native FSI domain requires surface_interfaces");
 	if (schema_version == 6) {
 		const auto& bindings = RequireObject(Required(object, "species_bindings", context),
 			context+".species_bindings");
@@ -321,7 +365,13 @@ inline GraphDomainDefinition ParseDomain(const JsonValue& value, std::size_t ind
 		ValidateOneDFlowDomainMetadata(domain.id, domain.ports, domain.one_d_inlet_policy);
 	else if (domain.kind == DomainKind::ThreeDBodyFittedFlow)
 		ValidateThreeDBodyFittedFlowDomainMetadata(domain.id, domain.ports);
-	else {
+	else if (native_fsi) {
+		// Scalar ports on the FSI pair wait for the graph executor to drive
+		// strong coupling together with pressure/flow edges.
+		if (!domain.ports.empty())
+			throw std::runtime_error("simulation_config.json: "+context
+				+" native FSI domains do not accept scalar ports yet");
+	} else {
 		// The referenced model chooses the source or terminal role.  Before the
 		// case file is read, accept only the two exact role-shaped port contracts.
 		try { ValidateZeroDFlowDomainMetadata(domain.id, domain.ports,
@@ -563,7 +613,7 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 		throw std::runtime_error(
 			"simulation_config.json: multidomain configuration requires schema_version 5 or 6");
 	auto root_keys = std::set<std::string>{"schema_version", "time", "start_domain",
-		"execution", "resources", "domains", "couplings"};
+		"execution", "resources", "domains", "couplings", "fsi_couplings"};
 	if (schema_version == 6) root_keys.insert("species");
 	RequireKnownKeys(root, root_keys, "root");
 	std::vector<SpeciesDefinition> species;
@@ -629,12 +679,65 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 			throw std::runtime_error("simulation_config.json: coupling ids must be unique");
 		edges.push_back(std::move(edge));
 	}
+	std::vector<FsiCouplingDefinition> fsi_couplings;
+	if (const auto* values = Find(root, "fsi_couplings")) {
+		const auto& items = RequireArray(*values, "fsi_couplings");
+		std::set<std::string> ids, endpoints;
+		for (std::size_t i = 0; i < items.size(); ++i) {
+			const auto context = "fsi_couplings["+std::to_string(i)+"]";
+			const auto& object = RequireObject(items[i], context);
+			RequireKnownKeys(object, {"id", "fluid", "structure"}, context);
+			FsiCouplingDefinition coupling;
+			coupling.id = RequireString(Required(object, "id", context), context+".id");
+			const auto endpoint = [&](const char* role, std::string& domain_id, std::string& interface_id) {
+				const auto role_context = context+"."+role;
+				const auto& reference = RequireObject(Required(object, role, context), role_context);
+				RequireKnownKeys(reference, {"domain", "interface"}, role_context);
+				domain_id = RequireString(Required(reference, "domain", role_context), role_context+".domain");
+				interface_id = RequireString(Required(reference, "interface", role_context),
+					role_context+".interface");
+				const auto found = std::find_if(domains.begin(), domains.end(),
+					[&](const GraphDomainDefinition& domain) { return domain.id == domain_id; });
+				if (found == domains.end())
+					throw std::runtime_error("simulation_config.json: "+role_context+" names an undeclared domain");
+				const auto& surfaces = found->surface_interfaces;
+				if (std::none_of(surfaces.begin(), surfaces.end(),
+						[&](const auto& surface) { return surface.first == interface_id; }))
+					throw std::runtime_error("simulation_config.json: "+role_context
+						+" names an undeclared surface interface");
+				if (!endpoints.insert(domain_id+"."+interface_id).second)
+					throw std::runtime_error("simulation_config.json: "+role_context
+						+" is attached to more than one FSI coupling");
+				return found->kind;
+			};
+			const auto fluid_kind = endpoint("fluid", coupling.fluid_domain_id, coupling.fluid_interface_id);
+			const auto structure_kind = endpoint("structure", coupling.structure_domain_id,
+				coupling.structure_interface_id);
+			if (!IsSupportedFsiDomainPair(fluid_kind, structure_kind))
+				throw std::runtime_error("simulation_config.json: "+context
+					+" must join a native_tet_ale_flow fluid to a native_tet_solid_structure structure");
+			if (coupling.id.empty() || !ids.insert(coupling.id).second)
+				throw std::runtime_error("simulation_config.json: fsi coupling ids must be unique and nonempty");
+			fsi_couplings.push_back(std::move(coupling));
+		}
+		for (const auto& domain : domains)
+			for (const auto& surface : domain.surface_interfaces)
+				if (!endpoints.count(domain.id+"."+surface.first))
+					throw std::runtime_error("simulation_config.json: surface interface '"+domain.id+"."
+						+surface.first+"' is not attached to an FSI coupling");
+	} else
+		for (const auto& domain : domains)
+			if (!domain.surface_interfaces.empty())
+				throw std::runtime_error("simulation_config.json: native FSI domains require fsi_couplings");
 	SimulationGraph graph(std::move(nodes), std::move(edges), std::move(species));
-	if (graph.Domains().size() < 2 || graph.Edges().empty())
+	if (graph.Domains().size() < 2 || (graph.Edges().empty() && fsi_couplings.empty()))
 		throw std::runtime_error(
 			"simulation_config.json: multidomain schema requires multiple coupled domains");
 	(void)graph.Domain(start_domain);
-	ValidateConnectedGraph(graph, start_domain);
+	if (!graph.Edges().empty()) ValidateConnectedGraph(graph, start_domain);
+	else if (graph.Domains().size() != 2)
+		throw std::runtime_error(
+			"simulation_config.json: an FSI-only graph holds exactly its fluid and structure domains");
 	std::set<PortRef> attached_ports;
 	for (const auto& edge : graph.Edges()) {
 		attached_ports.insert(edge.first);
@@ -646,8 +749,10 @@ inline MultidomainConfiguration ParseMultidomainConfiguration(const std::string&
 				&& !attached_ports.count({domain.first, port.id}))
 				throw std::runtime_error("simulation_config.json: required port '"
 					+domain.first+"."+port.id+"' is not attached to a coupling");
-	return {schema_version, time, start_domain, execution, std::move(resources), std::move(domains),
-		std::move(initial_pressure), std::move(graph)};
+	MultidomainConfiguration configuration{schema_version, time, start_domain, execution,
+		std::move(resources), std::move(domains), std::move(initial_pressure), std::move(graph)};
+	configuration.fsi_couplings = std::move(fsi_couplings);
+	return configuration;
 }
 
 // Capture the exact bytes parsed, keyed by logical input identity rather than

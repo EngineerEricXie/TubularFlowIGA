@@ -51,11 +51,11 @@ struct PressureFlowComponentPlan {
 	std::vector<PressureFlowInterfacePlan> interfaces;
 };
 
-// The graph keeps its FSI edge validation for the native tetrahedral ALE-solid
-// pair; no graph domain kind implements an FSI endpoint yet.
-inline bool IsSupportedFsiDomainPair(DomainKind, DomainKind)
+// The native tetrahedral ALE fluid and tetrahedral solid are the only FSI
+// endpoints (matching interface, strong Dirichlet--Neumann coupling).
+inline bool IsSupportedFsiDomainPair(DomainKind fluid, DomainKind structure)
 {
-	return false;
+	return fluid == DomainKind::NativeTetAleFlow && structure == DomainKind::NativeTetSolidStructure;
 }
 
 struct FluidStructureInterfacePlan {
@@ -180,8 +180,15 @@ private:
 		if (domain.id.empty()) throw std::runtime_error("simulation graph domain id must be nonempty");
 		if (!IsKnownDomainKind(domain.kind))
 			throw std::runtime_error("simulation graph domain has an unsupported kind");
-		if (IsFlowDomainKind(domain.kind) && domain.ports.empty())
+		// The native ALE FSI fluid may couple through its surface alone.
+		if (IsFlowDomainKind(domain.kind) && domain.ports.empty()
+			&& domain.kind != DomainKind::NativeTetAleFlow)
 			throw std::runtime_error("simulation graph flow domain requires at least one logical port");
+		if (IsStructureDomainKind(domain.kind) && !domain.ports.empty())
+			throw std::runtime_error("simulation graph structure domain cannot declare scalar ports");
+		if ((domain.kind == DomainKind::NativeTetAleFlow || IsStructureDomainKind(domain.kind))
+			&& domain.surface_interfaces.empty() && !domain.ports.empty())
+			throw std::runtime_error("simulation graph native FSI domain requires a surface interface");
 		ValidateCouplingPorts(domain.ports);
 		std::set<std::pair<std::string, std::string>> locators;
 		for (const auto& port : domain.ports) {
