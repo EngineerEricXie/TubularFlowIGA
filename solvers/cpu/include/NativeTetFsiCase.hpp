@@ -398,8 +398,15 @@ struct NativeTetFsiSolverOptions
 {
 	bool dense_solvers=false;
 	bool distributed_fluid=false;
-	double fluid_tolerance=1e-6;       // fluid Newton absolute residual
-	double solid_relative_tolerance=1e-5;
+	// Newton tolerances of the two fields. The fluid residual is absolute, so
+	// 1e-8 is what the generated channel cases need to reproduce a converged
+	// interface force to 1e-6 relative; 1e-6 under-converges them by 0.3%.
+	double fluid_tolerance=1e-8;
+	double solid_relative_tolerance=1e-7;
+	// Strong-coupling displacement gate: rms interface residual <= atol + rtol*scale.
+	double coupling_absolute_tolerance_m=1e-9;
+	double coupling_relative_tolerance=1e-3;
+	std::uint64_t coupling_maximum_iterations=24;
 };
 
 inline NativeTetFsiSolverOptions ReadNativeTetFsiSolverOptions(int ranks)
@@ -420,6 +427,16 @@ inline NativeTetFsiSolverOptions ReadNativeTetFsiSolverOptions(int ranks)
 	PetscOptionsGetReal(nullptr,nullptr,"-fsi_solid_rtol",&solid_tolerance,nullptr);
 	options.fluid_tolerance=fluid_tolerance;
 	options.solid_relative_tolerance=solid_tolerance;
+	PetscReal coupling_atol=options.coupling_absolute_tolerance_m,coupling_rtol=options.coupling_relative_tolerance;
+	PetscInt coupling_iterations=static_cast<PetscInt>(options.coupling_maximum_iterations);
+	PetscOptionsGetReal(nullptr,nullptr,"-fsi_coupling_atol",&coupling_atol,nullptr);
+	PetscOptionsGetReal(nullptr,nullptr,"-fsi_coupling_rtol",&coupling_rtol,nullptr);
+	PetscOptionsGetInt(nullptr,nullptr,"-fsi_coupling_max_it",&coupling_iterations,nullptr);
+	if(!(coupling_atol>=0.0)||!(coupling_rtol>=0.0)||coupling_iterations<1)
+		throw std::invalid_argument("-fsi_coupling_atol/-fsi_coupling_rtol must be >= 0 and -fsi_coupling_max_it >= 1");
+	options.coupling_absolute_tolerance_m=coupling_atol;
+	options.coupling_relative_tolerance=coupling_rtol;
+	options.coupling_maximum_iterations=static_cast<std::uint64_t>(coupling_iterations);
 	return options;
 }
 
@@ -548,9 +565,9 @@ public:
 			NativeTetSolidMaterial{scenario_.solid.young,scenario_.solid.poisson,scenario_.solid.density},
 			constraints,solid_options);
 		StrongFluidStructureCouplingOptions controls;
-		controls.maximum_iterations=12;
-		controls.absolute_displacement_tolerance_m=2e-5;
-		controls.relative_displacement_tolerance=2e-2;
+		controls.maximum_iterations=options.coupling_maximum_iterations;
+		controls.absolute_displacement_tolerance_m=options.coupling_absolute_tolerance_m;
+		controls.relative_displacement_tolerance=options.coupling_relative_tolerance;
 		controls.absolute_nodal_force_residual_tolerance_n=2e-2;
 		controls.absolute_traction_residual_tolerance_pa=1e-1;
 		controls.fluid_residual_tolerance=1e-6;
