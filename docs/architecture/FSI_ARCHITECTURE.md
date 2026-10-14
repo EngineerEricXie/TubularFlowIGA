@@ -348,4 +348,9 @@ coupling tolerances:
 The partitioned fluid with the iterative solver is where the two reductions
 combine: on the 24,576-cell case it runs 3.3× faster than the replicated MUMPS
 fluid in a sixth of the memory per rank. The interface forces agree with the
-MUMPS runs of the same runtime to 1e-8 relative or better.
+MUMPS runs of the same runtime to 1e-8 relative or better. (That table was
+measured with the earlier, under-converged defaults, see above; with the
+current defaults and the mesh motion, traction, and solid partitioned as
+well, the 24,576-cell case takes 285 s and 188 MiB per rank partitioned
+against 476 s and 442 MiB replicated at 4 ranks, both with the iterative
+fluid, and the 3,072-cell case 12.7 s / 55 MiB against 23.0 s / 88 MiB.)
