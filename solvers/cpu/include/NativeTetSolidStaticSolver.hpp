@@ -7,24 +7,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <map>
 #include <stdexcept>
 #include <vector>
 
 namespace iga {
-
-struct NativeTetSolidStaticOptions
-{
-	int maximum_iterations=30;
-	double relative_tolerance=1.0e-8;
-	double absolute_tolerance_n=1.0e-10;
-	double minimum_line_search=1.0/1024.0;
-	// The cap applies to the dense fallback only.
-	std::size_t maximum_dofs=1200;
-	// Solves the reduced Newton system (free DOFs); empty uses dense elimination.
-	NativeTetLinearSolve linear_solve;
-};
 
 struct NativeTetSolidStaticResult
 {
@@ -37,6 +26,23 @@ struct NativeTetSolidStaticResult
 	double external_load_potential_j=0.0;
 	double minimum_deformation_jacobian=0.0;
 	bool converged=false;
+};
+
+struct NativeTetSolidStaticOptions
+{
+	int maximum_iterations=30;
+	double relative_tolerance=1.0e-8;
+	double absolute_tolerance_n=1.0e-10;
+	double minimum_line_search=1.0/1024.0;
+	// The cap applies to the dense fallback only.
+	std::size_t maximum_dofs=1200;
+	// Solves the reduced Newton system (free DOFs); empty uses dense elimination.
+	NativeTetLinearSolve linear_solve;
+	// Replaces the whole static solve (for example by a partitioned assembly);
+	// it receives the arguments of SolveNativeTetSolidStatic.
+	std::function<NativeTetSolidStaticResult(const NativeTetMesh&,const NativeTetSolidMaterial&,
+		const std::vector<double>&,const std::map<std::size_t,double>&,std::vector<double>,
+		const NativeTetSolidStaticOptions&)> solve;
 };
 
 namespace native_tet_solid_static_detail {

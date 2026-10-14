@@ -35,12 +35,24 @@ using NativeTetAleFluidSolve=std::function<NativeTetAleDenseSolveResult(const Na
 	const std::map<std::uint32_t,std::array<double,3>>&,std::uint32_t,const NativeNavierStokesParameters&,
 	double,double,std::size_t)>;
 
-// Solvers for the fluid step and the harmonic mesh motion; empty members use
-// the dense single-process solvers.
+// Harmonic mesh motion of the reference mesh under prescribed boundary
+// displacement, and the interface traction of a fluid state on the current
+// mesh (arguments of EvaluateNativeTetFluidTractionOnMatchingStructure).
+using NativeTetAleHarmonicSolve=std::function<NativeTetAleHarmonicResult(const NativeTetMesh&,
+	const std::map<std::uint32_t,std::array<double,3>>&)>;
+using NativeTetAleTractionEvaluate=std::function<std::vector<NativeTetInterfaceTriangleTraction>(
+	const NativeTetMesh&,const NativeTaylorHoodTopology&,const std::vector<double>&,double,int)>;
+
+// Solvers for the fluid step, the harmonic mesh motion, and the traction
+// evaluation; empty members use the dense single-process solvers. `harmonic`
+// replaces the whole mesh-motion solve (for example on a partitioned mesh);
+// otherwise `mesh_motion` solves its reduced linear systems.
 struct NativeTetAleFsiSolvers
 {
 	NativeTetAleFluidSolve fluid;
 	NativeTetLinearSolve mesh_motion;
+	NativeTetAleHarmonicSolve harmonic;
+	NativeTetAleTractionEvaluate traction;
 };
 
 class NativeTetAleFsiRuntime final : public FsiFluidDomainRuntime {
@@ -165,8 +177,8 @@ public:
 	{
 		lifecycle_.RequireSolveAllowed();if(!kinematics_)throw std::runtime_error("native tetrahedral ALE FSI input is unavailable");
 		const auto boundary_displacement=BuildBoundaryDisplacement(*kinematics_);
-		const auto motion=SolveNativeTetAleHarmonicMotion(reference_mesh_,boundary_displacement,
-			solvers_.mesh_motion);
+		const auto motion=solvers_.harmonic?solvers_.harmonic(reference_mesh_,boundary_displacement)
+				:SolveNativeTetAleHarmonicMotion(reference_mesh_,boundary_displacement,solvers_.mesh_motion);
 		const auto& geometry=ale_.BeginTrial(motion.displacement_m,lifecycle_.Context().EndTime());
 		try{
 			const auto current_mesh=BuildNativeTetAleCurrentMesh(reference_mesh_,geometry);
@@ -176,8 +188,10 @@ public:
 			candidate.solve=solve(current_mesh,geometry.mesh_velocity_m_s,
 				committed_fluid_state_,committed_fluid_state_,prescribed_velocity,pressure_gauge_node_,
 				parameters_,geometry.dt_s,nonlinear_tolerance_,maximum_iterations_);
-			const auto triangle_traction=EvaluateNativeTetFluidTractionOnMatchingStructure(current_mesh,
-				topology_,candidate.solve.state,parameters_.dynamic_viscosity,interface_label_);
+			const auto triangle_traction=solvers_.traction
+				?solvers_.traction(current_mesh,topology_,candidate.solve.state,parameters_.dynamic_viscosity,interface_label_)
+				:EvaluateNativeTetFluidTractionOnMatchingStructure(current_mesh,
+					topology_,candidate.solve.state,parameters_.dynamic_viscosity,interface_label_);
 			std::vector<double> displacement(3*reference_mesh_.points.size()),velocity(displacement.size());
 			for(std::size_t node=0;node<reference_mesh_.points.size();++node)for(int component=0;component<3;++component){
 				displacement[3*node+component]=geometry.displacement_m[node][component];

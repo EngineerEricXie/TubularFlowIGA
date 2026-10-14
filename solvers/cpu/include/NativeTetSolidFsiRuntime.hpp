@@ -156,8 +156,10 @@ public:
 				external_force[3*node+component] += traction_->consistent_nodal_force_n[row][component];
 		}
 		NativeTetSolidFsiTrial candidate;
-		candidate.result = SolveNativeTetSolidStatic(mesh_, material_, external_force, constraints_,
-			committed_displacement_m_, options_);
+		candidate.result = options_.solve
+			? options_.solve(mesh_, material_, external_force, constraints_, committed_displacement_m_, options_)
+			: SolveNativeTetSolidStatic(mesh_, material_, external_force, constraints_,
+				committed_displacement_m_, options_);
 		candidate.velocity_m_per_s.resize(candidate.result.displacement_m.size());
 		const double dt = lifecycle_.Context().dt_s;
 		for (std::size_t dof = 0; dof < candidate.velocity_m_per_s.size(); ++dof)
