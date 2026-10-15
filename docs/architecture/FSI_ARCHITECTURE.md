@@ -63,6 +63,13 @@ a step on 3,072, 24,576, and 82,944 cells (the remainder is 1.5%, 0.7%, and
 of it the partitioned fluid solve. Making the coupling runtime's own state
 local would therefore gain about 1% of time and a few percent of memory; it
 is deferred, and the lever is the fluid solver's iteration counts.
+
+Strong scaling of that path on 82,944 cells (2 steps, one process per rank,
+16-thread workstation): 1 rank 2,323 s and 1,591 MiB; 2 ranks 1,544 s and
+946 MiB; 4 ranks 1,132 s and 537 MiB; 8 ranks 971 s and 314 MiB, with the
+same Newton and linear iteration counts and the same interface force to
+1e-12 at every rank count. Memory per rank falls 5×; the 2.4× wall-time gain
+is bounded by this machine's per-iteration efficiency, not by iteration growth.
 `-fsi_dense_solvers` keeps the earlier one-rank dense solvers for comparison.
 Each coupling iteration yields the same result on any rank count. The
 CUDA executable `solvers/cuda/native_tet_fsi_cuda` uses explicit sequential
