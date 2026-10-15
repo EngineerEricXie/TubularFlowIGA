@@ -30,7 +30,7 @@ The CPU executable is `solvers/cpu/native_tet_fsi_steps`. Its PETSc solves use
 LU with MUMPS for the P2/P1 fluid (unprefixed KSP options) and the solid
 (`-fsi_solid_` options), and CG with Jacobi for the mesh motion (`-fsi_mesh_`
 options); `-fsi_fluid_tolerance` and `-fsi_solid_rtol` set the fluid absolute
-and solid relative Newton tolerances (defaults `1e-8` and `1e-7`), and
+and solid relative Newton tolerances (defaults `1e-11` and `1e-7`), and
 `-fsi_coupling_atol`, `-fsi_coupling_rtol`, `-fsi_coupling_max_it` the
 strong-coupling displacement gate (rms interface residual at most
 `atol + rtol * displacement scale`, defaults `1e-9` m, `1e-3`, 24 iterations).
@@ -40,6 +40,29 @@ displacement itself, and the fluid tolerance left the step-2 interface force
 0.3% (3,072 cells) to 50% (24,576 cells) away from its converged value; the
 tightened Newton tolerances reproduce the converged value to 1e-6 relative
 with the same number of coupling iterations.
+
+Each coupling iteration's fluid Newton solve starts from the previous
+iteration's fluid state of the same step (`-fsi_fluid_warm_start`, on by
+default; the first iteration of a step starts from the committed state). The
+mesh moves little between coupling iterations, so this halves the Newton
+iterations (24 → 12 on the first step of both channel cases). It also exposes
+that a cold start over-converges: with the warm start, an absolute fluid
+tolerance of 1e-8 leaves the interface force 4e-5 from its converged value,
+and 1e-11 is needed for 1e-6, which is the default; at that tolerance the
+warm start still runs 1.3× faster than the cold start at 1e-8 (25k cells, 4
+ranks: 247 s against 325 s; 3k cells: 12.6 s against 16.8 s).
+
+Every step prints `native_fsi_timing`: wall time of the step split into the
+fluid Newton solves, mesh motion, traction evaluation, solid solves, output,
+and the remainder (transfer, kinematics, identities, conservation, species),
+with the number of fluid trials, Newton iterations, and outer linear
+iterations. On the partitioned path at 4 ranks the fluid solves take 98% of
+a step on 3,072, 24,576, and 82,944 cells (the remainder is 1.5%, 0.7%, and
+1.3%), and PETSc's event log attributes that time to the Krylov iterations
+(MatMult), not to setup. Per-rank memory is 55, 186, and 531 MiB, almost all
+of it the partitioned fluid solve. Making the coupling runtime's own state
+local would therefore gain about 1% of time and a few percent of memory; it
+is deferred, and the lever is the fluid solver's iteration counts.
 `-fsi_dense_solvers` keeps the earlier one-rank dense solvers for comparison.
 Each coupling iteration yields the same result on any rank count. The
 CUDA executable `solvers/cuda/native_tet_fsi_cuda` uses explicit sequential
