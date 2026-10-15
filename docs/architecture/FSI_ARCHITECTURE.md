@@ -30,7 +30,16 @@ The CPU executable is `solvers/cpu/native_tet_fsi_steps`. Its PETSc solves use
 LU with MUMPS for the P2/P1 fluid (unprefixed KSP options) and the solid
 (`-fsi_solid_` options), and CG with Jacobi for the mesh motion (`-fsi_mesh_`
 options); `-fsi_fluid_tolerance` and `-fsi_solid_rtol` set the fluid absolute
-and solid relative Newton tolerances (defaults `1e-6` and `1e-5`).
+and solid relative Newton tolerances (defaults `1e-8` and `1e-7`), and
+`-fsi_coupling_atol`, `-fsi_coupling_rtol`, `-fsi_coupling_max_it` the
+strong-coupling displacement gate (rms interface residual at most
+`atol + rtol * displacement scale`, defaults `1e-9` m, `1e-3`, 24 iterations).
+The earlier defaults (`1e-6`, `1e-5`, gate `2e-5` m + `2e-2`) under-converged
+the generated channel cases: the absolute gate was the size of the wall
+displacement itself, and the fluid tolerance left the step-2 interface force
+0.3% (3,072 cells) to 50% (24,576 cells) away from its converged value; the
+tightened Newton tolerances reproduce the converged value to 1e-6 relative
+with the same number of coupling iterations.
 `-fsi_dense_solvers` keeps the earlier one-rank dense solvers for comparison.
 Each coupling iteration yields the same result on any rank count. The
 CUDA executable `solvers/cuda/native_tet_fsi_cuda` uses explicit sequential
