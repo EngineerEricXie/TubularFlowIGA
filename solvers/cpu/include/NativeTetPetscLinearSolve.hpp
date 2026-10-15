@@ -56,6 +56,45 @@ struct Objects
 
 } // namespace native_tet_petsc_linear_solve_detail
 
+// A KSP on `matrix` with the defaults above and the options of `prefix`; the
+// caller destroys it. Shared by the replicated and the distributed solves.
+inline KSP MakeNativeTetPetscKsp(MPI_Comm comm, const std::string& prefix, Mat matrix,
+	const NativeTetPetscLinearSolveDefaults& defaults = {})
+{
+	using native_tet_petsc_linear_solve_detail::Check;
+	const std::string name = "native tetrahedral PETSc solve ("+prefix+")";
+	KSP solver = nullptr;
+	Check(KSPCreate(comm, &solver), name+" KSPCreate");
+	Check(KSPSetOptionsPrefix(solver, prefix.c_str()), name+" KSPSetOptionsPrefix");
+	Check(KSPSetOperators(solver, matrix, matrix), name+" KSPSetOperators");
+	Check(KSPSetType(solver, defaults.ksp_type.c_str()), name+" KSPSetType");
+	PC preconditioner = nullptr;
+	Check(KSPGetPC(solver, &preconditioner), name+" KSPGetPC");
+	Check(PCSetType(preconditioner, defaults.pc_type.c_str()), name+" PCSetType");
+	if (!defaults.factor_package.empty())
+		Check(PCFactorSetMatSolverType(preconditioner, defaults.factor_package.c_str()),
+			name+" PCFactorSetMatSolverType");
+	Check(KSPSetTolerances(solver, defaults.relative_tolerance, defaults.absolute_tolerance,
+		PETSC_DEFAULT, defaults.maximum_iterations), name+" KSPSetTolerances");
+	Check(KSPSetFromOptions(solver), name+" KSPSetFromOptions");
+	return solver;
+}
+
+// Solves with a KSP from MakeNativeTetPetscKsp and fails unless it converged.
+inline void NativeTetPetscKspSolve(KSP solver, Vec rhs, Vec solution, const std::string& prefix)
+{
+	using native_tet_petsc_linear_solve_detail::Check;
+	const std::string name = "native tetrahedral PETSc solve ("+prefix+")";
+	Check(KSPSolve(solver, rhs, solution), name+" KSPSolve");
+	KSPConvergedReason reason = KSP_CONVERGED_ITERATING;
+	Check(KSPGetConvergedReason(solver, &reason), name+" KSPGetConvergedReason");
+	if (reason <= 0) {
+		PetscInt iterations = 0; KSPGetIterationNumber(solver, &iterations);
+		throw std::runtime_error(name+": linear solve did not converge: reason="
+			+std::to_string(static_cast<int>(reason))+" iterations="+std::to_string(static_cast<long long>(iterations)));
+	}
+}
+
 // A NativeTetLinearSolve that runs on PETSC_COMM_WORLD. Every rank holds the
 // same reduced CSR system; each inserts only the rows it owns, so assembly
 // needs no communication, and every rank receives the whole solution.

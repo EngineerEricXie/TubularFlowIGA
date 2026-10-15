@@ -586,6 +586,9 @@ tfi_test(native_tet_fsi_iterative COMMAND [==[python3 tests/run_native_tet_fsi_r
 
 # Partitioned ALE fluid: each rank assembles its own cells; the result matches
 # the replicated runtime on one, two, and three ranks.
+tfi_executable(native_tet_fsi_distributed_parts_test SOURCES tests/test_native_tet_fsi_distributed_parts.cpp PETSC)
+tfi_test(native_tet_fsi_distributed_parts_test COMMAND [==[./native_tet_fsi_distributed_parts_test && @TFI_MPIEXEC@ -np 2 ./native_tet_fsi_distributed_parts_test && @TFI_MPIEXEC@ -np 3 ./native_tet_fsi_distributed_parts_test]==]
+	REQUIRES native_tet_fsi_distributed_parts_test MAKE petsc-test native-tet-fsi-distributed-parts-test LABELS petsc mpi PETSC_PACKAGES MUMPS)
 tfi_executable(native_tet_ale_distributed_runtime_test SOURCES tests/test_native_tet_ale_distributed_runtime.cpp PETSC)
 tfi_test(native_tet_ale_distributed_runtime_test COMMAND [==[./native_tet_ale_distributed_runtime_test && @TFI_MPIEXEC@ -np 2 ./native_tet_ale_distributed_runtime_test && @TFI_MPIEXEC@ -np 3 ./native_tet_ale_distributed_runtime_test]==]
 	REQUIRES native_tet_ale_distributed_runtime_test MAKE petsc-test native-tet-ale-distributed-runtime-test LABELS petsc mpi PETSC_PACKAGES MUMPS)

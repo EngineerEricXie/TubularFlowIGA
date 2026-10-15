@@ -19,12 +19,15 @@ namespace iga {
 // Native local P2 edges: 01,02,03,12,13,23. VTK quadratic tetra (type 24)
 // expects 01,12,20,03,13,23; see vtkQuadraticTetra class documentation.
 // https://vtk.org/doc/nightly/release/8.1/html/classvtkQuadraticTetra.html
-inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& reference,
-	const NativeTetMesh& mesh,const std::vector<double>& state,
-	double dynamic_viscosity_pa_s,int rank,int ranks)
+// Piece of the P2/P1 flow field over `cells` of `mesh` (current positions)
+// against `reference`. `velocity_node_ids` maps the topology's velocity nodes
+// (vertices, then edges) to the ids written as GlobalPointIds; empty keeps the
+// topology's own numbering (the replicated mesh). Cell ids come from the cells.
+inline VtkPartition BuildNativeTetHydraulicVtkPiece(const NativeTetMesh& reference,
+	const NativeTetMesh& mesh,const NativeTaylorHoodTopology& topology,
+	const std::vector<double>& state,double dynamic_viscosity_pa_s,
+	const std::vector<std::size_t>& cells,const std::vector<std::uint32_t>& velocity_node_ids={})
 {
-	if(rank<0||ranks<1||rank>=ranks)
-		throw std::invalid_argument("native tetra visualization rank is invalid");
 	if(!std::isfinite(dynamic_viscosity_pa_s)||dynamic_viscosity_pa_s<=0.)
 		throw std::invalid_argument("native tetra visualization viscosity is invalid");
 	if(reference.points.size()!=mesh.points.size()
@@ -34,14 +37,18 @@ inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& ref
 		if(reference.cells[cell].id!=mesh.cells[cell].id
 			||reference.cells[cell].nodes!=mesh.cells[cell].nodes)
 			throw std::invalid_argument("native tetra visualization reference cell differs");
-	const auto topology=BuildNativeTaylorHoodTopology(mesh);
 	const auto vertex_nodes=mesh.points.size();
 	const auto velocity_nodes=vertex_nodes+topology.edges.size();
 	if(state.size()!=3*velocity_nodes+vertex_nodes)
 		throw std::invalid_argument("native tetra visualization field shape differs");
+	if(!velocity_node_ids.empty()&&velocity_node_ids.size()!=velocity_nodes)
+		throw std::invalid_argument("native tetra visualization velocity node id map differs");
 	for(const double value:state)
 		if(!std::isfinite(value))
 			throw std::invalid_argument("native tetra visualization field is nonfinite");
+	for(const auto cell:cells)
+		if(cell>=mesh.cells.size())
+			throw std::invalid_argument("native tetra visualization cell is out of range");
 	const std::array<std::size_t,10> vtk_local{{0,1,2,3,4,7,5,6,8,9}};
 	std::map<std::uint32_t,std::int64_t> local_point;
 	VtkPartition piece;
@@ -50,8 +57,7 @@ inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& ref
 	VtkPointArray reference_position{"reference_position_m",3,{}};
 	VtkPointArray displacement{"displacement_m",3,{}};
 	VtkPointArray stress{"cauchy_stress_pa",9,{}};
-	for(std::size_t cell=static_cast<std::size_t>(rank);cell<mesh.cells.size();
-		cell+=static_cast<std::size_t>(ranks)){
+	for(const auto cell:cells){
 		const auto geometry=EvaluateNativeTetGeometry(mesh,mesh.cells[cell]);
 		const auto basis=EvaluateNativeTaylorHoodPhysicalBasis(geometry,
 			{{0.25,0.25,0.25}});
@@ -77,7 +83,7 @@ inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& ref
 			auto inserted=local_point.emplace(global,
 				static_cast<std::int64_t>(local_point.size()));
 			if(inserted.second){
-				piece.point_ids.push_back(global);
+				piece.point_ids.push_back(velocity_node_ids.empty()?global:velocity_node_ids[global]);
 				std::array<double,3> coordinate{};
 				std::array<double,3> reference_coordinate{};
 				double point_pressure=0.;
@@ -122,6 +128,20 @@ inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& ref
 	piece.cell_arrays.push_back(std::move(stress));
 	ValidateVtkPartition(piece,0.);
 	return piece;
+}
+
+// Round-robin cell distribution of the replicated mesh over the ranks.
+inline VtkPartition BuildNativeTetHydraulicVtkPartition(const NativeTetMesh& reference,
+	const NativeTetMesh& mesh,const std::vector<double>& state,
+	double dynamic_viscosity_pa_s,int rank,int ranks)
+{
+	if(rank<0||ranks<1||rank>=ranks)
+		throw std::invalid_argument("native tetra visualization rank is invalid");
+	const auto topology=BuildNativeTaylorHoodTopology(mesh);
+	std::vector<std::size_t> cells;
+	for(std::size_t cell=static_cast<std::size_t>(rank);cell<mesh.cells.size();
+		cell+=static_cast<std::size_t>(ranks))cells.push_back(cell);
+	return BuildNativeTetHydraulicVtkPiece(reference,mesh,topology,state,dynamic_viscosity_pa_s,cells);
 }
 
 } // namespace iga

@@ -8,6 +8,7 @@
 #include "CaseConfig.hpp"
 #include "NativeTetAleConservation.hpp"
 #include "NativeTetAleDistributedRuntime.hpp"
+#include "NativeTetSolidDistributedSolver.hpp"
 #include "NativeTetAleFsiRuntime.hpp"
 #include "NativeTetAlePetscRuntime.hpp"
 #include "NativeTetHydraulicVisualization.hpp"
@@ -507,7 +508,9 @@ public:
 		NativeTetAleFsiSolvers solvers;
 		if(options.distributed_fluid){
 			distributed_fluid_=std::make_unique<NativeTetAleDistributedMesh>(fluid_mesh_,PETSC_COMM_WORLD);
+			distributed_fluid_->BindReplicatedTopology(topology_);
 			const auto* distributed=distributed_fluid_.get();const auto* replicated_topology=&topology_;
+			const auto* reference_mesh=&fluid_mesh_;
 			solvers.fluid=[distributed,replicated_topology](const NativeTetMesh& mesh,
 				const std::vector<std::array<double,3>>& mesh_velocity,
 				const std::vector<double>& committed,const std::vector<double>& trial,
@@ -521,9 +524,15 @@ public:
 				result.newton_iterations=solve.newton_iterations;
 				result.final_free_residual_l2=solve.final_residual_l2;
 				return result;};
-			NativeTetPetscLinearSolveDefaults motion;
-			motion.ksp_type=KSPCG;motion.pc_type=PCJACOBI;motion.factor_package.clear();
-			solvers.mesh_motion=MakeNativeTetPetscLinearSolve("fsi_mesh_",motion);
+			// Mesh motion and traction on the partition as well (results replicated).
+			solvers.harmonic=[distributed,reference_mesh](const NativeTetMesh& mesh,
+				const std::map<std::uint32_t,std::array<double,3>>& prescribed){
+				if(&mesh!=reference_mesh&&mesh.points.size()!=reference_mesh->points.size())
+					throw std::runtime_error("native FSI distributed mesh motion received a different mesh");
+				return SolveNativeTetAleHarmonicMotionDistributed(*distributed,mesh,prescribed);};
+			solvers.traction=[distributed,reference_mesh](const NativeTetMesh& current,const NativeTaylorHoodTopology&,
+				const std::vector<double>& state,double viscosity,int label){
+				return EvaluateNativeTetFluidTractionDistributed(*distributed,*reference_mesh,current.points,state,viscosity,label);};
 			int rank=0;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 			if(rank==0)std::cout<<"native_fsi_distributed_fluid ranks="<<distributed->partition.ranks
 				<<" global_cells="<<fluid_mesh_.cells.size()<<" rank0_local_cells="<<distributed->partition.local.cells.size()
@@ -560,6 +569,16 @@ public:
 		solid_options.absolute_tolerance_n=1e-8;
 		solid_options.maximum_iterations=40;
 		if(!options.dense_solvers)solid_options.linear_solve=MakeNativeTetPetscLinearSolve("fsi_solid_");
+		if(options.distributed_fluid){
+			// The solid is partitioned too: owned-cell assembly, replicated vectors.
+			distributed_solid_=std::make_unique<NativeTetMeshPartition>(PartitionNativeTetMesh(solid_mesh_,PETSC_COMM_WORLD));
+			const auto* partition=distributed_solid_.get();
+			solid_options.solve=[partition](const NativeTetMesh& mesh,const NativeTetSolidMaterial& material,
+				const std::vector<double>& force,const std::map<std::size_t,double>& prescribed,
+				std::vector<double> initial,const NativeTetSolidStaticOptions& solid){
+				return SolveNativeTetSolidStaticDistributed(*partition,mesh,material,force,prescribed,std::move(initial),
+					solid,PETSC_COMM_WORLD);};
+		}
 		solid_=std::make_unique<NativeTetSolidFsiRuntime>(names_.solid_domain,names_.solid_subsystem,
 			*edge_,solid_surface_,fluid_surface_,layout_,layout_,solid_mesh_,label,
 			NativeTetSolidMaterial{scenario_.solid.young,scenario_.solid.poisson,scenario_.solid.density},
@@ -612,9 +631,12 @@ public:
 				interface_faces.emplace(face.id,face.nodes);
 		std::array<double,3> interface_force{};
 		double interface_power=0.;
-		for(const auto& traction:EvaluateNativeTetFluidTractionOnMatchingStructure(
-			current,topology_,fluid.CommittedFluidState(),scenario.fluid.viscosity,
-			scenario.interface_label)){
+		const auto committed_traction=distributed_fluid_
+			?EvaluateNativeTetFluidTractionDistributed(*distributed_fluid_,fluid_mesh_,current.points,
+				fluid.CommittedFluidState(),scenario.fluid.viscosity,scenario.interface_label)
+			:EvaluateNativeTetFluidTractionOnMatchingStructure(current,topology_,fluid.CommittedFluidState(),
+				scenario.fluid.viscosity,scenario.interface_label);
+		for(const auto& traction:committed_traction){
 			const auto& nodes=interface_faces.at(traction.triangle_id);
 			const auto& a=current.points[nodes[0]];
 			const auto& b=current.points[nodes[1]];
@@ -645,7 +667,8 @@ public:
 		const auto flow_path=output/("flow_step_"+std::to_string(step));
 		const auto solid_path=output/("wall_step_"+std::to_string(step));
 		WriteParallelVtkSnapshot(PETSC_COMM_WORLD,flow_path,
-			BuildNativeTetHydraulicVtkPartition(fluid_mesh_,current,
+			distributed_fluid_?BuildDistributedFlowPiece(current,fluid.CommittedFluidState())
+			:BuildNativeTetHydraulicVtkPartition(fluid_mesh_,current,
 				fluid.CommittedFluidState(),scenario.fluid.viscosity,rank,ranks),
 			step*scenario.dt_s);
 		WriteParallelVtkSnapshot(PETSC_COMM_WORLD,solid_path,
@@ -701,6 +724,20 @@ public:
 private:
 	using Coordinator=StrongFluidStructureCoupling<NativeTetAleFsiRuntime,NativeTetSolidFsiRuntime>;
 
+	// Flow snapshot piece of this rank's owned cells on the partitioned mesh,
+	// with the replicated velocity-node ids as GlobalPointIds.
+	VtkPartition BuildDistributedFlowPiece(const NativeTetMesh& current,const std::vector<double>& state)const
+	{
+		const auto& distributed=*distributed_fluid_;
+		const auto local_current=BuildNativeTetAleLocalMesh(distributed,current.points);
+		const auto local_state=RestrictNativeTetAleStateToLocal(distributed,state);
+		std::vector<std::size_t> owned_cells;
+		for(std::size_t cell=0;cell<distributed.partition.local.cells.size();++cell)
+			if(distributed.partition.local_cell_owned[cell])owned_cells.push_back(cell);
+		return BuildNativeTetHydraulicVtkPiece(distributed.partition.local,local_current,distributed.dofs.topology,
+			local_state,scenario_.fluid.viscosity,owned_cells,distributed.local_velocity_replicated);
+	}
+
 	NativeTetFsiCase scenario_;
 	NativeTetFsiNames names_;
 	NativeTetMesh fluid_mesh_,solid_mesh_;
@@ -711,6 +748,7 @@ private:
 	NativeTaylorHoodTopology topology_;
 	std::size_t velocity_nodes_=0;
 	std::unique_ptr<NativeTetAleDistributedMesh> distributed_fluid_;
+	std::unique_ptr<NativeTetMeshPartition> distributed_solid_;
 	std::unique_ptr<NativeTetAleFsiRuntime> fluid_;
 	std::unique_ptr<NativeTetSolidFsiRuntime> solid_;
 	std::unique_ptr<Coordinator> coordinator_;

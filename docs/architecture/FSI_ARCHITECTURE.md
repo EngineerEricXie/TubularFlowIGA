@@ -281,11 +281,30 @@ assembles only its own cells and boundary faces into a ghosted PETSc system
 (`NativeTetAleDistributedRuntime.hpp`). The replicated runtime instead keeps
 the whole mesh on every rank and assembles cells round-robin. Both produce the
 same discrete system, so results agree to round-off (`native_tet_fsi_ranks`
-checks this); the coupling and the outputs still receive the replicated state
-through one reduction per Newton solve. `-native_ale_scale` applies the same
-row/column scaling as the replicated runtime, so the fluid can also be solved
-iteratively on the partitioned mesh. Flow-rate controllers are not supported
-on the partitioned path yet.
+checks this). `-native_ale_scale` applies the same row/column scaling as the
+replicated runtime, so the fluid can also be solved iteratively on the
+partitioned mesh. Flow-rate controllers are not supported on the partitioned
+path yet.
+
+With the same option the rest of the step follows the partition as well,
+with the pattern "distributed assembly, replicated vectors": the harmonic
+mesh motion is assembled from each rank's owned cells into one PETSc matrix
+over the owner-major vertex numbering and solved once for the three
+components (`SolveNativeTetAleHarmonicMotionDistributed`, `-fsi_mesh_`
+options, CG/Jacobi by default); the interface tractions are evaluated on each
+rank's owned interface faces of its local submesh and gathered
+(`EvaluateNativeTetFluidTractionDistributed`); the solid mesh is partitioned
+too and its Newton tangent assembled from owned cells, with the residual
+summed into the replicated layout so the line search takes the same decisions
+on every rank (`SolveNativeTetSolidStaticDistributed`, `-fsi_solid_` options);
+and the flow snapshots are written from each rank's owned cells with the
+replicated velocity-node ids as `GlobalPointIds`. `NativeTetAleFsiSolvers`
+and `NativeTetSolidStaticOptions::solve` are the injection points, so the FSI
+runtimes themselves are unchanged. `native_tet_fsi_distributed_parts_test`
+checks the three solves against their replicated versions on 1–3 ranks. What
+still lives on every rank is one copy of the meshes, the P2 topology, and the
+state and displacement vectors; the per-cell work and every matrix are
+partitioned.
 
 ### Iterative fluid solver
 
@@ -329,4 +348,9 @@ coupling tolerances:
 The partitioned fluid with the iterative solver is where the two reductions
 combine: on the 24,576-cell case it runs 3.3× faster than the replicated MUMPS
 fluid in a sixth of the memory per rank. The interface forces agree with the
-MUMPS runs of the same runtime to 1e-8 relative or better.
+MUMPS runs of the same runtime to 1e-8 relative or better. (That table was
+measured with the earlier, under-converged defaults, see above; with the
+current defaults and the mesh motion, traction, and solid partitioned as
+well, the 24,576-cell case takes 285 s and 188 MiB per rank partitioned
+against 476 s and 442 MiB replicated at 4 ranks, both with the iterative
+fluid, and the 3,072-cell case 12.7 s / 55 MiB against 23.0 s / 88 MiB.)

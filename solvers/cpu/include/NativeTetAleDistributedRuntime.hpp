@@ -15,8 +15,11 @@
 #include "NativeTetAleBackflow.hpp"
 #include "NativeTetAleTransient.hpp"
 #include "NativeTetAlePetscAssembly.hpp"
+#include "NativeTetAleMeshMotion.hpp"
 #include "NativeTetDistributedDofs.hpp"
+#include "NativeTetMatchingFsiInterface.hpp"
 #include "NativeTetMeshPartition.hpp"
+#include "NativeTetPetscLinearSolve.hpp"
 
 #include <petscksp.h>
 
@@ -53,6 +56,9 @@ struct NativeTetAleDistributedMesh
 	MPI_Comm communicator=MPI_COMM_NULL;
 	std::vector<std::uint32_t> global_to_local_vertex;        // global vertex -> local or max
 	std::map<std::array<std::uint32_t,2>,std::uint32_t> local_edge_of;  // (min,max) global -> local edge
+	// Local velocity node (vertex, then edge) -> velocity node of the replicated
+	// topology; filled by BindReplicatedTopology, which every state restriction needs.
+	std::vector<std::uint32_t> local_velocity_replicated;
 
 	NativeTetAleDistributedMesh(const NativeTetMesh& reference,MPI_Comm comm)
 		:partition(PartitionNativeTetMesh(reference,comm)),dofs(BuildNativeTetDistributedDofs(partition,comm)),
@@ -63,7 +69,62 @@ struct NativeTetAleDistributedMesh
 		for(std::size_t edge=0;edge<dofs.edge_global.size();++edge)
 			local_edge_of.emplace(dofs.edge_global[edge],static_cast<std::uint32_t>(edge));
 	}
+
+	void BindReplicatedTopology(const NativeTaylorHoodTopology& replicated)
+	{
+		const std::size_t global_vertices=global_to_local_vertex.size();
+		std::map<std::array<std::uint32_t,2>,std::uint32_t> replicated_edge_index;
+		for(std::size_t edge=0;edge<replicated.edges.size();++edge){
+			const auto& ends=replicated.edges[edge];
+			replicated_edge_index.emplace(std::array<std::uint32_t,2>{{std::min(ends[0],ends[1]),std::max(ends[0],ends[1])}},
+				static_cast<std::uint32_t>(edge));
+		}
+		local_velocity_replicated.resize(partition.local_to_global_node.size()+dofs.edge_global.size());
+		for(std::size_t local=0;local<partition.local_to_global_node.size();++local)
+			local_velocity_replicated[local]=partition.local_to_global_node[local];
+		for(std::size_t edge=0;edge<dofs.edge_global.size();++edge){
+			const auto found=replicated_edge_index.find(dofs.edge_global[edge]);
+			if(found==replicated_edge_index.end())
+				throw std::invalid_argument("native ALE distributed mesh: local edge is absent from the replicated topology");
+			local_velocity_replicated[partition.local_to_global_node.size()+edge]=
+				static_cast<std::uint32_t>(global_vertices+found->second);
+		}
+	}
+	bool HasReplicatedTopology()const{return !local_velocity_replicated.empty();}
 };
+
+// The local submesh with the current (moved) vertex positions.
+inline NativeTetMesh BuildNativeTetAleLocalMesh(const NativeTetAleDistributedMesh& distributed,
+	const std::vector<std::array<double,3>>& current_points_m)
+{
+	NativeTetMesh local=distributed.partition.local;
+	if(current_points_m.size()!=distributed.global_to_local_vertex.size())
+		throw std::invalid_argument("native ALE distributed mesh: current point count differs");
+	for(std::size_t vertex=0;vertex<local.points.size();++vertex)
+		local.points[vertex]=current_points_m[distributed.partition.local_to_global_node[vertex]];
+	return local;
+}
+
+// The replicated P2/P1 state restricted to the local velocity nodes and vertices.
+inline std::vector<double> RestrictNativeTetAleStateToLocal(const NativeTetAleDistributedMesh& distributed,
+	const std::vector<double>& replicated_state)
+{
+	if(!distributed.HasReplicatedTopology())
+		throw std::logic_error("native ALE distributed mesh: BindReplicatedTopology must precede state restriction");
+	const std::size_t global_vertices=distributed.global_to_local_vertex.size();
+	const std::size_t local_vertices=distributed.partition.local.points.size();
+	const std::size_t local_velocity=distributed.local_velocity_replicated.size();
+	const std::size_t replicated_velocity=(replicated_state.size()-global_vertices)/3;
+	if(replicated_state.size()!=3*replicated_velocity+global_vertices)
+		throw std::invalid_argument("native ALE distributed mesh: replicated state size is invalid");
+	std::vector<double> local(3*local_velocity+local_vertices);
+	for(std::size_t node=0;node<local_velocity;++node)
+		for(int component=0;component<3;++component)
+			local[3*node+component]=replicated_state[3*distributed.local_velocity_replicated[node]+component];
+	for(std::size_t vertex=0;vertex<local_vertices;++vertex)
+		local[3*local_velocity+vertex]=replicated_state[3*replicated_velocity+distributed.partition.local_to_global_node[vertex]];
+	return local;
+}
 
 namespace native_tet_ale_distributed_detail {
 
@@ -149,11 +210,12 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 	for(std::size_t local=0;local<current.points.size();++local)
 		current.points[local]=current_points_m[partition.local_to_global_node[local]];
 	std::map<std::array<std::uint32_t,2>,std::uint32_t> replicated_edge_index;
-	for(std::size_t edge=0;edge<replicated_topology.edges.size();++edge){
-		const auto& ends=replicated_topology.edges[edge];
-		replicated_edge_index.emplace(std::array<std::uint32_t,2>{{std::min(ends[0],ends[1]),std::max(ends[0],ends[1])}},
-			static_cast<std::uint32_t>(edge));
-	}
+	if(!distributed.HasReplicatedTopology())
+		for(std::size_t edge=0;edge<replicated_topology.edges.size();++edge){
+			const auto& ends=replicated_topology.edges[edge];
+			replicated_edge_index.emplace(std::array<std::uint32_t,2>{{std::min(ends[0],ends[1]),std::max(ends[0],ends[1])}},
+				static_cast<std::uint32_t>(edge));
+		}
 	const std::size_t local_vertices=current.points.size(),local_edges=dofs.topology.edges.size();
 	std::vector<std::size_t> vertex_replicated_velocity(local_vertices),vertex_replicated_pressure(local_vertices),
 		edge_replicated_velocity(local_edges);
@@ -163,6 +225,10 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 		vertex_replicated_pressure[local]=3*replicated_velocity_nodes+global;
 	}
 	for(std::size_t edge=0;edge<local_edges;++edge){
+		if(distributed.HasReplicatedTopology()){
+			edge_replicated_velocity[edge]=3*static_cast<std::size_t>(distributed.local_velocity_replicated[local_vertices+edge]);
+			continue;
+		}
 		const auto found=replicated_edge_index.find(dofs.edge_global[edge]);
 		if(found==replicated_edge_index.end())
 			throw std::invalid_argument("native ALE distributed runtime: local edge is absent from the replicated topology");
@@ -470,6 +536,197 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 	result.replicated_state.assign(replicated_dofs,0.0);
 	if(MPI_Allreduce(local_layout.data(),result.replicated_state.data(),static_cast<int>(replicated_dofs),MPI_DOUBLE,MPI_SUM,comm)
 		!=MPI_SUCCESS)throw std::runtime_error("native ALE distributed runtime: result gather failed");
+	return result;
+}
+
+// Componentwise P1 harmonic extension on the partitioned reference mesh:
+// owned cells assemble the Laplacian into one PETSc matrix over the
+// owner-major vertex numbering, the prescribed vertices are eliminated with
+// MatZeroRowsColumns, the three components share one KSP (`prefix` options,
+// CG/Jacobi by default), and every rank receives the whole displacement.
+inline NativeTetAleHarmonicResult SolveNativeTetAleHarmonicMotionDistributed(
+	const NativeTetAleDistributedMesh& distributed,const NativeTetMesh& reference,
+	const std::map<std::uint32_t,std::array<double,3>>& prescribed_displacement_m,
+	const std::string& prefix="fsi_mesh_",NativeTetPetscLinearSolveDefaults defaults={KSPCG,PCJACOBI,""})
+{
+	const auto& partition=distributed.partition;const MPI_Comm comm=distributed.communicator;
+	const std::size_t node_count=reference.points.size();
+	if(reference.points.empty()||reference.cells.empty()||prescribed_displacement_m.empty())
+		throw std::invalid_argument("native ALE harmonic motion requires a mesh and constraints");
+	if(node_count!=distributed.global_to_local_vertex.size())
+		throw std::invalid_argument("native ALE distributed harmonic motion: mesh differs from the partition");
+	NativeTetAleHarmonicResult result;result.displacement_m.assign(node_count,{{0,0,0}});
+	std::vector<std::uint8_t> constrained(node_count,0);
+	for(const auto& prescribed:prescribed_displacement_m){
+		if(prescribed.first>=node_count)throw std::invalid_argument("native ALE harmonic constraint index is out of range");
+		for(const double value:prescribed.second)if(!std::isfinite(value))
+			throw std::invalid_argument("native ALE harmonic constraint is nonfinite");
+		constrained[prescribed.first]=1;result.displacement_m[prescribed.first]=prescribed.second;
+	}
+	result.constrained_nodes=prescribed_displacement_m.size();result.free_nodes=node_count-result.constrained_nodes;
+	if(result.free_nodes==0)return result;
+	const PetscInt begin=static_cast<PetscInt>(partition.owned_node_begin[partition.rank]),
+		owned=static_cast<PetscInt>(partition.owned_node_count),end=begin+owned,global=static_cast<PetscInt>(node_count);
+	const auto& local=partition.local;
+	// Exact preallocation from every local cell touching an owned vertex.
+	std::vector<std::vector<PetscInt>> columns(static_cast<std::size_t>(owned));
+	for(PetscInt row=begin;row<end;++row)columns[row-begin].push_back(row);
+	for(const auto& cell:local.cells){
+		std::array<PetscInt,4> rows{};
+		for(int vertex=0;vertex<4;++vertex)rows[vertex]=static_cast<PetscInt>(partition.OwnerMajorNode(partition.local_to_global_node[cell.nodes[vertex]]));
+		for(const auto row:rows)if(row>=begin&&row<end){auto& entries=columns[row-begin];entries.insert(entries.end(),rows.begin(),rows.end());}
+	}
+	std::vector<PetscInt> diagonal(static_cast<std::size_t>(owned)),off_diagonal(static_cast<std::size_t>(owned));
+	for(std::size_t row=0;row<columns.size();++row){
+		auto& entries=columns[row];std::sort(entries.begin(),entries.end());
+		entries.erase(std::unique(entries.begin(),entries.end()),entries.end());
+		for(const auto column:entries)++(column>=begin&&column<end?diagonal[row]:off_diagonal[row]);
+	}
+	struct Objects
+	{
+		Mat matrix=nullptr;Vec x=nullptr,b=nullptr,r=nullptr,gathered=nullptr;VecScatter scatter=nullptr;KSP solver=nullptr;
+		~Objects()
+		{
+			if(solver)KSPDestroy(&solver);
+			if(scatter)VecScatterDestroy(&scatter);
+			if(gathered)VecDestroy(&gathered);
+			if(r)VecDestroy(&r);
+			if(b)VecDestroy(&b);
+			if(x)VecDestroy(&x);
+			if(matrix)MatDestroy(&matrix);
+		}
+	} petsc;
+	NativeTetAlePetscCheck(MatCreateAIJ(comm,owned,owned,global,global,0,diagonal.data(),0,off_diagonal.data(),&petsc.matrix),
+		"MatCreateAIJ harmonic distributed");
+	NativeTetAlePetscCheck(MatSetOption(petsc.matrix,MAT_NEW_NONZERO_ALLOCATION_ERR,PETSC_TRUE),"MatSetOption harmonic distributed");
+	for(PetscInt row=begin;row<end;++row)
+		NativeTetAlePetscCheck(MatSetValue(petsc.matrix,row,row,0.0,ADD_VALUES),"MatSetValue diagonal harmonic distributed");
+	for(std::size_t cell=0;cell<local.cells.size();++cell){
+		if(!partition.local_cell_owned[cell])continue;
+		const auto geometry=EvaluateNativeTetGeometry(local,local.cells[cell]);
+		const double volume=geometry.determinant/6.0;
+		std::array<PetscScalar,16> stiffness{};std::array<PetscInt,4> rows{};
+		for(int a=0;a<4;++a){
+			rows[a]=static_cast<PetscInt>(partition.OwnerMajorNode(partition.local_to_global_node[local.cells[cell].nodes[a]]));
+			for(int b=0;b<4;++b){
+				double value=0.0;
+				for(int component=0;component<3;++component)
+					value+=geometry.barycentric_gradients[a][component]*geometry.barycentric_gradients[b][component];
+				stiffness[4*a+b]=volume*value;
+			}
+		}
+		NativeTetAlePetscCheck(MatSetValues(petsc.matrix,4,rows.data(),4,rows.data(),stiffness.data(),ADD_VALUES),"MatSetValues harmonic distributed");
+	}
+	NativeTetAlePetscCheck(MatAssemblyBegin(petsc.matrix,MAT_FINAL_ASSEMBLY),"MatAssemblyBegin harmonic distributed");
+	NativeTetAlePetscCheck(MatAssemblyEnd(petsc.matrix,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd harmonic distributed");
+	NativeTetAlePetscCheck(MatCreateVecs(petsc.matrix,&petsc.x,&petsc.b),"MatCreateVecs harmonic distributed");
+	NativeTetAlePetscCheck(VecDuplicate(petsc.b,&petsc.r),"VecDuplicate harmonic distributed");
+	NativeTetAlePetscCheck(VecScatterCreateToAll(petsc.x,&petsc.scatter,&petsc.gathered),"VecScatterCreateToAll harmonic distributed");
+	// Owned constrained rows, and their values per component.
+	std::vector<PetscInt> constrained_rows;std::array<std::vector<PetscScalar>,3> constrained_values;
+	for(PetscInt local_vertex=0;local_vertex<owned;++local_vertex){
+		const auto vertex=partition.local_to_global_node[local_vertex];
+		if(!constrained[vertex])continue;
+		constrained_rows.push_back(static_cast<PetscInt>(partition.OwnerMajorNode(vertex)));
+		for(int component=0;component<3;++component)constrained_values[component].push_back(result.displacement_m[vertex][component]);
+	}
+	// b_c = -A x_c on the free rows, x_c on the constrained rows; then the
+	// constrained rows and columns leave the operator.
+	std::array<std::vector<double>,3> rhs_owned;
+	for(int component=0;component<3;++component){
+		NativeTetAlePetscCheck(VecSet(petsc.x,0.0),"VecSet harmonic distributed");
+		NativeTetAlePetscCheck(VecSetValues(petsc.x,static_cast<PetscInt>(constrained_rows.size()),constrained_rows.data(),
+			constrained_values[component].data(),INSERT_VALUES),"VecSetValues harmonic distributed");
+		NativeTetAlePetscCheck(VecAssemblyBegin(petsc.x),"VecAssemblyBegin harmonic distributed");
+		NativeTetAlePetscCheck(VecAssemblyEnd(petsc.x),"VecAssemblyEnd harmonic distributed");
+		NativeTetAlePetscCheck(MatMult(petsc.matrix,petsc.x,petsc.b),"MatMult harmonic distributed");
+		NativeTetAlePetscCheck(VecScale(petsc.b,-1.0),"VecScale harmonic distributed");
+		NativeTetAlePetscCheck(VecSetValues(petsc.b,static_cast<PetscInt>(constrained_rows.size()),constrained_rows.data(),
+			constrained_values[component].data(),INSERT_VALUES),"VecSetValues rhs harmonic distributed");
+		NativeTetAlePetscCheck(VecAssemblyBegin(petsc.b),"VecAssemblyBegin rhs harmonic distributed");
+		NativeTetAlePetscCheck(VecAssemblyEnd(petsc.b),"VecAssemblyEnd rhs harmonic distributed");
+		const PetscScalar* values=nullptr;NativeTetAlePetscCheck(VecGetArrayRead(petsc.b,&values),"VecGetArrayRead rhs harmonic distributed");
+		rhs_owned[component].assign(values,values+owned);
+		NativeTetAlePetscCheck(VecRestoreArrayRead(petsc.b,&values),"VecRestoreArrayRead rhs harmonic distributed");
+	}
+	NativeTetAlePetscCheck(MatZeroRowsColumns(petsc.matrix,static_cast<PetscInt>(constrained_rows.size()),constrained_rows.data(),1.0,nullptr,nullptr),
+		"MatZeroRowsColumns harmonic distributed");
+	petsc.solver=MakeNativeTetPetscKsp(comm,prefix,petsc.matrix,defaults);
+	for(int component=0;component<3;++component){
+		PetscScalar* values=nullptr;NativeTetAlePetscCheck(VecGetArray(petsc.b,&values),"VecGetArray rhs harmonic distributed");
+		std::copy(rhs_owned[component].begin(),rhs_owned[component].end(),values);
+		NativeTetAlePetscCheck(VecRestoreArray(petsc.b,&values),"VecRestoreArray rhs harmonic distributed");
+		NativeTetAlePetscCheck(VecSet(petsc.x,0.0),"VecSet solution harmonic distributed");
+		NativeTetPetscKspSolve(petsc.solver,petsc.b,petsc.x,prefix);
+		NativeTetAlePetscCheck(MatMult(petsc.matrix,petsc.x,petsc.r),"MatMult residual harmonic distributed");
+		NativeTetAlePetscCheck(VecAXPY(petsc.r,-1.0,petsc.b),"VecAXPY residual harmonic distributed");
+		PetscReal residual=0.0;NativeTetAlePetscCheck(VecNorm(petsc.r,NORM_INFINITY,&residual),"VecNorm residual harmonic distributed");
+		result.maximum_free_residual=std::max(result.maximum_free_residual,static_cast<double>(residual));
+		NativeTetAlePetscCheck(VecScatterBegin(petsc.scatter,petsc.x,petsc.gathered,INSERT_VALUES,SCATTER_FORWARD),"VecScatterBegin harmonic distributed");
+		NativeTetAlePetscCheck(VecScatterEnd(petsc.scatter,petsc.x,petsc.gathered,INSERT_VALUES,SCATTER_FORWARD),"VecScatterEnd harmonic distributed");
+		const PetscScalar* gathered=nullptr;NativeTetAlePetscCheck(VecGetArrayRead(petsc.gathered,&gathered),"VecGetArrayRead gathered harmonic distributed");
+		for(std::size_t vertex=0;vertex<node_count;++vertex)if(!constrained[vertex])
+			result.displacement_m[vertex][component]=PetscRealPart(gathered[partition.OwnerMajorNode(static_cast<std::uint32_t>(vertex))]);
+		NativeTetAlePetscCheck(VecRestoreArrayRead(petsc.gathered,&gathered),"VecRestoreArrayRead gathered harmonic distributed");
+	}
+	return result;
+}
+
+// Interface tractions of a replicated fluid state, evaluated on each rank's
+// owned interface faces of the local submesh and gathered in the order of the
+// reference mesh's boundary triangles (the order of the replicated evaluation).
+inline std::vector<NativeTetInterfaceTriangleTraction> EvaluateNativeTetFluidTractionDistributed(
+	const NativeTetAleDistributedMesh& distributed,const NativeTetMesh& reference,
+	const std::vector<std::array<double,3>>& current_points_m,const std::vector<double>& replicated_state,
+	double dynamic_viscosity_pa_s,int interface_label)
+{
+	const auto& partition=distributed.partition;const MPI_Comm comm=distributed.communicator;
+	const auto local_mesh=BuildNativeTetAleLocalMesh(distributed,current_points_m);
+	const auto local_state=RestrictNativeTetAleStateToLocal(distributed,replicated_state);
+	std::vector<std::uint64_t> ids;std::vector<double> values;
+	bool any_interface=false;
+	for(const auto& triangle:local_mesh.boundary_triangles)any_interface|=triangle.boundary_label==interface_label;
+	if(any_interface){
+		const auto local=EvaluateNativeTetFluidTractionOnMatchingStructure(local_mesh,distributed.dofs.topology,local_state,
+			dynamic_viscosity_pa_s,interface_label);
+		std::size_t entry=0;
+		for(std::size_t triangle=0;triangle<local_mesh.boundary_triangles.size();++triangle){
+			if(local_mesh.boundary_triangles[triangle].boundary_label!=interface_label)continue;
+			if(entry>=local.size()||local[entry].triangle_id!=local_mesh.boundary_triangles[triangle].id)
+				throw std::runtime_error("native ALE distributed traction: local evaluation order differs");
+			if(partition.local_triangle_owned[triangle]){
+				ids.push_back(local[entry].triangle_id);
+				for(const double value:local[entry].traction_on_structure_pa)values.push_back(value);
+			}
+			++entry;
+		}
+	}
+	int ranks=1;MPI_Comm_size(comm,&ranks);
+	std::vector<int> counts(ranks),displacements(ranks),value_counts(ranks),value_displacements(ranks);
+	const int count=static_cast<int>(ids.size());
+	if(MPI_Allgather(&count,1,MPI_INT,counts.data(),1,MPI_INT,comm)!=MPI_SUCCESS)
+		throw std::runtime_error("native ALE distributed traction: count exchange failed");
+	int total=0;
+	for(int rank=0;rank<ranks;++rank){displacements[rank]=total;value_displacements[rank]=3*total;
+		value_counts[rank]=3*counts[rank];total+=counts[rank];}
+	std::vector<std::uint64_t> all_ids(total);std::vector<double> all_values(3*static_cast<std::size_t>(total));
+	if(MPI_Allgatherv(ids.data(),count,MPI_UINT64_T,all_ids.data(),counts.data(),displacements.data(),MPI_UINT64_T,comm)!=MPI_SUCCESS
+		||MPI_Allgatherv(values.data(),3*count,MPI_DOUBLE,all_values.data(),value_counts.data(),value_displacements.data(),MPI_DOUBLE,comm)!=MPI_SUCCESS)
+		throw std::runtime_error("native ALE distributed traction: gather failed");
+	std::map<std::uint64_t,std::size_t> order;std::size_t expected=0;
+	for(const auto& triangle:reference.boundary_triangles)if(triangle.boundary_label==interface_label)
+		order.emplace(triangle.id,expected++);
+	if(expected==0)throw std::invalid_argument("native matching FSI fluid label has no interface triangles");
+	if(static_cast<std::size_t>(total)!=expected)
+		throw std::runtime_error("native ALE distributed traction: owned interface faces do not cover the interface once");
+	std::vector<NativeTetInterfaceTriangleTraction> result(expected);std::vector<std::uint8_t> seen(expected,0);
+	for(int index=0;index<total;++index){
+		const auto found=order.find(all_ids[index]);
+		if(found==order.end()||seen[found->second])throw std::runtime_error("native ALE distributed traction: duplicate or unknown interface face");
+		seen[found->second]=1;result[found->second].triangle_id=all_ids[index];
+		for(int component=0;component<3;++component)
+			result[found->second].traction_on_structure_pa[component]=all_values[3*static_cast<std::size_t>(index)+component];
+	}
 	return result;
 }
 

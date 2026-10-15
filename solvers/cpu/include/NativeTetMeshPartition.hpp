@@ -144,14 +144,16 @@ inline NativeTetMeshPartition PartitionNativeTetMesh(const NativeTetMesh& mesh,M
 		throw std::invalid_argument("native tetra partition needs a nonempty mesh");
 	const std::size_t nodes=mesh.points.size(),cells=mesh.cells.size();
 	result.cell_owner=PartitionCells(mesh,communicator);
-	// A vertex goes to the rank with most adjacent cells; ties take the lower rank.
+	// A vertex goes to the rank with most adjacent cells; ties take the lower
+	// rank. A vertex no cell uses (meshes may carry surface-only points) goes
+	// to rank 0 and has no local cell anywhere.
 	result.node_owner.assign(nodes,-1);
 	{
 		std::vector<std::map<int,int>> votes(nodes);
 		for(std::size_t cell=0;cell<cells;++cell)
 			for(const auto node:mesh.cells[cell].nodes)++votes[node][result.cell_owner[cell]];
 		for(std::size_t node=0;node<nodes;++node){
-			if(votes[node].empty())throw std::invalid_argument("native tetra partition: isolated vertex");
+			if(votes[node].empty()){result.node_owner[node]=0;continue;}
 			int best=-1,best_count=0;
 			for(const auto& vote:votes[node])if(vote.second>best_count){best=vote.first;best_count=vote.second;}
 			result.node_owner[node]=best;
