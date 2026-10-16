@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <stdexcept>
+#include <tuple>
 #include <vector>
 
 // Plain (unsmoothed) aggregation algebraic multigrid for a scalar CSR matrix
@@ -20,7 +22,10 @@
 // is damped Jacobi; the coarsest operator (a few hundred unknowns) is
 // inverted densely on the host at every Update() and applied with one GEMV.
 // Cycle() applies V-cycles as a preconditioner and falls back to Jacobi
-// scaling if a cycle produces a non-finite vector.
+// scaling if a cycle produces a non-finite vector. The cycles of one (b, x)
+// pair are captured into a CUDA graph on first use and replayed afterwards
+// (one launch instead of ~10 per level), on a blocking stream of their own so
+// ordering with the caller's work on the legacy stream stays implicit.
 
 namespace iga::cuda {
 
@@ -34,6 +39,8 @@ struct AggregationAmgOptions {
 	double over_correction = 1.3;
 	int coarsest_size = 300;
 	int maximum_levels = 25;
+	// Replay captured CUDA graphs of the cycles instead of launching eagerly.
+	bool capture_graph = true;
 };
 
 __global__ void SumFineEntriesKernel(int fine_entries, const int* coarse_entry, const double* fine, double* coarse)
@@ -91,16 +98,28 @@ public:
 		AggregationAmgOptions options = {})
 		: fine_(fine), host_(host_pattern), block_(block), options_(options),
 		  size_(static_cast<int>(host_pattern.diagonal.size())),
-		  fine_inverse_(host_pattern.diagonal.size()), fine_r_(host_pattern.diagonal.size()), flags_(1)
+		  fine_inverse_(host_pattern.diagonal.size()), fine_r_(host_pattern.diagonal.size()), flags_(1),
+		  blas_workspace_(kBlasWorkspaceBytes)
 	{
+		Check(cudaStreamCreate(&stream_), "cudaStreamCreate AMG");
 		Check(cublasSetPointerMode(blas_, CUBLAS_POINTER_MODE_HOST), "cublasSetPointerMode AMG");
+		Check(cublasSetStream(blas_, stream_), "cublasSetStream AMG");
+		// A fixed workspace keeps cuBLAS from allocating during stream capture.
+		Check(cublasSetWorkspace(blas_, blas_workspace_.data(), kBlasWorkspaceBytes), "cublasSetWorkspace AMG");
 		if (block <= 0 || size_ == 0 || size_%block != 0)
 			throw std::invalid_argument("aggregation AMG needs a positive block size dividing the system");
 		if (options.pre_sweeps < 0 || options.post_sweeps < 0 || !(options.omega > 0.0))
 			throw std::invalid_argument("aggregation AMG smoother options are invalid");
 	}
 
+	~AggregationAmg()
+	{
+		for (auto& graph : graphs_) cudaGraphExecDestroy(graph.second);
+		if (stream_) cudaStreamDestroy(stream_);
+	}
+
 	int Levels() const { return static_cast<int>(levels_.size())+1; }
+	int GraphCount() const { return static_cast<int>(graphs_.size()); }
 	int CoarsestSize() const { return levels_.empty() ? size_ : levels_.back()->coarse_size; }
 	int FallbackCount() const { return fallbacks_; }
 
@@ -125,25 +144,52 @@ public:
 		InvertCoarsest(*pattern, values);
 	}
 
-	// x = M^-1 b with `cycles` V-cycles from a zero start.
+	// x = M^-1 b with `cycles` V-cycles from a zero start. The device buffers
+	// of the hierarchy keep their addresses across Update(), so a graph captured
+	// for one (b, x, cycles) stays valid for the object's lifetime.
 	void Cycle(const double* b, double* x, int cycles)
 	{
 		if (!built_) throw std::logic_error("aggregation AMG cycles need Update() first");
-		Check(cudaMemset(x, 0, static_cast<std::size_t>(size_)*sizeof(double)), "clear AMG solution");
-		for (int cycle = 0; cycle < cycles; ++cycle)
-			Visit(0, fine_.pattern(), fine_.values(), fine_inverse_.data(), b, x);
-		flags_.Clear();
-		CountNonFiniteKernel<<<(size_+255)/256,256>>>(size_, x, flags_.data());
+		if (options_.capture_graph) {
+			const auto key = std::make_tuple(b, x, cycles);
+			auto found = graphs_.find(key);
+			if (found == graphs_.end()) {
+				cudaGraph_t graph = nullptr;
+				Check(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal), "cudaStreamBeginCapture AMG");
+				Run(b, x, cycles);
+				Check(cudaStreamEndCapture(stream_, &graph), "cudaStreamEndCapture AMG");
+				cudaGraphExec_t exec = nullptr;
+				Check(cudaGraphInstantiate(&exec, graph, 0), "cudaGraphInstantiate AMG");
+				Check(cudaGraphDestroy(graph), "cudaGraphDestroy AMG");
+				found = graphs_.emplace(key, exec).first;
+			}
+			Check(cudaGraphLaunch(found->second, stream_), "cudaGraphLaunch AMG");
+		} else {
+			Run(b, x, cycles);
+		}
+		// The blocking copy waits for the cycle; the fallback runs eagerly.
 		unsigned int bad = 0;
 		flags_.CopyToHost(&bad, 1);
 		if (bad) {
 			++fallbacks_;
-			ScaleIntoKernel<<<(size_+255)/256,256>>>(size_, fine_inverse_.data(), b, x);
+			ScaleIntoKernel<<<(size_+255)/256,256,0,stream_>>>(size_, fine_inverse_.data(), b, x);
 		}
 		CheckKernel("aggregation AMG cycle");
 	}
 
 private:
+	static constexpr std::size_t kBlasWorkspaceBytes = 4u<<20;
+
+	// The cycles and the non-finite count, all on stream_ (capturable).
+	void Run(const double* b, double* x, int cycles)
+	{
+		Check(cudaMemsetAsync(x, 0, static_cast<std::size_t>(size_)*sizeof(double), stream_), "clear AMG solution");
+		for (int cycle = 0; cycle < cycles; ++cycle)
+			Visit(0, fine_.pattern(), fine_.values(), fine_inverse_.data(), b, x);
+		Check(cudaMemsetAsync(flags_.data(), 0, sizeof(unsigned int), stream_), "clear AMG flags");
+		CountNonFiniteKernel<<<(size_+255)/256,256,0,stream_>>>(size_, x, flags_.data());
+	}
+
 	struct Level {
 		Level(int fine_size, int coarse_size, const std::vector<int>& host_aggregate, const BlockPattern& coarse,
 			const std::vector<int>& host_coarse_entry)
@@ -280,8 +326,8 @@ private:
 	{
 		const int blocks = (pattern.nodes+255)/256;
 		for (int sweep = 0; sweep < sweeps; ++sweep) {
-			ResidualKernel<<<blocks,256>>>(pattern, values, b, x, r);
-			DampedJacobiKernel<<<blocks,256>>>(pattern.nodes, options_.omega, inverse, r, x);
+			ResidualKernel<<<blocks,256,0,stream_>>>(pattern, values, b, x, r);
+			DampedJacobiKernel<<<blocks,256,0,stream_>>>(pattern.nodes, options_.omega, inverse, r, x);
 		}
 	}
 
@@ -300,13 +346,14 @@ private:
 		Level& level = *levels_[depth];
 		double* r = depth == 0 ? fine_r_.data() : level.r.data();
 		Smooth(pattern, values, inverse, b, x, r, options_.pre_sweeps);
-		ResidualKernel<<<blocks,256>>>(pattern, values, b, x, r);
-		level.b.Clear();
-		level.x.Clear();
-		RestrictKernel<<<blocks,256>>>(size, level.aggregate.data(), r, level.b.data());
+		ResidualKernel<<<blocks,256,0,stream_>>>(pattern, values, b, x, r);
+		const std::size_t coarse_bytes = static_cast<std::size_t>(level.coarse_size)*sizeof(double);
+		Check(cudaMemsetAsync(level.b.data(), 0, coarse_bytes, stream_), "clear AMG coarse rhs");
+		Check(cudaMemsetAsync(level.x.data(), 0, coarse_bytes, stream_), "clear AMG coarse solution");
+		RestrictKernel<<<blocks,256,0,stream_>>>(size, level.aggregate.data(), r, level.b.data());
 		Visit(depth+1, level.matrix->pattern(), level.matrix->values(), level.inverse.data(), level.b.data(),
 			level.x.data());
-		ProlongKernel<<<blocks,256>>>(size, level.aggregate.data(), options_.over_correction, level.x.data(), x);
+		ProlongKernel<<<blocks,256,0,stream_>>>(size, level.aggregate.data(), options_.over_correction, level.x.data(), x);
 		Smooth(pattern, values, inverse, b, x, r, options_.post_sweeps);
 	}
 
@@ -379,6 +426,9 @@ private:
 	BlasHandle blas_;
 	DeviceBuffer<double> fine_inverse_, fine_r_;
 	DeviceBuffer<unsigned int> flags_;
+	DeviceBuffer<unsigned char> blas_workspace_;
+	cudaStream_t stream_ = nullptr;
+	std::map<std::tuple<const double*, double*, int>, cudaGraphExec_t> graphs_;
 };
 
 } // namespace iga::cuda

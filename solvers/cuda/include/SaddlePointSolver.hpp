@@ -126,6 +126,10 @@ public:
 		return (velocity_amg_ ? velocity_amg_->FallbackCount() : 0)+(pressure_amg_ ? pressure_amg_->FallbackCount() : 0);
 	}
 	int PressureLevels() const { return pressure_amg_ ? pressure_amg_->Levels() : 1; }
+	int AmgGraphs() const
+	{
+		return (velocity_amg_ ? velocity_amg_->GraphCount() : 0)+(pressure_amg_ ? pressure_amg_->GraphCount() : 0);
+	}
 
 	// Solves J x = b for the current Jacobian values; b is overwritten with x.
 	SaddlePointResult Solve(double* right_hand_side)

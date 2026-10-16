@@ -147,9 +147,15 @@ fieldsplit without multigrid). It needs about half the memory of cuDSS at
 convergence relies on mass-dominated transient steps. `"preconditioner":
 "amg"` (or `"amg-velocity"` / `"amg-pressure"`) replaces the Jacobi inner
 solves with BiCGStab preconditioned by plain aggregation multigrid
-(`AggregationAmg.hpp`). It is experimental: it cuts inner iterations 3-5x but,
-being launch-bound on meshes up to about 25k cells, it took 1.3-2.5x longer in
-every measured case, so `"jacobi"` remains the default.
+(`AggregationAmg.hpp`). It is experimental: it cuts inner iterations 3-5x,
+but a V-cycle moves far more memory than a Jacobi sweep, so it took 1.3-2.5x
+longer on meshes up to 25k cells and `"jacobi"` remains the default. The
+cycles are captured into CUDA graphs on first use and replayed afterwards
+(`"amg_graph": false` launches them eagerly); replay removes the launch
+overhead, which was worth 12%, 9%, and 1% of the solve on 3k, 10k, and 83k
+cells, so at 83k cells AMG and Jacobi now take the same time (52.8 s against
+50.6 s) and at 196k cells AMG is 9% faster (196 s against 214 s), the
+first size where its iteration reduction outweighs the cost of a cycle.
 Local assembly, solve, memory, and CPU comparison measurements are in
 [`benchmarks/fem_gpu_native_evidence.json`](../benchmarks/fem_gpu_native_evidence.json).
 
