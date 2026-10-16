@@ -40,27 +40,30 @@ ITERATIVE = shlex.split(
 
 
 def ledger(text):
-	steps = [line for line in text.splitlines() if line.startswith("native_fsi_step ")]
+	steps = [line for line in text.splitlines()
+		if line.startswith("native_fsi_step ") or line.startswith("native_fsi_species_step ")]
 	if not steps:
 		raise SystemExit("no native_fsi_step ledger lines")
 	values = []
 	for line in steps:
 		for key, value in re.findall(r"(\w+)=(\S+)", line):
-			if key in ("step", "iterations"):
+			if key in ("step", "iterations", "linear_iterations"):
 				values.append((key, int(value)))
+			elif key == "id":
+				values.append((key, value))
 			else:
 				values.append((key, float(value)))
 	return values
 
 
-def compare(name, reference, other, tolerance):
+def compare(name, reference, other, tolerance, floor=1e-18):
 	if [key for key, _ in reference] != [key for key, _ in other]:
 		raise SystemExit(f"{name}: ledgers have different fields")
 	for (key, a), (_, b) in zip(reference, other):
-		if isinstance(a, int):
-			if a != b:
+		if isinstance(a, (int, str)):
+			if a != b and key != "linear_iterations":
 				raise SystemExit(f"{name}: {key} differs ({a} vs {b})")
-		elif abs(a-b) > tolerance*max(abs(a), abs(b), 1e-20) and abs(a-b) > 1e-18:
+		elif abs(a-b) > tolerance*max(abs(a), abs(b), 1e-20) and abs(a-b) > floor:
 			raise SystemExit(f"{name}: {key} differs ({a!r} vs {b!r})")
 
 
@@ -78,8 +81,8 @@ def main():
 	binary = str(HERE.parent/"native_tet_fsi_steps")
 	launcher = shlex.split(args.launcher)
 
-	def run(name, ranks, options):
-		command = [*launcher, "-np", str(ranks), binary, str(root/"case.json"), str(root/name), *options]
+	def run(name, ranks, options, case="case.json"):
+		command = [*launcher, "-np", str(ranks), binary, str(root/case), str(root/name), *options]
 		result = subprocess.run(command, capture_output=True, text=True, cwd=root)
 		if result.returncode:
 			raise SystemExit(f"{name} failed:\n{result.stdout[-2000:]}{result.stderr[-2000:]}")
@@ -99,7 +102,14 @@ def main():
 	# A different MUMPS distribution changes round-off; cancellation-prone
 	# residuals in the ledger then agree to about 1e-9 relative.
 	compare("distributed fluid vs replicated", distributed, one, 1e-6)
-	print(f"native FSI ranks: PETSc 1/2 ranks, distributed fluid, and dense agree over {len(one)} ledger values")
+	# Species transport: the partitioned path assembles the partition's owned
+	# cells instead of round-robin cells; the species ledger must agree too.
+	species_one = run("species-1", 1, TIGHT, "fsi_species_case.json")
+	species_distributed = run("species-distributed-2", 2, TIGHT+["-fsi_distributed_fluid"], "fsi_species_case.json")
+	# The balance defect is a round-off-level residual (1e-18 mol/s here).
+	compare("species on the partitioned path vs replicated", species_distributed, species_one, 1e-6, floor=1e-15)
+	print(f"native FSI ranks: PETSc 1/2 ranks, distributed fluid, and dense agree over {len(one)} ledger values; "
+		f"species agree over {len(species_one)}")
 
 
 if __name__ == "__main__":

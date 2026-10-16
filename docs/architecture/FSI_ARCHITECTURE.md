@@ -327,8 +327,11 @@ rank's owned interface faces of its local submesh and gathered
 too and its Newton tangent assembled from owned cells, with the residual
 summed into the replicated layout so the line search takes the same decisions
 on every rank (`SolveNativeTetSolidStaticDistributed`, `-fsi_solid_` options);
-and the flow snapshots are written from each rank's owned cells with the
-replicated velocity-node ids as `GlobalPointIds`. `NativeTetAleFsiSolvers`
+the flow snapshots are written from each rank's owned cells with the
+replicated velocity-node ids as `GlobalPointIds`, and the species transport
+assembles the partition's owned cells instead of round-robin cells
+(`SolveNativeTetMovingSpeciesPetscStep`'s `cell_owned` mask; its vectors stay
+replicated and its GMRES/block-Jacobi solve is unchanged). `NativeTetAleFsiSolvers`
 and `NativeTetSolidStaticOptions::solve` are the injection points, so the FSI
 runtimes themselves are unchanged. `native_tet_fsi_distributed_parts_test`
 checks the three solves against their replicated versions on 1–3 ranks. What
