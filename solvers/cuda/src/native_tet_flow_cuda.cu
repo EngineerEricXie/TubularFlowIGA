@@ -89,6 +89,7 @@ struct FlowCase
 	// "direct" (cuDSS) or "iterative" (block-preconditioned FGMRES) with
 	// inner "jacobi" (BiCGStab) or "amg" (aggregation multigrid) solves.
 	std::string linear_solver="direct",preconditioner="jacobi";
+	bool amg_graph=true;   // replay the AMG cycles as CUDA graphs
 	std::array<double,3> initial_velocity{};
 	std::map<int,std::array<double,3>> velocity_by_label;
 	std::map<int,double> pressure_by_label;
@@ -151,6 +152,11 @@ FlowCase ParseCase(const std::filesystem::path& path)
 	if(result.preconditioner!="jacobi"&&result.preconditioner!="amg"
 		&&result.preconditioner!="amg-velocity"&&result.preconditioner!="amg-pressure")
 		throw std::invalid_argument("fluid.preconditioner must be jacobi, amg, amg-velocity, or amg-pressure");
+	if(const auto* graph=Find(fluid,"amg_graph")){
+		if(graph->type!=iga::config_detail::JsonValue::Type::Boolean)
+			throw std::invalid_argument("fluid.amg_graph must be a boolean");
+		result.amg_graph=graph->boolean;
+	}
 	const auto& boundaries=RequireObject(required(root,"boundaries"),"boundaries");
 	const auto& velocities=RequireObject(required(boundaries,"velocity_by_label_m_s"),
 		"velocity_by_label_m_s");
@@ -463,6 +469,7 @@ void RunCase(const std::filesystem::path& case_path,
 	if(specification.linear_solver=="iterative"){
 		iga::cuda::SaddlePointOptions options;
 		options.preconditioner=specification.preconditioner;
+		options.amg.capture_graph=specification.amg_graph;
 		iterative.emplace(host_pattern,jacobian,3*velocity_nodes,options);
 	}
 	else direct.emplace(jacobian);
@@ -604,6 +611,7 @@ void RunCase(const std::filesystem::path& case_path,
 		<<" inner_velocity_iterations="<<(iterative?iterative->VelocityIterations():0)
 		<<" inner_pressure_iterations="<<(iterative?iterative->PressureIterations():0)
 		<<" amg_fallbacks="<<(iterative?iterative->AmgFallbacks():0)
+		<<" amg_graphs="<<(iterative?iterative->AmgGraphs():0)
 		<<" linear_iterations="<<linear_iterations<<" host_peak_rss_kib="<<usage
 		<<" cuda_peak_bytes="<<iga::cuda::DeviceAllocationCounter::Peak()<<'\n';
 }
