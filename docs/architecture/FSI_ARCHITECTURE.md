@@ -372,6 +372,27 @@ cells at 4 ranks (207 s → 121 s), 1.9× less on 82,944 cells (1,132 s →
 605 s), and 1.2× less on 3,072 cells; the outer FGMRES takes about three
 times more iterations, each far cheaper.
 
+Block-Jacobi ILU depends on the rank count: a block is one rank's rows, so
+more ranks mean weaker blocks. Measured on 82,944 cells (2 steps, iterative
+set above, mean inner velocity iterations per solve, and wall time and
+maximum resident set of one process):
+
+| Ranks | block-Jacobi ILU | ASM (overlap 1) ILU |
+|---|---|---|
+| 4 | 19.5 iterations, 597 s, 633 MiB | 16.6 iterations, 596 s, 756 MiB |
+| 8 | 20.8 iterations, 484 s, 372 MiB | 16.9 iterations, 459 s, 441 MiB |
+| 16 | 21.8 iterations, 524 s, 240 MiB | 16.9 iterations, 512 s, 285 MiB |
+
+(16 ranks share the machine's 16 threads with the rest of the system, so
+its wall time is not a scaling point.) Block-Jacobi loses 12% from 4 to 16
+ranks while the additive Schwarz variant
+(`-fieldsplit_velocity_pc_type asm -fieldsplit_velocity_pc_asm_overlap 1
+-fieldsplit_velocity_sub_pc_type ilu` in place of the `bjacobi` lines) holds
+its count flat at 19% more memory per rank and up to 5% less time; the outer
+iteration counts and the interface force (to 1e-11) are the same. The
+documented set keeps block-Jacobi for its memory; switch to ASM when the
+rank count grows past what is measured here.
+
 A single BoomerAMG cycle on the velocity block (`-fieldsplit_velocity_ksp_type
 preonly -fieldsplit_velocity_pc_type hypre`) is not a usable preconditioner for
 these transient ALE systems: the outer FGMRES then stagnates at a few percent of
