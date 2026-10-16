@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -399,15 +400,17 @@ struct NativeTetFsiSolverOptions
 {
 	bool dense_solvers=false;
 	bool distributed_fluid=false;
-	// Newton tolerances of the two fields. The fluid residual is absolute, so
-	// 1e-8 is what the generated channel cases need to reproduce a converged
-	// interface force to 1e-6 relative; 1e-6 under-converges them by 0.3%.
-	double fluid_tolerance=1e-8;
+	// Newton tolerances of the two fields. The fluid residual is absolute;
+	// with the warm-started Newton below, 1e-11 is what the generated channel
+	// cases need to reproduce a converged interface force to 1e-6 relative
+	// (a cold start over-converges and hides that; 1e-6 under-converges by 0.3%).
+	double fluid_tolerance=1e-11;
 	double solid_relative_tolerance=1e-7;
 	// Strong-coupling displacement gate: rms interface residual <= atol + rtol*scale.
 	double coupling_absolute_tolerance_m=1e-9;
 	double coupling_relative_tolerance=1e-3;
 	std::uint64_t coupling_maximum_iterations=24;
+	bool fluid_warm_start=true;        // -fsi_fluid_warm_start
 };
 
 inline NativeTetFsiSolverOptions ReadNativeTetFsiSolverOptions(int ranks)
@@ -438,6 +441,9 @@ inline NativeTetFsiSolverOptions ReadNativeTetFsiSolverOptions(int ranks)
 	options.coupling_absolute_tolerance_m=coupling_atol;
 	options.coupling_relative_tolerance=coupling_rtol;
 	options.coupling_maximum_iterations=static_cast<std::uint64_t>(coupling_iterations);
+	PetscBool warm_start=options.fluid_warm_start?PETSC_TRUE:PETSC_FALSE;
+	PetscOptionsGetBool(nullptr,nullptr,"-fsi_fluid_warm_start",&warm_start,nullptr);
+	options.fluid_warm_start=warm_start==PETSC_TRUE;
 	return options;
 }
 
@@ -505,55 +511,69 @@ public:
 			for(auto node:topology_.boundary_velocity_nodes.at(boundary.first))
 				essential_velocity.emplace(node,interface_nodes.count(node)
 					?std::array<double,3>{{0.,0.,0.}}:boundary.second);
-		NativeTetAleFsiSolvers solvers;
+		NativeTetAleFsiSolvers solvers;solvers.warm_start=options.fluid_warm_start;
 		if(options.distributed_fluid){
 			distributed_fluid_=std::make_unique<NativeTetAleDistributedMesh>(fluid_mesh_,PETSC_COMM_WORLD);
 			distributed_fluid_->BindReplicatedTopology(topology_);
 			const auto* distributed=distributed_fluid_.get();const auto* replicated_topology=&topology_;
 			const auto* reference_mesh=&fluid_mesh_;
-			solvers.fluid=[distributed,replicated_topology](const NativeTetMesh& mesh,
+			solvers.fluid=[distributed,replicated_topology,this](const NativeTetMesh& mesh,
 				const std::vector<std::array<double,3>>& mesh_velocity,
 				const std::vector<double>& committed,const std::vector<double>& trial,
 				const std::map<std::uint32_t,std::array<double,3>>& prescribed,
 				std::uint32_t gauge,const NativeNavierStokesParameters& parameters,
 				double dt,double tolerance,std::size_t iterations){
+				const Timer timer(timing_.fluid_s);
 				auto solve=SolveNativeTetAleDistributed(*distributed,*replicated_topology,mesh.points,mesh_velocity,
 					committed,trial,prescribed,gauge,parameters,dt,false,tolerance,iterations);
 				NativeTetAleDenseSolveResult result;
 				result.state=std::move(solve.replicated_state);
 				result.newton_iterations=solve.newton_iterations;
 				result.final_free_residual_l2=solve.final_residual_l2;
+				++timing_.fluid_trials;timing_.fluid_newton+=solve.newton_iterations;timing_.fluid_linear+=solve.total_linear_iterations;
 				return result;};
 			// Mesh motion and traction on the partition as well (results replicated).
-			solvers.harmonic=[distributed,reference_mesh](const NativeTetMesh& mesh,
+			solvers.harmonic=[distributed,reference_mesh,this](const NativeTetMesh& mesh,
 				const std::map<std::uint32_t,std::array<double,3>>& prescribed){
 				if(&mesh!=reference_mesh&&mesh.points.size()!=reference_mesh->points.size())
 					throw std::runtime_error("native FSI distributed mesh motion received a different mesh");
+				const Timer timer(timing_.motion_s);
 				return SolveNativeTetAleHarmonicMotionDistributed(*distributed,mesh,prescribed);};
-			solvers.traction=[distributed,reference_mesh](const NativeTetMesh& current,const NativeTaylorHoodTopology&,
+			solvers.traction=[distributed,reference_mesh,this](const NativeTetMesh& current,const NativeTaylorHoodTopology&,
 				const std::vector<double>& state,double viscosity,int label){
+				const Timer timer(timing_.traction_s);
 				return EvaluateNativeTetFluidTractionDistributed(*distributed,*reference_mesh,current.points,state,viscosity,label);};
 			int rank=0;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 			if(rank==0)std::cout<<"native_fsi_distributed_fluid ranks="<<distributed->partition.ranks
 				<<" global_cells="<<fluid_mesh_.cells.size()<<" rank0_local_cells="<<distributed->partition.local.cells.size()
 				<<" rank0_owned_rows="<<distributed->dofs.OwnedRows()<<" global_rows="<<distributed->dofs.global_rows<<'\n';
 		}else if(!options.dense_solvers){
-			solvers.fluid=[](const NativeTetMesh& mesh,
+			solvers.fluid=[this](const NativeTetMesh& mesh,
 				const std::vector<std::array<double,3>>& mesh_velocity,
 				const std::vector<double>& committed,const std::vector<double>& trial,
 				const std::map<std::uint32_t,std::array<double,3>>& prescribed,
 				std::uint32_t gauge,const NativeNavierStokesParameters& parameters,
 				double dt,double tolerance,std::size_t iterations){
+				const Timer timer(timing_.fluid_s);
 				auto solve=SolveNativeTetAlePetscTransient(mesh,mesh_velocity,committed,trial,
 					prescribed,gauge,parameters,dt,tolerance,iterations);
 				NativeTetAleDenseSolveResult result;
 				result.state=std::move(solve.replicated_state);
 				result.newton_iterations=solve.newton_iterations;
 				result.final_free_residual_l2=solve.final_residual_l2;
+				++timing_.fluid_trials;timing_.fluid_newton+=solve.newton_iterations;timing_.fluid_linear+=solve.total_linear_iterations;
 				return result;};
 			NativeTetPetscLinearSolveDefaults motion;
 			motion.ksp_type=KSPCG;motion.pc_type=PCJACOBI;motion.factor_package.clear();
-			solvers.mesh_motion=MakeNativeTetPetscLinearSolve("fsi_mesh_",motion);
+			const auto mesh_motion=MakeNativeTetPetscLinearSolve("fsi_mesh_",motion);
+			solvers.harmonic=[mesh_motion,this](const NativeTetMesh& mesh,
+				const std::map<std::uint32_t,std::array<double,3>>& prescribed){
+				const Timer timer(timing_.motion_s);
+				return SolveNativeTetAleHarmonicMotion(mesh,prescribed,mesh_motion);};
+			solvers.traction=[this](const NativeTetMesh& current,const NativeTaylorHoodTopology& topology,
+				const std::vector<double>& state,double viscosity,int label){
+				const Timer timer(timing_.traction_s);
+				return EvaluateNativeTetFluidTractionOnMatchingStructure(current,topology,state,viscosity,label);};
 		}
 		fluid_=std::make_unique<NativeTetAleFsiRuntime>(names_.fluid_domain,names_.fluid_subsystem,
 			*edge_,fluid_surface_,solid_surface_,layout_,layout_,fluid_mesh_,label,
@@ -573,11 +593,19 @@ public:
 			// The solid is partitioned too: owned-cell assembly, replicated vectors.
 			distributed_solid_=std::make_unique<NativeTetMeshPartition>(PartitionNativeTetMesh(solid_mesh_,PETSC_COMM_WORLD));
 			const auto* partition=distributed_solid_.get();
-			solid_options.solve=[partition](const NativeTetMesh& mesh,const NativeTetSolidMaterial& material,
+			solid_options.solve=[partition,this](const NativeTetMesh& mesh,const NativeTetSolidMaterial& material,
 				const std::vector<double>& force,const std::map<std::size_t,double>& prescribed,
 				std::vector<double> initial,const NativeTetSolidStaticOptions& solid){
+				const Timer timer(timing_.solid_s);
 				return SolveNativeTetSolidStaticDistributed(*partition,mesh,material,force,prescribed,std::move(initial),
 					solid,PETSC_COMM_WORLD);};
+		}else{
+			solid_options.solve=[this](const NativeTetMesh& mesh,const NativeTetSolidMaterial& material,
+				const std::vector<double>& force,const std::map<std::size_t,double>& prescribed,
+				std::vector<double> initial,const NativeTetSolidStaticOptions& solid){
+				const Timer timer(timing_.solid_s);
+				auto inner=solid;inner.solve=nullptr;
+				return SolveNativeTetSolidStatic(mesh,material,force,prescribed,std::move(initial),inner);};
 		}
 		solid_=std::make_unique<NativeTetSolidFsiRuntime>(names_.solid_domain,names_.solid_subsystem,
 			*edge_,solid_surface_,fluid_surface_,layout_,layout_,solid_mesh_,label,
@@ -610,6 +638,7 @@ public:
 
 	void RunStep(int step,const std::filesystem::path& output,int rank,int ranks)
 	{
+		timing_=Timing{};const auto step_start=std::chrono::steady_clock::now();
 		const auto& scenario=scenario_;
 		auto& fluid=*fluid_;auto& solid=*solid_;
 		const auto previous=NativeTetFsiCurrentMesh(fluid_mesh_,fluid.CommittedAleDisplacementM());
@@ -666,6 +695,7 @@ public:
 				solid_field.displacement_m[node][axis]=solid.CommittedDisplacementM()[3*node+axis];
 		const auto flow_path=output/("flow_step_"+std::to_string(step));
 		const auto solid_path=output/("wall_step_"+std::to_string(step));
+		const auto output_start=std::chrono::steady_clock::now();
 		WriteParallelVtkSnapshot(PETSC_COMM_WORLD,flow_path,
 			distributed_fluid_?BuildDistributedFlowPiece(current,fluid.CommittedFluidState())
 			:BuildNativeTetHydraulicVtkPartition(fluid_mesh_,current,
@@ -674,6 +704,7 @@ public:
 		WriteParallelVtkSnapshot(PETSC_COMM_WORLD,solid_path,
 			BuildNativeTetLinearElasticVtkPartition(solid_mesh_,solid_field,rank,ranks),
 			step*scenario.dt_s);
+		timing_.output_s+=std::chrono::duration<double>(std::chrono::steady_clock::now()-output_start).count();
 		std::vector<std::array<double,3>> fluid_velocity(velocity_nodes_);
 		for(std::size_t node=0;node<velocity_nodes_;++node)
 			for(int axis=0;axis<3;++axis)
@@ -711,6 +742,15 @@ public:
 				<<" interface_power_w="<<interface_power
 				<<" wall_max_displacement_m="<<maximum_wall_displacement
 			<<" interface_power_defect_w="<<*result.history.back().interface_power_defect_w<<'\n';
+		// Wall time of the step by phase on rank 0; "other" is what the
+		// coupling does between the solves (transfer, kinematics, identities,
+		// conservation, species).
+		const double step_s=std::chrono::duration<double>(std::chrono::steady_clock::now()-step_start).count();
+		if(rank==0)std::cout<<std::setprecision(4)<<"native_fsi_timing step="<<step<<" total_s="<<step_s
+			<<" fluid_s="<<timing_.fluid_s<<" motion_s="<<timing_.motion_s<<" traction_s="<<timing_.traction_s
+			<<" solid_s="<<timing_.solid_s<<" output_s="<<timing_.output_s
+			<<" fluid_trials="<<timing_.fluid_trials<<" fluid_newton="<<timing_.fluid_newton<<" fluid_linear="<<timing_.fluid_linear
+			<<" other_s="<<step_s-timing_.fluid_s-timing_.motion_s-timing_.traction_s-timing_.solid_s-timing_.output_s<<'\n';
 	}
 
 	void WriteSeries(const std::filesystem::path& output)const
@@ -723,6 +763,15 @@ public:
 
 private:
 	using Coordinator=StrongFluidStructureCoupling<NativeTetAleFsiRuntime,NativeTetSolidFsiRuntime>;
+
+	struct Timing{double fluid_s=0,motion_s=0,traction_s=0,solid_s=0,output_s=0;
+		std::size_t fluid_trials=0,fluid_newton=0;long long fluid_linear=0;};
+	struct Timer
+	{
+		explicit Timer(double& sink):sink_(sink),start_(std::chrono::steady_clock::now()){}
+		~Timer(){sink_+=std::chrono::duration<double>(std::chrono::steady_clock::now()-start_).count();}
+		double& sink_;std::chrono::steady_clock::time_point start_;
+	};
 
 	// Flow snapshot piece of this rank's owned cells on the partitioned mesh,
 	// with the replicated velocity-node ids as GlobalPointIds.
@@ -753,6 +802,7 @@ private:
 	std::unique_ptr<NativeTetSolidFsiRuntime> solid_;
 	std::unique_ptr<Coordinator> coordinator_;
 	std::vector<std::pair<double,std::filesystem::path>> flow_series_,solid_series_;
+	Timing timing_;
 	std::map<std::string,std::vector<double>> species_concentration_;
 	std::map<std::string,std::vector<std::pair<double,std::filesystem::path>>> species_series_;
 };

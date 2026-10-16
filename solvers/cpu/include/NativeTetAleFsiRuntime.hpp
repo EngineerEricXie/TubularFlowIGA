@@ -53,6 +53,9 @@ struct NativeTetAleFsiSolvers
 	NativeTetLinearSolve mesh_motion;
 	NativeTetAleHarmonicSolve harmonic;
 	NativeTetAleTractionEvaluate traction;
+	// Start each coupling iteration's Newton solve from the previous
+	// iteration's fluid state of the same step instead of the committed state.
+	bool warm_start=true;
 };
 
 class NativeTetAleFsiRuntime final : public FsiFluidDomainRuntime {
@@ -155,7 +158,7 @@ public:
 		if(trial_||prepared_)throw std::runtime_error("native tetrahedral ALE FSI retains stale trial state");
 		if(step.start_time_s!=ale_.CommittedTime())
 			throw std::runtime_error("native tetrahedral ALE FSI step time differs from committed ALE time");
-		lifecycle_.BeginStep(step);
+		lifecycle_.BeginStep(step);warm_state_.reset();
 	}
 	void BeginCouplingIteration(std::uint64_t iteration,const SurfaceFieldStamp& expected_kinematics,
 		const SurfaceFieldStampEnvelope& output_envelope)
@@ -186,8 +189,9 @@ public:
 			NativeTetAleFsiTrial candidate;
 			const auto& solve=solvers_.fluid?solvers_.fluid:NativeTetAleFluidSolve(SolveNativeTetAleDenseTransient);
 			candidate.solve=solve(current_mesh,geometry.mesh_velocity_m_s,
-				committed_fluid_state_,committed_fluid_state_,prescribed_velocity,pressure_gauge_node_,
-				parameters_,geometry.dt_s,nonlinear_tolerance_,maximum_iterations_);
+				committed_fluid_state_,solvers_.warm_start&&warm_state_?*warm_state_:committed_fluid_state_,
+				prescribed_velocity,pressure_gauge_node_,parameters_,geometry.dt_s,nonlinear_tolerance_,maximum_iterations_);
+			if(solvers_.warm_start)warm_state_=candidate.solve.state;
 			const auto triangle_traction=solvers_.traction
 				?solvers_.traction(current_mesh,topology_,candidate.solve.state,parameters_.dynamic_viscosity,interface_label_)
 				:EvaluateNativeTetFluidTractionOnMatchingStructure(current_mesh,
@@ -389,6 +393,7 @@ private:
 	SurfaceFieldStamp expected_kinematics_;SurfaceFieldStampEnvelope output_envelope_;
 	std::optional<SurfaceKinematics> kinematics_;std::optional<NativeTetAleFsiTrial> trial_;
 	std::optional<NativeTetAleFsiPrepared> prepared_;SurfaceTraction committed_traction_;
+	std::optional<std::vector<double>> warm_state_;   // last trial state of the current step
 };
 
 } // namespace iga
