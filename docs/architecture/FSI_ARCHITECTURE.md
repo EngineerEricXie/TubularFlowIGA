@@ -365,8 +365,9 @@ of velocity solves and PETSc's event log put 90% of a Newton solve inside
 `KSPSolve_FS_Schur`. Three block-ILU GMRES iterations for the inner `A00^-1`
 and a looser pressure solve (15 iterations, 1e-2) give the same Newton
 history and interface force (to 1e-11) with 1.7× less wall time on 24,576
-cells at 4 ranks (207 s → 121 s) and 1.2× less on 3,072 cells; the outer
-FGMRES takes about three times more iterations, each far cheaper.
+cells at 4 ranks (207 s → 121 s), 1.9× less on 82,944 cells (1,132 s →
+605 s), and 1.2× less on 3,072 cells; the outer FGMRES takes about three
+times more iterations, each far cheaper.
 
 A single BoomerAMG cycle on the velocity block (`-fieldsplit_velocity_ksp_type
 preonly -fieldsplit_velocity_pc_type hypre`) is not a usable preconditioner for
