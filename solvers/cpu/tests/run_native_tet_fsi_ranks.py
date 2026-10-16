@@ -23,14 +23,18 @@ ROOT = HERE.parents[2]
 TIGHT = ["-fsi_fluid_tolerance", "1e-11", "-fsi_solid_rtol", "1e-11"]
 # Fluid Newton systems through FGMRES with a full Schur fieldsplit on the
 # row/column-scaled system: GMRES/block-ILU on the velocity block and an LSC
-# Schur preconditioner (BoomerAMG inside) on the pressure block. A single
-# BoomerAMG cycle on the velocity block stagnates on these systems.
+# Schur preconditioner (BoomerAMG inside) on the pressure block, whose Schur
+# matvecs use three block-ILU GMRES iterations for A00 instead of the full
+# velocity solve. A single BoomerAMG cycle on the velocity block stagnates
+# on these systems.
 ITERATIVE = shlex.split(
 	"-native_ale_scale true -native_ale_user_schur false -ksp_type fgmres -ksp_rtol 1e-6 -ksp_max_it 500 "
 	"-pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full "
 	"-pc_fieldsplit_schur_precondition self -fieldsplit_pressure_ksp_type gmres "
-	"-fieldsplit_pressure_ksp_max_it 30 -fieldsplit_pressure_ksp_rtol 1e-3 -fieldsplit_pressure_pc_type lsc "
-	"-fieldsplit_pressure_lsc_pc_type hypre -fieldsplit_velocity_ksp_type gmres "
+	"-fieldsplit_pressure_ksp_max_it 15 -fieldsplit_pressure_ksp_rtol 1e-2 -fieldsplit_pressure_pc_type lsc "
+	"-fieldsplit_pressure_lsc_pc_type hypre -fieldsplit_pressure_inner_ksp_type gmres "
+	"-fieldsplit_pressure_inner_ksp_max_it 3 -fieldsplit_pressure_inner_pc_type bjacobi "
+	"-fieldsplit_pressure_inner_sub_pc_type ilu -fieldsplit_velocity_ksp_type gmres "
 	"-fieldsplit_velocity_ksp_max_it 50 -fieldsplit_velocity_ksp_rtol 1e-3 -fieldsplit_velocity_pc_type bjacobi "
 	"-fieldsplit_velocity_sub_pc_type ilu")
 
