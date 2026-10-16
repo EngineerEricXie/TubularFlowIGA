@@ -189,8 +189,16 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 	double first_order_decay_rate_s_inv=0.,
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
-	const std::vector<double>& cell_source_mol_m3_s={})
+	const std::vector<double>& cell_source_mol_m3_s={},
+	const std::vector<std::uint8_t>& cell_owned={})
 {
+	// This rank assembles the cells of `cell_owned` (one flag per cell, for
+	// example a mesh partition's owned cells); empty takes cells round-robin.
+	if(!cell_owned.empty()&&cell_owned.size()!=current_mesh.cells.size())
+		throw std::invalid_argument("native moving species cell ownership mask size mismatch");
+	const auto owned_cell=[&](std::size_t cell_index){
+		return cell_owned.empty()?cell_index%static_cast<std::size_t>(ranks)==static_cast<std::size_t>(rank)
+			:cell_owned[cell_index]!=0;};
 	const std::size_t nodes=current_mesh.points.size();
 	if(nodes==0||previous_mesh.points.size()!=nodes
 		||previous_mesh.cells.size()!=current_mesh.cells.size()
@@ -302,8 +310,7 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 	auto& incoming_flux_mol_s=assembly.incoming_flux_mol_s;
 	auto& source_mol_s=assembly.source_mol_s;
 	for(std::size_t cell_index=0;cell_index<current_mesh.cells.size();++cell_index){
-		if(cell_index%static_cast<std::size_t>(ranks)
-			!=static_cast<std::size_t>(rank))continue;
+		if(!owned_cell(cell_index))continue;
 		const auto& cell=current_mesh.cells[cell_index];
 		const auto before=monotone
 			?native_tet_moving_species_detail::ElementBlock(matrix,cell.nodes)
@@ -387,8 +394,7 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 		if(owner==owners.end()||owner->second.uses!=1||++labelled[face]!=1)
 			throw std::invalid_argument("native moving species boundary face is invalid");
 		const auto cell_index=owner->second.cell;
-		const bool owned=cell_index%static_cast<std::size_t>(ranks)
-			==static_cast<std::size_t>(rank);
+		const bool owned=owned_cell(cell_index);
 		const auto& cell=current_mesh.cells[cell_index];
 		const auto before=monotone&&owned
 			?native_tet_moving_species_detail::ElementBlock(matrix,cell.nodes)

@@ -515,6 +515,10 @@ public:
 		if(options.distributed_fluid){
 			distributed_fluid_=std::make_unique<NativeTetAleDistributedMesh>(fluid_mesh_,PETSC_COMM_WORLD);
 			distributed_fluid_->BindReplicatedTopology(topology_);
+			// Species transport assembles this rank's owned cells of the partition.
+			species_cells_.assign(fluid_mesh_.cells.size(),0);
+			for(std::size_t cell=0;cell<fluid_mesh_.cells.size();++cell)
+				species_cells_[cell]=distributed_fluid_->partition.cell_owner[cell]==distributed_fluid_->partition.rank?1:0;
 			const auto* distributed=distributed_fluid_.get();const auto* replicated_topology=&topology_;
 			const auto* reference_mesh=&fluid_mesh_;
 			solvers.fluid=[distributed,replicated_topology,this](const NativeTetMesh& mesh,
@@ -714,7 +718,7 @@ public:
 			const auto transport=SolveNativeTetMovingSpeciesPetscStep(
 				previous,current,fluid_velocity,mesh_velocity,concentration,
 				species.inflow,species.diffusivity,species.source,
-				scenario.dt_s,false,species.decay,species.wall_exchange);
+				scenario.dt_s,false,species.decay,species.wall_exchange,{},{},species_cells_);
 			concentration=transport.step.concentration_mol_m3;
 			const auto species_path=output/("species_"+species.id+"_step_"+std::to_string(step));
 			WriteParallelVtkSnapshot(PETSC_COMM_WORLD,species_path,
@@ -798,6 +802,7 @@ private:
 	std::size_t velocity_nodes_=0;
 	std::unique_ptr<NativeTetAleDistributedMesh> distributed_fluid_;
 	std::unique_ptr<NativeTetMeshPartition> distributed_solid_;
+	std::vector<std::uint8_t> species_cells_;   // owned cells for species assembly (empty: round-robin)
 	std::unique_ptr<NativeTetAleFsiRuntime> fluid_;
 	std::unique_ptr<NativeTetSolidFsiRuntime> solid_;
 	std::unique_ptr<Coordinator> coordinator_;
