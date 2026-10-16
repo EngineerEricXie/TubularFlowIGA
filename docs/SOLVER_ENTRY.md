@@ -168,7 +168,9 @@ its displacement through the fluid mesh with harmonic ALE, and uses the new
 wall and mesh velocity on the next flow step. It writes `flow.pvd` and
 `wall.pvd` and reports GCL residual, interface force and power, wall
 displacement, solid residual, timings, host RSS, and CUDA allocation. The
-solid and ALE algebra run on the host.
+solid tangent and the harmonic mesh-motion stiffness are assembled on the host
+in CSR and factorized with cuDSS, so the wall is not bound by the dense solid
+solver's DOF cap.
 
 For fixed-mesh P1 species transport, run
 `python3 scripts/solver.py examples/solver/fem_species_gpu.json`. The
