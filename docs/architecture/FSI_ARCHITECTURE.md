@@ -349,11 +349,25 @@ checks against MUMPS:
 -ksp_type fgmres -ksp_rtol 1e-6 -ksp_max_it 500
 -pc_type fieldsplit -pc_fieldsplit_type schur -pc_fieldsplit_schur_fact_type full
 -pc_fieldsplit_schur_precondition self
--fieldsplit_pressure_ksp_type gmres -fieldsplit_pressure_ksp_max_it 30 -fieldsplit_pressure_ksp_rtol 1e-3
+-fieldsplit_pressure_ksp_type gmres -fieldsplit_pressure_ksp_max_it 15 -fieldsplit_pressure_ksp_rtol 1e-2
 -fieldsplit_pressure_pc_type lsc -fieldsplit_pressure_lsc_pc_type hypre
+-fieldsplit_pressure_inner_ksp_type gmres -fieldsplit_pressure_inner_ksp_max_it 3
+-fieldsplit_pressure_inner_pc_type bjacobi -fieldsplit_pressure_inner_sub_pc_type ilu
 -fieldsplit_velocity_ksp_type gmres -fieldsplit_velocity_ksp_max_it 50 -fieldsplit_velocity_ksp_rtol 1e-3
 -fieldsplit_velocity_pc_type bjacobi -fieldsplit_velocity_sub_pc_type ilu
 ```
+
+The `-fieldsplit_pressure_inner_*` lines matter: with `schur_precondition self`
+every pressure GMRES iteration applies the exact Schur complement
+`-C A00^-1 B`, and without them that `A00^-1` is the full velocity solve
+(about eleven block-ILU GMRES iterations), so one outer iteration cost tens
+of velocity solves and PETSc's event log put 90% of a Newton solve inside
+`KSPSolve_FS_Schur`. Three block-ILU GMRES iterations for the inner `A00^-1`
+and a looser pressure solve (15 iterations, 1e-2) give the same Newton
+history and interface force (to 1e-11) with 1.7× less wall time on 24,576
+cells at 4 ranks (207 s → 121 s), 1.9× less on 82,944 cells (1,132 s →
+605 s), and 1.2× less on 3,072 cells; the outer FGMRES takes about three
+times more iterations, each far cheaper.
 
 A single BoomerAMG cycle on the velocity block (`-fieldsplit_velocity_ksp_type
 preonly -fieldsplit_velocity_pc_type hypre`) is not a usable preconditioner for
