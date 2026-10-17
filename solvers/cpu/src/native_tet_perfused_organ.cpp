@@ -6,6 +6,7 @@
 #include "CheckedText.hpp"
 #include "PerfusedOrganHemodynamics.hpp"
 #include "PerfusedOrganKinetics.hpp"
+#include "PerfusedOrganPlant.hpp"
 #include "PerfusedOrganTransport.hpp"
 #include "Sha256.hpp"
 
@@ -119,16 +120,13 @@ struct TreeSpec
 struct Organ
 {
 	std::filesystem::path case_path;
-	iga::NativeTetMesh mesh;
-	std::vector<iga::PerfusedOrganTree> trees;
+	iga::PerfusedOrganModel model;
 	std::vector<std::map<int,int>> terminal_swc_id; // per tree: node index -> SWC id
-	std::vector<double> volume;
 	std::vector<std::array<double,3>> centroid;
 	double total_volume=0.;
 	std::string case_hash,mesh_hash,territories_hash;
 	std::vector<std::string> skeleton_hashes;
 	std::string reaction_model;
-	std::size_t zones=1; // lobular zones per cell
 };
 
 Organ LoadOrgan(const std::filesystem::path& case_path)
@@ -150,8 +148,8 @@ Organ LoadOrgan(const std::filesystem::path& case_path)
 	if(organ.reaction_model!="hepatic_v1")
 		throw std::invalid_argument("unsupported reaction_model "+organ.reaction_model);
 	if(const auto* zones=Find(root,"lobular_zones"))
-		organ.zones=static_cast<std::size_t>(RequireInteger(*zones,"lobular_zones"));
-	if(organ.zones<1||organ.zones>16)throw std::invalid_argument("lobular_zones must be 1..16");
+		organ.model.zones=static_cast<std::size_t>(RequireInteger(*zones,"lobular_zones"));
+	if(organ.model.zones<1||organ.model.zones>16)throw std::invalid_argument("lobular_zones must be 1..16");
 	const auto base=organ.case_path.parent_path();
 	const auto mesh_path=base/RequireString(Field(root,"tissue_mesh_file","perfused organ case"),"tissue_mesh_file");
 	const double mesh_scale=NumberOr(root,"mesh_length_scale_to_m",1.,"perfused organ case");
@@ -160,20 +158,20 @@ Organ LoadOrgan(const std::filesystem::path& case_path)
 	organ.mesh_hash=Hash(mesh_text);
 	{
 		std::istringstream input(mesh_text);
-		organ.mesh=iga::ReadNativeTetMeshGmsh41(input);
+		organ.model.mesh=iga::ReadNativeTetMeshGmsh41(input);
 	}
-	for(auto& point:organ.mesh.points)for(auto& x:point)x*=mesh_scale;
-	if(organ.mesh.cells.empty())throw std::invalid_argument("tissue mesh has no tetrahedra");
+	for(auto& point:organ.model.mesh.points)for(auto& x:point)x*=mesh_scale;
+	if(organ.model.mesh.cells.empty())throw std::invalid_argument("tissue mesh has no tetrahedra");
 	std::unordered_map<std::uint64_t,std::size_t> cell_index;
-	organ.volume.resize(organ.mesh.cells.size());
-	organ.centroid.resize(organ.mesh.cells.size());
-	for(std::size_t i=0;i<organ.mesh.cells.size();++i){
-		if(!cell_index.emplace(organ.mesh.cells[i].id,i).second)
+	organ.model.cell_volume.resize(organ.model.mesh.cells.size());
+	organ.centroid.resize(organ.model.mesh.cells.size());
+	for(std::size_t i=0;i<organ.model.mesh.cells.size();++i){
+		if(!cell_index.emplace(organ.model.mesh.cells[i].id,i).second)
 			throw std::invalid_argument("tissue mesh repeats a cell id");
-		organ.volume[i]=iga::PerfusedOrganCellVolume(organ.mesh,i);
-		organ.total_volume+=organ.volume[i];
-		for(const auto node:organ.mesh.cells[i].nodes)
-			for(int axis=0;axis<3;++axis)organ.centroid[i][axis]+=0.25*organ.mesh.points[node][axis];
+		organ.model.cell_volume[i]=iga::PerfusedOrganCellVolume(organ.model.mesh,i);
+		organ.total_volume+=organ.model.cell_volume[i];
+		for(const auto node:organ.model.mesh.cells[i].nodes)
+			for(int axis=0;axis<3;++axis)organ.centroid[i][axis]+=0.25*organ.model.mesh.points[node][axis];
 	}
 
 	std::vector<TreeSpec> specs;
@@ -238,10 +236,11 @@ Organ LoadOrgan(const std::filesystem::path& case_path)
 			}
 			swc_ids[node->second]=swc_id;
 		}
-		iga::ValidatePerfusedOrganTree(organ.mesh,tree);
-		organ.trees.push_back(std::move(tree));
+		iga::ValidatePerfusedOrganTree(organ.model.mesh,tree);
+		organ.model.trees.push_back(std::move(tree));
 		organ.terminal_swc_id.push_back(swc_ids);
 	}
+	iga::FinalizePerfusedOrganModel(organ.model);
 	return organ;
 }
 
@@ -327,18 +326,20 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 	return k;
 }
 
-iga::PerfusateChemistry ParseChemistry(const Object& object)
+iga::PerfusateChemistry ParseChemistry(const Object& object,bool require_hemoglobin=true)
 {
-	iga::config_detail::RequireKnownKeys(object,{"haemoglobin_g_dl","o2_solubility_mol_m3_mmhg",
-		"p50_mmhg","hill_coefficient","bohr_coefficient","co2_solubility_mol_m3_mmhg",
+	iga::config_detail::RequireKnownKeys(object,{"hemoglobin_g_dl","oxygen_solubility_ml_dl_mmhg",
+		"p50_mmhg","hill_exponent","bohr_coefficient","co2_solubility_mol_m3_mmhg",
 		"bicarbonate_pk","non_bicarbonate_buffer_mol_m3_ph","buffer_anion_at_7_4_mol_m3"},"chemistry");
 	iga::PerfusateChemistry chemistry;
 	const std::string c="chemistry";
-	chemistry.haemoglobin_g_dl=Number(object,"haemoglobin_g_dl",c);
-	chemistry.o2_solubility_mol_m3_mmhg=NumberOr(object,"o2_solubility_mol_m3_mmhg",
-		chemistry.o2_solubility_mol_m3_mmhg,c);
-	chemistry.p50_mmhg=NumberOr(object,"p50_mmhg",chemistry.p50_mmhg,c);
-	chemistry.hill_coefficient=NumberOr(object,"hill_coefficient",chemistry.hill_coefficient,c);
+	auto& oxygen=chemistry.oxygen;
+	oxygen.hemoglobin_g_dl=require_hemoglobin?Number(object,"hemoglobin_g_dl",c)
+		:NumberOr(object,"hemoglobin_g_dl",oxygen.hemoglobin_g_dl,c);
+	oxygen.oxygen_solubility_ml_dl_mmhg=NumberOr(object,"oxygen_solubility_ml_dl_mmhg",
+		oxygen.oxygen_solubility_ml_dl_mmhg,c);
+	oxygen.p50_mmhg=NumberOr(object,"p50_mmhg",oxygen.p50_mmhg,c);
+	oxygen.hill_exponent=NumberOr(object,"hill_exponent",oxygen.hill_exponent,c);
 	chemistry.bohr_coefficient=NumberOr(object,"bohr_coefficient",chemistry.bohr_coefficient,c);
 	chemistry.co2_solubility_mol_m3_mmhg=NumberOr(object,"co2_solubility_mol_m3_mmhg",
 		chemistry.co2_solubility_mol_m3_mmhg,c);
@@ -347,6 +348,7 @@ iga::PerfusateChemistry ParseChemistry(const Object& object)
 		chemistry.non_bicarbonate_buffer_mol_m3_ph,c);
 	chemistry.buffer_anion_at_7_4_mol_m3=NumberOr(object,"buffer_anion_at_7_4_mol_m3",
 		chemistry.buffer_anion_at_7_4_mol_m3,c);
+	iga::ValidateOxygenCapacity(oxygen);
 	return chemistry;
 }
 
@@ -385,11 +387,11 @@ void WriteLegacyVtk(const std::filesystem::path& path,const Organ& organ,
 	if(!out)throw std::runtime_error("cannot write VTK "+path.string());
 	out<<std::setprecision(9);
 	out<<"# vtk DataFile Version 3.0\nperfused organ\nASCII\nDATASET UNSTRUCTURED_GRID\n";
-	out<<"POINTS "<<organ.mesh.points.size()<<" double\n";
-	for(const auto& p:organ.mesh.points)out<<p[0]<<' '<<p[1]<<' '<<p[2]<<'\n';
-	const auto cells=organ.mesh.cells.size();
+	out<<"POINTS "<<organ.model.mesh.points.size()<<" double\n";
+	for(const auto& p:organ.model.mesh.points)out<<p[0]<<' '<<p[1]<<' '<<p[2]<<'\n';
+	const auto cells=organ.model.mesh.cells.size();
 	out<<"CELLS "<<cells<<' '<<cells*5<<'\n';
-	for(const auto& cell:organ.mesh.cells)
+	for(const auto& cell:organ.model.mesh.cells)
 		out<<"4 "<<cell.nodes[0]<<' '<<cell.nodes[1]<<' '<<cell.nodes[2]<<' '<<cell.nodes[3]<<'\n';
 	out<<"CELL_TYPES "<<cells<<'\n';
 	for(std::size_t i=0;i<cells;++i)out<<"10\n";
@@ -410,8 +412,8 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	RequireKnownKeys(request,{"dt_s","viscosity_pa_s","root_pressure_pa",
 		"specific_conductance_inv_pa_s","mobility_m2_pa_s","inlet","initial",
 		"distribution_volume_fraction","chemistry","kinetics","viability","glycogen_mol_m3",
-		"field_input","field_output","vtk_file","hypoxic_po2_mmhg","tag","resolution"},"request");
-	const std::size_t cells=organ.mesh.cells.size(),zones=organ.zones,nodes=cells*zones;
+		"field_input","field_output","vtk_file","hypoxic_po2_mmhg","tag","resolution","command"},"request");
+	const std::size_t cells=organ.model.mesh.cells.size(),zones=organ.model.zones,nodes=cells*zones;
 	Fields fields;
 	if(const auto* spec=Find(request,"field_input"))
 		fields=ReadFields(RequireObject(*spec,"field_input"),cells,zones,base);
@@ -433,21 +435,18 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	const auto& pressures=RequireObject(Field(request,"root_pressure_pa","request"),"root_pressure_pa");
 	const auto& conductances=RequireObject(Field(request,"specific_conductance_inv_pa_s","request"),
 		"specific_conductance_inv_pa_s");
-	for(const auto& tree:organ.trees){
+	for(const auto& tree:organ.model.trees){
 		flow.root_pressure_pa.push_back(Number(pressures,tree.id,"root_pressure_pa"));
 		flow.specific_conductance_inv_pa_s.push_back(Number(conductances,tree.id,
 			"specific_conductance_inv_pa_s"));
 	}
-	if(pressures.size()!=organ.trees.size()||conductances.size()!=organ.trees.size())
+	if(pressures.size()!=organ.model.trees.size()||conductances.size()!=organ.model.trees.size())
 		throw std::invalid_argument("root pressures and conductances must name every tree once");
 	const double mobility=Number(request,"mobility_m2_pa_s","request");
 	const auto scale=field_or("mobility_scale",1.);
 	flow.mobility_by_cell_m2_pa_s.resize(cells);
 	for(std::size_t i=0;i<cells;++i)flow.mobility_by_cell_m2_pa_s[i]=mobility*scale[i];
 	if(fields.values.count("exchange_scale"))flow.exchange_scale_by_cell=fields.values.at("exchange_scale");
-	const auto flow_started=std::chrono::steady_clock::now();
-	const auto hemodynamics=iga::SolvePerfusedOrganFlow(organ.mesh,organ.trees,flow);
-	const auto flow_finished=std::chrono::steady_clock::now();
 
 	iga::OrganTransportInput transport;
 	transport.dt_s=Number(request,"dt_s","request");
@@ -476,75 +475,15 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 			throw std::invalid_argument("viability must be in [0,1] and glycogen nonnegative");
 		transport.state[i]={viability[i],glycogen[i]};
 	}
-	// Transport resolution: every cell, one well-mixed pool per territory of the
-	// first inflow tree, or one pool for the organ. Per-node inputs are
-	// volume-averaged into pools and pool results are broadcast back.
 	const std::string resolution=Find(request,"resolution")
 		?RequireString(*Find(request,"resolution"),"resolution"):"cell";
-	std::vector<std::size_t> group(cells,0);
-	std::size_t groups=cells;
-	if(resolution=="cell")std::iota(group.begin(),group.end(),0);
-	else if(resolution=="organ")groups=1;
-	else if(resolution=="portal_territory"){
-		const auto inflow=std::find_if(organ.trees.begin(),organ.trees.end(),
-			[](const iga::PerfusedOrganTree& tree){return tree.inflow;});
-		std::vector<char> assigned(cells,0);
-		groups=0;
-		for(const auto& territory:inflow->territories){
-			for(const auto& entry:territory.second){
-				if(assigned[entry.first])throw std::invalid_argument("inflow territories overlap");
-				assigned[entry.first]=1;
-				group[entry.first]=groups;
-			}
-			++groups;
-		}
-		if(std::find(assigned.begin(),assigned.end(),0)!=assigned.end())
-			throw std::invalid_argument("inflow territories do not cover every cell");
-	}else throw std::invalid_argument("resolution must be cell, portal_territory or organ");
-	const auto cell_graph=iga::BuildTetTransportGraph(organ.mesh,
-		hemodynamics.darcy.conservative_face_flow_m3_s,hemodynamics.cell_exchange_in_m3_s,
-		hemodynamics.cell_exchange_out_m3_s);
-	const bool lumped=resolution!="cell";
-	const auto graph=iga::SplitIntoLobularZones(
-		lumped?iga::AggregateTransportGraph(cell_graph,group,groups):cell_graph,zones);
-	if(lumped){
-		iga::OrganTransportInput pooled=transport;
-		pooled.previous.assign(groups*zones,iga::OrganConcentration{});
-		pooled.state.assign(groups*zones,{0.,0.});
-		std::vector<double> pool_volume(groups*zones,0.);
-		for(std::size_t i=0;i<cells;++i)
-			for(std::size_t z=0;z<zones;++z){
-				const std::size_t node=i*zones+z,pool=group[i]*zones+z;
-				const double v=organ.volume[i];
-				pool_volume[pool]+=v;
-				for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
-					pooled.previous[pool][s]+=v*transport.previous[node][s];
-				pooled.state[pool].viability+=v*transport.state[node].viability;
-				pooled.state[pool].glycogen_mol_m3+=v*transport.state[node].glycogen_mol_m3;
-			}
-		for(std::size_t pool=0;pool<groups*zones;++pool){
-			for(auto& value:pooled.previous[pool])value/=pool_volume[pool];
-			pooled.state[pool].viability/=pool_volume[pool];
-			pooled.state[pool].glycogen_mol_m3/=pool_volume[pool];
-		}
-		transport=pooled;
-	}
-	const auto pooled_species=iga::SolveOrganTransport(graph,transport);
-	// Per-node view (cell-major, zone-minor) for outputs and summaries.
-	iga::OrganTransportResult species=pooled_species;
-	std::vector<double> node_volume(nodes);
-	for(std::size_t i=0;i<cells;++i)
-		for(std::size_t z=0;z<zones;++z)node_volume[i*zones+z]=organ.volume[i]/double(zones);
-	if(lumped){
-		species.concentration.resize(nodes);
-		species.rates.resize(nodes);
-		for(std::size_t i=0;i<cells;++i)
-			for(std::size_t z=0;z<zones;++z){
-				species.concentration[i*zones+z]=pooled_species.concentration[group[i]*zones+z];
-				species.rates[i*zones+z]=pooled_species.rates[group[i]*zones+z];
-			}
-	}
-	const auto transport_finished=std::chrono::steady_clock::now();
+	const auto step_started=std::chrono::steady_clock::now();
+	const auto step=iga::StepPerfusedOrgan(organ.model,flow,transport,resolution);
+	const auto& hemodynamics=step.hemodynamics;
+	const auto& species=step.species;
+	const auto& node_volume=step.node_volume;
+	const std::size_t groups=step.pools;
+	const auto step_finished=std::chrono::steady_clock::now();
 
 	// Cell output fields.
 	std::map<std::string,std::vector<double>> out;
@@ -575,7 +514,7 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 		auto& flux=out["darcy_flux_m_s"];
 		perfusion.resize(cells);flux.resize(cells);
 		for(std::size_t i=0;i<cells;++i){
-			perfusion[i]=hemodynamics.cell_exchange_in_m3_s[i]/organ.volume[i];
+			perfusion[i]=hemodynamics.cell_exchange_in_m3_s[i]/organ.model.cell_volume[i];
 			const auto& q=hemodynamics.darcy.cell_flux_m_s[i];
 			flux[i]=std::sqrt(q[0]*q[0]+q[1]*q[1]+q[2]*q[2]);
 		}
@@ -600,8 +539,8 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	json.Entry("cells",cells).Entry("lobular_zones",zones).Entry("resolution",resolution)
 		.Entry("transport_pools",groups).Entry("volume_m3",organ.total_volume);
 	json.Key("trees").Open();
-	for(std::size_t t=0;t<organ.trees.size();++t){
-		const auto& tree=organ.trees[t];
+	for(std::size_t t=0;t<organ.model.trees.size();++t){
+		const auto& tree=organ.model.trees[t];
 		json.Key(tree.id).Open().Entry("role",tree.inflow?"inflow":"outflow")
 			.Entry("root_pressure_pa",flow.root_pressure_pa[t])
 			.Entry("root_inflow_m3_s",hemodynamics.root_inflow_m3_s[t]);
@@ -640,9 +579,9 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	for(const char* name:{"po2_mmHg","ph","pco2_mmHg","energy_deficit","lactate_mol_m3","glucose_mol_m3"})
 		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),node_volume));
 	for(const char* name:{"perfusion_s_inv","tissue_pressure_pa"})
-		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),organ.volume));
-	WriteQuantiles(json,"last_zone_po2_mmHg",VolumeQuantiles(last_zone("po2_mmHg"),organ.volume));
-	WriteQuantiles(json,"last_zone_energy_deficit",VolumeQuantiles(last_zone("energy_deficit"),organ.volume));
+		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),organ.model.cell_volume));
+	WriteQuantiles(json,"last_zone_po2_mmHg",VolumeQuantiles(last_zone("po2_mmHg"),organ.model.cell_volume));
+	WriteQuantiles(json,"last_zone_energy_deficit",VolumeQuantiles(last_zone("energy_deficit"),organ.model.cell_volume));
 	json.Entry("hypoxic_po2_mmhg",hypoxic_threshold)
 		.Entry("hypoxic_volume_fraction",hypoxic/organ.total_volume)
 		.Entry("o2_uptake_mol_s",o2_uptake).Close();
@@ -656,8 +595,7 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 		.Entry("transport_largest_component",species.largest_component)
 		.Entry("gauss_seidel_sweeps",species.gauss_seidel_sweeps)
 		.Entry("newton_failures",species.newton_failures)
-		.Entry("flow_seconds",seconds(flow_started,flow_finished))
-		.Entry("transport_seconds",seconds(flow_finished,transport_finished))
+		.Entry("step_seconds",seconds(step_started,step_finished))
 		.Entry("total_seconds",seconds(started,std::chrono::steady_clock::now())).Close();
 
 	if(const auto* spec=Find(request,"field_output")){
@@ -704,6 +642,290 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	return json.Text();
 }
 
+
+// ---- Plant advance ---------------------------------------------------------
+
+std::map<std::string,double> NumberMap(const Object& object,const std::string& key,const std::string& context)
+{
+	std::map<std::string,double> result;
+	if(const auto* value=iga::config_detail::Find(object,key))
+		for(const auto& item:iga::config_detail::RequireObject(*value,context+"."+key))
+			result[item.first]=iga::config_detail::RequireNumber(item.second,context+"."+key+"."+item.first);
+	return result;
+}
+
+void RequireSpeciesKeys(const std::map<std::string,double>& values,const std::string& context)
+{
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	for(const auto& item:values)
+		if(std::find_if(names.begin(),names.end(),[&](const char* n){return item.first==n;})==names.end())
+			throw std::invalid_argument(context+" names unknown species "+item.first);
+}
+
+iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ& organ)
+{
+	using namespace iga::config_detail;
+	RequireKnownKeys(object,{"viscosity_pa_s","outflow_pressure_pa","specific_conductance_inv_pa_s",
+		"mobility_m2_pa_s","distribution_volume_fraction","kinetics","chemistry","hemoglobin_per_hematocrit",
+		"atmospheric_pressure_mmhg","water_vapour_mmhg","carbogen_o2_fraction","carbogen_co2_fraction",
+		"air_o2_fraction","oxygenator_efficiency","injury_deficit_threshold","injury_rate_s_inv",
+		"oedema_deficit_rate_s_inv","oedema_pressure_threshold_pa","oedema_pressure_rate_inv_pa_s",
+		"oedema_resolution_s_inv","oedema_maximum","oedema_exponent","vasodilator_elimination_s_inv",
+		"vasodilator_emax","vasodilator_ec50_mg_l"},"parameters");
+	iga::OrganPlantParameters p;
+	const std::string c="parameters";
+	p.viscosity_pa_s=Number(object,"viscosity_pa_s",c);
+	p.outflow_pressure_pa=NumberMap(object,"outflow_pressure_pa",c);
+	p.specific_conductance_inv_pa_s=NumberMap(object,"specific_conductance_inv_pa_s",c);
+	for(const auto& tree:organ.model.trees){
+		if(!p.specific_conductance_inv_pa_s.count(tree.id))
+			throw std::invalid_argument("parameters.specific_conductance_inv_pa_s lacks tree "+tree.id);
+		if(!tree.inflow&&!p.outflow_pressure_pa.count(tree.id))
+			throw std::invalid_argument("parameters.outflow_pressure_pa lacks tree "+tree.id);
+	}
+	p.mobility_m2_pa_s=Number(object,"mobility_m2_pa_s",c);
+	p.distribution_volume_fraction=SpeciesObject(RequireObject(Field(object,"distribution_volume_fraction",c),
+		"distribution_volume_fraction"),"distribution_volume_fraction");
+	p.kinetics=ParseKinetics(RequireObject(Field(object,"kinetics",c),"kinetics"));
+	p.chemistry=ParseChemistry(RequireObject(Field(object,"chemistry",c),"chemistry"),false);
+	const auto optional=[&](const char* key,double& value){value=NumberOr(object,key,value,c);};
+	optional("hemoglobin_per_hematocrit",p.hemoglobin_per_hematocrit);
+	optional("atmospheric_pressure_mmhg",p.atmospheric_pressure_mmhg);
+	optional("water_vapour_mmhg",p.water_vapour_mmhg);
+	optional("carbogen_o2_fraction",p.carbogen_o2_fraction);
+	optional("carbogen_co2_fraction",p.carbogen_co2_fraction);
+	optional("air_o2_fraction",p.air_o2_fraction);
+	optional("oxygenator_efficiency",p.oxygenator_efficiency);
+	optional("injury_deficit_threshold",p.injury_deficit_threshold);
+	optional("injury_rate_s_inv",p.injury_rate_s_inv);
+	optional("oedema_deficit_rate_s_inv",p.oedema_deficit_rate_s_inv);
+	optional("oedema_pressure_threshold_pa",p.oedema_pressure_threshold_pa);
+	optional("oedema_pressure_rate_inv_pa_s",p.oedema_pressure_rate_inv_pa_s);
+	optional("oedema_resolution_s_inv",p.oedema_resolution_s_inv);
+	optional("oedema_maximum",p.oedema_maximum);
+	optional("oedema_exponent",p.oedema_exponent);
+	optional("vasodilator_elimination_s_inv",p.vasodilator_elimination_s_inv);
+	optional("vasodilator_emax",p.vasodilator_emax);
+	optional("vasodilator_ec50_mg_l",p.vasodilator_ec50_mg_l);
+	return p;
+}
+
+iga::OrganPlantControls ParseControls(const Object& object)
+{
+	using namespace iga::config_detail;
+	RequireKnownKeys(object,{"inlet_pressure_pa","fio2","dialysis_in_m3_s","dialysis_out_m3_s",
+		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c"},"controls");
+	iga::OrganPlantControls controls;
+	const std::string c="controls";
+	controls.inlet_pressure_pa=Number(object,"inlet_pressure_pa",c);
+	controls.fio2=Number(object,"fio2",c);
+	controls.dialysis_in_m3_s=NumberOr(object,"dialysis_in_m3_s",0.,c);
+	controls.dialysis_out_m3_s=NumberOr(object,"dialysis_out_m3_s",0.,c);
+	controls.dialysate=NumberMap(object,"dialysate",c);
+	controls.infusion_rates=NumberMap(object,"infusion_rates",c);
+	controls.bolus=NumberMap(object,"bolus",c);
+	RequireSpeciesKeys(controls.dialysate,"controls.dialysate");
+	RequireSpeciesKeys(controls.infusion_rates,"controls.infusion_rates");
+	RequireSpeciesKeys(controls.bolus,"controls.bolus");
+	controls.bolus_volume_m3=NumberOr(object,"bolus_volume_m3",0.,c);
+	controls.vasodilator_bolus_mg=NumberOr(object,"vasodilator_bolus_mg",0.,c);
+	controls.temperature_c=NumberOr(object,"temperature_c",37.,c);
+	if(controls.dialysis_in_m3_s>0.){
+		const auto& names=iga::PerfusedOrganSpeciesNames();
+		for(const auto* name:names)
+			if(!controls.dialysate.count(name))
+				throw std::invalid_argument(std::string("controls.dialysate lacks ")+name);
+	}
+	return controls;
+}
+
+std::filesystem::path Resolve(const std::filesystem::path& path,const std::filesystem::path& base)
+{
+	return path.is_relative()?base/path:path;
+}
+
+// State files: a JSON header with scalars and the reservoir, and a float64
+// field file with, in order, the six tissue species (per node), viability and
+// glycogen (per node) and oedema (per cell).
+iga::OrganPlantState LoadPlantState(const Object& spec,const Organ& organ,const std::filesystem::path& base)
+{
+	using namespace iga::config_detail;
+	RequireKnownKeys(spec,{"json","fields"},"state_in");
+	const auto header_text=ReadText(Resolve(RequireString(Field(spec,"json","state_in"),"state_in.json"),base),"state");
+	const auto parsed=JsonParser(header_text).Parse();
+	const auto& header=RequireObject(parsed,"state");
+	const std::size_t cells=organ.model.mesh.cells.size(),nodes=cells*organ.model.zones;
+	if(static_cast<std::size_t>(RequireInteger(Field(header,"cells","state"),"cells"))!=cells
+		||static_cast<std::size_t>(RequireInteger(Field(header,"lobular_zones","state"),"lobular_zones"))!=organ.model.zones)
+		throw std::invalid_argument("state does not match this organ model");
+	iga::OrganPlantState state;
+	state.time_s=Number(header,"time_s","state");
+	state.vasodilator_mg_l=Number(header,"vasodilator_mg_l","state");
+	const auto& reservoir=RequireObject(Field(header,"reservoir","state"),"state.reservoir");
+	state.reservoir.volume_m3=Number(reservoir,"volume_m3","state.reservoir");
+	state.reservoir.hematocrit_percent=Number(reservoir,"hematocrit_percent","state.reservoir");
+	state.reservoir.temperature_c=NumberOr(reservoir,"temperature_c",37.,"state.reservoir");
+	state.reservoir.species=NumberMap(reservoir,"species","state.reservoir");
+	std::ifstream input(Resolve(RequireString(Field(spec,"fields","state_in"),"state_in.fields"),base),std::ios::binary);
+	if(!input)throw std::runtime_error("cannot open state fields");
+	const auto read=[&](std::vector<double>& values,std::size_t count){
+		values.resize(count);
+		input.read(reinterpret_cast<char*>(values.data()),static_cast<std::streamsize>(count*sizeof(double)));
+		if(!input)throw std::runtime_error("state fields are truncated");
+	};
+	state.tissue.assign(nodes,iga::OrganConcentration{});
+	std::vector<double> values;
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s){
+		read(values,nodes);
+		for(std::size_t n=0;n<nodes;++n)state.tissue[n][s]=values[n];
+	}
+	read(state.viability,nodes);
+	read(state.glycogen_mol_m3,nodes);
+	read(state.oedema,cells);
+	char extra=0;
+	if(input.read(&extra,1))throw std::invalid_argument("state fields are longer than expected");
+	return state;
+}
+
+iga::OrganPlantState InitialPlantState(const Object& spec,const Organ& organ)
+{
+	using namespace iga::config_detail;
+	RequireKnownKeys(spec,{"reservoir_volume_m3","hematocrit_percent","reservoir","viability",
+		"glycogen_mol_m3","oedema","vasodilator_mg_l"},"initial_state");
+	iga::OrganPlantState state;
+	state.reservoir.volume_m3=Number(spec,"reservoir_volume_m3","initial_state");
+	state.reservoir.hematocrit_percent=Number(spec,"hematocrit_percent","initial_state");
+	const auto species=SpeciesObject(RequireObject(Field(spec,"reservoir","initial_state"),"reservoir"),"reservoir");
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)state.reservoir.species[names[s]]=species[s];
+	const std::size_t cells=organ.model.mesh.cells.size(),nodes=cells*organ.model.zones;
+	state.tissue.assign(nodes,species);
+	state.viability.assign(nodes,NumberOr(spec,"viability",1.,"initial_state"));
+	state.glycogen_mol_m3.assign(nodes,NumberOr(spec,"glycogen_mol_m3",0.,"initial_state"));
+	state.oedema.assign(cells,NumberOr(spec,"oedema",0.,"initial_state"));
+	state.vasodilator_mg_l=NumberOr(spec,"vasodilator_mg_l",0.,"initial_state");
+	return state;
+}
+
+void SavePlantState(const Object& spec,const iga::OrganPlantState& state,const Organ& organ,
+	const std::filesystem::path& base)
+{
+	using namespace iga::config_detail;
+	RequireKnownKeys(spec,{"json","fields"},"state_out");
+	const auto json_path=Resolve(RequireString(Field(spec,"json","state_out"),"state_out.json"),base);
+	const auto fields_path=Resolve(RequireString(Field(spec,"fields","state_out"),"state_out.fields"),base);
+	{
+		std::ofstream out(fields_path.string()+".partial",std::ios::binary|std::ios::trunc);
+		if(!out)throw std::runtime_error("cannot write state fields");
+		const std::size_t nodes=state.tissue.size();
+		std::vector<double> values(nodes);
+		for(std::size_t s=0;s<iga::OrganSpeciesCount;++s){
+			for(std::size_t n=0;n<nodes;++n)values[n]=state.tissue[n][s];
+			out.write(reinterpret_cast<const char*>(values.data()),static_cast<std::streamsize>(nodes*sizeof(double)));
+		}
+		for(const auto* field:{&state.viability,&state.glycogen_mol_m3,&state.oedema})
+			out.write(reinterpret_cast<const char*>(field->data()),static_cast<std::streamsize>(field->size()*sizeof(double)));
+		if(!out)throw std::runtime_error("state field write failed");
+	}
+	Json json;
+	json.Open().Entry("schema_version",1L).Entry("cells",organ.model.mesh.cells.size())
+		.Entry("lobular_zones",organ.model.zones).Entry("time_s",state.time_s)
+		.Entry("vasodilator_mg_l",state.vasodilator_mg_l);
+	json.Key("reservoir").Open().Entry("volume_m3",state.reservoir.volume_m3)
+		.Entry("hematocrit_percent",state.reservoir.hematocrit_percent)
+		.Entry("temperature_c",state.reservoir.temperature_c).Key("species").Open();
+	for(const auto& item:state.reservoir.species)json.Entry(item.first,item.second);
+	json.Close().Close().Close();
+	{
+		std::ofstream out(json_path.string()+".partial",std::ios::trunc);
+		out<<json.Text()<<'\n';
+		if(!out)throw std::runtime_error("cannot write state header");
+	}
+	std::filesystem::rename(fields_path.string()+".partial",fields_path);
+	std::filesystem::rename(json_path.string()+".partial",json_path);
+}
+
+void WriteReading(Json& json,const std::string& key,const iga::PerfusateReading& reading)
+{
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	json.Key(key).Open().Entry("po2_mmHg",reading.po2_mmhg).Entry("saturation",reading.saturation)
+		.Entry("ph",reading.ph).Entry("pco2_mmHg",reading.pco2_mmhg)
+		.Entry("bicarbonate_mol_m3",reading.bicarbonate_mol_m3);
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)json.Entry(names[s],reading.concentration[s]);
+	json.Close();
+}
+
+std::string Advance(const Organ& organ,const Object& request,const std::filesystem::path& base)
+{
+	using namespace iga::config_detail;
+	const auto started=std::chrono::steady_clock::now();
+	RequireKnownKeys(request,{"command","tag","duration_s","substeps","resolution","parameters","controls",
+		"state_in","initial_state","state_out","heterogeneity"},"advance request");
+	const auto parameters=ParsePlantParameters(RequireObject(Field(request,"parameters","advance"),"parameters"),organ);
+	const auto controls=ParseControls(RequireObject(Field(request,"controls","advance"),"controls"));
+	iga::OrganPlantState state;
+	if(const auto* in=Find(request,"state_in"))state=LoadPlantState(RequireObject(*in,"state_in"),organ,base);
+	else state=InitialPlantState(RequireObject(Field(request,"initial_state","advance"),"initial_state"),organ);
+	const std::size_t cells=organ.model.mesh.cells.size();
+	Fields heterogeneity;
+	if(const auto* spec=Find(request,"heterogeneity")){
+		heterogeneity=ReadFields(RequireObject(*spec,"heterogeneity"),cells,organ.model.zones,base);
+		for(const auto& item:heterogeneity.values)
+			if(item.first!="mobility_scale"&&item.first!="exchange_scale")
+				throw std::invalid_argument("heterogeneity accepts mobility_scale and exchange_scale only");
+	}
+	const auto field=[&](const char* name){
+		const auto found=heterogeneity.values.find(name);
+		return found==heterogeneity.values.end()?std::vector<double>{}:found->second;
+	};
+	const std::string resolution=Find(request,"resolution")?RequireString(*Find(request,"resolution"),"resolution"):"cell";
+	const double duration=Number(request,"duration_s","advance");
+	const int substeps=RequireInteger(Field(request,"substeps","advance"),"substeps");
+	const auto records=iga::AdvancePerfusedOrganPlant(organ.model,parameters,controls,field("mobility_scale"),
+		field("exchange_scale"),state,duration,static_cast<std::size_t>(substeps),resolution);
+	if(const auto* out=Find(request,"state_out"))SavePlantState(RequireObject(*out,"state_out"),state,organ,base);
+	Json json;
+	json.Open().Entry("ok",true).Entry("command","advance");
+	if(const auto* tag=Find(request,"tag"))json.Entry("tag",RequireString(*tag,"tag"));
+	json.Entry("resolution",resolution).Entry("time_s",state.time_s);
+	json.Key("records").OpenArray();
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	for(const auto& r:records){
+		json.Open().Entry("time_s",r.time_s).Entry("flow_m3_s",r.flow_m3_s)
+			.Entry("inlet_pressure_pa",r.inlet_pressure_pa).Entry("reservoir_volume_m3",r.reservoir_volume_m3)
+			.Entry("hematocrit_percent",r.hematocrit_percent).Entry("vasodilator_mg_l",r.vasodilator_mg_l);
+		WriteReading(json,"arterial",r.arterial);
+		WriteReading(json,"venous",r.venous);
+		json.Key("tissue").Open().Entry("hypoxic_volume_fraction",r.hypoxic_volume_fraction)
+			.Entry("mean_viability",r.mean_viability).Entry("mean_oedema",r.mean_oedema)
+			.Entry("last_zone_po2_p05_mmHg",r.last_zone_po2_p05).Entry("energy_deficit_mean",r.energy_deficit_mean)
+			.Entry("energy_deficit_p95",r.energy_deficit_p95).Entry("o2_uptake_mol_s",r.o2_uptake_mol_s).Close();
+		json.Key("organ_uptake").Open();
+		for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)json.Entry(names[s],r.organ_uptake[s]);
+		json.Close().Close();
+	}
+	json.CloseArray();
+	json.Key("reservoir").Open().Entry("volume_m3",state.reservoir.volume_m3)
+		.Entry("hematocrit_percent",state.reservoir.hematocrit_percent).Key("species").Open();
+	for(const auto& item:state.reservoir.species)json.Entry(item.first,item.second);
+	json.Close().Close();
+	json.Entry("total_seconds",std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count());
+	json.Close();
+	return json.Text();
+}
+
+std::string Dispatch(const Organ& organ,const std::string& text,const std::filesystem::path& base)
+{
+	const auto parsed=iga::config_detail::JsonParser(text).Parse();
+	const auto& request=iga::config_detail::RequireObject(parsed,"request");
+	if(const auto* command=iga::config_detail::Find(request,"command")){
+		const auto name=iga::config_detail::RequireString(*command,"command");
+		if(name=="advance")return Advance(organ,request,base);
+		if(name!="solve")throw std::invalid_argument("command must be solve or advance");
+	}
+	return Solve(organ,text,base);
+}
+
 std::string Describe(const Organ& organ,const std::filesystem::path& geometry_file)
 {
 	{
@@ -711,17 +933,17 @@ std::string Describe(const Organ& organ,const std::filesystem::path& geometry_fi
 		if(!file)throw std::runtime_error("cannot write geometry "+geometry_file.string());
 		for(int axis=0;axis<3;++axis)
 			for(const auto& c:organ.centroid)file.write(reinterpret_cast<const char*>(&c[axis]),sizeof(double));
-		file.write(reinterpret_cast<const char*>(organ.volume.data()),
-			static_cast<std::streamsize>(organ.volume.size()*sizeof(double)));
+		file.write(reinterpret_cast<const char*>(organ.model.cell_volume.data()),
+			static_cast<std::streamsize>(organ.model.cell_volume.size()*sizeof(double)));
 		std::vector<double> ids;
-		for(const auto& cell:organ.mesh.cells)ids.push_back(static_cast<double>(cell.id));
+		for(const auto& cell:organ.model.mesh.cells)ids.push_back(static_cast<double>(cell.id));
 		file.write(reinterpret_cast<const char*>(ids.data()),static_cast<std::streamsize>(ids.size()*sizeof(double)));
 		if(!file)throw std::runtime_error("geometry write failed");
 	}
 	Json json;
 	json.Open().Entry("ok",true).Entry("reaction_model",organ.reaction_model)
-		.Entry("cells",organ.mesh.cells.size()).Entry("nodes",organ.mesh.points.size())
-		.Entry("lobular_zones",organ.zones)
+		.Entry("cells",organ.model.mesh.cells.size()).Entry("nodes",organ.model.mesh.points.size())
+		.Entry("lobular_zones",organ.model.zones)
 		.Entry("volume_m3",organ.total_volume)
 		.Entry("case_sha256",organ.case_hash).Entry("mesh_sha256",organ.mesh_hash)
 		.Entry("territories_sha256",organ.territories_hash);
@@ -732,9 +954,9 @@ std::string Describe(const Organ& organ,const std::filesystem::path& geometry_fi
 	for(const auto* name:iga::PerfusedOrganSpeciesNames())json.Value(name);
 	json.CloseArray();
 	json.Key("trees").Open();
-	for(std::size_t t=0;t<organ.trees.size();++t){
-		const auto& tree=organ.trees[t];
-		const auto volumes=iga::PerfusedOrganTerritoryVolumes(organ.mesh,tree);
+	for(std::size_t t=0;t<organ.model.trees.size();++t){
+		const auto& tree=organ.model.trees[t];
+		const auto volumes=iga::PerfusedOrganTerritoryVolumes(organ.model.mesh,tree);
 		json.Key(tree.id).Open().Entry("role",tree.inflow?"inflow":"outflow")
 			.Entry("skeleton_sha256",organ.skeleton_hashes[t])
 			.Entry("nodes",tree.network.nodes.size()).Entry("segments",tree.network.segments.size())
@@ -767,8 +989,8 @@ int Run(int argc,char** argv)
 	const std::string mode=argv[2];
 	const auto organ=LoadOrgan(case_path);
 	if(mode=="--check-input"){
-		std::cout<<Json().Open().Entry("ok",true).Entry("cells",organ.mesh.cells.size())
-			.Entry("trees",organ.trees.size()).Close().Text()<<'\n';
+		std::cout<<Json().Open().Entry("ok",true).Entry("cells",organ.model.mesh.cells.size())
+			.Entry("trees",organ.model.trees.size()).Close().Text()<<'\n';
 		return 0;
 	}
 	if(mode=="--describe"&&argc>=4){
@@ -778,7 +1000,7 @@ int Run(int argc,char** argv)
 	if(mode=="--request"&&argc>=4){
 		const std::filesystem::path request_path=argv[3];
 		const auto text=ReadText(request_path,"request");
-		const auto response=Solve(organ,text,std::filesystem::absolute(request_path).parent_path());
+		const auto response=Dispatch(organ,text,std::filesystem::absolute(request_path).parent_path());
 		if(argc>=6&&std::string(argv[4])=="--output"){
 			const std::string temporary=std::string(argv[5])+".partial";
 			{
@@ -792,12 +1014,12 @@ int Run(int argc,char** argv)
 	}
 	if(mode=="--serve"){
 		std::cout<<Json().Open().Entry("ok",true).Entry("ready",true)
-			.Entry("cells",organ.mesh.cells.size()).Close().Text()<<std::endl;
+			.Entry("cells",organ.model.mesh.cells.size()).Close().Text()<<std::endl;
 		for(std::string line;std::getline(std::cin,line);){
 			if(line.find_first_not_of(" \t\r")==std::string::npos)continue;
 			try{
 				if(line.find("\"command\"")!=std::string::npos&&line.find("\"exit\"")!=std::string::npos)break;
-				std::cout<<Solve(organ,line,std::filesystem::current_path())<<std::endl;
+				std::cout<<Dispatch(organ,line,std::filesystem::current_path())<<std::endl;
 			}catch(const std::exception& error){
 				std::cout<<Json().Open().Entry("ok",false).Entry("error",std::string(error.what()))
 					.Close().Text()<<std::endl;

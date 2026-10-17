@@ -1,5 +1,6 @@
 #include "PerfusedOrganHemodynamics.hpp"
 #include "PerfusedOrganKinetics.hpp"
+#include "PerfusedOrganPlant.hpp"
 #include "PerfusedOrganTransport.hpp"
 
 #include <petscsys.h>
@@ -125,7 +126,7 @@ iga::HepaticKinetics Liver()
 iga::PerfusateChemistry Perfusate()
 {
 	iga::PerfusateChemistry chemistry;
-	chemistry.haemoglobin_g_dl=4.6;
+	chemistry.oxygen.hemoglobin_g_dl=4.6;
 	return chemistry;
 }
 
@@ -396,6 +397,113 @@ void TestCubeTransport()
 		<<" largest="<<result.largest_component<<" sweeps="<<result.gauss_seidel_sweeps<<'\n';
 }
 
+iga::CouplingDefinition ReservoirCircuit(double volume)
+{
+	iga::CouplingDefinition definition;
+	definition.mode=iga::SimulationScopeMode::VcaClosedLoop;
+	definition.external_circuit.reservoir.enabled=true;
+	definition.external_circuit.reservoir.volume_m3=volume;
+	definition.external_circuit.reservoir.species={{"x",2.0},{"y",1.0}};
+	definition.external_circuit.pump.mode="pressure_control";
+	definition.external_circuit.pump.pressure_pa=1000.;
+	definition.perfusate.oxygen.hematocrit_percent=20.;
+	return definition;
+}
+
+void TestCircuitExtensions()
+{
+	const double volume=2e-3,k=1e-6,dt=3600.;
+	{
+		// First-order clearance U = k c is integrated exactly for any step.
+		iga::VcaExternalCircuit circuit(ReservoirCircuit(volume));
+		const auto inlet=circuit.InletState(0.);
+		assert(inlet.has_pressure&&!inlet.has_flow&&inlet.pressure_pa==1000.);
+		circuit.AdvanceWithUptake({{"x",k*2.0}},{},0.,dt,0.);
+		Close(circuit.State().species.at("x"),2.0*std::exp(-k*dt/volume),1e-12,"exact clearance");
+		Close(circuit.State().species.at("y"),1.0,1e-15,"untouched species");
+	}
+	{
+		// Dialysate inflow (zero solute) dilutes: c V is conserved.
+		auto definition=ReservoirCircuit(volume);
+		definition.external_circuit.dialyzer.enabled=true;
+		definition.external_circuit.dialyzer.inflow_m3_s=1e-7;
+		definition.external_circuit.dialyzer.dialysate={{"x",0.},{"y",0.}};
+		iga::VcaExternalCircuit circuit(definition);
+		circuit.AdvanceWithUptake({},{},0.,dt,0.);
+		const double v1=volume+1e-7*dt;
+		Close(circuit.State().volume_m3,v1,1e-12,"dialysis volume");
+		Close(circuit.State().species.at("x"),2.0*volume/v1,1e-12,"exact dilution");
+		Close(circuit.State().hematocrit_percent,20.*volume/v1,1e-12,"haematocrit dilution");
+	}
+	{
+		// Outflow removes perfusate at reservoir composition.
+		auto definition=ReservoirCircuit(volume);
+		definition.external_circuit.dialyzer.enabled=true;
+		definition.external_circuit.dialyzer.outflow_m3_s=1e-7;
+		iga::VcaExternalCircuit circuit(definition);
+		circuit.AdvanceWithUptake({},{},0.,dt,0.);
+		Close(circuit.State().volume_m3,volume-1e-7*dt,1e-12,"outflow volume");
+		Close(circuit.State().species.at("x"),2.0,1e-12,"outflow keeps composition");
+	}
+	{
+		// A gas-reset species relaxes to arterial - U/q at the circuit flow.
+		iga::VcaExternalCircuit circuit(ReservoirCircuit(volume));
+		const double q=2e-5,arterial=4.0,uptake=1e-5;
+		circuit.AdvanceWithUptake({{"y",-uptake}},{{"y",arterial}},q,1e5,0.);
+		Close(circuit.State().species.at("y"),arterial+uptake/q,1e-9,"reset species steady state");
+		iga::VcaExternalCircuit bolus(ReservoirCircuit(volume));
+		bolus.ApplyBolus({{"x",1e-3}},volume);
+		Close(bolus.State().species.at("x"),(2.0*volume+1e-3)/(2.*volume),1e-12,"bolus mass");
+		Close(bolus.State().volume_m3,2.*volume,1e-15,"bolus volume");
+	}
+}
+
+void TestPlantAdvance()
+{
+	iga::PerfusedOrganModel model;
+	model.mesh=Cube(3);
+	model.trees=CubeTrees(model.mesh,3e-3);
+	model.zones=3;
+	iga::FinalizePerfusedOrganModel(model);
+	const std::size_t cells=model.mesh.cells.size(),nodes=3*cells;
+	iga::OrganPlantParameters p;
+	p.viscosity_pa_s=3e-3;
+	p.outflow_pressure_pa={{"outflow",0.}};
+	p.specific_conductance_inv_pa_s={{"inflow",2e-8},{"outflow",6e-8}};
+	p.mobility_m2_pa_s=1e-8;
+	p.distribution_volume_fraction={{0.2,0.7,0.7,0.3,0.5,0.25}};
+	p.kinetics=Liver();
+	p.chemistry=Perfusate();
+	iga::OrganPlantState state;
+	state.reservoir.volume_m3=2.0;
+	state.reservoir.hematocrit_percent=18.;
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	const auto inlet=Inlet();
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)state.reservoir.species[names[s]]=inlet[s];
+	state.tissue.assign(nodes,inlet);
+	state.viability.assign(nodes,1.);
+	state.glycogen_mol_m3.assign(nodes,100.);
+	state.oedema.assign(cells,0.);
+	iga::OrganPlantControls controls;
+	controls.inlet_pressure_pa=1000.;
+	controls.fio2=0.6;
+	controls.bolus={{names[iga::OrganGlucose],5.0}};
+	controls.dialysis_in_m3_s=1e-8;
+	for(const std::string resolution:{"cell","portal_territory","organ"}){
+		auto copy=state;
+		const auto records=iga::AdvancePerfusedOrganPlant(model,p,controls,{},{},copy,3600.,3,resolution);
+		assert(records.size()==3);
+		Close(copy.time_s,3600.,1e-12,"plant time");
+		Close(copy.reservoir.volume_m3,2.0+1e-8*3600.,1e-9,"plant volume");
+		for(const auto& record:records){
+			assert(record.flow_m3_s>0.&&record.arterial.po2_mmhg>record.venous.po2_mmhg);
+			assert(record.arterial.pco2_mmhg>0.&&record.mean_viability<=1.);
+		}
+		assert(copy.reservoir.species.at(names[iga::OrganGlucose])>inlet[iga::OrganGlucose]);
+		for(const double v:copy.viability)assert(v>0.&&v<=1.);
+	}
+}
+
 } // namespace
 
 int main(int argc,char** argv)
@@ -411,6 +519,8 @@ int main(int argc,char** argv)
 	TestExchangeScaleMatchesConductance();
 	TestLobularZonesAreTanksInSeries();
 	TestCubeTransport();
+	TestCircuitExtensions();
+	TestPlantAdvance();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;

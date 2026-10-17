@@ -1,6 +1,8 @@
 #ifndef IGA_PERFUSED_ORGAN_KINETICS_HPP
 #define IGA_PERFUSED_ORGAN_KINETICS_HPP
 
+#include "OxygenCapacity.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -33,13 +35,12 @@ inline const std::array<const char*,OrganSpeciesCount>& PerfusedOrganSpeciesName
 	return names;
 }
 
-// Perfusate chemistry that does not react in the tissue.
+// Perfusate chemistry that does not react in the tissue. Oxygen binding reuses
+// the shared OxygenCapacity model (Hill saturation, 1.34 mL O2/g Hb, plasma
+// solubility); its P50 is the value at pH 7.4 and shifts with the Bohr effect.
 struct PerfusateChemistry
 {
-	double haemoglobin_g_dl=0.;            // Hb in the perfusate
-	double o2_solubility_mol_m3_mmhg=1.34e-3; // plasma at 37 C
-	double p50_mmhg=26.8;                  // at pH 7.4, 37 C
-	double hill_coefficient=2.7;
+	OxygenCapacityParameters oxygen;
 	double bohr_coefficient=-0.48;         // d log10(P50) / d pH
 	double co2_solubility_mol_m3_mmhg=0.0307;
 	double bicarbonate_pk=6.1;
@@ -54,13 +55,13 @@ struct PerfusateChemistry
 inline double NonBicarbonateBuffer(const PerfusateChemistry& chemistry)
 {
 	return std::isnan(chemistry.non_bicarbonate_buffer_mol_m3_ph)
-		?1.43*chemistry.haemoglobin_g_dl+7.7:chemistry.non_bicarbonate_buffer_mol_m3_ph;
+		?1.43*chemistry.oxygen.hemoglobin_g_dl+7.7:chemistry.non_bicarbonate_buffer_mol_m3_ph;
 }
 
 inline double BufferAnionAt74(const PerfusateChemistry& chemistry)
 {
 	return std::isnan(chemistry.buffer_anion_at_7_4_mol_m3)
-		?17.7+0.42*chemistry.haemoglobin_g_dl:chemistry.buffer_anion_at_7_4_mol_m3;
+		?17.7+0.42*chemistry.oxygen.hemoglobin_g_dl:chemistry.buffer_anion_at_7_4_mol_m3;
 }
 
 struct PerfusateAcidBase
@@ -153,34 +154,26 @@ struct HepaticRates
 	double energy_deficit=0.;      // unmet fraction of ATP demand in [0,1]
 };
 
-inline double OxygenSaturation(double po2_mmhg,double p50_mmhg,double hill)
+inline OxygenCapacityParameters BohrShifted(double ph,const PerfusateChemistry& chemistry)
 {
-	if(po2_mmhg<=0.)return 0.;
-	const double x=std::pow(po2_mmhg/p50_mmhg,hill);
-	return x/(1.+x);
-}
-
-
-inline double HaemoglobinSites(const PerfusateChemistry& chemistry)
-{
-	// g/dL -> g/L, divided by 16114.5 g per mol of haem, -> mol/m^3.
-	return chemistry.haemoglobin_g_dl*10./16114.5*1000.;
+	auto parameters=chemistry.oxygen;
+	parameters.p50_mmhg*=std::pow(10.,chemistry.bohr_coefficient*(std::clamp(ph,6.5,8.0)-7.4));
+	return parameters;
 }
 
 inline double OxygenContent(double po2_mmhg,double ph,const PerfusateChemistry& chemistry)
 {
-	const double p50=chemistry.p50_mmhg*std::pow(10.,
-		chemistry.bohr_coefficient*(std::clamp(ph,6.5,8.0)-7.4));
-	return chemistry.o2_solubility_mol_m3_mmhg*po2_mmhg
-		+HaemoglobinSites(chemistry)*OxygenSaturation(po2_mmhg,p50,chemistry.hill_coefficient);
+	return OxygenFromPo2(po2_mmhg,BohrShifted(ph,chemistry)).total_oxygen_mol_m3;
 }
 
 // Inverts the monotone content curve by safeguarded bisection/secant.
 inline double PartialPressureO2(double content,double ph,const PerfusateChemistry& chemistry)
 {
 	if(content<=0.)return 0.;
-	double low=0.,high=content/chemistry.o2_solubility_mol_m3_mmhg;
-	double value=std::min(high,chemistry.p50_mmhg);
+	const double solubility=chemistry.oxygen.oxygen_solubility_ml_dl_mmhg*10.
+		/chemistry.oxygen.gas_molar_volume_ml_mmol; // mol/(m^3 mmHg)
+	double low=0.,high=content/solubility;
+	double value=std::min(high,chemistry.oxygen.p50_mmhg);
 	for(int iteration=0;iteration<200;++iteration){
 		const double residual=OxygenContent(value,ph,chemistry)-content;
 		if(std::abs(residual)<=1e-13*std::max(content,1e-12))break;
@@ -199,17 +192,15 @@ inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChem
 {
 	if(!(NonBicarbonateBuffer(chemistry)>=0.)||!std::isfinite(BufferAnionAt74(chemistry)))
 		throw std::invalid_argument("perfusate buffer constants are invalid");
+	ValidateOxygenCapacity(chemistry.oxygen);
 	const double values[]={k.vmax_o2_mol_m3_s,k.atp_per_o2,k.glycolysis_capacity_mol_m3_s,
 		k.lactate_vmax_mol_m3_s,k.glycogenolysis_vmax_mol_m3_s,
-		k.glucose_uptake_vmax_mol_m3_s,k.insulin_clearance_s_inv,k.respiratory_quotient,
-		chemistry.haemoglobin_g_dl};
+		k.glucose_uptake_vmax_mol_m3_s,k.insulin_clearance_s_inv,k.respiratory_quotient};
 	for(const double value:values)
 		if(!(value>=0.)||!std::isfinite(value))
 			throw std::invalid_argument("hepatic kinetics rates must be finite and nonnegative");
 	const double positive[]={k.km_o2_mmhg,k.glycogen_half_saturation_mol_m3,k.km_glucose_mol_m3,
-		k.lactate_km_mol_m3,k.insulin_half_effect_mU_L,k.q10,
-		chemistry.o2_solubility_mol_m3_mmhg,chemistry.p50_mmhg,chemistry.hill_coefficient,
-		chemistry.co2_solubility_mol_m3_mmhg};
+		k.lactate_km_mol_m3,k.insulin_half_effect_mU_L,k.q10,chemistry.co2_solubility_mol_m3_mmhg};
 	for(const double value:positive)
 		if(!(value>0.)||!std::isfinite(value))
 			throw std::invalid_argument("hepatic kinetics constants must be positive");
