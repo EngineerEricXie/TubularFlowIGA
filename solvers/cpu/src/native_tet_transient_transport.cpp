@@ -15,6 +15,7 @@
 #include "NativeTetHydraulicVisualization.hpp"
 #include "NativeTetMovingSpeciesPetscRuntime.hpp"
 #include "ParallelVtkOutput.hpp"
+#include "Sha256.hpp"
 
 #include <petscksp.h>
 
@@ -361,13 +362,15 @@ std::vector<double> ReadDoubles(const fs::path& path,std::size_t count)
 	return values;
 }
 
-std::string Digest(const std::string& text)
+// Restart identity: SHA-256 of the case text and the mesh file contents.
+std::string Digest(const std::string& case_text,const std::string& mesh_text)
 {
-	std::uint64_t hash=1469598103934665603ULL;  // FNV-1a, for restart identity only
-	for(const unsigned char c:text){hash^=c;hash*=1099511628211ULL;}
-	std::ostringstream out;
-	out<<std::hex<<std::setw(16)<<std::setfill('0')<<hash;
-	return out.str();
+	iga::Sha256 hash;
+	for(const auto* text:{&case_text,&mesh_text}){
+		hash.AppendLittleEndian64(text->size());
+		hash.Append(text->data(),text->size());
+	}
+	return hash.Hex();
 }
 
 std::string StepName(const std::string& prefix,int step,const std::string& extension)
@@ -408,9 +411,11 @@ int main(int argc,char** argv)
 		std::ifstream case_stream(case_file);
 		const std::string case_text=iga::ReadCheckedText(case_stream);
 		const auto scenario=ParseCase(case_file);
-		std::ifstream mesh_stream(scenario.mesh_file);
+		std::ifstream mesh_stream(scenario.mesh_file,std::ios::binary);
 		if(!mesh_stream)throw std::invalid_argument("cannot open mesh "+scenario.mesh_file.string());
-		const auto mesh=iga::ReadNativeTetMeshGmsh41(mesh_stream);
+		const std::string mesh_text=iga::ReadCheckedText(mesh_stream);
+		std::istringstream mesh_input(mesh_text);
+		const auto mesh=iga::ReadNativeTetMeshGmsh41(mesh_input);
 		const auto topology=iga::BuildNativeTaylorHoodTopology(mesh);
 		for(const auto& cell:mesh.cells)iga::EvaluateNativeTetGeometry(mesh,cell);
 		std::set<int> labels,assigned(scenario.walls);
@@ -442,7 +447,7 @@ int main(int argc,char** argv)
 			concentration.emplace_back(mesh.points.size(),model.initial);
 			older.emplace_back();
 		}
-		const std::string identity=Digest(case_text)+"-"+std::to_string(ranks);
+		const std::string identity=Digest(case_text,mesh_text)+"-"+std::to_string(ranks);
 		int first_step=1;
 		if(restart){
 			std::ifstream marker(output/"checkpoint.json");
@@ -467,6 +472,28 @@ int main(int argc,char** argv)
 				}
 			}
 			first_step=step+1;
+			// A step can be logged before its checkpoint is written; drop such
+			// lines so a resumed log has each accepted step exactly once.
+			if(rank==0){
+				std::ifstream log(output/"steps.jsonl");
+				std::ostringstream kept;
+				for(std::string line;std::getline(log,line);){
+					// A line cut short by an interruption belongs to an unaccepted step.
+					int logged=std::numeric_limits<int>::max();
+					try{
+						const auto row=iga::config_detail::JsonParser(line).Parse();
+						logged=Integer(iga::config_detail::RequireObject(row,"steps.jsonl"),"step","steps.jsonl");
+					}catch(const std::exception&){}
+					if(logged<=step)kept<<line<<'\n';
+				}
+				log.close();
+				{
+					std::ofstream rewritten(output/"steps.jsonl.tmp",std::ios::trunc);
+					rewritten<<kept.str();
+					if(!rewritten.flush())throw std::runtime_error("cannot rewrite steps.jsonl");
+				}
+				fs::rename(output/"steps.jsonl.tmp",output/"steps.jsonl");
+			}
 		}else if(rank==0){
 			if(fs::exists(output/"steps.jsonl"))
 				throw std::runtime_error("output already contains a run; use --restart");
@@ -475,7 +502,11 @@ int main(int argc,char** argv)
 		MPI_Barrier(PETSC_COMM_WORLD);
 		const double pi=std::acos(-1.);
 		const auto start=std::chrono::steady_clock::now();
+		// Keep snapshots written before a restart in flow.pvd.
 		std::vector<std::pair<double,fs::path>> visualization;
+		for(const int step:scenario.visualization_steps)
+			if(step<first_step&&fs::exists(output/StepName("vtk_step_",step,"")/"snapshot.pvtu"))
+				visualization.push_back({step*scenario.dt,output/StepName("vtk_step_",step,"")/"snapshot.pvtu"});
 		for(int step=first_step;step<=scenario.steps;++step){
 			const double t=step*scenario.dt;
 			const double ramp=scenario.ramp>0.&&t<scenario.ramp?0.5*(1.-std::cos(pi*t/scenario.ramp)):1.;
@@ -576,9 +607,9 @@ int main(int argc,char** argv)
 				fs::rename(output/"checkpoint.json.tmp",output/"checkpoint.json");
 			}
 			if(scenario.visualization_steps.count(step)){
-				auto physical=committed;
-				for(std::size_t n=0;n<mesh.points.size();++n)physical[3*velocity_nodes+n]+=scenario.outlet_pressure;
-				auto piece=iga::BuildNativeTetHydraulicVtkPartition(mesh,mesh,physical,scenario.viscosity,rank,ranks);
+				// The solved P1 pressure is already the gauge pressure (outlets carry
+				// outlet_pressure_pa as traction), the same field as flow_NNNNNN.
+				auto piece=iga::BuildNativeTetHydraulicVtkPartition(mesh,mesh,committed,scenario.viscosity,rank,ranks);
 				const auto snapshot=output/StepName("vtk_step_",step,"");
 				iga::WriteParallelVtkSnapshot(PETSC_COMM_WORLD,snapshot,piece,t);
 				visualization.push_back({t,snapshot/"snapshot.pvtu"});
@@ -600,7 +631,7 @@ int main(int argc,char** argv)
 				<<"  \"output_every_steps\": "<<scenario.output_every<<",\n"
 				<<"  \"precision\": \""<<(scenario.float32?"float32":"float64")<<"\",\n"
 				<<"  \"flow_layout\": \"interleaved P2 velocity xyz (m/s) in native vertex then edge order, "
-				<<"followed by P1 pressure (Pa) relative to the outlet pressure\",\n"
+				<<"followed by P1 gauge pressure (Pa); outlets carry outlet_pressure_pa\",\n"
 				<<"  \"species_layout\": \"P1 concentration (mol/m^3) per vertex\",\n"
 				<<"  \"outlet_pressure_pa\": "<<scenario.outlet_pressure<<",\n"
 				<<"  \"inlet\": {\"center_m\": ["<<center[0]<<", "<<center[1]<<", "<<center[2]<<"], "
