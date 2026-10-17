@@ -25,13 +25,37 @@ struct NativeTetWallExchange
 	double external_concentration_mol_m3=0.;
 };
 
+enum class NativeTetSpeciesTimeIntegration
+{
+	BackwardEuler,
+	// Second-order backward differentiation on a mesh that does not move. The
+	// caller supplies the concentration two steps back and uses backward Euler
+	// for the first step.
+	Bdf2,
+};
+
+// Optional per-step settings. Defaults reproduce the backward-Euler scheme.
+struct NativeTetMovingSpeciesStepOptions
+{
+	NativeTetSpeciesTimeIntegration time_integration=
+		NativeTetSpeciesTimeIntegration::BackwardEuler;
+	// Concentration two steps back (BDF2 only), one value per vertex.
+	std::vector<double> older_concentration_mol_m3;
+	// Galerkin transport can undershoot slightly. When true, finite negative
+	// concentrations are accepted as input history instead of rejected.
+	bool allow_negative_concentration=false;
+};
+
 // Concentration is mol/m^3. Boundary flux and source budgets are mol/s.
-// The conservative backward-Euler inventory uses each step's own geometry.
+// The conservative inventory uses each step's own geometry; with BDF2 the
+// inventory time derivative is (3 I^{n+1} - 4 I^n + I^{n-1}) / (2 dt).
 struct NativeTetMovingSpeciesStep
 {
 	std::vector<double> concentration_mol_m3;
+	double older_inventory_mol=0.;
 	double previous_inventory_mol=0.;
 	double current_inventory_mol=0.;
+	double inventory_rate_mol_s=0.;
 	double outward_advective_flux_mol_s=0.;
 	std::map<int,double> outward_advective_flux_by_label_mol_s;
 	std::map<int,double> outward_relative_flow_by_label_m3_s;
@@ -190,7 +214,8 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
 	const std::vector<double>& cell_source_mol_m3_s={},
-	const std::vector<std::uint8_t>& cell_owned={})
+	const std::vector<std::uint8_t>& cell_owned={},
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
 	// This rank assembles the cells of `cell_owned` (one flag per cell, for
 	// example a mesh partition's owned cells); empty takes cells round-robin.
@@ -230,9 +255,24 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 			||previous_mesh.boundary_triangles[face].boundary_label
 				!=current_mesh.boundary_triangles[face].boundary_label)
 			throw std::invalid_argument("native moving species boundary changed during the step");
+	const bool bdf2=options.time_integration==NativeTetSpeciesTimeIntegration::Bdf2;
+	const auto valid_history=[&](double concentration){
+		return std::isfinite(concentration)
+			&&(options.allow_negative_concentration||concentration>=0.);};
 	for(const double concentration:previous_concentration_mol_m3)
-		if(!std::isfinite(concentration)||concentration<0.)
+		if(!valid_history(concentration))
 			throw std::invalid_argument("native moving species previous concentration is invalid");
+	if(bdf2){
+		if(options.older_concentration_mol_m3.size()!=nodes)
+			throw std::invalid_argument("native moving species BDF2 needs the older concentration");
+		for(const double concentration:options.older_concentration_mol_m3)
+			if(!valid_history(concentration))
+				throw std::invalid_argument("native moving species older concentration is invalid");
+		for(std::size_t node=0;node<nodes;++node)
+			if(previous_mesh.points[node]!=current_mesh.points[node])
+				throw std::invalid_argument("native moving species BDF2 needs a mesh that does not move");
+	}else if(!options.older_concentration_mol_m3.empty())
+		throw std::invalid_argument("native moving species older concentration needs BDF2");
 	for(std::size_t node=0;node<nodes;++node)
 		for(int component=0;component<3;++component){
 			const double velocity=mesh_velocity_nodes_m_s[node][component];
@@ -328,12 +368,15 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 			for(std::size_t column=0;column<4;++column){
 				const auto global_column=cell.nodes[column];
 				const double factor=row==column?2.:1.;
+				// Consistent mass. BDF2: 3/2 at n+1, 2 at n and -1/2 at n-1.
 				matrix[{global_row,global_column}]
-					+=current_volume*factor/(20.*dt_s);
+					+=(bdf2?1.5:1.)*current_volume*factor/(20.*dt_s);
 				matrix[{global_row,global_column}]
 					+=first_order_decay_rate_s_inv*current_volume*factor/20.;
 				rhs[global_row]+=previous_volume*factor/(20.*dt_s)
-					*previous_concentration_mol_m3[global_column];
+					*(bdf2?2.*previous_concentration_mol_m3[global_column]
+						-0.5*options.older_concentration_mol_m3[global_column]
+						:previous_concentration_mol_m3[global_column]);
 				const auto& a=geometry.barycentric_gradients[row];
 				const auto& b=geometry.barycentric_gradients[column];
 				matrix[{global_row,global_column}]+=diffusivity_m2_s
@@ -538,8 +581,13 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 	const std::vector<double>& previous_concentration_mol_m3,
 	std::vector<double> current_concentration_mol_m3,
 	const NativeTetMovingSpeciesAssembly& assembly,double dt_s,
-	bool require_nonnegative=false)
+	bool require_nonnegative=false,
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
+	const bool bdf2=options.time_integration==NativeTetSpeciesTimeIntegration::Bdf2;
+	// Monotone graph diffusion bounds backward Euler only; BDF2 and signed
+	// Galerkin histories are reported as computed.
+	require_nonnegative=require_nonnegative&&!bdf2&&!options.allow_negative_concentration;
 	if(current_concentration_mol_m3.size()!=current_mesh.points.size()
 		||assembly.outward_coefficients.size()!=current_mesh.points.size()
 		||!(dt_s>0.))
@@ -561,6 +609,15 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 		previous_mesh,previous_concentration_mol_m3);
 	result.current_inventory_mol=native_tet_moving_species_detail::Inventory(
 		current_mesh,result.concentration_mol_m3);
+	if(bdf2){
+		if(options.older_concentration_mol_m3.size()!=current_mesh.points.size())
+			throw std::invalid_argument("native moving species BDF2 needs the older concentration");
+		result.older_inventory_mol=native_tet_moving_species_detail::Inventory(
+			previous_mesh,options.older_concentration_mol_m3);
+		result.inventory_rate_mol_s=(1.5*result.current_inventory_mol
+			-2.*result.previous_inventory_mol+0.5*result.older_inventory_mol)/dt_s;
+	}else result.inventory_rate_mol_s=(result.current_inventory_mol
+		-result.previous_inventory_mol)/dt_s;
 	result.outward_advective_flux_mol_s=assembly.incoming_flux_mol_s;
 	result.outward_relative_flow_by_label_m3_s=
 		assembly.outward_relative_flow_by_label_m3_s;
@@ -591,8 +648,7 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 		result.outward_wall_exchange_by_label_mol_s.emplace(item.first,flux);
 		result.outward_wall_exchange_mol_s+=flux;
 	}
-	result.balance_defect_mol_s=(result.current_inventory_mol
-		-result.previous_inventory_mol)/dt_s
+	result.balance_defect_mol_s=result.inventory_rate_mol_s
 		+result.outward_advective_flux_mol_s+result.reaction_sink_mol_s
 		+result.outward_wall_exchange_mol_s
 		-result.source_mol_s;
@@ -611,7 +667,8 @@ inline NativeTetMovingSpeciesStep SolveNativeTetMovingSpeciesDenseStep(
 	bool monotone=false,double first_order_decay_rate_s_inv=0.,
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
-	const std::vector<double>& cell_source_mol_m3_s={})
+	const std::vector<double>& cell_source_mol_m3_s={},
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
 	if(current_mesh.points.size()>128)
 		throw std::invalid_argument("native moving species dense limit is 128 vertices");
@@ -620,7 +677,7 @@ inline NativeTetMovingSpeciesStep SolveNativeTetMovingSpeciesDenseStep(
 		previous_concentration_mol_m3,inflow_concentration_mol_m3,
 		diffusivity_m2_s,source_mol_m3_s,dt_s,0,1,monotone,
 		first_order_decay_rate_s_inv,wall_exchange,rt0_face_flow_m3_s,
-		cell_source_mol_m3_s);
+		cell_source_mol_m3_s,{},options);
 	std::vector<double> matrix(assembly.nodes*assembly.nodes,0.);
 	for(const auto& entry:assembly.matrix)
 		matrix[static_cast<std::size_t>(entry.first.first)*assembly.nodes
@@ -629,7 +686,7 @@ inline NativeTetMovingSpeciesStep SolveNativeTetMovingSpeciesDenseStep(
 		std::move(matrix),assembly.rhs);
 	return FinishNativeTetMovingSpeciesStep(previous_mesh,current_mesh,
 		previous_concentration_mol_m3,std::move(solution),assembly,dt_s,
-		monotone);
+		monotone,options);
 }
 
 // Adapter for the native Taylor-Hood flow state, whose pressure tail is not

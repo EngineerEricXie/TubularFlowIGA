@@ -243,6 +243,9 @@ tfi_executable(native_tet_moving_species_spatial_convergence_test
 tfi_executable(native_tet_moving_species_transport_test
 	SOURCES tests/test_native_tet_moving_species_transport.cpp
 	OPTIONS -UNDEBUG)
+tfi_executable(native_tet_species_bdf2_test
+	SOURCES tests/test_native_tet_species_bdf2.cpp
+	OPTIONS -UNDEBUG)
 tfi_executable(native_tet_solid_fsi_runtime_test
 	SOURCES tests/test_native_tet_solid_fsi_runtime.cpp
 	OPTIONS -UNDEBUG)
@@ -422,6 +425,8 @@ tfi_test(native_tet_moving_species_ports_test COMMAND [==[./native_tet_moving_sp
 	REQUIRES native_tet_moving_species_ports_test MAKE native-tet-moving-species-ports-test LABELS unit)
 tfi_test(native_tet_moving_species_transport_test COMMAND [==[./native_tet_moving_species_transport_test]==]
 	REQUIRES native_tet_moving_species_transport_test MAKE native-tet-moving-species-transport-test LABELS unit)
+tfi_test(native_tet_species_bdf2_test COMMAND [==[./native_tet_species_bdf2_test]==]
+	REQUIRES native_tet_species_bdf2_test MAKE native-tet-species-bdf2-test LABELS unit)
 tfi_test(native_tet_solid_fsi_runtime_test COMMAND [==[./native_tet_solid_fsi_runtime_test]==]
 	REQUIRES native_tet_solid_fsi_runtime_test MAKE native-tet-solid-fsi-runtime-test test LABELS unit)
 tfi_test(native_tet_solid_prestress_test COMMAND [==[./native_tet_solid_prestress_test]==]

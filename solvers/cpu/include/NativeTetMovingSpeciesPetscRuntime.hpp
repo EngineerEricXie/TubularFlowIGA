@@ -68,7 +68,8 @@ inline NativeTetMovingSpeciesPetscResult SolveNativeTetMovingSpeciesPetscStep(
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
 	const std::vector<double>& cell_source_mol_m3_s={},
-	const std::vector<std::uint8_t>& cell_owned={})
+	const std::vector<std::uint8_t>& cell_owned={},
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
 	using namespace native_tet_moving_species_petsc_detail;
 	const std::size_t nodes=current_mesh.points.size();
@@ -82,7 +83,7 @@ inline NativeTetMovingSpeciesPetscResult SolveNativeTetMovingSpeciesPetscStep(
 		previous_concentration_mol_m3,inflow_concentration_mol_m3,
 		diffusivity_m2_s,source_mol_m3_s,dt_s,rank,ranks,monotone,
 		first_order_decay_rate_s_inv,wall_exchange,rt0_face_flow_m3_s,
-		cell_source_mol_m3_s,cell_owned);
+		cell_source_mol_m3_s,cell_owned,options);
 	const PetscInt size=static_cast<PetscInt>(nodes);
 	Objects petsc;
 	Check(MatCreateAIJ(PETSC_COMM_WORLD,PETSC_DECIDE,PETSC_DECIDE,size,size,
@@ -190,7 +191,7 @@ inline NativeTetMovingSpeciesPetscResult SolveNativeTetMovingSpeciesPetscStep(
 	}
 	result.step=FinishNativeTetMovingSpeciesStep(previous_mesh,current_mesh,
 		previous_concentration_mol_m3,std::move(concentration),local,dt_s,
-		monotone);
+		monotone,options);
 	return result;
 }
 
