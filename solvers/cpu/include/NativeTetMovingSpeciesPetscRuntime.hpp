@@ -107,6 +107,24 @@ inline NativeTetMovingSpeciesPetscResult SolveNativeTetMovingSpeciesPetscStep(
 	Check(MatAssemblyEnd(petsc.matrix,MAT_FINAL_ASSEMBLY),"MatAssemblyEnd");
 	Check(VecAssemblyBegin(petsc.right),"VecAssemblyBegin");
 	Check(VecAssemblyEnd(petsc.right),"VecAssemblyEnd");
+	if(!local.dirichlet_value_by_node.empty()){
+		// Rank zero lists every constrained row; PETSc routes off-process rows.
+		Vec values=nullptr;
+		Check(VecDuplicate(petsc.right,&values),"VecDuplicate Dirichlet");
+		std::vector<PetscInt> rows;
+		if(rank==0)
+			for(const auto& item:local.dirichlet_value_by_node){
+				rows.push_back(static_cast<PetscInt>(item.first));
+				Check(VecSetValue(values,static_cast<PetscInt>(item.first),item.second,
+					INSERT_VALUES),"VecSetValue Dirichlet");
+			}
+		Check(VecAssemblyBegin(values),"VecAssemblyBegin Dirichlet");
+		Check(VecAssemblyEnd(values),"VecAssemblyEnd Dirichlet");
+		const auto zeroed=MatZeroRows(petsc.matrix,static_cast<PetscInt>(rows.size()),
+			rows.data(),1.,values,petsc.right);
+		VecDestroy(&values);
+		Check(zeroed,"MatZeroRows Dirichlet");
+	}
 	Check(KSPCreate(PETSC_COMM_WORLD,&petsc.solver),"KSPCreate");
 	Check(KSPSetOperators(petsc.solver,petsc.matrix,petsc.matrix),"KSPSetOperators");
 	Check(KSPSetType(petsc.solver,KSPGMRES),"KSPSetType");
@@ -139,6 +157,13 @@ inline NativeTetMovingSpeciesPetscResult SolveNativeTetMovingSpeciesPetscStep(
 	for(std::size_t node=0;node<nodes;++node)
 		concentration[node]=PetscRealPart(values[node]);
 	Check(VecRestoreArrayRead(petsc.gathered,&values),"VecRestoreArrayRead");
+	for(const auto& item:native_tet_moving_species_detail::DirichletReaction(local,concentration)){
+		double reaction=0.;
+		if(MPI_Allreduce(&item.second,&reaction,1,MPI_DOUBLE,MPI_SUM,
+			PETSC_COMM_WORLD)!=MPI_SUCCESS)
+			throw std::runtime_error("native moving species MPI Dirichlet reaction reduction failed");
+		local.dirichlet_reaction_by_label_mol_s[item.first]=reaction;
+	}
 	double global_source=0.,global_incoming=0.;
 	if(MPI_Allreduce(&local.source_mol_s,&global_source,1,MPI_DOUBLE,MPI_SUM,
 		PETSC_COMM_WORLD)!=MPI_SUCCESS
