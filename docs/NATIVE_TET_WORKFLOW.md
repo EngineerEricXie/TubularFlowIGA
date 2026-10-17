@@ -67,6 +67,61 @@ Run on an allocated compute resource:
 python3 scripts/run_native_tet_workflow.py workflow.json
 ```
 
+### Labelled surfaces from vessel segmentations
+
+A segmentation isosurface, such as the output of
+`scripts/dicom_seg_to_surface.py`, is closed but has blind vessel ends and no
+port labels. `scripts/cap_vessel_ports.py` turns it into a labelled closed
+surface for the surface route above. It takes the surface and a ports JSON
+listing each port's label, a point, an outward tangent and a radius; several
+ports may share a label:
+
+```bash
+python3 scripts/cap_vessel_ports.py lumen.stl ports.json capped.vtp \
+  --length-scale-to-m 0.001 --smoothing-iterations 30 \
+  --target-size 1.0 --centerline-swc centerline.swc
+python3 scripts/surface_to_fem_volume.py capped.vtp volume.msh \
+  --length-scale-to-m 0.001 --target-size-m 0.001
+```
+
+The tool works in these stages:
+
+1. **Smoothing (optional).** A windowed-sinc filter removes voxel
+   staircasing. The per-vertex displacement is recorded and can be bounded
+   with `--max-smoothing-displacement`.
+2. **Cutting.** Each port removes the blind end beyond a plane, set inward
+   from the port point by the first of `--cut-offsets-radii` that yields one
+   simple local loop. Vertices within `--snap-fraction` of their shortest
+   edge are snapped onto the plane, so the cut adds no slivers.
+3. **Cap checks.** A plane through a rounded or tapering tip is rejected when
+   its cap is much smaller than the port radius or than the section one
+   radius deeper. If no offset passes, the valid cut with the largest cap is
+   used and marked `fallback_largest_valid_cap` in the manifest.
+4. **Remeshing (optional).** Gmsh remeshes the wall. The element size is
+   bounded by `--target-size`, by `--radius-factor` times the distance to
+   the centerline, and by `--thickness-factor` times the local wall-to-wall
+   distance. Each cap is meshed as a planar surface on its remeshed rim, so
+   labels never depend on feature angles.
+
+The tool fails closed in these cases:
+
+- a port has no valid cut;
+- a remesh folds back onto itself after Gmsh's other 2D algorithms are
+  tried;
+- the surface is not a closed two-manifold.
+
+The C++ surface preflight still runs inside `surface_to_fem_volume.py`.
+
+On CRLM-CT-1072 `Portal`, the plane-cut plus fan-cap surface previously used
+downstream passed only with `--minimum-scaled-jacobian 1e-9` (minimum
+scaled Jacobian `4.05e-7`). This route instead passes the default `1e-3`
+volume gate; see the
+[liver geometry audit](LIVER_GEOMETRY_CANDIDATES.md#portal-vein-truth-model-runs).
+`preprocessing/tet/skeleton_to_tet.py` remains a template-free alternative
+for sparse trees. Its OCC fragment of every capsule fails or stalls on dense
+real trees (2,076 primitives on the pruned portal tree). `--timeout-s` and
+the stage reports bound and attribute that cost.
+
 For a planned pause after an accepted step, use
 `--stop-after-step 1`. The status becomes `partial`, and a subsequent
 `--resume` with the same workflow JSON, solver binary, MPI rank count, case
@@ -162,6 +217,22 @@ Re-run the supported functional example with:
 python3 scripts/integration/test_native_tet_hydraulic_y.py \
   --solver solvers/cpu/native_tet_hydraulic_graph --ranks 2 --coupling fixed
 ```
+
+The failing high-impedance load is now a regression for the
+[implicit 0D predictor](NATIVE_TET_HYDRAULIC_CLI.md#implicit-0d-predictor-couplingpredictor).
+Without the predictor, label 3 (`Rp=5e6`, `Rd=5e7 Pa·s/m³`, `C=1e-10 m³/Pa`)
+still stops at `residual=0.001364`. With `coupling.predictor=implicit_0d`
+each step is accepted after one coupling iteration, and the test checks that
+the same case without the predictor still fails:
+
+```bash
+make t9-native-y-rcr-implicit-smoke PETSC_DIR=/path/to/petsc T7_SPECIES_MPI_RANKS=2
+```
+
+The workflow passes `coupling.predictor`, `fluid.steady` and
+`boundary_updates` through its case file. Restarts that change declared
+boundary values use the CLI directly with `--accept-boundary-update`; the
+workflow `--resume` path does not change the case.
 This proves functional data routing only; spatial/temporal accuracy and
 physiological QoIs remain separate validation tasks.
 

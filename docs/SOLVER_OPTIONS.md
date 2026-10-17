@@ -170,6 +170,25 @@ PETSc. The coarse solver uses `..._mg_coarse_`. When changing the coarse KSP,
 also configure compatible norm behavior; the multilevel regressions use
 preconditioned norms for coarse GMRES.
 
+## Native tetra flow runtime
+
+The replicated native P2/P1 runtime, used by `native_tet_hydraulic_graph` and
+the native graph drivers, reads unprefixed PETSc options. The hydraulic CLI
+rejects unknown command-line arguments, so pass its options through
+`PETSC_OPTIONS` (for example `-options_file FILE`).
+
+| Option | Effect |
+|---|---|
+| `-native_ale_monitor` | Print one line per Newton iteration: residual, scaled merit, control-row residual, step length, Krylov iterations, preconditioner rebuilds. It is excluded from the hydraulic checkpoint execution identity. |
+| `-native_ale_scaled_line_search` | Backtrack on a residual weighted by a characteristic force (momentum rows) and flow (continuity and control rows) instead of the raw mixed-unit 2-norm. It is on for implicit-predictor runs; convergence still uses the raw norm. |
+| `-native_ale_pc_reuse_max_iterations N` | Keep the preconditioner, typically an LU inside GMRES, across Newton iterations while the Krylov solve converges within `N` iterations; otherwise rebuild it and repeat that solve. `0` (default) leaves PETSc's own reuse settings. |
+| `-native_ale_scale` | Row and column scaling of the linear system; not available with flow, resistance or other bordered controls. |
+| `-native_ale_user_schur` | Pressure-mass user Schur preconditioner for `-pc_type fieldsplit` (default on with fieldsplit). |
+
+[`native_tet_hydraulic_mumps_lagged.opts`](../solvers/cpu/options/native_tet_hydraulic_mumps_lagged.opts)
+is the configuration measured on the patient portal tree; see
+[the hydraulic CLI guide](NATIVE_TET_HYDRAULIC_CLI.md#solver-options-for-large-meshes).
+
 ## Legacy transport CLI
 
 `iga_transport` uses `domain_neuron_transport_transport_`, with unprefixed
