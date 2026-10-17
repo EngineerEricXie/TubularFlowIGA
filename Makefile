@@ -36,6 +36,7 @@ t1-audit: t1-fem-mesh-test t1-ftetwild-mesh-test t1-multiregion-audit-test t1-ig
 t1-fem-mesh-test:
 	$(MAKE) -C solvers/cpu surface_fem_preflight
 	python3 scripts/tests/test_surface_to_fem_volume.py
+	python3 -m unittest scripts.tests.test_cap_vessel_ports
 
 t1-multiregion-audit-test:
 	$(MAKE) -C solvers/cpu native_tet_mesh_inspect native_tet_matching_mesh_inspect

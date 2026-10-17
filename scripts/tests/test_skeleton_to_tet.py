@@ -9,6 +9,7 @@ import unittest
 
 from preprocessing.tet.skeleton_geometry import (branch_transition_radius,
 	fit_terminal_caps, spline_capsule_paths, ExactCenterlineIndex, closest_centerline_segment)
+import preprocessing.tet.skeleton_to_tet as skeleton_to_tet
 from preprocessing.tet.skeleton_to_tet import read_skeleton, simplify_tree, compact_surface_nodes
 
 
@@ -89,6 +90,37 @@ l 2 4
 		index = ExactCenterlineIndex(segments)
 		for point in [segments[0][0], *(tuple(rng.uniform(-20., 20.) for _ in range(3)) for _ in range(200))]:
 			self.assertEqual(index.query(point), closest_centerline_segment(point, segments))
+
+
+class SupervisedGenerationTest(unittest.TestCase):
+	"""The supervisor only needs a generate() callable, so no Gmsh is required."""
+
+	def setUp(self):
+		self.original = skeleton_to_tet.generate
+		self.tree = {"nodes_m": [[0, 0, 0]], "terminals": []}
+
+	def tearDown(self):
+		skeleton_to_tet.generate = self.original
+
+	def test_timeout_names_the_running_stage(self):
+		def hangs(tree, prefix, controls):
+			skeleton_to_tet.progress("occ_fragment", parts=7)
+			import time
+			time.sleep(60)
+		skeleton_to_tet.generate = hangs
+		with self.assertRaisesRegex(RuntimeError, "timed out after .* in stage occ_fragment"):
+			skeleton_to_tet.run_supervised(self.tree, Path("unused"), {}, 1.5, 0.5)
+
+	def test_result_and_errors_cross_the_process_boundary(self):
+		skeleton_to_tet.generate = lambda tree, prefix, controls: {"tetrahedra": 3}
+		self.assertEqual(skeleton_to_tet.run_supervised(self.tree, Path("unused"), {}, 30., 5.),
+			{"tetrahedra": 3})
+		def fails(tree, prefix, controls):
+			skeleton_to_tet.progress("surface_mesh")
+			raise ValueError("bad surface")
+		skeleton_to_tet.generate = fails
+		with self.assertRaisesRegex(ValueError, "bad surface .stage surface_mesh"):
+			skeleton_to_tet.run_supervised(self.tree, Path("unused"), {}, None, 5.)
 
 
 if __name__ == "__main__":
