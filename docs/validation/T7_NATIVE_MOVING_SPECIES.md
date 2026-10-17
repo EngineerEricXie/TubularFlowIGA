@@ -20,6 +20,25 @@ inconsistent geometry/velocity input is rejected before assembly.
 With the natural zero diffusive flux used here, the reported budget is
 `(inventory_current−inventory_previous)/dt + outward_advective_flux−source`.
 
+**Second-order time integration on a fixed mesh.** `NativeTetMovingSpeciesStepOptions`
+selects `NativeTetSpeciesTimeIntegration::Bdf2`, which replaces the mass terms by
+`(3 M c^{n+1} − 4 M c^n + M c^{n−1})/(2 dt)`. The caller passes `c^{n−1}` in
+`older_concentration_mol_m3` and takes the first step with backward Euler.
+BDF2 is restricted to a mesh that does not move during the step (it is
+rejected otherwise), and the reported budget uses the matching inventory rate
+`(3 I^{n+1} − 4 I^n + I^{n−1})/(2 dt)`, exposed as `inventory_rate_mol_s` together
+with `older_inventory_mol`. `allow_negative_concentration` accepts finite
+negative histories from Galerkin undershoot; the monotone option bounds
+backward Euler only, so the nonnegativity check is skipped for BDF2. The
+options are trailing defaulted arguments of the assembly, dense and PETSc step
+functions, so existing callers keep the backward-Euler behaviour.
+`native_tet_species_bdf2_test` integrates first-order decay of a uniform
+concentration on a closed two-cell mesh to `t = 1 s` with `dt = 0.1, 0.05,
+0.025 s`: observed orders are 0.97/0.99 for backward Euler and 2.07/2.03 for
+BDF2. It also checks the BDF2 budget with a localized source, diffusion and
+decay, and rejects a missing history, a stray history with backward Euler and
+a moving mesh.
+
 `make t7-native-moving-species-test` runs two-cell tests for stationary
 concentration, rigid mesh translation with `u=w`, 20% mesh expansion with
 unchanged inventory but correctly diluted concentration, through-flow,
