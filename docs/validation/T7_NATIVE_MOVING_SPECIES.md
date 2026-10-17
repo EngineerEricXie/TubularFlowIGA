@@ -39,6 +39,26 @@ BDF2. It also checks the BDF2 budget with a localized source, diffusion and
 decay, and rejects a missing history, a stray history with backward Euler and
 a moving mesh.
 
+**Strong Dirichlet inflow.** `NativeTetMovingSpeciesStepOptions::dirichlet_labels`
+fixes every vertex of the listed boundary labels to that label's entry in the
+inflow-concentration map. The default remains the weak prescribed advective
+inflow flux. A vertex shared with another label (an inlet rim) takes the
+Dirichlet value. The dense path replaces the constrained rows; the PETSc path
+uses `MatZeroRows` after global assembly. The boundary transfer imposed by the
+constraint is the reaction `sum_j A_ij c_j - b_i` of the unconstrained rows,
+computed per rank from its own entries and summed with MPI. It is reported as
+`dirichlet_reaction_by_label_mol_s`, and each Dirichlet label's outward
+transfer becomes its weak advective flux minus the reaction (advection plus
+diffusion), so the budget closes exactly. Time-dependent inlet values are
+supplied by updating the map every step. A Dirichlet label must have an
+inflow value and must not have wall exchange.
+`native_tet_species_dirichlet_inflow_test` (1 and 2 ranks) drives a uniform
+flow through a 60-tetra channel with `c_in = 1`. Inlet vertices equal 1
+exactly every step, the dense and PETSc solutions agree, and the budget closes
+for backward Euler and BDF2. The steady inlet and outlet transfers equal
+`∓u A c_in`. The test also checks that the default weak inflow differs while
+the front passes, and that invalid labels are rejected.
+
 `make t7-native-moving-species-test` runs two-cell tests for stationary
 concentration, rigid mesh translation with `u=w`, 20% mesh expansion with
 unchanged inventory but correctly diluted concentration, through-flow,

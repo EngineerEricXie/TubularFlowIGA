@@ -246,6 +246,10 @@ tfi_executable(native_tet_moving_species_transport_test
 tfi_executable(native_tet_species_bdf2_test
 	SOURCES tests/test_native_tet_species_bdf2.cpp
 	OPTIONS -UNDEBUG)
+tfi_executable(native_tet_species_dirichlet_inflow_test
+	SOURCES tests/test_native_tet_species_dirichlet_inflow.cpp
+	PETSC
+	OPTIONS -UNDEBUG)
 tfi_executable(native_tet_solid_fsi_runtime_test
 	SOURCES tests/test_native_tet_solid_fsi_runtime.cpp
 	OPTIONS -UNDEBUG)
@@ -556,6 +560,10 @@ tfi_test(native_tet_moving_species_checkpoint_test COMMAND [==[./native_tet_movi
 	REQUIRES native_tet_moving_species_checkpoint_test MAKE petsc-test native-tet-moving-species-checkpoint-test LABELS petsc)
 tfi_test(native_tet_moving_species_petsc_runtime_test COMMAND [==[./native_tet_moving_species_petsc_runtime_test]==]
 	REQUIRES native_tet_moving_species_petsc_runtime_test MAKE petsc-test native-tet-moving-species-petsc-runtime-test LABELS petsc)
+tfi_test(native_tet_species_dirichlet_inflow_test COMMAND [==[./native_tet_species_dirichlet_inflow_test]==]
+	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc)
+tfi_test(native_tet_species_dirichlet_inflow_test.mpi COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_species_dirichlet_inflow_test]==]
+	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc mpi)
 tfi_test(native_tet_moving_species_spatial_convergence_test COMMAND [==[./native_tet_moving_species_spatial_convergence_test]==]
 	REQUIRES native_tet_moving_species_spatial_convergence_test MAKE petsc-test native-tet-moving-species-spatial-convergence-test LABELS petsc)
 tfi_test(native_tet_wall_reservoir_exchange_test COMMAND [==[./native_tet_wall_reservoir_exchange_test]==]
