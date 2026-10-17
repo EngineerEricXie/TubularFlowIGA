@@ -129,9 +129,13 @@ iga::PerfusateChemistry Perfusate()
 	return chemistry;
 }
 
+// HCO3- 24 mmol/L and pCO2 40 mmHg at Hb 4.6 g/dL: pH from Henderson-
+// Hasselbalch, buffer base = HCO3- + A0 + beta (pH - 7.4).
 iga::OrganConcentration Inlet()
 {
-	return {{3.0,8.0,1.0,24.0,1.2,100.0}};
+	const double ph=6.1+std::log10(24.0/(0.0307*40.0));
+	const double buffer_base=24.0+17.7+0.42*4.6+(1.43*4.6+7.7)*(ph-7.4);
+	return {{3.0,8.0,1.0,buffer_base,24.0+0.0307*40.0,100.0}};
 }
 
 iga::PerfusedOrganFlowResult CubeFlow(const iga::NativeTetMesh& mesh,double mobility)
@@ -202,6 +206,24 @@ void TestOxygenInversion()
 	assert(iga::PartialPressureO2(0.,7.4,chemistry)==0.);
 }
 
+void TestAcidBase()
+{
+	const auto chemistry=Perfusate();
+	const auto inlet=Inlet();
+	const auto normal=iga::SolveAcidBase(inlet[iga::OrganBufferBase],inlet[iga::OrganCarbonDioxide],chemistry);
+	Close(normal.bicarbonate_mol_m3,24.,1e-9,"normal bicarbonate");
+	Close(normal.pco2_mmhg,40.,1e-9,"normal pCO2");
+	Close(normal.ph,6.1+std::log10(24./(0.0307*40.)),1e-12,"Henderson-Hasselbalch");
+	// Adding CO2 at fixed buffer base: most becomes HCO3- through the
+	// non-bicarbonate buffer, so pCO2 rises far less than without it.
+	const auto loaded=iga::SolveAcidBase(inlet[iga::OrganBufferBase],inlet[iga::OrganCarbonDioxide]+2.,chemistry);
+	assert(loaded.ph<normal.ph&&loaded.bicarbonate_mol_m3>24.);
+	assert(loaded.pco2_mmhg<40.+2./0.0307);
+	// A strong acid lowers buffer base one-for-one and lowers pH.
+	const auto acid=iga::SolveAcidBase(inlet[iga::OrganBufferBase]-5.,inlet[iga::OrganCarbonDioxide],chemistry);
+	assert(acid.ph<normal.ph);
+}
+
 void TestKineticsLimits()
 {
 	const auto chemistry=Perfusate();
@@ -219,7 +241,7 @@ void TestKineticsLimits()
 	const double fuel=100./120.+(20./120.)*8./9.;
 	Close(anoxic.lactate_production,0.01*fuel,1e-12,"glycolysis capacity");
 	Close(anoxic.energy_deficit,1.-0.01*fuel/(0.02*5.),1e-12,"energy deficit");
-	Close(anoxic.reaction[iga::OrganBicarbonate],-anoxic.lactate_production,1e-12,"acid load");
+	Close(anoxic.reaction[iga::OrganBufferBase],-anoxic.lactate_production,1e-12,"acid load");
 	state.viability=0.;
 	const auto dead=iga::EvaluateHepaticRates(Inlet(),state,k,chemistry);
 	for(const double value:dead.reaction)assert(value==0.);
@@ -280,6 +302,43 @@ void TestStagnantCellRelaxes()
 	Close(result.concentration[0][iga::OrganGlucose],8.,1e-12,"inert glucose");
 }
 
+void TestExchangeScaleMatchesConductance()
+{
+	// Doubling every cell's exchange multiplier equals doubling both trees'
+	// specific conductances.
+	const auto mesh=Cube(3);
+	const auto trees=CubeTrees(mesh,1e-3);
+	iga::PerfusedOrganFlowInput input;
+	input.viscosity_pa_s=1e-3;
+	input.root_pressure_pa={1000.,0.};
+	input.specific_conductance_inv_pa_s={4e-5,8e-5};
+	input.mobility_by_cell_m2_pa_s.assign(mesh.cells.size(),1e-5);
+	const auto doubled=iga::SolvePerfusedOrganFlow(mesh,trees,input);
+	input.specific_conductance_inv_pa_s={2e-5,4e-5};
+	input.exchange_scale_by_cell.assign(mesh.cells.size(),2.);
+	const auto scaled=iga::SolvePerfusedOrganFlow(mesh,trees,input);
+	Close(scaled.root_inflow_m3_s[0],doubled.root_inflow_m3_s[0],1e-10,"exchange scale");
+}
+
+void TestLobularZonesAreTanksInSeries()
+{
+	// Steady first-order insulin clearance through N equal zones:
+	// c_out = c_in / (1 + k V / (N Q))^N.
+	const double volume=1e-3,flow=1e-6,k=2e-3;
+	for(const std::size_t zones:{std::size_t(1),std::size_t(3)}){
+		auto input=TransportInput(zones,1e12);
+		input.kinetics=iga::HepaticKinetics{};
+		input.kinetics.insulin_clearance_s_inv=k;
+		const auto graph=iga::SplitIntoLobularZones(SingleCell(volume,flow),zones);
+		const auto result=iga::SolveOrganTransport(graph,input);
+		const double expected=100./std::pow(1.+k*volume/(zones*flow),double(zones));
+		Close(result.concentration.back()[iga::OrganInsulin],expected,1e-8,"tanks in series");
+		for(std::size_t z=1;z<zones;++z)
+			assert(result.concentration[z][iga::OrganInsulin]<result.concentration[z-1][iga::OrganInsulin]);
+		Close(result.outflow[iga::OrganInsulin],flow*expected,1e-8,"zone outflow");
+	}
+}
+
 void TestCubeTransport()
 {
 	const auto mesh=Cube(4);
@@ -303,6 +362,18 @@ void TestCubeTransport()
 	}
 	for(const auto& c:result.concentration)for(const double value:c)assert(value>=0.);
 	assert(result.reaction[iga::OrganOxygen]<0.);
+	// Three lobular zones: same balance, oxygen falls from zone 1 to zone 3.
+	const auto zoned_graph=iga::SplitIntoLobularZones(graph,3);
+	auto zoned_input=TransportInput(3*mesh.cells.size(),600.);
+	const auto zoned=iga::SolveOrganTransport(zoned_graph,zoned_input);
+	assert(zoned.newton_failures==0);
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s){
+		const double scale=std::max({std::abs(zoned.inflow[s]),std::abs(zoned.reaction[s]),1e-30});
+		assert(std::abs(zoned.balance_defect[s])<=1e-6*scale);
+	}
+	for(std::size_t i=0;i<mesh.cells.size();++i)
+		if(graph.exchange_in_m3_s[i]>0.)
+			assert(zoned.rates[3*i+2].po2_mmhg<=zoned.rates[3*i].po2_mmhg+1e-9);
 	std::cout<<"cube: Q="<<hemodynamics.root_inflow_m3_s[0]<<" components="<<result.components
 		<<" largest="<<result.largest_component<<" sweeps="<<result.gauss_seidel_sweeps<<'\n';
 }
@@ -315,9 +386,12 @@ int main(int argc,char** argv)
 	TestFlowConservation();
 	TestSeriesLimit();
 	TestOxygenInversion();
+	TestAcidBase();
 	TestKineticsLimits();
 	TestSingleCellOxygenAgainstScalarRoot();
 	TestStagnantCellRelaxes();
+	TestExchangeScaleMatchesConductance();
+	TestLobularZonesAreTanksInSeries();
 	TestCubeTransport();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();

@@ -25,11 +25,12 @@ namespace iga {
 //
 // Each terminal k owns a territory of tissue cells i with weights w_ki summing
 // to one. The unresolved microvasculature between terminal k and cell i carries
-//   q_ki = G_k w_ki (p_k - pbar_i)        [m^3/s, vessel -> tissue positive]
+//   q_ki = G_k w_ki e_i (p_k - pbar_i)    [m^3/s, vessel -> tissue positive]
 // where pbar_i is the mean of the cell's four nodal pressures and
 // G_k = g_tree V_k scales the tree's specific conductance g_tree [1/(Pa s)]
 // with the territory volume V_k (sum of its cell volumes). With volume
-// weights w_ki = V_i/V_k each cell exchanges g_tree V_i (p_k - pbar_i). Segment flows are pi r^4 dp/(8 mu L). The
+// weights w_ki = V_i/V_k each cell exchanges g_tree e_i V_i (p_k - pbar_i);
+// e_i > 0 is an optional per-cell exchange multiplier (default one). Segment flows are pi r^4 dp/(8 mu L). The
 // tree nodes, Darcy nodes and exchange terms form one symmetric positive
 // definite system whose only Dirichlet data are the tree root pressures; the
 // tissue boundary carries natural zero flux. Inflow and outflow trees obey the
@@ -49,6 +50,9 @@ struct PerfusedOrganFlowInput
 	std::vector<double> root_pressure_pa;              // per tree
 	std::vector<double> specific_conductance_inv_pa_s; // per tree
 	std::vector<double> mobility_by_cell_m2_pa_s;      // per tissue cell
+	// Optional per-cell multiplier of every terminal exchange conductance into
+	// that cell (local microvascular state, e.g. sinusoidal compression).
+	std::vector<double> exchange_scale_by_cell;
 };
 
 struct PerfusedOrganExchange
@@ -172,6 +176,13 @@ inline PerfusedOrganFlowResult SolvePerfusedOrganFlow(const NativeTetMesh& mesh,
 	for(const double value:input.mobility_by_cell_m2_pa_s)
 		if(!(value>0.)||!std::isfinite(value))
 			throw std::invalid_argument("perfused organ mobility must be positive");
+	if(!input.exchange_scale_by_cell.empty()&&input.exchange_scale_by_cell.size()!=cells)
+		throw std::invalid_argument("perfused organ exchange scale does not match the cells");
+	for(const double value:input.exchange_scale_by_cell)
+		if(!(value>0.)||!std::isfinite(value))
+			throw std::invalid_argument("perfused organ exchange scale must be positive");
+	const auto exchange_scale=[&](std::size_t cell){
+		return input.exchange_scale_by_cell.empty()?1.:input.exchange_scale_by_cell[cell];};
 	for(std::size_t t=0;t<trees.size();++t){
 		if(!std::isfinite(input.root_pressure_pa[t]))
 			throw std::invalid_argument("perfused organ root pressure is invalid");
@@ -238,7 +249,7 @@ inline PerfusedOrganFlowResult SolvePerfusedOrganFlow(const NativeTetMesh& mesh,
 			const PetscInt terminal=tree_unknown[t][static_cast<std::size_t>(territory.first)];
 			for(const auto& entry:territory.second){
 				// Energy c (p_k - mean_n p_n)^2 / 2 over the cell's four nodes.
-				const double c=g*entry.second;
+				const double c=g*entry.second*exchange_scale(entry.first);
 				const auto& nodes=mesh.cells[entry.first].nodes;
 				entries.Add(terminal,terminal,c);
 				for(std::size_t a=0;a<4;++a){
@@ -367,8 +378,9 @@ inline PerfusedOrganFlowResult SolvePerfusedOrganFlow(const NativeTetMesh& mesh,
 			const double g=terminal_conductance[t][index++];
 			double total=0.;
 			for(const auto& entry:territory.second){
-				const double flow=g*entry.second*(pressure[static_cast<std::size_t>(territory.first)]
-					-result.cell_mean_pressure_pa[entry.first]);
+				const double flow=g*entry.second*exchange_scale(entry.first)
+					*(pressure[static_cast<std::size_t>(territory.first)]
+						-result.cell_mean_pressure_pa[entry.first]);
 				total+=flow;
 				source[entry.first]+=flow;
 				if(flow>=0.)result.cell_exchange_in_m3_s[entry.first]+=flow;

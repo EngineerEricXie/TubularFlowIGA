@@ -33,6 +33,10 @@ tfi_executable(native_tet_darcy SOURCES src/native_tet_darcy.cpp PETSC)
 tfi_executable(native_tet_flow SOURCES src/native_tet_flow.cpp PETSC)
 tfi_executable(native_tet_flow_darcy_chain SOURCES src/native_tet_flow_darcy_chain.cpp PETSC)
 tfi_executable(native_tet_flow_export SOURCES src/native_tet_flow_export.cpp HDF5)
+tfi_executable(native_tet_perfused_organ
+	SOURCES src/native_tet_perfused_organ.cpp
+	PETSC
+	INCLUDES ../one_d/include)
 tfi_executable(native_tet_fsi_steps SOURCES src/native_tet_fsi_steps.cpp PETSC)
 tfi_executable(native_tet_hydraulic_graph
 	SOURCES src/native_tet_hydraulic_graph.cpp

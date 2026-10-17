@@ -83,6 +83,43 @@ inline OrganTransportGraph BuildTetTransportGraph(const NativeTetMesh& mesh,
 	return graph;
 }
 
+// Splits every cell into `zones` well-mixed lobular zones in series (tanks in
+// series for the sinusoidal path; zones = 3 mirrors hepatic zones 1-3). Node
+// i*zones+z is zone z of cell i with volume V_i/zones. Exchange inflow and
+// inflow from neighbouring cells enter zone 0; the cell's throughflow passes
+// zone by zone; exchange outflow and outflow to neighbours (into their zone 0)
+// leave from the last zone. zones = 1 returns the cell graph unchanged.
+inline OrganTransportGraph SplitIntoLobularZones(const OrganTransportGraph& cells,std::size_t zones)
+{
+	if(zones==0)throw std::invalid_argument("lobular zone count must be positive");
+	if(zones==1)return cells;
+	const std::size_t n=cells.volume_m3.size();
+	OrganTransportGraph graph;
+	graph.volume_m3.resize(n*zones);
+	graph.face_outflow_m3_s.assign(n*zones,0.);
+	graph.boundary_outflow_m3_s.assign(n*zones,0.);
+	graph.exchange_in_m3_s.assign(n*zones,0.);
+	graph.exchange_out_m3_s.assign(n*zones,0.);
+	graph.upstream.assign(n*zones,{});
+	for(std::size_t i=0;i<n;++i){
+		double through=cells.exchange_in_m3_s[i];
+		for(const auto& edge:cells.upstream[i])through+=edge.second;
+		const std::size_t first=i*zones,last=first+zones-1;
+		for(std::size_t z=0;z<zones;++z){
+			graph.volume_m3[first+z]=cells.volume_m3[i]/static_cast<double>(zones);
+			if(z>0)graph.upstream[first+z].push_back({first+z-1,through});
+			if(z+1<zones)graph.face_outflow_m3_s[first+z]=through;
+		}
+		graph.exchange_in_m3_s[first]=cells.exchange_in_m3_s[i];
+		for(const auto& edge:cells.upstream[i])
+			graph.upstream[first].push_back({edge.first*zones+zones-1,edge.second});
+		graph.exchange_out_m3_s[last]=cells.exchange_out_m3_s[i];
+		graph.face_outflow_m3_s[last]=cells.face_outflow_m3_s[i];
+		graph.boundary_outflow_m3_s[last]=cells.boundary_outflow_m3_s[i];
+	}
+	return graph;
+}
+
 struct OrganTransportInput
 {
 	double dt_s=0.;

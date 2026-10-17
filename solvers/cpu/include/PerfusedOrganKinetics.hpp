@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -16,8 +17,8 @@ enum PerfusedOrganSpecies : std::size_t {
 	OrganOxygen=0,      // total O2 content, dissolved + haemoglobin-bound [mol/m^3]
 	OrganGlucose=1,     // [mol/m^3] (= mmol/L)
 	OrganLactate=2,     // [mol/m^3]
-	OrganBicarbonate=3, // [mol/m^3]
-	OrganCarbonDioxide=4, // dissolved CO2 [mol/m^3]
+	OrganBufferBase=3,  // HCO3- plus non-bicarbonate buffer anions [mol/m^3]
+	OrganCarbonDioxide=4, // total CO2, HCO3- plus dissolved CO2 [mol/m^3]
 	OrganInsulin=5,     // [mU/L]
 	OrganSpeciesCount=6
 };
@@ -28,7 +29,7 @@ inline const std::array<const char*,OrganSpeciesCount>& PerfusedOrganSpeciesName
 {
 	static const std::array<const char*,OrganSpeciesCount> names{{
 		"o2_total_mol_m3","glucose_mol_m3","lactate_mol_m3",
-		"bicarbonate_mol_m3","co2_dissolved_mol_m3","insulin_mU_L"}};
+		"buffer_base_mol_m3","co2_total_mol_m3","insulin_mU_L"}};
 	return names;
 }
 
@@ -42,7 +43,64 @@ struct PerfusateChemistry
 	double bohr_coefficient=-0.48;         // d log10(P50) / d pH
 	double co2_solubility_mol_m3_mmhg=0.0307;
 	double bicarbonate_pk=6.1;
+	// Non-bicarbonate buffer A-(pH) = A0 + beta (pH - 7.4). NaN selects the
+	// whole-blood estimates from haemoglobin: Van Slyke beta = 1.43 Hb + 7.7
+	// mmol/(L pH) and A0 = 17.7 + 0.42 Hb mmol/L (normal buffer base
+	// 41.7 + 0.42 Hb with HCO3- 24 mmol/L), Hb in g/dL.
+	double non_bicarbonate_buffer_mol_m3_ph=std::numeric_limits<double>::quiet_NaN();
+	double buffer_anion_at_7_4_mol_m3=std::numeric_limits<double>::quiet_NaN();
 };
+
+inline double NonBicarbonateBuffer(const PerfusateChemistry& chemistry)
+{
+	return std::isnan(chemistry.non_bicarbonate_buffer_mol_m3_ph)
+		?1.43*chemistry.haemoglobin_g_dl+7.7:chemistry.non_bicarbonate_buffer_mol_m3_ph;
+}
+
+inline double BufferAnionAt74(const PerfusateChemistry& chemistry)
+{
+	return std::isnan(chemistry.buffer_anion_at_7_4_mol_m3)
+		?17.7+0.42*chemistry.haemoglobin_g_dl:chemistry.buffer_anion_at_7_4_mol_m3;
+}
+
+struct PerfusateAcidBase
+{
+	double ph=7.4,bicarbonate_mol_m3=0.,co2_dissolved_mol_m3=0.,pco2_mmhg=0.;
+};
+
+// Solves HCO3-(pH) (1 + 10^(pK - pH)) = TCO2 with HCO3- = BB - A-(pH), which
+// is strictly decreasing in pH, by safeguarded Newton on [5.5, 9].
+inline PerfusateAcidBase SolveAcidBase(double buffer_base,double co2_total,
+	const PerfusateChemistry& chemistry)
+{
+	const double beta=NonBicarbonateBuffer(chemistry),anion=BufferAnionAt74(chemistry);
+	const double pk=chemistry.bicarbonate_pk;
+	const auto bicarbonate=[&](double ph){return buffer_base-anion-beta*(ph-7.4);};
+	const auto residual=[&](double ph){
+		return bicarbonate(ph)*(1.+std::pow(10.,pk-ph))-std::max(co2_total,0.);};
+	double low=5.5,high=9.;
+	if(beta>0.)high=std::clamp(7.4+(buffer_base-anion)/beta,low,9.);
+	double ph=std::clamp(7.4,low,high);
+	if(residual(low)<=0.)ph=low;
+	else if(residual(high)>=0.)ph=high;
+	else for(int iteration=0;iteration<100;++iteration){
+		const double r=residual(ph);
+		if(r>0.)low=ph;else high=ph;
+		const double factor=std::pow(10.,pk-ph);
+		const double slope=-beta*(1.+factor)-bicarbonate(ph)*factor*std::log(10.);
+		double next=slope<0.?ph-r/slope:0.5*(low+high);
+		if(!(next>low&&next<high))next=0.5*(low+high);
+		if(std::abs(next-ph)<1e-12){ph=next;break;}
+		ph=next;
+	}
+	PerfusateAcidBase result;
+	result.ph=ph;
+	result.bicarbonate_mol_m3=std::max(bicarbonate(ph),0.);
+	result.co2_dissolved_mol_m3=std::max(co2_total,0.)-result.bicarbonate_mol_m3;
+	if(result.co2_dissolved_mol_m3<0.)result.co2_dissolved_mol_m3=0.;
+	result.pco2_mmhg=result.co2_dissolved_mol_m3/chemistry.co2_solubility_mol_m3_mmhg;
+	return result;
+}
 
 // Hepatic metabolism, model "hepatic_v1". Rates scale with the local viable
 // fraction v in [0,1] and with Q10^((T-37)/10).
@@ -56,9 +114,10 @@ struct PerfusateChemistry
 //    becomes glucose (gluconeogenesis, two lactate per glucose).
 //  - Glycogenolysis releases glucose, suppressed by insulin; insulin promotes
 //    glucose uptake into glycogen. Insulin is cleared first-order.
-//  - Lactate production releases one H+ per lactate (HCO3- -> CO2), lactate
-//    clearance consumes it; aerobic metabolism makes CO2 at the respiratory
-//    quotient. pH follows Henderson-Hasselbalch; no other buffer is modelled.
+//  - Lactate production releases one H+ per lactate, lowering buffer base;
+//    lactate clearance consumes it. Aerobic metabolism adds total CO2 at the
+//    respiratory quotient. pH, HCO3- and pCO2 follow from buffer base and total
+//    CO2 with a linear non-bicarbonate buffer (SolveAcidBase).
 struct HepaticKinetics
 {
 	double vmax_o2_mol_m3_s=0.;
@@ -88,7 +147,8 @@ struct HepaticCellState
 struct HepaticRates
 {
 	OrganConcentration reaction{}; // mol/(m^3 tissue s), insulin mU/(L s)
-	double po2_mmhg=0.,ph=0.,o2_uptake=0.,lactate_production=0.,lactate_clearance=0.;
+	double po2_mmhg=0.,ph=0.,pco2_mmhg=0.,bicarbonate=0.;
+	double o2_uptake=0.,lactate_production=0.,lactate_clearance=0.;
 	double glycogen_rate=0.;       // d(glycogen)/dt
 	double energy_deficit=0.;      // unmet fraction of ATP demand in [0,1]
 };
@@ -100,12 +160,6 @@ inline double OxygenSaturation(double po2_mmhg,double p50_mmhg,double hill)
 	return x/(1.+x);
 }
 
-inline double PerfusatePh(const OrganConcentration& c,const PerfusateChemistry& chemistry)
-{
-	const double bicarbonate=std::max(c[OrganBicarbonate],1e-9);
-	const double co2=std::max(c[OrganCarbonDioxide],1e-9);
-	return chemistry.bicarbonate_pk+std::log10(bicarbonate/co2);
-}
 
 inline double HaemoglobinSites(const PerfusateChemistry& chemistry)
 {
@@ -143,6 +197,8 @@ inline double PartialPressureO2(double content,double ph,const PerfusateChemistr
 
 inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChemistry& chemistry)
 {
+	if(!(NonBicarbonateBuffer(chemistry)>=0.)||!std::isfinite(BufferAnionAt74(chemistry)))
+		throw std::invalid_argument("perfusate buffer constants are invalid");
 	const double values[]={k.vmax_o2_mol_m3_s,k.atp_per_o2,k.glycolysis_capacity_mol_m3_s,
 		k.lactate_vmax_mol_m3_s,k.glycogenolysis_vmax_mol_m3_s,
 		k.glucose_uptake_vmax_mol_m3_s,k.insulin_clearance_s_inv,k.respiratory_quotient,
@@ -172,7 +228,10 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	const double v=std::clamp(state.viability,0.,1.);
 	const double glycogen=std::max(state.glycogen_mol_m3,0.);
 	const double thermal=std::pow(k.q10,(k.temperature_c-37.)/10.);
-	rates.ph=PerfusatePh(c,chemistry);
+	const auto acid_base=SolveAcidBase(c[OrganBufferBase],c[OrganCarbonDioxide],chemistry);
+	rates.ph=acid_base.ph;
+	rates.pco2_mmhg=acid_base.pco2_mmhg;
+	rates.bicarbonate=acid_base.bicarbonate_mol_m3;
 	rates.po2_mmhg=PartialPressureO2(c[OrganOxygen],rates.ph,chemistry);
 	const double oxygen_fraction=rates.po2_mmhg/(k.km_o2_mmhg+rates.po2_mmhg);
 	const double vmax=v*k.vmax_o2_mol_m3_s*thermal;
@@ -199,9 +258,8 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	rates.reaction[OrganOxygen]=-rates.o2_uptake;
 	rates.reaction[OrganGlucose]=release+gluconeogenesis-uptake-glycolysis_glucose;
 	rates.reaction[OrganLactate]=rates.lactate_production-rates.lactate_clearance;
-	rates.reaction[OrganBicarbonate]=rates.lactate_clearance-rates.lactate_production;
-	rates.reaction[OrganCarbonDioxide]=k.respiratory_quotient*rates.o2_uptake
-		+rates.lactate_production-rates.lactate_clearance;
+	rates.reaction[OrganBufferBase]=rates.lactate_clearance-rates.lactate_production;
+	rates.reaction[OrganCarbonDioxide]=k.respiratory_quotient*rates.o2_uptake;
 	rates.reaction[OrganInsulin]=-v*k.insulin_clearance_s_inv*thermal*c[OrganInsulin];
 	return rates;
 }
