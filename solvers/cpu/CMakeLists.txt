@@ -47,6 +47,7 @@ tfi_executable(native_tet_matching_solved_roi_smoke
 	PETSC)
 tfi_executable(native_tet_mesh_inspect SOURCES src/native_tet_mesh_inspect.cpp)
 tfi_executable(native_tet_species_transport SOURCES src/native_tet_species_transport.cpp PETSC HDF5)
+tfi_executable(native_tet_transient_transport SOURCES src/native_tet_transient_transport.cpp PETSC HDF5)
 tfi_executable(surface_fem_preflight SOURCES src/surface_fem_preflight.cpp)
 
 # Test executables.
@@ -564,6 +565,10 @@ tfi_test(native_tet_species_dirichlet_inflow_test COMMAND [==[./native_tet_speci
 	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc)
 tfi_test(native_tet_species_dirichlet_inflow_test.mpi COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_species_dirichlet_inflow_test]==]
 	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc mpi)
+tfi_test(native_tet_transient_transport_test COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_transient_transport.py ./native_tet_transient_transport tests/data/native_tet_transient_y.json 1]==]
+	REQUIRES native_tet_transient_transport MAKE petsc-test native-tet-transient-transport-test LABELS petsc)
+tfi_test(native_tet_transient_transport_test.mpi COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_transient_transport.py ./native_tet_transient_transport tests/data/native_tet_transient_y.json 2]==]
+	REQUIRES native_tet_transient_transport MAKE petsc-test native-tet-transient-transport-test LABELS petsc mpi)
 tfi_test(native_tet_moving_species_spatial_convergence_test COMMAND [==[./native_tet_moving_species_spatial_convergence_test]==]
 	REQUIRES native_tet_moving_species_spatial_convergence_test MAKE petsc-test native-tet-moving-species-spatial-convergence-test LABELS petsc)
 tfi_test(native_tet_wall_reservoir_exchange_test COMMAND [==[./native_tet_wall_reservoir_exchange_test]==]
