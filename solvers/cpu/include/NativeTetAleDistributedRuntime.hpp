@@ -170,8 +170,8 @@ inline NativeTetAleDistributedResult SolveNativeTetAleDistributed(
 	const std::size_t replicated_velocity_nodes=global_vertices+replicated_topology.edges.size();
 	const std::size_t replicated_dofs=3*replicated_velocity_nodes+global_vertices;
 	const bool gauge_enabled=pressure_gauge_node!=std::numeric_limits<std::uint32_t>::max();
-	if(!boundary_conditions.flow_rate_controls.empty())
-		throw std::invalid_argument("native ALE distributed runtime does not support flow-rate controllers");
+	if(!boundary_conditions.flow_rate_controls.empty()||!boundary_conditions.resistance_controls.empty())
+		throw std::invalid_argument("native ALE distributed runtime does not support flow-rate or resistance controllers");
 	// Every prescribed-pressure or backflow label must exist on the global
 	// boundary: collect the labels of owned faces and reduce.
 	{

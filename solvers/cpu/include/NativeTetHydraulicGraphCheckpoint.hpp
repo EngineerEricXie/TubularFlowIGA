@@ -12,19 +12,130 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace iga {
 
+// One contiguous range of accepted steps that used the same 0D boundary
+// values (identified by the hash of every accepted 0D model).
+struct NativeTetHydraulicBoundaryHistoryEntry
+{
+	std::uint64_t first_step=0,last_step=0;
+	std::string values_sha256;
+};
+
+// Opt-in policy for controlled restarts that may change declared 0D boundary
+// values. The configuration identity then uses each 0D owner's structural
+// identity (its model without the declared values) instead of the full model
+// identity, and an extra shard carries the exact accepted 0D models plus the
+// boundary-value history, so every 0D state is still validated against the
+// model that produced it.
+struct NativeTetHydraulicBoundaryPolicy
+{
+	std::map<std::string,std::string> zero_d_structural_identity;
+};
+
 struct NativeTetHydraulicGraphImage
 {
 	CoupledCheckpointEpoch epoch;
 	NativeTetAleFlowCheckpoint native;
 	std::map<std::string,ZeroDFlowCheckpointState> zero_d;
+	std::map<std::string,ZeroDFlowModel> accepted_zero_d_models;
+	std::vector<NativeTetHydraulicBoundaryHistoryEntry> boundary_history;
 };
+
+namespace native_tet_hydraulic_checkpoint_detail {
+
+inline void WriteModel(checkpoint_metadata::Writer& output,const ZeroDFlowModel& model)
+{
+	ValidateZeroDFlowModel(model);
+	output.Unsigned(static_cast<std::uint64_t>(model.role));
+	if(model.role==ZeroDFlowRole::SourceReservoir)
+		for(const double value:{model.source.capacitance_m3_pa,model.source.resistance_pa_s_m3,
+			model.source.prescribed_flow_m3_s})output.Real(value);
+	else for(const double value:{model.terminal.proximal_resistance_pa_s_m3,
+		model.terminal.distal_resistance_pa_s_m3,model.terminal.capacitance_m3_pa,
+		model.terminal.distal_pressure_pa})output.Real(value);
+}
+
+inline ZeroDFlowModel ReadModel(checkpoint_metadata::Reader& input)
+{
+	ZeroDFlowModel model;
+	const auto role=input.Unsigned();
+	checkpoint_metadata::Require(role<=1,"unknown 0D role in boundary values");
+	model.role=static_cast<ZeroDFlowRole>(role);
+	if(model.role==ZeroDFlowRole::SourceReservoir){
+		model.source.capacitance_m3_pa=input.Real();model.source.resistance_pa_s_m3=input.Real();
+		model.source.prescribed_flow_m3_s=input.Real();
+	}else{
+		model.terminal.proximal_resistance_pa_s_m3=input.Real();
+		model.terminal.distal_resistance_pa_s_m3=input.Real();
+		model.terminal.capacitance_m3_pa=input.Real();model.terminal.distal_pressure_pa=input.Real();
+	}
+	ValidateZeroDFlowModel(model);
+	return model;
+}
+
+// Hash of every 0D model, keyed and ordered by domain id.
+inline std::string BoundaryValuesSha256(const std::map<std::string,ZeroDFlowModel>& models)
+{
+	Sha256 hash;
+	const auto append=[&](const std::string& value){
+		hash.AppendLittleEndian64(value.size());hash.Append(value.data(),value.size());
+	};
+	append("native-tet-hydraulic-boundary-values/v1");
+	hash.AppendLittleEndian64(models.size());
+	for(const auto& item:models){append(item.first);append(BuildZeroDFlowModelIdentitySha256(item.second));}
+	return hash.Hex();
+}
+
+inline std::string SerializeBoundaryValues(const std::map<std::string,ZeroDFlowModel>& models,
+	const std::vector<NativeTetHydraulicBoundaryHistoryEntry>& history)
+{
+	checkpoint_metadata::Writer output;
+	output.Text("IGA_NATIVE_TET_HYDRAULIC_BOUNDARY_VALUES");output.Unsigned(1);
+	output.Unsigned(models.size());
+	for(const auto& item:models){output.Text(item.first);WriteModel(output,item.second);}
+	output.Unsigned(history.size());
+	for(const auto& entry:history){
+		output.Unsigned(entry.first_step);output.Unsigned(entry.last_step);output.Text(entry.values_sha256);
+	}
+	return output.Bytes();
+}
+
+inline void ParseBoundaryValues(std::string_view bytes,NativeTetHydraulicGraphImage& image)
+{
+	checkpoint_metadata::Reader input(bytes);
+	checkpoint_metadata::Require(input.Text()=="IGA_NATIVE_TET_HYDRAULIC_BOUNDARY_VALUES"
+		&&input.Unsigned()==1,"unsupported boundary-values schema");
+	const auto count=input.Unsigned();
+	checkpoint_metadata::Require(count<=checkpoint_metadata::maximum_map_entries,"too many 0D models");
+	for(std::uint64_t index=0;index<count;++index){
+		auto domain=input.Text();
+		checkpoint_metadata::Require(image.accepted_zero_d_models.emplace(domain,ReadModel(input)).second,
+			"duplicate 0D model in boundary values");
+	}
+	const auto entries=input.Unsigned();
+	checkpoint_metadata::Require(entries>=1&&entries<=checkpoint_metadata::maximum_map_entries,
+		"boundary-value history length is invalid");
+	std::uint64_t next=1;
+	for(std::uint64_t index=0;index<entries;++index){
+		NativeTetHydraulicBoundaryHistoryEntry entry;
+		entry.first_step=input.Unsigned();entry.last_step=input.Unsigned();entry.values_sha256=input.Text();
+		checkpoint_metadata::Require(entry.first_step==next&&entry.last_step>=entry.first_step
+			&&entry.values_sha256.size()==64,"boundary-value history is not contiguous");
+		next=entry.last_step+1;
+		image.boundary_history.push_back(std::move(entry));
+	}
+	input.Finish();
+}
+
+} // namespace native_tet_hydraulic_checkpoint_detail
 
 // A file-backed accepted publication for a hydraulic native tetra graph.
 // The caller supplies case and execution identities; the configuration identity
@@ -35,8 +146,9 @@ public:
 	NativeTetHydraulicGraphCheckpoint(MPI_Comm comm,const SimulationGraph& graph,
 		const PressureFlowExecutionControls& controls,
 		NativeTetAleFlowDomainAdapter& native,
-		std::map<std::string,ZeroDFlowDomainRuntime*> zero_d)
-		:comm_(comm),native_(native),zero_d_(std::move(zero_d))
+		std::map<std::string,ZeroDFlowDomainRuntime*> zero_d,
+		std::optional<NativeTetHydraulicBoundaryPolicy> policy=std::nullopt)
+		:comm_(comm),native_(native),zero_d_(std::move(zero_d)),policy_(std::move(policy))
 	{
 		MPI_Comm_rank(comm_,&rank_);MPI_Comm_size(comm_,&ranks_);
 		ValidatePressureFlowExecutionControls(controls);
@@ -55,6 +167,13 @@ public:
 				||item.second->DomainId()!=item.first)
 				throw std::invalid_argument("native tetra hydraulic checkpoint owner differs");
 			catalog_.push_back({prefix(item.first)+".zero-d","zero-d-accepted-v1",0});
+			if(policy_&&!policy_->zero_d_structural_identity.count(item.first))
+				throw std::invalid_argument("native tetra hydraulic boundary policy misses a 0D owner");
+		}
+		if(policy_){
+			if(policy_->zero_d_structural_identity.size()!=zero_d_.size())
+				throw std::invalid_argument("native tetra hydraulic boundary policy has extra owners");
+			catalog_.push_back({BoundaryShardId(),"native-tet-hydraulic-boundary-values-v1",0});
 		}
 		std::sort(catalog_.begin(),catalog_.end(),[](const auto& a,const auto& b){
 			return a.id<b.id;
@@ -66,8 +185,10 @@ public:
 		};
 		append("native-tet-hydraulic-models/v1");
 		append(native_.DomainId());append(native_.ModelIdentitySha256());
+		if(policy_)append("native-tet-hydraulic-boundary-policy/v1");
 		for(const auto& item:zero_d_){
-			append(item.first);append(item.second->ModelIdentitySha256());
+			append(item.first);append(policy_?policy_->zero_d_structural_identity.at(item.first)
+				:item.second->ModelIdentitySha256());
 		}
 		hash.AppendLittleEndian64(graph.Domains().size());
 		for(const auto& item:graph.Domains()){
@@ -125,7 +246,7 @@ public:
 	const std::vector<CoupledCheckpointShardSpec>& Catalog()const noexcept
 	{return catalog_;}
 
-	void Save(const std::filesystem::path& root,const CoupledCheckpointEpoch& epoch)const
+	void Save(const std::filesystem::path& root,const CoupledCheckpointEpoch& epoch)
 	{
 		std::vector<std::pair<CoupledCheckpointShardSpec,std::string>> images;
 		CollectiveLocalStage(comm_,"native hydraulic checkpoint capture",[&]{
@@ -144,6 +265,23 @@ public:
 					epoch.accepted_steps,epoch.time_s,epoch.dt_s);
 				images.emplace_back(Spec(item.first,".zero-d"),
 					SerializeZeroDFlowCheckpoint(value));
+			}
+			if(policy_){
+				const auto models=AcceptedModels();
+				const auto values=native_tet_hydraulic_checkpoint_detail::BoundaryValuesSha256(models);
+				auto history=history_;
+				if(!history.empty()&&history.back().values_sha256==values
+					&&history.back().last_step+1==epoch.accepted_steps)
+					history.back().last_step=epoch.accepted_steps;
+				else{
+					coupled_checkpoint_detail::Require(history.empty()
+						?epoch.accepted_steps==1:history.back().last_step+1==epoch.accepted_steps,
+						"native hydraulic boundary-value history is not contiguous");
+					history.push_back({epoch.accepted_steps,epoch.accepted_steps,values});
+				}
+				images.emplace_back(BoundarySpec(),
+					native_tet_hydraulic_checkpoint_detail::SerializeBoundaryValues(models,history));
+				pending_history_=std::move(history);
 			}
 			std::sort(images.begin(),images.end(),[](const auto& a,const auto& b){
 				return a.first.id<b.first.id;
@@ -170,6 +308,20 @@ public:
 		CollectiveLocalStage(comm_,"native hydraulic manifest publish",[&]{
 			if(rank_==0)PublishCoupledCheckpoint(root,epoch,catalog_,receipts);
 		});
+		history_.swap(pending_history_);
+		pending_history_.clear();
+	}
+
+	// Boundary-value history up to the latest published or restored epoch.
+	const std::vector<NativeTetHydraulicBoundaryHistoryEntry>& BoundaryHistory()const noexcept
+	{return history_;}
+
+	// Accepted models of every 0D owner, keyed by domain id.
+	std::map<std::string,ZeroDFlowModel> AcceptedModels()const
+	{
+		std::map<std::string,ZeroDFlowModel> models;
+		for(const auto& item:zero_d_)models.emplace(item.first,item.second->AcceptedModel());
+		return models;
 	}
 
 	NativeTetHydraulicGraphImage LoadLatest(const std::filesystem::path& root,
@@ -235,12 +387,27 @@ public:
 			for(const auto& item:zero_d_)
 				image.zero_d.emplace(item.first,ParseZeroDFlowCheckpoint(
 					read(Spec(item.first,".zero-d")),image.epoch));
+			if(policy_){
+				native_tet_hydraulic_checkpoint_detail::ParseBoundaryValues(read(BoundarySpec()),image);
+				coupled_checkpoint_detail::Require(image.accepted_zero_d_models.size()==zero_d_.size()
+					&&image.boundary_history.back().last_step==image.epoch.accepted_steps
+					&&image.boundary_history.back().values_sha256==native_tet_hydraulic_checkpoint_detail::
+						BoundaryValuesSha256(image.accepted_zero_d_models),
+					"native hydraulic boundary values differ from the epoch");
+				for(const auto& item:zero_d_){
+					const auto found=image.accepted_zero_d_models.find(item.first);
+					coupled_checkpoint_detail::Require(found!=image.accepted_zero_d_models.end()
+						&&BuildZeroDFlowModelIdentitySha256(found->second)
+							==image.zero_d.at(item.first).model_identity_sha256,
+						"native hydraulic 0D state and accepted boundary values differ");
+				}
+			}
 		});
 		return image;
 	}
 
 	// The graph owner must discard every candidate runtime if this fails.
-	void RestoreFresh(const NativeTetHydraulicGraphImage& image)const
+	void RestoreFresh(const NativeTetHydraulicGraphImage& image)
 	{
 		CollectiveLocalStage(comm_,"native hydraulic fresh restore",[&]{
 			coupled_checkpoint_detail::Require(
@@ -252,11 +419,27 @@ public:
 				"native hydraulic 0D catalog differs");
 			native_.RestoreCheckpoint(image.native);
 			for(const auto& item:zero_d_)
-				item.second->RestoreCheckpointState(image.zero_d.at(item.first));
+				if(policy_)item.second->RestoreCheckpointStateUnderModel(image.zero_d.at(item.first),
+					image.accepted_zero_d_models.at(item.first));
+				else item.second->RestoreCheckpointState(image.zero_d.at(item.first));
+			history_=image.boundary_history;
 		});
 	}
 
 private:
+	static std::string BoundaryShardId()
+	{
+		return coupled_checkpoint_detail::Hash("native-tet-hydraulic/v1:boundary-values")
+			+".boundary-values";
+	}
+	const CoupledCheckpointShardSpec& BoundarySpec()const
+	{
+		const auto id=BoundaryShardId();
+		const auto found=std::find_if(catalog_.begin(),catalog_.end(),
+			[&](const auto& item){return item.id==id;});
+		coupled_checkpoint_detail::Require(found!=catalog_.end(),"unknown native hydraulic shard");
+		return *found;
+	}
 	const CoupledCheckpointShardSpec& Spec(const std::string& domain,
 		const std::string& suffix)const
 	{
@@ -270,6 +453,8 @@ private:
 	MPI_Comm comm_;
 	NativeTetAleFlowDomainAdapter& native_;
 	std::map<std::string,ZeroDFlowDomainRuntime*> zero_d_;
+	std::optional<NativeTetHydraulicBoundaryPolicy> policy_;
+	std::vector<NativeTetHydraulicBoundaryHistoryEntry> history_,pending_history_;
 	int rank_=0,ranks_=1;
 	std::string configuration_sha256_;
 	std::vector<CoupledCheckpointShardSpec> catalog_;

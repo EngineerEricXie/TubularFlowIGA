@@ -1,0 +1,17 @@
+# PETSc options for native_tet_hydraulic_graph on ~0.5-1 M P2/P1 unknowns.
+# Use with PETSC_OPTIONS="-options_file <this file>"; options are part of the
+# checkpoint execution identity. See docs/NATIVE_TET_HYDRAULIC_CLI.md.
+# GMRES preconditioned by a MUMPS block-low-rank LU that is reused across
+# Newton iterations while GMRES converges within 30 iterations.
+-ksp_type gmres
+-ksp_gmres_restart 100
+-ksp_rtol 1e-6
+-ksp_atol 1e-30
+-ksp_max_it 200
+-native_ale_pc_reuse_max_iterations 30
+-pc_type lu
+-pc_factor_mat_solver_type mumps
+-mat_mumps_icntl_7 5
+-mat_mumps_icntl_14 50
+-mat_mumps_icntl_35 2
+-mat_mumps_cntl_7 1e-8

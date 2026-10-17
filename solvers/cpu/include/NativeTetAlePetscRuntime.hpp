@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <stdexcept>
@@ -35,6 +36,24 @@ struct NativeTetAlePetscSolveResult
 	bool system_scaling_enabled = false;
 	bool user_schur_enabled = false;
 	std::vector<double> flow_controller_multipliers_pa;
+	// Boundary pressures of NativeTetAleResistanceControl rows, in order.
+	std::vector<double> resistance_pressures_pa;
+	double assembly_seconds = 0.0;
+	double linear_solve_seconds = 0.0;
+};
+
+// Optional solver inputs that do not change the discrete problem: a warm
+// start for the bordered control unknowns and an extra absolute bound on the
+// control-row residuals (m^3/s), checked together with the residual norm.
+struct NativeTetAlePetscSolveControls
+{
+	std::vector<double> initial_control_values;
+	double control_absolute_tolerance_m3_s = 0.0;
+	// Backtracking compares a physically scaled residual instead of the raw
+	// 2-norm, whose momentum (N) and flow (m^3/s) rows have unrelated units;
+	// also enabled by -native_ale_scaled_line_search. The convergence test and
+	// the linear system are unchanged.
+	bool scaled_line_search = false;
 };
 
 inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
@@ -45,7 +64,8 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 	std::uint32_t pressure_gauge_node,const NativeNavierStokesParameters& parameters,
 	double dt_s,bool steady,double absolute_tolerance=1e-10,
 	std::size_t maximum_iterations=10,
-	const NativeTetAleBoundaryConditions& boundary_conditions={})
+	const NativeTetAleBoundaryConditions& boundary_conditions={},
+	const NativeTetAlePetscSolveControls& solve_controls={})
 {
 	int rank=0,ranks=1;MPI_Comm_rank(PETSC_COMM_WORLD,&rank);
 	MPI_Comm_size(PETSC_COMM_WORLD,&ranks);
@@ -57,14 +77,26 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 		?std::vector<std::size_t>{}:NativeTetAleBoundaryFaceOwners(current_mesh);
 	const std::size_t velocity_nodes=current_mesh.points.size()+topology.edges.size();
 	const std::size_t physical_dofs_size=3*velocity_nodes+current_mesh.points.size();
-	const std::size_t controller_dofs=boundary_conditions.flow_rate_controls.size();
+	const std::size_t flow_controls=boundary_conditions.flow_rate_controls.size();
+	const std::size_t controller_dofs=flow_controls+boundary_conditions.resistance_controls.size();
 	const std::size_t dofs_size=physical_dofs_size+controller_dofs;
 	const bool pressure_gauge_enabled=
 		pressure_gauge_node!=std::numeric_limits<std::uint32_t>::max();
 	if(pressure_gauge_enabled&&!boundary_conditions.prescribed_pressure_pa.empty())
 		throw std::invalid_argument("native ALE pressure outlet and point gauge conflict");
-	if(!pressure_gauge_enabled&&boundary_conditions.prescribed_pressure_pa.empty())
+	if(pressure_gauge_enabled&&!boundary_conditions.resistance_controls.empty())
+		throw std::invalid_argument("native ALE resistance outlet and point gauge conflict");
+	if(!pressure_gauge_enabled&&boundary_conditions.prescribed_pressure_pa.empty()
+		&&boundary_conditions.resistance_controls.empty())
 		throw std::invalid_argument("native ALE fluid pressure needs a gauge or outlet");
+	if((!solve_controls.initial_control_values.empty()
+			&&solve_controls.initial_control_values.size()!=controller_dofs)
+		||!(solve_controls.control_absolute_tolerance_m3_s>=0.0)
+		||!std::isfinite(solve_controls.control_absolute_tolerance_m3_s))
+		throw std::invalid_argument("native ALE PETSc solve controls are invalid");
+	for(const double value:solve_controls.initial_control_values)
+		if(!std::isfinite(value))
+			throw std::invalid_argument("native ALE PETSc initial control value is nonfinite");
 	if(dofs_size>static_cast<std::size_t>(std::numeric_limits<PetscInt>::max())
 		||vertex_mesh_velocity_m_s.size()!=current_mesh.points.size()
 		||committed_state.size()!=physical_dofs_size
@@ -89,7 +121,9 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 	PetscScalar* local_state=nullptr;VecGetArray(state,&local_state);
 	for(PetscInt row=begin;row<end;++row)
 		local_state[row-begin]=static_cast<std::size_t>(row)<physical_dofs_size
-			?initial_trial_state[static_cast<std::size_t>(row)]:0.0;
+			?initial_trial_state[static_cast<std::size_t>(row)]
+			:(solve_controls.initial_control_values.empty()?0.0
+				:solve_controls.initial_control_values[static_cast<std::size_t>(row)-physical_dofs_size]);
 	VecRestoreArray(state,&local_state);VecAssemblyBegin(state);VecAssemblyEnd(state);
 	PetscBool scale_system=PETSC_FALSE;
 	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_scale",&scale_system,nullptr);
@@ -234,9 +268,79 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 	result.preconditioner_type=pc_type?pc_type:"unknown";
 	result.system_scaling_enabled=scale_system==PETSC_TRUE;
 	result.user_schur_enabled=use_user_schur==PETSC_TRUE;
+	PetscBool monitor=PETSC_FALSE;
+	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_monitor",&monitor,nullptr);
+	// Lagged preconditioner (typically an LU factorization inside GMRES): reuse
+	// it across Newton iterations while the Krylov solve converges within this
+	// many iterations; otherwise rebuild it from the current Jacobian and
+	// repeat that solve. Zero keeps PETSc's own -ksp_reuse_preconditioner.
+	PetscInt reuse_limit=0;
+	PetscOptionsGetInt(nullptr,nullptr,"-native_ale_pc_reuse_max_iterations",&reuse_limit,nullptr);
+	if(reuse_limit<0)throw std::invalid_argument("native ALE preconditioner reuse limit is negative");
+	PetscReal ksp_rtol=0.0,ksp_abstol=0.0,ksp_dtol=0.0;PetscInt ksp_max_it=0;
+	NativeTetAlePetscCheck(KSPGetTolerances(solver,&ksp_rtol,&ksp_abstol,&ksp_dtol,&ksp_max_it),
+		"KSPGetTolerances runtime");
+	bool preconditioner_built=false;
+	std::size_t preconditioner_rebuilds=0;
+	PetscBool scaled_line_search=solve_controls.scaled_line_search?PETSC_TRUE:PETSC_FALSE;
+	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_scaled_line_search",&scaled_line_search,nullptr);
+	// Merit weights: momentum rows by a force P*L^2, flow rows by U*L^2, where
+	// U and L come from the first flow control (mean velocity, sqrt(area)) or
+	// else from prescribed velocities and the mesh, and P is the dynamic,
+	// viscous and inertial pressure scale.
+	double merit_momentum_weight=1.0,merit_flow_weight=1.0;
+	if(scaled_line_search){
+		double velocity_scale=0.0,length_scale=0.0;
+		for(const auto& control:boundary_conditions.flow_rate_controls){
+			const double area=boundary_operators.at(control.boundary_label).area_m2;
+			velocity_scale=std::abs(control.target_outward_flow_m3_s)/area;
+			length_scale=std::sqrt(area);
+			if(velocity_scale>0.0)break;
+		}
+		if(!(velocity_scale>0.0))
+			for(const auto& prescribed:prescribed_velocity)
+				velocity_scale=std::max(velocity_scale,std::sqrt(prescribed.second[0]*prescribed.second[0]
+					+prescribed.second[1]*prescribed.second[1]+prescribed.second[2]*prescribed.second[2]));
+		if(!(velocity_scale>0.0))velocity_scale=1.0;
+		if(!(length_scale>0.0)){
+			std::array<double,3> minimum=current_mesh.points.front(),maximum=minimum;
+			for(const auto& point:current_mesh.points)
+				for(int component=0;component<3;++component){
+					minimum[component]=std::min(minimum[component],point[component]);
+					maximum[component]=std::max(maximum[component],point[component]);
+				}
+			length_scale=std::max({maximum[0]-minimum[0],maximum[1]-minimum[1],maximum[2]-minimum[2]});
+		}
+		const double pressure_scale=parameters.density*velocity_scale*velocity_scale
+			+parameters.dynamic_viscosity*velocity_scale/length_scale
+			+(steady?0.0:parameters.density*velocity_scale*length_scale/dt_s);
+		merit_momentum_weight=1.0/(pressure_scale*length_scale*length_scale);
+		merit_flow_weight=1.0/(velocity_scale*length_scale*length_scale);
+		if(!std::isfinite(merit_momentum_weight)||!std::isfinite(merit_flow_weight))
+			throw std::runtime_error("native ALE scaled line search has nonfinite weights");
+	}
+	const auto merit=[&](double raw_norm){
+		if(!scaled_line_search)return raw_norm;
+		PetscInt merit_begin=0,merit_end=0;
+		VecGetOwnershipRange(residual,&merit_begin,&merit_end);
+		const PetscScalar* values=nullptr;VecGetArrayRead(residual,&values);
+		double local=0.0,global_sum=0.0;
+		for(PetscInt row=merit_begin;row<merit_end;++row){
+			const double weight=row<static_cast<PetscInt>(3*velocity_nodes)
+				?merit_momentum_weight:merit_flow_weight;
+			const double value=weight*static_cast<double>(PetscRealPart(values[row-merit_begin]));
+			local+=value*value;
+		}
+		VecRestoreArrayRead(residual,&values);
+		MPI_Allreduce(&local,&global_sum,1,MPI_DOUBLE,MPI_SUM,PETSC_COMM_WORLD);
+		return std::sqrt(global_sum);
+	};
+	double base_merit=0.0;
 	bool line_search_pending=false;
 	double base_residual_norm=0.0,step_length=1.0;
+	PetscInt last_linear_iterations=0;
 	for(std::size_t iteration=0;iteration<=maximum_iterations;++iteration) {
+		const double assembly_start=MPI_Wtime();
 		VecScatterBegin(scatter,state,replicated,INSERT_VALUES,SCATTER_FORWARD);
 		VecScatterEnd(scatter,state,replicated,INSERT_VALUES,SCATTER_FORWARD);
 		const PetscScalar* global=nullptr;VecGetArrayRead(replicated,&global);
@@ -288,33 +392,59 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 			for(const auto& prescribed:boundary_conditions.prescribed_pressure_pa){
 				const auto& coefficients=boundary_operators.at(prescribed.first)
 					.velocity_coefficients;
-				for(std::size_t dof=0;dof<coefficients.size();++dof)
-					if(coefficients[dof]!=0.0)
-						NativeTetAlePetscCheck(VecSetValue(residual,static_cast<PetscInt>(dof),
-							prescribed.second*coefficients[dof],ADD_VALUES),
-							"VecSetValue prescribed pressure runtime");
+				const auto& dofs=boundary_operators.at(prescribed.first).velocity_dofs;
+				for(std::size_t entry=0;entry<dofs.size();++entry)
+					NativeTetAlePetscCheck(VecSetValue(residual,static_cast<PetscInt>(dofs[entry]),
+						prescribed.second*coefficients[entry],ADD_VALUES),
+						"VecSetValue prescribed pressure runtime");
 			}
+			// Bordered controls: the unknown is a boundary pressure applied as
+			// traction; its row constrains the label's absolute outward flow.
 			for(std::size_t control=0;control<controller_dofs;++control){
-				const auto& specification=boundary_conditions.flow_rate_controls[control];
-				const auto& coefficients=boundary_operators.at(specification.boundary_label)
-					.velocity_coefficients;
+				const bool flow_control=control<flow_controls;
+				const int label=flow_control
+					?boundary_conditions.flow_rate_controls[control].boundary_label
+					:boundary_conditions.resistance_controls[control-flow_controls].boundary_label;
+				const auto& operator_value=boundary_operators.at(label);
 				const PetscInt controller_row=static_cast<PetscInt>(physical_dofs_size+control);
 				const double multiplier=PetscRealPart(global[controller_row]);
-				double flow=-specification.target_outward_flow_m3_s;
-				for(std::size_t dof=0;dof<coefficients.size();++dof)
-					if(coefficients[dof]!=0.0){
-						const PetscInt velocity_row=static_cast<PetscInt>(dof);
-						flow+=coefficients[dof]*PetscRealPart(global[velocity_row]);
-						NativeTetAlePetscCheck(VecSetValue(residual,velocity_row,
-							multiplier*coefficients[dof],ADD_VALUES),
-							"VecSetValue flow controller traction runtime");
-						NativeTetAlePetscCheck(MatSetValue(matrix,velocity_row,controller_row,
-							coefficients[dof],ADD_VALUES),
-							"MatSetValue flow controller column runtime");
-						NativeTetAlePetscCheck(MatSetValue(matrix,controller_row,velocity_row,
-							coefficients[dof],ADD_VALUES),
-							"MatSetValue flow controller row runtime");
-					}
+				double flow=0.0;
+				if(flow_control){
+					const auto& specification=boundary_conditions.flow_rate_controls[control];
+					flow=-specification.target_outward_flow_m3_s;
+					if(specification.target_pressure_slope_m3_s_pa!=0.0)
+						for(std::size_t entry=0;entry<operator_value.pressure_nodes.size();++entry){
+							const PetscInt pressure_row=static_cast<PetscInt>(3*velocity_nodes
+								+operator_value.pressure_nodes[entry]);
+							const double weight=specification.target_pressure_slope_m3_s_pa
+								*operator_value.pressure_weights[entry];
+							flow-=weight*PetscRealPart(global[pressure_row]);
+							NativeTetAlePetscCheck(MatSetValue(matrix,controller_row,pressure_row,
+								-weight,ADD_VALUES),"MatSetValue flow controller pressure runtime");
+						}
+				}else{
+					const auto& specification=
+						boundary_conditions.resistance_controls[control-flow_controls];
+					flow=-specification.mesh_flow_m3_s
+						-(multiplier-specification.offset_pa)/specification.resistance_pa_s_m3;
+					NativeTetAlePetscCheck(MatSetValue(matrix,controller_row,controller_row,
+						-1.0/specification.resistance_pa_s_m3,ADD_VALUES),
+						"MatSetValue resistance diagonal runtime");
+				}
+				for(std::size_t entry=0;entry<operator_value.velocity_dofs.size();++entry){
+					const PetscInt velocity_row=static_cast<PetscInt>(operator_value.velocity_dofs[entry]);
+					const double coefficient=operator_value.velocity_coefficients[entry];
+					flow+=coefficient*PetscRealPart(global[velocity_row]);
+					NativeTetAlePetscCheck(VecSetValue(residual,velocity_row,
+						multiplier*coefficient,ADD_VALUES),
+						"VecSetValue flow controller traction runtime");
+					NativeTetAlePetscCheck(MatSetValue(matrix,velocity_row,controller_row,
+						coefficient,ADD_VALUES),
+						"MatSetValue flow controller column runtime");
+					NativeTetAlePetscCheck(MatSetValue(matrix,controller_row,velocity_row,
+						coefficient,ADD_VALUES),
+						"MatSetValue flow controller row runtime");
+				}
 				NativeTetAlePetscCheck(VecSetValue(residual,controller_row,flow,ADD_VALUES),
 					"VecSetValue flow controller residual runtime");
 			}
@@ -340,8 +470,32 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 			local_constraint_rows.data(),values.data(),INSERT_VALUES);
 		VecAssemblyBegin(residual);VecAssemblyEnd(residual);
 		PetscReal norm=0.0;VecNorm(residual,NORM_2,&norm);
+		double control_residual=0.0;
+		{
+			PetscInt residual_begin=0,residual_end=0;
+			VecGetOwnershipRange(residual,&residual_begin,&residual_end);
+			const PetscScalar* residual_values=nullptr;
+			VecGetArrayRead(residual,&residual_values);
+			double local=0.0;
+			for(PetscInt row=std::max(residual_begin,static_cast<PetscInt>(physical_dofs_size));
+					row<residual_end;++row)
+				local=std::max(local,std::abs(static_cast<double>(PetscRealPart(
+					residual_values[row-residual_begin]))));
+			VecRestoreArrayRead(residual,&residual_values);
+			MPI_Allreduce(&local,&control_residual,1,MPI_DOUBLE,MPI_MAX,PETSC_COMM_WORLD);
+		}
+		const double current_merit=merit(static_cast<double>(norm));
+		result.assembly_seconds+=MPI_Wtime()-assembly_start;
+		if(monitor&&rank==0)
+			std::cout<<std::setprecision(6)<<"native_ale_newton iteration="<<iteration
+				<<" residual="<<norm<<" merit="<<current_merit
+				<<" control_residual_m3_s="<<control_residual
+				<<" step="<<(line_search_pending?step_length:0.0)
+				<<" linear_iterations="<<last_linear_iterations
+				<<" preconditioner_rebuilds="<<preconditioner_rebuilds<<'\n'<<std::flush;
 		if(line_search_pending){
-			if(std::isfinite(static_cast<double>(norm))&&norm<base_residual_norm)
+			if(std::isfinite(static_cast<double>(norm))&&std::isfinite(current_merit)
+				&&current_merit<base_merit)
 				line_search_pending=false;
 			else {
 				step_length*=0.5;
@@ -365,7 +519,9 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 					diagnostic<<std::setprecision(17)
 						<<"native ALE PETSc Newton line search failed: iteration="
 						<<iteration<<" base_residual="<<base_residual_norm
-						<<" trial_residual="<<norm<<" rejected_step="<<step_length
+						<<" trial_residual="<<norm<<" base_merit="<<base_merit
+						<<" trial_merit="<<current_merit<<" scaled_merit="<<(scaled_line_search?1:0)
+						<<" rejected_step="<<step_length
 						<<" velocity_residual="<<std::sqrt(global_squares[0])
 						<<" continuity_residual="<<std::sqrt(global_squares[1])
 						<<" controller_residual="<<std::sqrt(global_squares[2])
@@ -381,7 +537,8 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 			}
 		}
 		result.final_residual_l2=norm;result.newton_iterations=iteration;
-		if(norm<=absolute_tolerance) break;
+		if(norm<=absolute_tolerance&&(solve_controls.control_absolute_tolerance_m3_s==0.0
+			||control_residual<=solve_controls.control_absolute_tolerance_m3_s)) break;
 		if(iteration==maximum_iterations)
 			throw std::runtime_error("native ALE PETSc Newton did not converge: residual="
 				+std::to_string(static_cast<double>(norm)));
@@ -392,9 +549,29 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 				"VecPointwiseMult residual scale runtime");
 		} else VecCopy(residual,right);
 		VecScale(right,-1.0);KSPSetOperators(solver,matrix,matrix);
+		const double solve_start=MPI_Wtime();
+		const bool lagged=reuse_limit>0&&preconditioner_built;
+		if(reuse_limit>0){
+			NativeTetAlePetscCheck(KSPSetReusePreconditioner(solver,lagged?PETSC_TRUE:PETSC_FALSE),
+				"KSPSetReusePreconditioner runtime");
+			NativeTetAlePetscCheck(KSPSetTolerances(solver,ksp_rtol,ksp_abstol,ksp_dtol,
+				lagged?std::min(reuse_limit,ksp_max_it):ksp_max_it),"KSPSetTolerances runtime");
+		}
 		NativeTetAlePetscCheck(KSPSolve(solver,right,update),"KSPSolve runtime");
 		KSPConvergedReason reason;KSPGetConvergedReason(solver,&reason);
 		PetscInt iterations=0;KSPGetIterationNumber(solver,&iterations);
+		if(lagged&&reason<=0){
+			result.total_linear_iterations+=iterations;++preconditioner_rebuilds;
+			NativeTetAlePetscCheck(KSPSetReusePreconditioner(solver,PETSC_FALSE),
+				"KSPSetReusePreconditioner rebuild runtime");
+			NativeTetAlePetscCheck(KSPSetTolerances(solver,ksp_rtol,ksp_abstol,ksp_dtol,ksp_max_it),
+				"KSPSetTolerances rebuild runtime");
+			NativeTetAlePetscCheck(KSPSolve(solver,right,update),"KSPSolve rebuild runtime");
+			KSPGetConvergedReason(solver,&reason);KSPGetIterationNumber(solver,&iterations);
+		}
+		preconditioner_built=true;
+		result.linear_solve_seconds+=MPI_Wtime()-solve_start;
+		last_linear_iterations=iterations;
 		result.final_linear_converged_reason=static_cast<PetscInt>(reason);
 		if(reason<=0) throw std::runtime_error("native ALE PETSc linear solve did not converge: "
 			"reason="+std::to_string(static_cast<int>(reason))
@@ -403,7 +580,7 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 		if(scale_system) NativeTetAlePetscCheck(VecPointwiseMult(update,update,column_scale),
 			"VecPointwiseMult update scale runtime");
 		NativeTetAlePetscCheck(VecCopy(state,base_state),"VecCopy Newton base state");
-		base_residual_norm=norm;step_length=1.0;line_search_pending=true;
+		base_residual_norm=norm;base_merit=current_merit;step_length=1.0;line_search_pending=true;
 		NativeTetAlePetscCheck(VecAXPY(state,step_length,update),"VecAXPY Newton update");
 	}
 	VecScatterBegin(scatter,state,replicated,INSERT_VALUES,SCATTER_FORWARD);
@@ -412,9 +589,11 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 	result.replicated_state.resize(physical_dofs_size);
 	for(std::size_t dof=0;dof<physical_dofs_size;++dof)
 		result.replicated_state[dof]=PetscRealPart(final_values[dof]);
-	result.flow_controller_multipliers_pa.resize(controller_dofs);
+	result.flow_controller_multipliers_pa.resize(flow_controls);
+	result.resistance_pressures_pa.resize(controller_dofs-flow_controls);
 	for(std::size_t control=0;control<controller_dofs;++control)
-		result.flow_controller_multipliers_pa[control]=
+		(control<flow_controls?result.flow_controller_multipliers_pa[control]
+			:result.resistance_pressures_pa[control-flow_controls])=
 			PetscRealPart(final_values[physical_dofs_size+control]);
 	VecRestoreArrayRead(replicated,&final_values);
 	VecScatterDestroy(&scatter);VecDestroy(&replicated);KSPDestroy(&solver);
@@ -432,11 +611,12 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetscTransient(
 	const std::map<std::uint32_t,std::array<double,3>>& prescribed_velocity,
 	std::uint32_t pressure_gauge_node,const NativeNavierStokesParameters& parameters,
 	double dt_s,double absolute_tolerance=1e-10,std::size_t maximum_iterations=10,
-	const NativeTetAleBoundaryConditions& boundary_conditions={})
+	const NativeTetAleBoundaryConditions& boundary_conditions={},
+	const NativeTetAlePetscSolveControls& solve_controls={})
 {
 	return SolveNativeTetAlePetsc(current_mesh,vertex_mesh_velocity_m_s,committed_state,
 		initial_trial_state,prescribed_velocity,pressure_gauge_node,parameters,dt_s,false,
-		absolute_tolerance,maximum_iterations,boundary_conditions);
+		absolute_tolerance,maximum_iterations,boundary_conditions,solve_controls);
 }
 
 inline NativeTetAlePetscSolveResult SolveNativeTetAlePetscSteady(
@@ -446,11 +626,12 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetscSteady(
 	const std::map<std::uint32_t,std::array<double,3>>& prescribed_velocity,
 	std::uint32_t pressure_gauge_node,const NativeNavierStokesParameters& parameters,
 	double absolute_tolerance=1e-10,std::size_t maximum_iterations=10,
-	const NativeTetAleBoundaryConditions& boundary_conditions={})
+	const NativeTetAleBoundaryConditions& boundary_conditions={},
+	const NativeTetAlePetscSolveControls& solve_controls={})
 {
 	return SolveNativeTetAlePetsc(current_mesh,vertex_mesh_velocity_m_s,initial_trial_state,
 		initial_trial_state,prescribed_velocity,pressure_gauge_node,parameters,1.0,true,
-		absolute_tolerance,maximum_iterations,boundary_conditions);
+		absolute_tolerance,maximum_iterations,boundary_conditions,solve_controls);
 }
 
 } // namespace iga

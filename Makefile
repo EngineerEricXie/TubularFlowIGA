@@ -36,6 +36,7 @@ t1-audit: t1-fem-mesh-test t1-ftetwild-mesh-test t1-multiregion-audit-test t1-ig
 t1-fem-mesh-test:
 	$(MAKE) -C solvers/cpu surface_fem_preflight
 	python3 scripts/tests/test_surface_to_fem_volume.py
+	python3 -m unittest scripts.tests.test_cap_vessel_ports
 
 t1-multiregion-audit-test:
 	$(MAKE) -C solvers/cpu native_tet_mesh_inspect native_tet_matching_mesh_inspect
@@ -198,6 +199,7 @@ t7-native-ale-flow-0d-cross-process-test:
 t7-native-tet-hydraulic-cli-test:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	python3 scripts/integration/test_native_tet_hydraulic_cli.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
+	python3 scripts/integration/test_native_tet_hydraulic_control.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
 	python3 scripts/validate_t7_native_hydraulic_cli_evidence.py
 
 .PHONY: t7-native-tet-ftetwild-smoke
@@ -269,6 +271,11 @@ t9-native-tet-species-workflow-test:
 t9-native-y-rcr-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+
+.PHONY: t9-native-y-rcr-implicit-smoke
+t9-native-y-rcr-implicit-smoke:
+	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
+	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) --coupling implicit_0d $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
 
 .PHONY: t9-native-y-rcr-strong-smoke
 t9-native-y-rcr-strong-smoke:

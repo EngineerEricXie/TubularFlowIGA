@@ -116,6 +116,75 @@ int main(int argc,char** argv)
 			controller_summary<<" controlled_flow="<<controlled_flow
 				<<" controller_pa="<<port_result.flow_controller_multipliers_pa[0]
 				<<" pressure_shift_controller_pa="<<shifted.flow_controller_multipliers_pa[0];
+			// Implicit resistance ports: label 1 keeps a pressure-dependent flow
+			// control, labels 2 and 3 obey pi=offset+R*(relative outward flow).
+			// Prescribing the returned pressures must reproduce the same state.
+			auto split_mesh=port_mesh;
+			split_mesh.boundary_triangles[1].boundary_label=2;
+			for(std::size_t triangle=2;triangle<split_mesh.boundary_triangles.size();++triangle)
+				split_mesh.boundary_triangles[triangle].boundary_label=3;
+			const auto split_operators=iga::BuildNativeTetAleBoundaryFluxOperators(split_mesh,
+				iga::BuildNativeTaylorHoodTopology(split_mesh));
+			double weight_sum=0.0;
+			for(const double weight:split_operators.at(3).pressure_weights)weight_sum+=weight;
+			if(std::abs(weight_sum-1.0)>1e-14)
+				throw std::runtime_error("native ALE mean-pressure weights do not sum to one");
+			const auto mesh_flow=[&](int label){return split_operators.at(label).OutwardFlowM3S(committed);};
+			const auto mean_pressure=[&](const std::vector<double>& state,int label){
+				const auto& operator_value=split_operators.at(label);
+				double value=0.0;
+				for(std::size_t entry=0;entry<operator_value.pressure_nodes.size();++entry)
+					value+=operator_value.pressure_weights[entry]
+						*state[3*velocity_nodes+operator_value.pressure_nodes[entry]];
+				return value;
+			};
+			iga::NativeTetAleBoundaryConditions implicit;
+			iga::NativeTetAleFlowRateControl inflow;
+			inflow.boundary_label=1;inflow.target_outward_flow_m3_s=mesh_flow(1)-2e-3;
+			inflow.target_pressure_slope_m3_s_pa=1e-4;
+			implicit.flow_rate_controls.push_back(inflow);
+			implicit.resistance_controls.push_back({2,20.0,1.0,mesh_flow(2)});
+			implicit.resistance_controls.push_back({3,60.0,-2.0,mesh_flow(3)});
+			iga::NativeTetAlePetscSolveControls tight;
+			tight.control_absolute_tolerance_m3_s=1e-15;tight.scaled_line_search=true;
+			const auto implicit_result=iga::SolveNativeTetAlePetscTransient(split_mesh,grid,
+				committed,committed,{},std::numeric_limits<std::uint32_t>::max(),
+				{1000.0,0.004},dt,1e-10,8,implicit,tight);
+			if(implicit_result.resistance_pressures_pa.size()!=2
+				||implicit_result.flow_controller_multipliers_pa.size()!=1)
+				throw std::runtime_error("native ALE resistance controls returned the wrong unknowns");
+			iga::NativeTetAleBoundaryConditions explicit_conditions;
+			for(std::size_t control=0;control<2;++control){
+				const auto& resistance=implicit.resistance_controls[control];
+				const double relative=split_operators.at(resistance.boundary_label)
+					.OutwardFlowM3S(implicit_result.replicated_state)-resistance.mesh_flow_m3_s;
+				const double pressure=implicit_result.resistance_pressures_pa[control];
+				if(std::abs(pressure-resistance.offset_pa-resistance.resistance_pa_s_m3*relative)
+					>1e-10*std::max(1.0,std::abs(pressure)))
+					throw std::runtime_error("native ALE resistance relation is not satisfied");
+				explicit_conditions.prescribed_pressure_pa[resistance.boundary_label]=pressure;
+			}
+			const double inlet_pressure=mean_pressure(implicit_result.replicated_state,1);
+			auto fixed_inflow=inflow;
+			fixed_inflow.target_outward_flow_m3_s+=inflow.target_pressure_slope_m3_s_pa*inlet_pressure;
+			fixed_inflow.target_pressure_slope_m3_s_pa=0.0;
+			explicit_conditions.flow_rate_controls.push_back(fixed_inflow);
+			iga::NativeTetAlePetscSolveControls warm;
+			warm.initial_control_values=implicit_result.flow_controller_multipliers_pa;
+			const auto explicit_result=iga::SolveNativeTetAlePetscTransient(split_mesh,grid,
+				committed,implicit_result.replicated_state,{},std::numeric_limits<std::uint32_t>::max(),
+				{1000.0,0.004},dt,1e-10,8,explicit_conditions,warm);
+			if(explicit_result.newton_iterations!=0)
+				throw std::runtime_error("native ALE implicit state is not a fixed-pressure solution");
+			const auto cold=iga::SolveNativeTetAlePetscTransient(split_mesh,grid,
+				committed,committed,{},std::numeric_limits<std::uint32_t>::max(),
+				{1000.0,0.004},dt,1e-10,8,explicit_conditions);
+			for(std::size_t dof=0;dof<dofs;++dof)
+				if(std::abs(cold.replicated_state[dof]-implicit_result.replicated_state[dof])
+					>1e-9*std::max(1.0,std::abs(implicit_result.replicated_state[dof])))
+					throw std::runtime_error("native ALE implicit and prescribed-pressure states differ");
+			controller_summary<<" resistance_pa="<<implicit_result.resistance_pressures_pa[0]
+				<<","<<implicit_result.resistance_pressures_pa[1];
 		}
 		if(rank==0) std::cout<<"native tetrahedral ALE PETSc runtime passed ranks="<<ranks
 			<<" transient_newton="<<result.newton_iterations

@@ -20,6 +20,17 @@
 
 namespace iga {
 
+// Affine boundary relation supplied by an implicit neighbor domain for one
+// port, in graph (material-relative, outward-positive) quantities:
+// a FlowRate-input port receives outward_flow = constant + slope*mean_pressure,
+// a MeanPressure-input port receives pressure = constant + slope*outward_flow.
+// Both slopes must be nonnegative (dissipative neighbors).
+struct NativeTetAleImplicitPortRelation
+{
+	double constant=0.0;
+	double slope=0.0;
+};
+
 // Hydraulic part of a native tetra pressure/flow graph adapter. The native
 // flow solver uses absolute u at its boundary controller, while graph ports
 // exchange the material-domain relative flow (u-w). No FEM assembly is done
@@ -85,6 +96,43 @@ public:
 					throw std::invalid_argument("native tetra graph flow input is invalid");
 				result.flow_rate_controls.push_back({label,
 					*input->second.outward_flow_m3_s+mesh_flow.at(label)});
+			}
+		}
+		ValidateNativeTetAleBoundaryConditions(result,operators);
+		return result;
+	}
+
+	// Monolithic counterpart of BoundaryConditions: every port is driven by an
+	// affine relation instead of a fixed value. Pressure ports with a positive
+	// slope become resistance controls; zero-slope ports keep fixed values.
+	NativeTetAleBoundaryConditions ImplicitBoundaryConditions(const NativeTetMesh& current_mesh,
+		const std::vector<std::array<double,3>>& mesh_velocity_nodes_m_s,
+		const std::map<std::string,NativeTetAleImplicitPortRelation>& relations) const
+	{
+		const auto mesh_flow=MeshFlowByLabel(current_mesh,mesh_velocity_nodes_m_s);
+		const auto operators=BuildNativeTetAleBoundaryFluxOperators(current_mesh,
+			BuildNativeTaylorHoodTopology(current_mesh));
+		if(relations.size()!=ports_.size())
+			throw std::invalid_argument("native tetra graph implicit relations do not cover every port");
+		NativeTetAleBoundaryConditions result;
+		for(const auto& port:ports_){
+			const auto relation=relations.find(port.id);
+			if(relation==relations.end()||!std::isfinite(relation->second.constant)
+				||!std::isfinite(relation->second.slope)||relation->second.slope<0.0)
+				throw std::invalid_argument("native tetra graph implicit relation is missing or invalid");
+			const int label=ParseThreeDFlowBoundaryLabel(port);
+			if(port.requires.count(PortQuantity::MeanPressure)){
+				if(relation->second.slope==0.0)
+					result.prescribed_pressure_pa.emplace(label,relation->second.constant);
+				else result.resistance_controls.push_back({label,relation->second.slope,
+					relation->second.constant,mesh_flow.at(label)});
+			}else{
+				// Absolute target = relative outward flow + mesh flux.
+				NativeTetAleFlowRateControl control;
+				control.boundary_label=label;
+				control.target_outward_flow_m3_s=relation->second.constant+mesh_flow.at(label);
+				control.target_pressure_slope_m3_s_pa=relation->second.slope;
+				result.flow_rate_controls.push_back(control);
 			}
 		}
 		ValidateNativeTetAleBoundaryConditions(result,operators);
