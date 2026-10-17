@@ -33,6 +33,10 @@ tfi_executable(native_tet_darcy SOURCES src/native_tet_darcy.cpp PETSC)
 tfi_executable(native_tet_flow SOURCES src/native_tet_flow.cpp PETSC)
 tfi_executable(native_tet_flow_darcy_chain SOURCES src/native_tet_flow_darcy_chain.cpp PETSC)
 tfi_executable(native_tet_flow_export SOURCES src/native_tet_flow_export.cpp HDF5)
+tfi_executable(native_tet_perfused_organ
+	SOURCES src/native_tet_perfused_organ.cpp
+	PETSC
+	INCLUDES ../one_d/include)
 tfi_executable(native_tet_fsi_steps SOURCES src/native_tet_fsi_steps.cpp PETSC)
 tfi_executable(native_tet_hydraulic_graph
 	SOURCES src/native_tet_hydraulic_graph.cpp
@@ -206,6 +210,11 @@ tfi_executable(native_tet_darcy_petsc_test
 	PETSC
 	OPTIONS -UNDEBUG)
 tfi_executable(native_tet_fem_test SOURCES tests/test_native_tet_fem.cpp)
+tfi_executable(perfused_organ_test
+	SOURCES tests/test_perfused_organ.cpp
+	PETSC
+	INCLUDES ../one_d/include
+	OPTIONS -UNDEBUG)
 tfi_executable(native_tet_fixed_spatial_convergence_test
 	SOURCES tests/test_native_tet_fixed_spatial_convergence.cpp
 	OPTIONS -UNDEBUG)
@@ -545,6 +554,8 @@ tfi_test(native_tet_ale_species_graph_1d_test COMMAND [==[./native_tet_ale_speci
 	REQUIRES native_tet_ale_species_graph_1d_test MAKE petsc-test native-tet-ale-species-graph-1d-test LABELS petsc)
 tfi_test(native_tet_darcy_petsc_test COMMAND [==[./native_tet_darcy_petsc_test]==]
 	REQUIRES native_tet_darcy_petsc_test MAKE petsc-test native-tet-darcy-petsc-test LABELS petsc)
+tfi_test(perfused_organ_test COMMAND [==[./perfused_organ_test]==]
+	REQUIRES perfused_organ_test MAKE petsc-test perfused-organ-test LABELS petsc)
 tfi_test(native_tet_mesh_components_test COMMAND [==[./native_tet_mesh_components_test]==]
 	REQUIRES native_tet_mesh_components_test MAKE test native-tet-mesh-components-test LABELS unit)
 tfi_test(native_tet_moving_species_checkpoint_test COMMAND [==[./native_tet_moving_species_checkpoint_test]==]

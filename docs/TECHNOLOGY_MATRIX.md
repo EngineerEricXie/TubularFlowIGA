@@ -31,6 +31,7 @@ moving volume mesh that follows the moving boundary.
 | Valves and contact | Solid structure coupled to flow and contact | Leaflet geometry, material, contact, and support data | **Planned** |
 | Porous tissue perfusion | P1 Darcy pressure with RT0 conservative flux | Labeled tissue tetrahedra, mobility/permeability, sources, and boundaries | **Functional** single-compartment steady workflow, including matching-face source transfer |
 | Tissue deformation with fluid interaction | Poroelastic or biphasic FEM | Tissue solid/fluid material and boundary data | **Planned** |
+| Perfused organ step | Poiseuille trees + P1 Darcy tissue (one SPD system) + upwind multispecies transport with lobular zones and hepatic kinetics | Labeled tissue tetrahedra, rooted inflow/outflow SWC trees, terminal territories | **Functional** [step solver](PERFUSED_ORGAN.md) with analytic-limit tests; kinetics uncalibrated |
 | Species transport | Advection--diffusion--reaction in the corresponding domain | Concentration fields, velocity/flux, diffusion, reactions, sources, interfaces | **Supported** body-fitted IGA multispecies transport; **Functional** native tetrahedral P1 ALE transport and wall/reservoir exchange |
 
 The [idealized dual-tree case](cases/CUBE_DUAL_TREE_FSI.md) combines arterial

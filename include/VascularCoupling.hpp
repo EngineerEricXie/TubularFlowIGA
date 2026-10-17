@@ -169,8 +169,12 @@ struct ReservoirDefinition {
 };
 
 struct PumpDefinition {
+	// flow_control: the pump sets flow_m3_s. pressure_control: the pump holds
+	// pressure_pa at the vascular inlet and the vascular model returns the flow;
+	// at steady state the pump returns the venous flow to the vascular bed.
 	std::string mode = "flow_control";
 	double flow_m3_s = 0.0;
+	double pressure_pa = 0.0;
 };
 
 struct OxygenatorDefinition {
@@ -184,7 +188,9 @@ struct OxygenatorDefinition {
 
 struct DialyzerDefinition {
 	bool enabled = false;
-	double exchange_flow_m3_s = 0.0;
+	double exchange_flow_m3_s = 0.0;          // volume-neutral exchange
+	double inflow_m3_s = 0.0;                 // dialysate added to the reservoir
+	double outflow_m3_s = 0.0;                // reservoir perfusate removed
 	std::map<std::string, double> dialysate;
 };
 
@@ -240,10 +246,18 @@ public:
 	{
 		if (definition_.mode != SimulationScopeMode::VcaClosedLoop)
 			throw std::runtime_error("VCA external circuit requires vca_closed_loop mode");
-		if (definition_.external_circuit.pump.mode != "flow_control")
-			throw std::runtime_error("native VCA coupling currently supports flow_control pumps");
-		if (!(definition_.external_circuit.pump.flow_m3_s > 0.0))
-			throw std::runtime_error("VCA flow-control pump requires positive flow_m3_s");
+		const auto& pump = definition_.external_circuit.pump;
+		if (pump.mode == "flow_control") {
+			if (!(pump.flow_m3_s > 0.0))
+				throw std::runtime_error("VCA flow-control pump requires positive flow_m3_s");
+		} else if (pump.mode == "pressure_control") {
+			if (!std::isfinite(pump.pressure_pa))
+				throw std::runtime_error("VCA pressure-control pump requires a finite pressure_pa");
+		} else throw std::runtime_error("VCA pump mode must be flow_control or pressure_control");
+		const auto& dialyzer = definition_.external_circuit.dialyzer;
+		if (!(dialyzer.exchange_flow_m3_s >= 0.0) || !(dialyzer.inflow_m3_s >= 0.0)
+			|| !(dialyzer.outflow_m3_s >= 0.0))
+			throw std::runtime_error("VCA dialyzer flows must be nonnegative");
 		const auto& reservoir = definition_.external_circuit.reservoir;
 		if (!reservoir.enabled || !(reservoir.volume_m3 > 0.0))
 			throw std::runtime_error("VCA closed loop requires a positive reservoir volume");
@@ -262,12 +276,38 @@ public:
 		ValidateState();
 	}
 
+	// Mutable controls for a perfusion controller acting between steps.
+	ExternalCircuitDefinition& Controls() { return definition_.external_circuit; }
+
+	// Adds solute amounts [mol, or the species' amount unit] and an optional
+	// carrier volume to the well-mixed reservoir.
+	void ApplyBolus(const std::map<std::string, double>& amount, double volume_m3 = 0.0)
+	{
+		if (!(volume_m3 >= 0.0) || !std::isfinite(volume_m3))
+			throw std::runtime_error("VCA bolus volume must be finite and nonnegative");
+		const double new_volume = state_.volume_m3+volume_m3;
+		for (auto& item : state_.species) item.second *= state_.volume_m3/new_volume;
+		for (const auto& item : amount) {
+			if (!(item.second >= 0.0) || !std::isfinite(item.second))
+				throw std::runtime_error("VCA bolus amounts must be finite and nonnegative");
+			state_.species[item.first] += item.second/new_volume;
+		}
+		state_.hematocrit_percent *= state_.volume_m3/new_volume;
+		state_.volume_m3 = new_volume;
+		ValidateState();
+	}
+
 	VascularInletState InletState(double time_s)
 	{
 		VascularInletState result;
 		result.time_s = time_s;
-		result.has_flow = true;
-		result.flow_m3_s = definition_.external_circuit.pump.flow_m3_s;
+		if (definition_.external_circuit.pump.mode == "pressure_control") {
+			result.has_pressure = true;
+			result.pressure_pa = definition_.external_circuit.pump.pressure_pa;
+		} else {
+			result.has_flow = true;
+			result.flow_m3_s = definition_.external_circuit.pump.flow_m3_s;
+		}
 		result.species = state_.species;
 		result.has_temperature = true;
 		result.temperature_c = state_.temperature_c;
@@ -297,6 +337,11 @@ public:
 	{
 		if (!(dt_s >= 0.0) || !std::isfinite(dt_s))
 			throw std::runtime_error("VCA timestep must be finite and nonnegative");
+		if (definition_.external_circuit.pump.mode != "flow_control")
+			throw std::runtime_error("VCA Advance requires a flow-control pump; use AdvanceWithUptake");
+		const auto& volume_dialyzer = definition_.external_circuit.dialyzer;
+		if (volume_dialyzer.enabled && (volume_dialyzer.inflow_m3_s > 0.0 || volume_dialyzer.outflow_m3_s > 0.0))
+			throw std::runtime_error("VCA Advance supports volume-neutral dialysis only; use AdvanceWithUptake");
 		const double old_volume = state_.volume_m3;
 		const double pump_flow = definition_.external_circuit.pump.flow_m3_s;
 		const double new_volume = old_volume+dt_s*(venous.flow_m3_s-pump_flow);
@@ -350,6 +395,83 @@ public:
 			rbc_volume/new_volume
 			-definition_.external_circuit.reservoir.hematocrit_loss_percent_per_hour
 				*dt_s/3600.0);
+		state_.volume_m3 = new_volume;
+		state_.species = std::move(next);
+		ValidateState();
+		return report;
+	}
+
+	// Advances the reservoir by dt_s with the organ treated as a quasi-steady
+	// load. `organ_uptake` is the net removal rate by the vascular bed per
+	// species (positive = consumed), evaluated at the current reservoir state;
+	// `arterial` holds species that a gas exchanger resets on every pass
+	// (O2, CO2), which relax towards the arterial value at the circuit flow.
+	// Uptake is linearised as first-order clearance (k = U/c) and production as
+	// a constant source; together with dialysis, infusion and the exchanger
+	// this gives a linear ODE per species that is integrated exactly, so the
+	// update is stable for any step when circuit transit is fast. Dialysate
+	// inflow dilutes; perfusate outflow removes volume at reservoir composition.
+	CircuitAdvanceReport AdvanceWithUptake(const std::map<std::string, double>& organ_uptake,
+		const std::map<std::string, double>& arterial, double circuit_flow_m3_s,
+		double dt_s, double time_s)
+	{
+		if (!(dt_s >= 0.0) || !std::isfinite(dt_s) || !(circuit_flow_m3_s >= 0.0)
+			|| !std::isfinite(circuit_flow_m3_s))
+			throw std::runtime_error("VCA uptake step requires finite nonnegative dt and flow");
+		const auto& circuit = definition_.external_circuit;
+		const auto& dialyzer = circuit.dialyzer;
+		const double inflow = dialyzer.enabled ? dialyzer.inflow_m3_s : 0.0;
+		const double outflow = dialyzer.enabled ? dialyzer.outflow_m3_s : 0.0;
+		const double exchange = dialyzer.enabled ? dialyzer.exchange_flow_m3_s : 0.0;
+		const double old_volume = state_.volume_m3;
+		const double new_volume = old_volume+dt_s*(inflow-outflow);
+		if (!(new_volume > 0.0) || !std::isfinite(new_volume))
+			throw std::runtime_error("VCA reservoir volume became non-positive");
+		std::map<std::string, bool> names;
+		for (const auto& item : state_.species) names[item.first] = true;
+		for (const auto& item : organ_uptake) names[item.first] = true;
+		for (const auto& item : circuit.infusion_rates) names[item.first] = true;
+		CircuitAdvanceReport report;
+		report.time_s = time_s;
+		report.volume_change_m3 = new_volume-old_volume;
+		std::map<std::string, double> next;
+		for (const auto& named : names) {
+			const auto& name = named.first;
+			const double c0 = state_.species.count(name) ? state_.species.at(name) : 0.0;
+			const double uptake = organ_uptake.count(name) ? organ_uptake.at(name) : 0.0;
+			RequireFiniteCouplingValue("VCA organ uptake "+name, uptake);
+			const double infusion = circuit.infusion_rates.count(name) ? circuit.infusion_rates.at(name) : 0.0;
+			const double dialysate = dialyzer.dialysate.count(name) ? dialyzer.dialysate.at(name) : c0;
+			// V dc/dt = -alpha c + beta (outflow at reservoir composition leaves c unchanged).
+			double alpha = inflow+exchange, beta = infusion+(inflow+exchange)*dialysate;
+			if (uptake > 0.0 && c0 > 0.0) alpha += uptake/c0;
+			else beta -= uptake;
+			const auto reset = arterial.find(name);
+			if (reset != arterial.end()) {
+				alpha += circuit_flow_m3_s;
+				beta += circuit_flow_m3_s*reset->second;
+			}
+			// V(t) = V0 + r t; dc/dt = (beta - alpha c)/V(t) has the exact solution
+			// c - c_inf = (c0 - c_inf) (V(t)/V0)^(-alpha/r), or exp(-alpha t/V0) at r = 0.
+			const double rate = inflow-outflow;
+			double c1 = c0;
+			if (alpha > 0.0) {
+				const double target = beta/alpha;
+				const double decay = std::abs(rate) > 1.0e-14*old_volume/std::max(dt_s, 1.0e-300)
+					? std::pow(new_volume/old_volume, -alpha/rate)
+					: std::exp(-alpha*dt_s/old_volume);
+				c1 = target+(c0-target)*decay;
+			} else c1 = c0+beta*(std::abs(rate) > 0.0
+				? std::log(new_volume/old_volume)/rate : dt_s/old_volume);
+			c1 = std::max(c1, 0.0);
+			next[name] = c1;
+			report.species_mass_change[name] = new_volume*c1-old_volume*c0;
+			report.device_source_rate[name] = dt_s > 0.0
+				? (new_volume*c1-old_volume*c0)/dt_s+uptake : 0.0;
+		}
+		const double rbc_volume = old_volume*state_.hematocrit_percent;
+		state_.hematocrit_percent = std::max(0.0, rbc_volume/new_volume
+			-circuit.reservoir.hematocrit_loss_percent_per_hour*dt_s/3600.0);
 		state_.volume_m3 = new_volume;
 		state_.species = std::move(next);
 		ValidateState();
