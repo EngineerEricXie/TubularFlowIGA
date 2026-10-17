@@ -134,7 +134,12 @@ struct HepaticKinetics
 	double glucose_uptake_vmax_mol_m3_s=0.;
 	double insulin_half_effect_mU_L=50.;
 	double insulin_clearance_s_inv=0.;
-	double respiratory_quotient=0.8;
+	double respiratory_quotient=0.8;      // of the non-glucose aerobic fuel
+	// Fraction of aerobic O2 uptake spent oxidising glucose (6 O2 per glucose,
+	// RQ 1), drawn from glycogen first and then perfusate glucose; the rest
+	// oxidises other substrate at respiratory_quotient. Zero keeps the
+	// original substrate-free aerobic metabolism.
+	double aerobic_glucose_fraction=0.;
 	double q10=2.;
 	double temperature_c=37.;
 };
@@ -204,6 +209,8 @@ inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChem
 	for(const double value:positive)
 		if(!(value>0.)||!std::isfinite(value))
 			throw std::invalid_argument("hepatic kinetics constants must be positive");
+	if(!(k.aerobic_glucose_fraction>=0.&&k.aerobic_glucose_fraction<=1.))
+		throw std::invalid_argument("aerobic glucose fraction must be in [0,1]");
 	if(!(k.gluconeogenic_fraction>=0.&&k.gluconeogenic_fraction<=1.))
 		throw std::invalid_argument("gluconeogenic fraction must be in [0,1]");
 	if(!std::isfinite(k.temperature_c))
@@ -237,6 +244,11 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	rates.energy_deficit=demand>0.?std::clamp((shortfall-rates.lactate_production)/demand,0.,1.):0.;
 	const double glycolysis_glucose=fuel>0.?0.5*rates.lactate_production*glucose_share/fuel:0.;
 	const double glycolysis_glycogen=fuel>0.?0.5*rates.lactate_production*glycogen_share/fuel:0.;
+	// Aerobic glucose oxidation, limited by the same glycogen/glucose availability.
+	const double oxidised_fraction=k.aerobic_glucose_fraction*std::min(fuel,1.);
+	const double oxidation=oxidised_fraction*rates.o2_uptake/6.;
+	const double oxidation_glucose=fuel>0.?oxidation*glucose_share/fuel:0.;
+	const double oxidation_glycogen=fuel>0.?oxidation*glycogen_share/fuel:0.;
 	rates.lactate_clearance=v*k.lactate_vmax_mol_m3_s*thermal*oxygen_fraction
 		*c[OrganLactate]/(k.lactate_km_mol_m3+c[OrganLactate]);
 	const double insulin_effect=c[OrganInsulin]/(c[OrganInsulin]+k.insulin_half_effect_mU_L);
@@ -245,12 +257,13 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	const double uptake=v*k.glucose_uptake_vmax_mol_m3_s*thermal*insulin_effect
 		*c[OrganGlucose]/(k.km_glucose_mol_m3+c[OrganGlucose]);
 	const double gluconeogenesis=0.5*k.gluconeogenic_fraction*rates.lactate_clearance;
-	rates.glycogen_rate=uptake-release-glycolysis_glycogen;
+	rates.glycogen_rate=uptake-release-glycolysis_glycogen-oxidation_glycogen;
 	rates.reaction[OrganOxygen]=-rates.o2_uptake;
-	rates.reaction[OrganGlucose]=release+gluconeogenesis-uptake-glycolysis_glucose;
+	rates.reaction[OrganGlucose]=release+gluconeogenesis-uptake-glycolysis_glucose-oxidation_glucose;
 	rates.reaction[OrganLactate]=rates.lactate_production-rates.lactate_clearance;
 	rates.reaction[OrganBufferBase]=rates.lactate_clearance-rates.lactate_production;
-	rates.reaction[OrganCarbonDioxide]=k.respiratory_quotient*rates.o2_uptake;
+	rates.reaction[OrganCarbonDioxide]=(oxidised_fraction+(1.-oxidised_fraction)*k.respiratory_quotient)
+		*rates.o2_uptake;
 	rates.reaction[OrganInsulin]=-v*k.insulin_clearance_s_inv*thermal*c[OrganInsulin];
 	return rates;
 }

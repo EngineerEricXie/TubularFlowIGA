@@ -243,6 +243,23 @@ void TestKineticsLimits()
 	Close(anoxic.lactate_production,0.01*fuel,1e-12,"glycolysis capacity");
 	Close(anoxic.energy_deficit,1.-0.01*fuel/(0.02*5.),1e-12,"energy deficit");
 	Close(anoxic.reaction[iga::OrganBufferBase],-anoxic.lactate_production,1e-12,"acid load");
+	// Aerobic glucose oxidation: six O2 per glucose, RQ 1 for that part.
+	{
+		auto oxidiser=Liver();
+		oxidiser.aerobic_glucose_fraction=1.;
+		oxidiser.glycolysis_capacity_mol_m3_s=0.;
+		oxidiser.glycogenolysis_vmax_mol_m3_s=0.;
+		oxidiser.glucose_uptake_vmax_mol_m3_s=0.;
+		oxidiser.lactate_vmax_mol_m3_s=0.;
+		auto rich=Inlet();
+		rich[iga::OrganOxygen]=iga::OxygenContent(500.,7.4,chemistry);
+		const iga::HepaticCellState no_glycogen{1.,0.};
+		const auto burning=iga::EvaluateHepaticRates(rich,no_glycogen,oxidiser,chemistry);
+		const double fuel=8./(1.+8.);
+		Close(-burning.reaction[iga::OrganGlucose],fuel*burning.o2_uptake/6.,1e-12,"glucose oxidation");
+		Close(burning.reaction[iga::OrganCarbonDioxide],(fuel+(1.-fuel)*oxidiser.respiratory_quotient)
+			*burning.o2_uptake,1e-12,"oxidation CO2");
+	}
 	state.viability=0.;
 	const auto dead=iga::EvaluateHepaticRates(Inlet(),state,k,chemistry);
 	for(const double value:dead.reaction)assert(value==0.);

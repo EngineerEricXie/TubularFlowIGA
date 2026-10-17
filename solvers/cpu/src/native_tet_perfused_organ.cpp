@@ -303,7 +303,7 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 		"glycolysis_capacity_mol_m3_s","glycogen_half_saturation_mol_m3","km_glucose_mol_m3",
 		"lactate_vmax_mol_m3_s","lactate_km_mol_m3","gluconeogenic_fraction",
 		"glycogenolysis_vmax_mol_m3_s","glucose_uptake_vmax_mol_m3_s","insulin_half_effect_mU_L",
-		"insulin_clearance_s_inv","respiratory_quotient","q10","temperature_c"},"kinetics");
+		"insulin_clearance_s_inv","respiratory_quotient","aerobic_glucose_fraction","q10","temperature_c"},"kinetics");
 	iga::HepaticKinetics k;
 	const std::string c="kinetics";
 	k.vmax_o2_mol_m3_s=Number(object,"vmax_o2_mol_m3_s",c);
@@ -322,6 +322,7 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 	k.gluconeogenic_fraction=NumberOr(object,"gluconeogenic_fraction",k.gluconeogenic_fraction,c);
 	k.insulin_half_effect_mU_L=NumberOr(object,"insulin_half_effect_mU_L",k.insulin_half_effect_mU_L,c);
 	k.respiratory_quotient=NumberOr(object,"respiratory_quotient",k.respiratory_quotient,c);
+	k.aerobic_glucose_fraction=NumberOr(object,"aerobic_glucose_fraction",k.aerobic_glucose_fraction,c);
 	k.q10=NumberOr(object,"q10",k.q10,c);
 	return k;
 }

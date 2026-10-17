@@ -102,6 +102,10 @@ and with `Q10^((T−37)/10)`.
 - **Glycogen flux.** Glycogenolysis releases glucose and is suppressed by
   insulin. Insulin promotes glucose uptake into glycogen. `glycogen_rate` is
   returned per node for the caller to integrate.
+- **Aerobic glucose oxidation.** An optional `aerobic_glucose_fraction` of
+  the O₂ uptake oxidises glucose, at 6 O₂ per glucose and RQ 1. It draws on
+  glycogen first and then on perfusate glucose. The remaining uptake oxidises
+  other fuel at `respiratory_quotient`.
 - **Insulin** is cleared first-order.
 - **CO₂** is produced at the respiratory quotient.
 
