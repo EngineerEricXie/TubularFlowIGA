@@ -791,7 +791,37 @@ int main(int argc,char** argv)
 		iga::RequireCollectiveSameText(PETSC_COMM_WORLD,"native hydraulic execution",
 			execution_sha256);
 		const auto topology=iga::BuildNativeTaylorHoodTopology(mesh);
+		// P2/P1 with no-slip walls: a vertex whose every tetrahedron has all ten
+		// velocity nodes on a wall leaves its pressure decoupled and the system
+		// singular. Fail before solving instead of inside the factorization.
+		iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native hydraulic wall-locked pressure",[&]{
+			std::set<std::uint32_t> wall_nodes;
+			for(const int label:scenario.wall_labels){
+				const auto found=topology.boundary_velocity_nodes.find(label);
+				if(found!=topology.boundary_velocity_nodes.end())
+					wall_nodes.insert(found->second.begin(),found->second.end());
+			}
+			std::vector<char> free_vertex(mesh.points.size(),0);
+			for(std::size_t cell=0;cell<mesh.cells.size();++cell){
+				bool free=false;
+				for(const auto node:topology.cell_velocity_nodes[cell])free=free||!wall_nodes.count(node);
+				if(free)for(const auto vertex:mesh.cells[cell].nodes)free_vertex[vertex]=1;
+			}
+			std::size_t locked=0,first=0;
+			for(std::size_t vertex=0;vertex<free_vertex.size();++vertex)
+				if(!free_vertex[vertex]&&!locked++)first=vertex;
+			if(locked){
+				std::ostringstream message;
+				message<<std::setprecision(9)<<"native hydraulic mesh has "<<locked
+					<<" pressure vertices whose tetrahedra have every P2 velocity node on a no-slip "
+					"wall (first at "<<mesh.points[first][0]<<","<<mesh.points[first][1]<<","
+					<<mesh.points[first][2]<<" m); split those tetrahedra, for example with "
+					"surface_to_fem_volume.py --split-boundary-locked-tetrahedra";
+				throw std::invalid_argument(message.str());
+			}
+		});
 		if(!scenario.species.empty()&&(!options.checkpoint_root.empty()
+
 			||!options.restart_root.empty()))
 			throw std::invalid_argument("coupled flow/species checkpoint is not available");
 		if(options.check_input){

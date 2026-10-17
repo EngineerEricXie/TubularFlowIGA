@@ -49,6 +49,47 @@ def close(actual, reference, tolerance):
 	return abs(actual-reference) <= tolerance*max(abs(reference), 1e-30)
 
 
+def write_msh(path, points, tetrahedra, labels):
+	"""ASCII Gmsh 4.1 volume with one physical surface per boundary label."""
+	count = sum(map(len, labels.values()))+len(tetrahedra)
+	lines = ["$MeshFormat", "4.1 0 8", "$EndMeshFormat", "$PhysicalNames", str(len(labels)+1)]
+	lines += [f'2 {label} "boundary_label_{label}"' for label in sorted(labels)]
+	lines += ['3 1 "fluid"', "$EndPhysicalNames", "$Entities", f"0 0 {len(labels)} 1"]
+	lines += [f"{label} 0 0 0 1 1 1 1 {label} 0" for label in sorted(labels)]
+	lines += ["1 0 0 0 1 1 1 1 1 0", "$EndEntities", "$Nodes",
+		f"1 {len(points)} 1 {len(points)}", f"3 1 0 {len(points)}"]
+	lines += [str(index+1) for index in range(len(points))]
+	lines += [" ".join(map(repr, point)) for point in points]
+	lines += ["$EndNodes", "$Elements", f"{len(labels)+1} {count} 1 {count}"]
+	element = 1
+	for label in sorted(labels):
+		lines.append(f"2 {label} 2 {len(labels[label])}")
+		for face in labels[label]:
+			lines.append(" ".join(map(str, (element, *(index+1 for index in face)))))
+			element += 1
+	lines.append(f"3 1 4 {len(tetrahedra)}")
+	for tetra in tetrahedra:
+		lines.append(" ".join(map(str, (element, *(index+1 for index in tetra)))))
+		element += 1
+	lines.append("$EndElements")
+	path.write_text("\n".join(lines)+"\n")
+
+
+def wall_locked_case(directory, reference_case):
+	"""Two tetrahedra; the lower one has three no-slip wall faces, so its apex
+	pressure has no free P2 velocity node and P2/P1 is singular."""
+	points = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.), (.2, .2, -.5), (.3, .3, .6)]
+	tetrahedra = [(0, 2, 1, 3), (0, 1, 2, 4)]
+	labels = {0: [(0, 3, 1), (1, 3, 2), (0, 2, 3), (0, 1, 4)], 1: [(1, 2, 4)], 2: [(0, 4, 2)]}
+	mesh = directory/"wall_locked.msh"
+	write_msh(mesh, points, tetrahedra, labels)
+	case = json.loads(reference_case.read_text())
+	case["mesh_file"] = str(mesh)
+	case["boundaries"]["wall_labels"] = [0]
+	case["motion"] = {"kind": "fixed", "speed_x_m_s": 0.0}
+	return write_case(directory/"wall_locked.json", case)
+
+
 def outlet_grid_case(directory, reference_case, cells):
 	"""Unit cube, one cell deep in x: inlet label 1 at x=1, wall label 3, and
 	one outlet label per (y,z) square at x=0, numbered 10, 11, ..."""
@@ -94,29 +135,8 @@ def outlet_grid_case(directory, reference_case, cells):
 		else:
 			label = 3
 		labels.setdefault(label, []).append(face)
-	count = sum(map(len, labels.values()))+len(tetrahedra)
-	lines = ["$MeshFormat", "4.1 0 8", "$EndMeshFormat", "$PhysicalNames", str(len(labels)+1)]
-	lines += [f'2 {label} "boundary_label_{label}"' for label in sorted(labels)]
-	lines += ['3 1 "fluid"', "$EndPhysicalNames", "$Entities", f"0 0 {len(labels)} 1"]
-	lines += [f"{label} 0 0 0 1 1 1 1 {label} 0" for label in sorted(labels)]
-	lines += ["1 0 0 0 1 1 1 1 1 0", "$EndEntities", "$Nodes",
-		f"1 {len(points)} 1 {len(points)}", f"3 1 0 {len(points)}"]
-	lines += [str(index+1) for index in range(len(points))]
-	lines += [" ".join(map(repr, point)) for point in points]
-	lines += ["$EndNodes", "$Elements", f"{len(labels)+1} {count} 1 {count}"]
-	element = 1
-	for label in sorted(labels):
-		lines.append(f"2 {label} 2 {len(labels[label])}")
-		for face in labels[label]:
-			lines.append(" ".join(map(str, (element, *(index+1 for index in face)))))
-			element += 1
-	lines.append(f"3 1 4 {len(tetrahedra)}")
-	for tetra in tetrahedra:
-		lines.append(" ".join(map(str, (element, *(index+1 for index in tetra)))))
-		element += 1
-	lines.append("$EndElements")
 	mesh = directory/f"outlet_grid_{cells}.msh"
-	mesh.write_text("\n".join(lines)+"\n")
+	write_msh(mesh, points, tetrahedra, labels)
 	case = json.loads(reference_case.read_text())
 	case["schema_version"] = 2
 	case["mesh_file"] = str(mesh)
@@ -306,7 +326,13 @@ def main():
 		for key, value in step_values(grid_output, 2).items():
 			if not close(step_values(grid_resumed, 2)[key], value, 1e-10):
 				raise RuntimeError("25-outlet restart differs")
-	print(f"native hydraulic predictor, steady, summary, controlled restart and 25-outlet: PASS ranks={ranks}")
+		# 5. A wall-locked P2/P1 pressure vertex is rejected before any solve.
+		locked = run(binary, ranks, wall_locked_case(root, reference), "--check-input",
+			expect_success=False)
+		if "pressure vertices whose tetrahedra have every P2 velocity node" not in locked:
+			raise RuntimeError("wall-locked pressure vertex was not diagnosed")
+	print(f"native hydraulic predictor, steady, summary, controlled restart, 25-outlet "
+		f"and wall-locked check: PASS ranks={ranks}")
 
 
 if __name__ == "__main__":
