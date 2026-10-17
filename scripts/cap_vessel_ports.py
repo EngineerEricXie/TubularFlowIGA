@@ -529,7 +529,30 @@ def boundary_loops(faces):
 	return loops
 
 
-def remesh(points, faces, labels, caps, target, minimum, radius_factor, centerline, angle_degrees):
+def thin_wall_samples(points, faces, search, factor):
+	"""Points where opposite-facing walls are closer than `search`, with the
+	size bound factor*distance there. They catch pinches and thin sheets that a
+	centerline does not describe; elsewhere the returned arrays are empty."""
+	import numpy as np
+	from scipy.spatial import cKDTree
+	centroids = points[faces].mean(axis=1)
+	normals = np.cross(points[faces[:, 1]]-points[faces[:, 0]], points[faces[:, 2]]-points[faces[:, 0]])
+	normals /= np.maximum(np.linalg.norm(normals, axis=1), 1e-300)[:, None]
+	tree = cKDTree(centroids)
+	distance, neighbor = tree.query(centroids, k=min(64, len(centroids)), distance_upper_bound=search)
+	sample_points, sample_sizes = [], []
+	for index in range(len(centroids)):
+		valid = np.isfinite(distance[index])
+		candidates = neighbor[index][valid]
+		facing = (normals[candidates]@normals[index]) < -0.5
+		if facing.any():
+			sample_points.append(centroids[index])
+			sample_sizes.append(factor*float(distance[index][valid][facing].min()))
+	return np.array(sample_points).reshape(-1, 3), np.array(sample_sizes)
+
+
+def remesh(points, faces, labels, caps, target, minimum, radius_factor, centerline, angle_degrees,
+		algorithm=6, thin=None):
 	"""Remesh the wall with Gmsh, then mesh every cap as a planar surface on
 	the remeshed rim nodes, so boundary labels never depend on feature angles."""
 	import numpy as np
@@ -539,6 +562,7 @@ def remesh(points, faces, labels, caps, target, minimum, radius_factor, centerli
 		reject(f"Gmsh Python module is unavailable: {error}")
 	from scipy.spatial import cKDTree
 	tree = cKDTree(centerline) if centerline is not None else None
+	thin_tree = cKDTree(thin[0]) if thin is not None and len(thin[0]) else None
 	wall = faces[labels == 0]
 	used = np.unique(wall)
 	local = -np.ones(len(points), dtype=np.int64)
@@ -560,11 +584,15 @@ def remesh(points, faces, labels, caps, target, minimum, radius_factor, centerli
 				# On the wall, the distance to the centerline is the local lumen radius.
 				distance, _ = tree.query((x, y, z))
 				value = min(value, radius_factor*distance)
+			if thin_tree is not None:
+				distance, nearest = thin_tree.query((x, y, z))
+				if distance <= target:
+					value = min(value, thin[1][nearest])
 			return max(minimum, value)
 
 		gmsh.model.mesh.setSizeCallback(size)
 		for name, value in (("Mesh.MeshSizeExtendFromBoundary", 0), ("Mesh.MeshSizeFromPoints", 0),
-				("Mesh.MeshSizeFromCurvature", 0), ("Mesh.Algorithm", 6)):
+				("Mesh.MeshSizeFromCurvature", 0), ("Mesh.Algorithm", algorithm)):
 			gmsh.option.setNumber(name, value)
 		gmsh.model.mesh.generate(2)
 		node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
@@ -676,6 +704,28 @@ def orient_consistently(faces):
 	return oriented
 
 
+def maximum_fold(points, faces):
+	"""Largest angle (degrees) between the normals of two edge-adjacent
+	triangles, and where it occurs. Near 180 degrees is a folded-back flap,
+	which exact intersection predicates do not flag but volume meshers reject."""
+	import numpy as np
+	normal = np.cross(points[faces[:, 1]]-points[faces[:, 0]], points[faces[:, 2]]-points[faces[:, 0]])
+	normal /= np.maximum(np.linalg.norm(normal, axis=1), 1e-300)[:, None]
+	edges = {}
+	for index, face in enumerate(faces):
+		for corner in range(3):
+			edges.setdefault((min(face[corner], face[(corner+1) % 3]),
+				max(face[corner], face[(corner+1) % 3])), []).append(index)
+	worst, where = 0.0, None
+	for edge, users in edges.items():
+		if len(users) != 2:
+			continue
+		angle = math.degrees(math.acos(max(-1.0, min(1.0, float(normal[users[0]]@normal[users[1]])))))
+		if angle > worst:
+			worst, where = angle, points[edge[0]].tolist()
+	return worst, where
+
+
 def orient_outward(points, faces):
 	"""Make every triangle agree with its neighbors and the enclosed volume positive."""
 	edge_faces = {}
@@ -755,6 +805,11 @@ def main():
 		help="SWC unit in input surface units")
 	parser.add_argument("--radius-factor", type=float, default=1.0,
 		help="remesh size is at most this factor times the local lumen radius")
+	parser.add_argument("--thickness-factor", type=float, default=0.5,
+		help="remesh size is at most this factor times the local wall-to-wall distance "
+		"(0 disables; catches pinches the centerline misses)")
+	parser.add_argument("--maximum-fold-degrees", type=float, default=150.0,
+		help="reject remeshed surfaces whose adjacent triangle normals differ by more than this")
 	parser.add_argument("--feature-angle-degrees", type=float, default=60.0,
 		help="dihedral angle at which Gmsh splits the wall into reparametrizable patches")
 	args = parser.parse_args()
@@ -856,15 +911,35 @@ def main():
 		cut_points, cut_faces = points, faces
 		caps = [{"label": report["label"], "plane_point": report["plane_point"],
 			"plane_normal": report["plane_normal"]} for report in port_reports]
-		points, faces, labels, version, patches = remesh(points, faces, labels, caps, args.target_size,
-			minimum, args.radius_factor, centerline, args.feature_angle_degrees)
-		faces = orient_outward(points, faces)
+		# Gmsh's 2D algorithms occasionally fold a tiny wall patch back on
+		# itself; retry with the other algorithms before failing closed.
+		attempts = []
+		thin = thin_wall_samples(cut_points, cut_faces, 2.0*args.target_size, args.thickness_factor) \
+			if args.thickness_factor > 0.0 else None
+		for algorithm in (6, 5, 1):
+			candidate = remesh(cut_points, cut_faces, labels, caps, args.target_size,
+				minimum, args.radius_factor, centerline, args.feature_angle_degrees, algorithm, thin)
+			oriented = orient_outward(candidate[0], candidate[1])
+			fold, where = maximum_fold(candidate[0], oriented)
+			attempts.append({"gmsh_algorithm": algorithm, "maximum_fold_degrees": fold})
+			if fold <= args.maximum_fold_degrees:
+				break
+			progress(f"warning: Gmsh algorithm {algorithm} folded the surface ({fold:.1f} deg at {where})")
+		else:
+			reject(f"every remesh folds the surface (worst {fold:.1f} deg at {where}); "
+				"change --target-size or --feature-angle-degrees")
+		points, faces, labels, version, patches = candidate
+		faces = oriented
 		distance = surface_distance(points, cut_points, cut_faces)
 		remesh_report = {"mesher": "Gmsh", "version": version, "target_size": args.target_size,
 			"minimum_size": minimum, "radius_factor": args.radius_factor,
 			"centerline_swc": str(Path(args.centerline_swc).resolve()) if args.centerline_swc else None,
 			"centerline_swc_sha256": file_sha256(args.centerline_swc) if args.centerline_swc else None,
 			"feature_angle_degrees": args.feature_angle_degrees, "patches": patches,
+			"attempts": attempts, "maximum_fold_degrees_gate": args.maximum_fold_degrees,
+			"thickness_factor": args.thickness_factor,
+			"thin_wall_samples": 0 if thin is None else int(len(thin[0])),
+			"minimum_thin_wall_size": None if thin is None or not len(thin[1]) else float(thin[1].min()),
 			"maximum_distance_to_cut_surface": float(distance.max())}
 	volume, area = surface_volume_and_area(points, faces)
 	quality = triangle_quality(points, faces)
@@ -896,6 +971,7 @@ def main():
 			"volume": volume, "area": area,
 			"relative_volume_change": (volume-source_volume)/source_volume,
 			"minimum_triangle_quality": float(quality.min()),
+			"maximum_fold_degrees": maximum_fold(points, faces)[0],
 			"p1_triangle_quality": float(np.percentile(quality, 1)),
 			"minimum_edge_length": float(lengths.min()),
 			"median_edge_length": float(np.median(lengths))},

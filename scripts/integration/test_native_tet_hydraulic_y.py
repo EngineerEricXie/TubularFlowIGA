@@ -25,8 +25,10 @@ def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("--solver", type=Path, required=True)
 	parser.add_argument("--ranks", type=int, default=2)
-	parser.add_argument("--coupling", choices=("explicit", "fixed"),
-		default="explicit")
+	parser.add_argument("--coupling", choices=("explicit", "fixed", "implicit_0d"),
+		default="explicit",
+		help="implicit_0d: fixed-point executor seeded by the implicit 0D predictor, "
+		"with the high-impedance label-3 load that fails plain fixed-point coupling")
 	parser.add_argument("--ftetwild", type=Path,
 		help="also test fTetWild in addition to the Gmsh fallback")
 	args = parser.parse_args()
@@ -58,10 +60,17 @@ def main():
 			dict(terminal, boundary_label=3,
 				proximal_resistance_pa_s_m3=2000.0,
 				distal_resistance_pa_s_m3=20000.0)]
+		if args.coupling == "implicit_0d":
+			# The load documented in NATIVE_TET_WORKFLOW.md as failing the inner
+			# Newton solve under plain fixed-point coupling.
+			case["terminal_rcrs"][1].update(proximal_resistance_pa_s_m3=5e6,
+				distal_resistance_pa_s_m3=5e7, capacitance_m3_pa=1e-10)
 		case["motion"] = {"kind": "fixed", "speed_x_m_s": 0.0}
-		case["coupling"]["method"] = args.coupling
+		case["coupling"]["method"] = "explicit" if args.coupling == "explicit" else "fixed"
 		case["coupling"]["maximum_iterations"] = 1 if args.coupling == "explicit" else 20
-		if args.coupling == "fixed":
+		if args.coupling == "implicit_0d":
+			case["coupling"]["predictor"] = "implicit_0d"
+		if args.coupling != "explicit":
 			case["coupling"]["pressure_relative_tolerance"] = 1e-4
 			case["coupling"]["flow_relative_tolerance"] = 1e-6
 		case["time"] = {"dt_s": 0.01, "steps": 2}
@@ -76,7 +85,9 @@ def main():
 				"backend": "native_tet_p2p1_ale_hydraulic",
 				"input_route": "surface", "input_file": surface.name,
 				"case_file": "y_case.json", "output_directory": name+"_result",
-				"mpi_ranks": args.ranks, "mesher": mesher}
+				"mpi_ranks": args.ranks, "mesher": mesher,
+				# The snapshot checks below read the legacy PVTU layout.
+				"visualization_format": "pvtu"}
 			config_path = work/(name+"_workflow.json")
 			config_path.write_text(json.dumps(configuration, indent=2)+"\n")
 			result = work/(name+"_result")
@@ -99,6 +110,8 @@ def main():
 				step = step_values(output, step_number)
 				if args.coupling == "fixed" and step["iterations"] < 2:
 					raise RuntimeError(f"{name} Y fixed-point did not iterate: {step}")
+				if args.coupling == "implicit_0d" and step["iterations"] != 1:
+					raise RuntimeError(f"{name} Y predictor needed outer iterations: {step}")
 				inlet, upper, lower = (step["inlet_m3_s"],
 					step["outlet_2_m3_s"], step["outlet_3_m3_s"])
 				scale = abs(inlet)+abs(upper)+abs(lower)
@@ -109,6 +122,18 @@ def main():
 								abs(step["terminal_3_pa"]))
 						or abs(inlet+upper+lower) > 1e-4*scale):
 					raise RuntimeError(f"{name} Y outlet flow or mass balance differs: {step}")
+			if args.coupling == "implicit_0d":
+				# Contrast: the same mesh and load without the predictor still
+				# fails inside the native Newton solve under fixed-point coupling.
+				plain = json.loads((result/"case.json").read_text())
+				plain["coupling"].pop("predictor")
+				(result/"case_without_predictor.json").write_text(json.dumps(plain))
+				contrast = subprocess.run(["mpiexec", "-np", str(args.ranks), str(solver),
+					str(result/"case_without_predictor.json")], capture_output=True, text=True,
+					timeout=180, check=False)
+				if contrast.returncode == 0:
+					raise RuntimeError(f"{name} Y high-impedance load now passes without the predictor; "
+						"update the documented negative result")
 			vtk_snapshot(result/"fields", 2, expected_points=None,
 				expected_cells=volume["elements"], expected_first_cell=None,
 				expected_displacement_x=0.0)

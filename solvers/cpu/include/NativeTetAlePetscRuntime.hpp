@@ -270,6 +270,18 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 	result.user_schur_enabled=use_user_schur==PETSC_TRUE;
 	PetscBool monitor=PETSC_FALSE;
 	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_monitor",&monitor,nullptr);
+	// Lagged preconditioner (typically an LU factorization inside GMRES): reuse
+	// it across Newton iterations while the Krylov solve converges within this
+	// many iterations; otherwise rebuild it from the current Jacobian and
+	// repeat that solve. Zero keeps PETSc's own -ksp_reuse_preconditioner.
+	PetscInt reuse_limit=0;
+	PetscOptionsGetInt(nullptr,nullptr,"-native_ale_pc_reuse_max_iterations",&reuse_limit,nullptr);
+	if(reuse_limit<0)throw std::invalid_argument("native ALE preconditioner reuse limit is negative");
+	PetscReal ksp_rtol=0.0,ksp_abstol=0.0,ksp_dtol=0.0;PetscInt ksp_max_it=0;
+	NativeTetAlePetscCheck(KSPGetTolerances(solver,&ksp_rtol,&ksp_abstol,&ksp_dtol,&ksp_max_it),
+		"KSPGetTolerances runtime");
+	bool preconditioner_built=false;
+	std::size_t preconditioner_rebuilds=0;
 	PetscBool scaled_line_search=solve_controls.scaled_line_search?PETSC_TRUE:PETSC_FALSE;
 	PetscOptionsGetBool(nullptr,nullptr,"-native_ale_scaled_line_search",&scaled_line_search,nullptr);
 	// Merit weights: momentum rows by a force P*L^2, flow rows by U*L^2, where
@@ -479,7 +491,8 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 				<<" residual="<<norm<<" merit="<<current_merit
 				<<" control_residual_m3_s="<<control_residual
 				<<" step="<<(line_search_pending?step_length:0.0)
-				<<" linear_iterations="<<last_linear_iterations<<'\n'<<std::flush;
+				<<" linear_iterations="<<last_linear_iterations
+				<<" preconditioner_rebuilds="<<preconditioner_rebuilds<<'\n'<<std::flush;
 		if(line_search_pending){
 			if(std::isfinite(static_cast<double>(norm))&&std::isfinite(current_merit)
 				&&current_merit<base_merit)
@@ -537,10 +550,27 @@ inline NativeTetAlePetscSolveResult SolveNativeTetAlePetsc(
 		} else VecCopy(residual,right);
 		VecScale(right,-1.0);KSPSetOperators(solver,matrix,matrix);
 		const double solve_start=MPI_Wtime();
+		const bool lagged=reuse_limit>0&&preconditioner_built;
+		if(reuse_limit>0){
+			NativeTetAlePetscCheck(KSPSetReusePreconditioner(solver,lagged?PETSC_TRUE:PETSC_FALSE),
+				"KSPSetReusePreconditioner runtime");
+			NativeTetAlePetscCheck(KSPSetTolerances(solver,ksp_rtol,ksp_abstol,ksp_dtol,
+				lagged?std::min(reuse_limit,ksp_max_it):ksp_max_it),"KSPSetTolerances runtime");
+		}
 		NativeTetAlePetscCheck(KSPSolve(solver,right,update),"KSPSolve runtime");
-		result.linear_solve_seconds+=MPI_Wtime()-solve_start;
 		KSPConvergedReason reason;KSPGetConvergedReason(solver,&reason);
 		PetscInt iterations=0;KSPGetIterationNumber(solver,&iterations);
+		if(lagged&&reason<=0){
+			result.total_linear_iterations+=iterations;++preconditioner_rebuilds;
+			NativeTetAlePetscCheck(KSPSetReusePreconditioner(solver,PETSC_FALSE),
+				"KSPSetReusePreconditioner rebuild runtime");
+			NativeTetAlePetscCheck(KSPSetTolerances(solver,ksp_rtol,ksp_abstol,ksp_dtol,ksp_max_it),
+				"KSPSetTolerances rebuild runtime");
+			NativeTetAlePetscCheck(KSPSolve(solver,right,update),"KSPSolve rebuild runtime");
+			KSPGetConvergedReason(solver,&reason);KSPGetIterationNumber(solver,&iterations);
+		}
+		preconditioner_built=true;
+		result.linear_solve_seconds+=MPI_Wtime()-solve_start;
 		last_linear_iterations=iterations;
 		result.final_linear_converged_reason=static_cast<PetscInt>(reason);
 		if(reason<=0) throw std::runtime_error("native ALE PETSc linear solve did not converge: "

@@ -272,6 +272,11 @@ t9-native-y-rcr-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
 
+.PHONY: t9-native-y-rcr-implicit-smoke
+t9-native-y-rcr-implicit-smoke:
+	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
+	python3 scripts/integration/test_native_tet_hydraulic_y.py --solver solvers/cpu/native_tet_hydraulic_graph --ranks $(T7_SPECIES_MPI_RANKS) --coupling implicit_0d $(if $(strip $(FTETWILD_BIN)),--ftetwild $(FTETWILD_BIN),)
+
 .PHONY: t9-native-y-rcr-strong-smoke
 t9-native-y-rcr-strong-smoke:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph surface_fem_preflight PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
