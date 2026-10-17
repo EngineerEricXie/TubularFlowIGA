@@ -92,7 +92,10 @@ total CO₂, and most of that becomes HCO₃⁻ through the non-bicarbonate buff
 Rates are per tissue volume. Each scales with the local viable fraction `v`
 and with `Q10^((T−37)/10)`.
 
-- **O₂ uptake** is supply-limited: `v Vmax pO₂/(Km + pO₂)`.
+- **O₂ uptake** is supply-limited: `v Vmax f(pO₂)`, where
+  `f = (pO₂/Km)^n / (1 + (pO₂/Km)^n)`. With `n = 1` (the default) this is
+  Michaelis–Menten. With `n > 1`, respiration stays nearly O₂-independent
+  above a critical pO₂, so a well-oxygenated organ shows no aerobic shortfall.
 - **Glycolysis (Pasteur effect).** The aerobic ATP shortfall is covered by
   glycolysis, up to `v · glycolysis_capacity`, at one ATP per lactate. Glycogen
   is used first, then perfusate glucose. The part still unmet is reported per

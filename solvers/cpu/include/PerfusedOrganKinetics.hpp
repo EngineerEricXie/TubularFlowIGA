@@ -105,7 +105,8 @@ inline PerfusateAcidBase SolveAcidBase(double buffer_base,double co2_total,
 
 // Hepatic metabolism, model "hepatic_v1". Rates scale with the local viable
 // fraction v in [0,1] and with Q10^((T-37)/10).
-//  - O2 uptake  VO2 = v Vmax pO2/(Km + pO2) (supply-limited, Michaelis-Menten).
+//  - O2 uptake  VO2 = v Vmax f(pO2), f = (pO2/Km)^n/(1+(pO2/Km)^n) (supply-limited;
+//    n = 1 is Michaelis-Menten).
 //  - ATP demand D = v Vmax atp_per_o2; the aerobic shortfall is covered by
 //    anaerobic glycolysis (Pasteur effect) up to v glycolysis_capacity, one ATP
 //    per lactate, fuelled by glycogen first and then perfusate glucose. The
@@ -123,6 +124,10 @@ struct HepaticKinetics
 {
 	double vmax_o2_mol_m3_s=0.;
 	double km_o2_mmhg=2.;
+	// Hill exponent of the O2 dependence of uptake; above 1 makes mitochondrial
+	// respiration nearly O2-independent above a critical pO2 (default keeps
+	// Michaelis-Menten).
+	double o2_hill_coefficient=1.;
 	double atp_per_o2=5.;
 	double glycolysis_capacity_mol_m3_s=0.;
 	double glycogen_half_saturation_mol_m3=20.;
@@ -205,7 +210,8 @@ inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChem
 		if(!(value>=0.)||!std::isfinite(value))
 			throw std::invalid_argument("hepatic kinetics rates must be finite and nonnegative");
 	const double positive[]={k.km_o2_mmhg,k.glycogen_half_saturation_mol_m3,k.km_glucose_mol_m3,
-		k.lactate_km_mol_m3,k.insulin_half_effect_mU_L,k.q10,chemistry.co2_solubility_mol_m3_mmhg};
+		k.lactate_km_mol_m3,k.insulin_half_effect_mU_L,k.q10,chemistry.co2_solubility_mol_m3_mmhg,
+		k.o2_hill_coefficient};
 	for(const double value:positive)
 		if(!(value>0.)||!std::isfinite(value))
 			throw std::invalid_argument("hepatic kinetics constants must be positive");
@@ -231,7 +237,8 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	rates.pco2_mmhg=acid_base.pco2_mmhg;
 	rates.bicarbonate=acid_base.bicarbonate_mol_m3;
 	rates.po2_mmhg=PartialPressureO2(c[OrganOxygen],rates.ph,chemistry);
-	const double oxygen_fraction=rates.po2_mmhg/(k.km_o2_mmhg+rates.po2_mmhg);
+	const double o2_power=std::pow(rates.po2_mmhg/k.km_o2_mmhg,k.o2_hill_coefficient);
+	const double oxygen_fraction=o2_power/(1.+o2_power);
 	const double vmax=v*k.vmax_o2_mol_m3_s*thermal;
 	rates.o2_uptake=vmax*oxygen_fraction;
 	const double demand=vmax*k.atp_per_o2;

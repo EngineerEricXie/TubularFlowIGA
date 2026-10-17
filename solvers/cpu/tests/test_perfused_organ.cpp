@@ -243,6 +243,17 @@ void TestKineticsLimits()
 	Close(anoxic.lactate_production,0.01*fuel,1e-12,"glycolysis capacity");
 	Close(anoxic.energy_deficit,1.-0.01*fuel/(0.02*5.),1e-12,"energy deficit");
 	Close(anoxic.reaction[iga::OrganBufferBase],-anoxic.lactate_production,1e-12,"acid load");
+	// A steep O2 dependence removes the aerobic shortfall at normoxic pO2.
+	{
+		auto steep=Liver();
+		steep.km_o2_mmhg=0.5;
+		steep.o2_hill_coefficient=3.;
+		auto normoxic=Inlet();
+		normoxic[iga::OrganOxygen]=iga::OxygenContent(20.,7.4,chemistry);
+		const auto rates=iga::EvaluateHepaticRates(normoxic,state,steep,chemistry);
+		Close(rates.o2_uptake,steep.vmax_o2_mol_m3_s/(1.+std::pow(0.5/rates.po2_mmhg,3.)),1e-12,"Hill O2 uptake");
+		assert(rates.lactate_production<1e-4*steep.vmax_o2_mol_m3_s);
+	}
 	// Aerobic glucose oxidation: six O2 per glucose, RQ 1 for that part.
 	{
 		auto oxidiser=Liver();

@@ -299,7 +299,7 @@ iga::OrganConcentration SpeciesObject(const Object& object,const std::string& co
 
 iga::HepaticKinetics ParseKinetics(const Object& object)
 {
-	iga::config_detail::RequireKnownKeys(object,{"vmax_o2_mol_m3_s","km_o2_mmhg","atp_per_o2",
+	iga::config_detail::RequireKnownKeys(object,{"vmax_o2_mol_m3_s","km_o2_mmhg","o2_hill_coefficient","atp_per_o2",
 		"glycolysis_capacity_mol_m3_s","glycogen_half_saturation_mol_m3","km_glucose_mol_m3",
 		"lactate_vmax_mol_m3_s","lactate_km_mol_m3","gluconeogenic_fraction",
 		"glycogenolysis_vmax_mol_m3_s","glucose_uptake_vmax_mol_m3_s","insulin_half_effect_mU_L",
@@ -314,6 +314,7 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 	k.insulin_clearance_s_inv=Number(object,"insulin_clearance_s_inv",c);
 	k.temperature_c=Number(object,"temperature_c",c);
 	k.km_o2_mmhg=NumberOr(object,"km_o2_mmhg",k.km_o2_mmhg,c);
+	k.o2_hill_coefficient=NumberOr(object,"o2_hill_coefficient",k.o2_hill_coefficient,c);
 	k.atp_per_o2=NumberOr(object,"atp_per_o2",k.atp_per_o2,c);
 	k.glycogen_half_saturation_mol_m3=NumberOr(object,"glycogen_half_saturation_mol_m3",
 		k.glycogen_half_saturation_mol_m3,c);
