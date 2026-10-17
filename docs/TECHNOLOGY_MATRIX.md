@@ -24,7 +24,7 @@ moving volume mesh that follows the moving boundary.
 | Physical domain | Primary route | Required geometry/data | Status |
 |---|---|---|---|
 | Rigid vascular flow | Body-fitted IGA Navier--Stokes or tetrahedral P2/P1 FEM | IGA control mesh and Bezier extraction, or labeled tetrahedral lumen mesh | **Supported** IGA CPU/CUDA workflow; **Functional** native FEM workflow with manufactured and idealized tube/Y evidence, and a patient-derived portal-vein tree (15 RCR outlets, transient or steady momentum) with the implicit 0D predictor |
-| Deforming vascular flow | Tetrahedral ALE coupled to a tetrahedral solid | Fluid and wall volume meshes with matching interface, motion or material data | **Functional** prescribed-motion ALE and single-partition matching ALE--solid routes |
+| Deforming vascular flow | Tetrahedral ALE coupled to a tetrahedral solid | Fluid and wall volume meshes with matching interface, motion or material data | **Functional** prescribed-motion ALE, and matching ALE--solid FSI on any MPI rank count and on one GPU |
 | Thick vessel wall or local stress | Nonlinear tetrahedral solid FEM | Wall volume mesh, material, loads, and constraints | **Functional** compressible neo-Hookean and stabilized mixed P1/P1 formulations |
 | Prescribed chamber flow | ALE flow with supplied wall motion | Chamber volume mesh, motion law, and labeled ports | **Functional** idealized LV cases |
 | Myocardium and active tissue | Nonlinear anisotropic solid with activation | Tissue volume, fibers, material, prestress, support, activation | **Planned**; current solids cover isotropic reference problems only |
@@ -90,7 +90,7 @@ port planes it is given.
 |---|---|---|
 | 0D/1D/3D pressure and flow | Named outward-positive SI ports; explicit or partitioned strong coupling | **Supported** for validated acyclic graph topologies; **Functional** opt-in implicit 0D predictor for native tetra source→FEM→RCR graphs (one coupling iteration at high terminal impedance, up to 1024 outlets) |
 | 1D/3D species | Flow-direction-aware concentration and conservative mass transfer | **Supported** for native 1D/body-fitted 3D; **Functional** native tetra moving chains |
-| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** single-partition native matching reference workflow; not yet a graph edge |
+| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** native P2/P1 ALE fluid with a hyperelastic tetra solid. Strong coupling runs on any MPI rank count, with a replicated or ParMETIS-partitioned fluid; the graph case is FSI-only (`native_tet_fsi_graph`); explicit sequential coupling runs on one GPU. Not yet combinable with 0D/1D ports or restartable. |
 | Vessel/tissue | Matching-face or named-port source transfer | **Functional** conservative flow and selected species exchange workflows |
 | Geometry motion | Fixed or ALE | **Supported/Functional** by route; remeshing and general history transfer are not yet common services |
 | Time integration | Backward Euler plus formulation-specific 1D explicit/implicit schemes | **Supported**; no framework-wide multirate integrator |
