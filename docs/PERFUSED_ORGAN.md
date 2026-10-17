@@ -74,8 +74,9 @@ search. Cyclic components fall back to Gauss–Seidel.
 | `co2_total_mol_m3` | mol/m³ | HCO₃⁻ + dissolved CO₂ |
 | `insulin_mU_L` | mU/L | |
 
-pO₂ inverts `C = α pO₂ + 4[Hb] S(pO₂)`. Here `S` is a Hill curve whose P50
-shifts with pH through the Bohr effect.
+O₂ content reuses the shared `OxygenCapacity` model:
+`C = α pO₂ + 1.34·Hb·S(pO₂)`, where `S` is a Hill curve. The P50 is shifted by
+the Bohr effect, and pO₂ is recovered by safeguarded Newton inversion.
 
 pH comes from solving `HCO₃⁻ (1 + 10^(pK−pH)) = TCO₂`, with:
 
@@ -139,7 +140,7 @@ Required keys:
   `specific_conductance_inv_pa_s {tree: 1/(Pa s)}`.
 - **Per species:** `inlet {species: value}` and
   `distribution_volume_fraction {species: value}`.
-- `chemistry {haemoglobin_g_dl, ...}`.
+- `chemistry {hemoglobin_g_dl, ...}`. These keys follow the shared `OxygenCapacityParameters`.
 - `kinetics {vmax_o2_mol_m3_s, glycolysis_capacity_mol_m3_s,
   lactate_vmax_mol_m3_s, glycogenolysis_vmax_mol_m3_s,
   glucose_uptake_vmax_mol_m3_s, insulin_clearance_s_inv, temperature_c, ...}`.
@@ -180,6 +181,70 @@ native_tet_perfused_organ CASE.json --describe geometry.f64   # centroids, volum
 native_tet_perfused_organ CASE.json --request request.json --output response.json
 native_tet_perfused_organ CASE.json --serve                   # one request JSON per stdin line
 ```
+
+## Plant advance (`"command": "advance"`)
+
+The full perfusion plant reuses the shared `VcaExternalCircuit` (reservoir,
+infusion, dialyzer, bolus) with the backward-compatible extensions described
+below. One request advances the plant by `duration_s` in `substeps` organ
+solves.
+
+Each substep runs in this order:
+
+1. The reservoir perfusate passes the gas exchanger. The gas is air blended with
+   carbogen (95 % O₂, 5 % CO₂), so the gas pCO₂ rises with FiO₂, matching
+   Model41. Arterial O₂ and total CO₂ are efficiency-weighted blends of the gas
+   equilibrium and the venous values.
+2. The organ is solved at the controlled portal pressure. Oedema and
+   vasodilator scale the per-cell conductances.
+3. `AdvanceWithUptake` integrates the reservoir. It linearises organ uptake as
+   first-order clearance and treats production as a constant source, then
+   solves each species' linear ODE exactly, including volume change from
+   dialysis. The update is therefore stable for any step.
+4. The slow tissue states advance:
+   - viability falls while the energy deficit exceeds a threshold;
+   - glycogen integrates its rate;
+   - sinusoidal oedema grows with the energy deficit and with tissue pressure
+     above a threshold, resolves first-order, and compresses conductance by
+     `(1 − E)^n`;
+   - the vasodilator is eliminated first-order.
+
+Each request carries:
+
+- `parameters`: every physical constant, so it is hidden in the truth and
+  guessed by the tools;
+- `controls`: `inlet_pressure_pa`, `fio2`, dialysis in/out flows and
+  dialysate, `infusion_rates`, `bolus`, `vasodilator_bolus_mg`,
+  `temperature_c`;
+- the state: either `initial_state`, or `state_in` with `json` and `fields`
+  paths;
+- optional `state_out` and `heterogeneity` (per-cell `mobility_scale` and
+  `exchange_scale`);
+- `resolution`.
+
+The state field file holds, in order:
+
+1. the six tissue species, per node;
+2. viability, per node;
+3. glycogen, per node;
+4. oedema, per cell.
+
+The response holds one record per substep, each with:
+
+- flow, pressure, reservoir volume and haematocrit;
+- the arterial and venous O₂, saturation, pH, pCO₂, HCO₃⁻ and species;
+- the hypoxic volume fraction, mean viability, mean oedema, zone-3 pO₂ and
+  energy-deficit quantiles;
+- the organ uptake per species.
+
+`VcaExternalCircuit` extensions (defaults keep previous behaviour):
+
+- a `pressure_control` pump;
+- `ApplyBolus`;
+- `DialyzerDefinition::inflow_m3_s/outflow_m3_s`;
+- `AdvanceWithUptake`.
+
+`Advance` rejects the new modes rather than integrating them explicitly.
 
 ## Geometry from a DICOM SEG
 
