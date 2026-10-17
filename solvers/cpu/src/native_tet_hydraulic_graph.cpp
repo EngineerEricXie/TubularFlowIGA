@@ -93,9 +93,92 @@ struct Case
 	std::string source_1d_system;
 	std::map<std::string,std::string> source_1d_species_bindings;
 	iga::PressureFlowExecutionControls coupling;
+	// Opt-in monolithic 0D predictor for the coupling iteration's initial
+	// edge pressures ("none" keeps the stateless zero guesses).
+	std::string predictor="none";
+	bool steady=false;
 	double nonlinear_tolerance=1e-8;
 	std::size_t nonlinear_iterations=12;
+	// Opt-in controlled restart: case paths whose values may change between
+	// a checkpoint and its restart (see MaskedCaseText).
+	std::set<std::string> mutable_boundary_values;
 };
+
+const std::set<std::string>& AllowedMutableBoundaryValues()
+{
+	static const std::set<std::string> allowed{"source.prescribed_flow_m3_s",
+		"terminal_rcrs[].proximal_resistance_pa_s_m3","terminal_rcrs[].distal_resistance_pa_s_m3",
+		"terminal_rcrs[].distal_pressure_pa","terminal_rcr.proximal_resistance_pa_s_m3",
+		"terminal_rcr.distal_resistance_pa_s_m3","terminal_rcr.distal_pressure_pa"};
+	return allowed;
+}
+
+// Canonical, formatting-independent serialization of a parsed case. Leaves
+// on a masked path (object keys joined by '.', array elements as '[]') are
+// written to `values` instead of `structure`. Returns the masked leaf count.
+std::size_t MaskedCaseText(const iga::config_detail::JsonValue& value,const std::string& path,
+	const std::set<std::string>& masked,std::string& structure,std::string& values)
+{
+	using Type=iga::config_detail::JsonValue::Type;
+	const auto number=[](double item){
+		std::ostringstream text;text<<std::hexfloat<<item;return text.str();
+	};
+	if(masked.count(path)){
+		if(value.type!=Type::Number)
+			throw std::invalid_argument("native hydraulic mutable boundary value is not a number: "+path);
+		structure+="m;";values+=path+"="+number(value.number)+";";
+		return 1;
+	}
+	std::size_t count=0;
+	switch(value.type){
+	case Type::Null:structure+="n;";break;
+	case Type::Boolean:structure+=value.boolean?"t;":"f;";break;
+	case Type::Number:structure+="d"+number(value.number)+";";break;
+	case Type::String:structure+="s"+std::to_string(value.string.size())+":"+value.string+";";break;
+	case Type::Array:
+		structure+="a"+std::to_string(value.array.size())+"[";
+		for(const auto& item:value.array)count+=MaskedCaseText(item,path+"[]",masked,structure,values);
+		structure+="]";break;
+	case Type::Object:
+		structure+="o"+std::to_string(value.object.size())+"{";
+		for(const auto& item:value.object){
+			structure+="k"+std::to_string(item.first.size())+":"+item.first;
+			count+=MaskedCaseText(item.second,path.empty()?item.first:path+"."+item.first,
+				masked,structure,values);
+		}
+		structure+="}";break;
+	}
+	return count;
+}
+
+// 0D model identity without the declared mutable values; it binds the
+// role, capacitance and every value that must stay fixed across a restart.
+std::string StructuralZeroDIdentity(const iga::ZeroDFlowModel& model,
+	const std::set<std::string>& mutable_values,const std::string& prefix)
+{
+	iga::Sha256 hash;
+	const auto text=[&](const std::string& value){
+		hash.AppendLittleEndian64(value.size());hash.Append(value.data(),value.size());
+	};
+	const auto field=[&](const std::string& name,double value){
+		text(name);
+		if(mutable_values.count(prefix+name))text("mutable");
+		else hash.AppendNormalizedDouble(value);
+	};
+	text("ZeroDFlowStructure/v1");
+	hash.AppendLittleEndian32(static_cast<std::uint32_t>(model.role));
+	if(model.role==iga::ZeroDFlowRole::SourceReservoir){
+		field("capacitance_m3_pa",model.source.capacitance_m3_pa);
+		field("resistance_pa_s_m3",model.source.resistance_pa_s_m3);
+		field("prescribed_flow_m3_s",model.source.prescribed_flow_m3_s);
+	}else{
+		field("proximal_resistance_pa_s_m3",model.terminal.proximal_resistance_pa_s_m3);
+		field("distal_resistance_pa_s_m3",model.terminal.distal_resistance_pa_s_m3);
+		field("capacitance_m3_pa",model.terminal.capacitance_m3_pa);
+		field("distal_pressure_pa",model.terminal.distal_pressure_pa);
+	}
+	return hash.Hex();
+}
 
 Case ParseCase(const std::string& text,const std::filesystem::path& file)
 {
@@ -104,7 +187,7 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 	const auto& root=RequireObject(parsed,"native case");
 	RequireKnownKeys(root,{"schema_version","mesh_file","boundaries","fluid",
 		"source","source_1d","terminal_rcr","terminal_rcrs","motion","coupling","time",
-		"species"},"native case");
+		"species","boundary_updates"},"native case");
 	const int schema=Integer(root,"schema_version","native case");
 	if(schema!=1&&schema!=2)
 		throw std::invalid_argument("unsupported native hydraulic case schema");
@@ -125,7 +208,9 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 		throw std::invalid_argument("native inlet and wall labels overlap or are negative");
 	const auto& fluid=Section(root,"fluid");
 	RequireKnownKeys(fluid,{"density_kg_m3","dynamic_viscosity_pa_s",
-		"initial_velocity_x_m_s","nonlinear_tolerance","maximum_iterations"},"fluid");
+		"initial_velocity_x_m_s","nonlinear_tolerance","maximum_iterations","steady"},"fluid");
+	if(const auto* steady=Find(fluid,"steady"))
+		value.steady=RequireBoolean(*steady,"fluid.steady");
 	value.fluid.density=Number(fluid,"density_kg_m3","fluid");
 	value.fluid.dynamic_viscosity=Number(fluid,"dynamic_viscosity_pa_s","fluid");
 	value.initial_velocity_x_m_s=Number(fluid,"initial_velocity_x_m_s","fluid");
@@ -192,8 +277,11 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 			throw std::invalid_argument("schema 2 uses terminal_rcrs, not singular outlet fields");
 		const auto& terminals=RequireArray(Member(root,"terminal_rcrs","native case"),
 			"terminal_rcrs");
-		if(terminals.empty()||terminals.size()>16)
-			throw std::invalid_argument("schema 2 requires 1 to 16 terminal RCRs");
+		// A sanity bound only: flux operators are sparse, the checkpoint
+		// catalog allows 4096 shards, and the implicit 0D predictor makes the
+		// coupling cost independent of the outlet count.
+		if(terminals.empty()||terminals.size()>1024)
+			throw std::invalid_argument("schema 2 requires 1 to 1024 terminal RCRs");
 		std::set<int> labels;
 		for(const auto& item:terminals){
 			const auto& terminal=RequireObject(item,"terminal_rcrs[]");
@@ -221,7 +309,12 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 	const auto& coupling=Section(root,"coupling");
 	RequireKnownKeys(coupling,{"method","maximum_iterations",
 		"pressure_relative_tolerance","flow_relative_tolerance",
-		"relaxation_factor"},"coupling");
+		"relaxation_factor","predictor"},"coupling");
+	if(const auto* predictor=Find(coupling,"predictor")){
+		value.predictor=RequireString(*predictor,"coupling.predictor");
+		if(value.predictor!="none"&&value.predictor!="implicit_0d")
+			throw std::invalid_argument("native hydraulic coupling predictor is unsupported");
+	}
 	const auto method=RequireString(Member(coupling,"method","coupling"),
 		"coupling.method");
 	if(method=="explicit")value.coupling.method=iga::PressureFlowIterationMethod::Explicit;
@@ -242,6 +335,28 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 		||!(value.nonlinear_tolerance>0.)
 		||!(value.fluid.density>0.)||!(value.fluid.dynamic_viscosity>0.))
 		throw std::invalid_argument("native hydraulic time or fluid parameters are invalid");
+	if(const auto* updates=Find(root,"boundary_updates")){
+		const auto& object=RequireObject(*updates,"boundary_updates");
+		RequireKnownKeys(object,{"mutable"},"boundary_updates");
+		for(const auto& item:RequireArray(Member(object,"mutable","boundary_updates"),
+			"boundary_updates.mutable")){
+			const auto path=RequireString(item,"boundary_updates.mutable[]");
+			if(!AllowedMutableBoundaryValues().count(path)
+				||!value.mutable_boundary_values.insert(path).second)
+				throw std::invalid_argument("native hydraulic mutable boundary value is unknown "
+					"or duplicate: "+path);
+		}
+		if(value.mutable_boundary_values.empty()||!value.source_1d_dir.empty()
+			||Find(root,"species"))
+			throw std::invalid_argument("native hydraulic boundary updates need a nonempty "
+				"mutable list, a 0D source and no species");
+	}
+	if(value.steady&&value.motion_kind!="fixed")
+		throw std::invalid_argument("native hydraulic steady momentum needs fixed motion");
+	if((value.steady||value.predictor!="none")
+		&&(!value.source_1d_dir.empty()||Find(root,"species")))
+		throw std::invalid_argument("native hydraulic steady momentum and the implicit 0D "
+			"predictor need a 0D source and no species");
 	if(const auto* species=Find(root,"species")){
 		std::set<std::string> ids;
 		for(const auto& item:RequireArray(*species,"species")){
@@ -287,9 +402,10 @@ Case ParseCase(const std::string& text,const std::filesystem::path& file)
 
 struct Options
 {
-	std::filesystem::path case_file,checkpoint_root,restart_root,output_root;
+	std::filesystem::path case_file,checkpoint_root,restart_root,output_root,summary_json;
 	int stop_after_step=0;
 	bool check_input=false;
+	bool accept_boundary_update=false;
 	std::string visualization_format="auto";
 	bool format_set=false;
 };
@@ -299,7 +415,7 @@ Options ParseOptions(int argc,char** argv)
 	if(argc<2)throw std::invalid_argument(
 		"usage: native_tet_hydraulic_graph case.json [--checkpoint-dir DIR] "
 		"[--restart-dir DIR] [--output-dir DIR] [--stop-after-step N] "
-		"[--visualization-format auto|vtkhdf|pvtu] [--check-input]");
+		"[--visualization-format auto|vtkhdf|pvtu] [--summary-json FILE] [--check-input]");
 	Options result;result.case_file=argv[1];
 	for(int i=2;i<argc;){
 		const std::string name=argv[i];
@@ -308,6 +424,11 @@ Options ParseOptions(int argc,char** argv)
 				throw std::invalid_argument("duplicate native hydraulic check-input option");
 			result.check_input=true;++i;continue;
 		}
+		if(name=="--accept-boundary-update"){
+			if(result.accept_boundary_update)
+				throw std::invalid_argument("duplicate native hydraulic boundary-update option");
+			result.accept_boundary_update=true;++i;continue;
+		}
 		if(i+1>=argc)throw std::invalid_argument("native hydraulic option needs a value");
 		if(name=="--checkpoint-dir"&&result.checkpoint_root.empty())
 			result.checkpoint_root=argv[i+1];
@@ -315,6 +436,8 @@ Options ParseOptions(int argc,char** argv)
 			result.restart_root=argv[i+1];
 		else if(name=="--output-dir"&&result.output_root.empty())
 			result.output_root=argv[i+1];
+		else if(name=="--summary-json"&&result.summary_json.empty())
+			result.summary_json=argv[i+1];
 		else if(name=="--visualization-format"&&!result.format_set){
 			result.visualization_format=argv[i+1];result.format_set=true;
 			iga::NativeTetUseVtkHdf(result.visualization_format);
@@ -331,8 +454,10 @@ Options ParseOptions(int argc,char** argv)
 	}
 	if(result.check_input&&(!result.checkpoint_root.empty()
 		||!result.restart_root.empty()||!result.output_root.empty()
-		||result.stop_after_step!=0))
+		||!result.summary_json.empty()||result.stop_after_step!=0))
 		throw std::invalid_argument("check-input cannot write or resume native hydraulic output");
+	if(result.accept_boundary_update&&result.restart_root.empty())
+		throw std::invalid_argument("--accept-boundary-update needs --restart-dir");
 	return result;
 }
 
@@ -356,7 +481,9 @@ std::string ExecutionSha256(int ranks)
 	hash.AppendLittleEndian64(static_cast<std::uint64_t>(ranks));
 	const auto options=iga::CapturePetscOptions(nullptr,
 		{"--checkpoint-dir","--restart-dir","--output-dir",
-			"--stop-after-step","--check-input","--visualization-format"});
+			"--stop-after-step","--check-input","--visualization-format","--summary-json",
+			"--accept-boundary-update","-native_ale_monitor"});
+
 	hash.AppendLittleEndian64(options.size());hash.Append(options.data(),options.size());
 	return hash.Hex();
 }
@@ -391,6 +518,64 @@ iga::CouplingPort OneDObservationSpeciesPort(const std::string& species)
 		iga::PortQuantity::MeanPressure,iga::PortQuantity::SpeciesConcentration,
 		iga::PortQuantity::SpeciesFlux};
 	port.species={species};return port;
+}
+
+// Affine relations of the 0D neighbors at the coming step, probed through the
+// same trial evaluation the coupling executor uses, then one monolithic native
+// solve. Returns initial edge pressures that the executor's first iteration
+// reproduces when the prediction is consistent.
+std::map<std::string,double> PredictImplicit0D(const Case& scenario,
+	iga::NativeTetAleFlowDomainAdapter& native,const iga::ZeroDFlowDomainRuntime& source,
+	const std::map<int,iga::ZeroDFlowDomainRuntime*>& terminals,
+	const iga::DomainStepContext& step)
+{
+	const double flow_scale=std::max(1e-12,
+		std::abs(source.Model().source.prescribed_flow_m3_s));
+	const auto source_flow=[&](double pressure){
+		return *iga::EvaluateZeroDFlowTrial(source.Model(),source.CommittedState(),pressure,
+			step.dt_s,step.start_time_s).port.outward_flow_m3_s;
+	};
+	const auto terminal_pressure=[&](const iga::ZeroDFlowDomainRuntime& terminal,
+		double native_outward_flow){
+		return *iga::EvaluateZeroDFlowTrial(terminal.Model(),terminal.CommittedState(),
+			-native_outward_flow,step.dt_s,step.start_time_s).port.mean_pressure_pa;
+	};
+	// The native inlet receives the negated source outflow.
+	const double reference_pressure=1000.0;
+	const double source_zero=source_flow(0.0);
+	std::map<std::string,iga::NativeTetAleImplicitPortRelation> relations{{"inlet",
+		{-source_zero,-(source_flow(reference_pressure)-source_zero)/reference_pressure}}};
+	for(const auto& outlet:scenario.outlets){
+		const auto& terminal=*terminals.at(outlet.label);
+		const double zero=terminal_pressure(terminal,0.0);
+		relations.emplace(outlet.port_id,iga::NativeTetAleImplicitPortRelation{zero,
+			(terminal_pressure(terminal,flow_scale)-zero)/flow_scale});
+	}
+	const auto states=native.PredictImplicit(step,relations,1e-9*flow_scale);
+	std::map<std::string,double> guesses{{"source_tet",*states.at("inlet").mean_pressure_pa}};
+	for(const auto& outlet:scenario.outlets)
+		guesses.emplace(outlet.edge_id,terminal_pressure(*terminals.at(outlet.label),
+			*states.at(outlet.port_id).outward_flow_m3_s));
+	return guesses;
+}
+
+// Peak resident set of this process (VmHWM), in bytes; 0 if unavailable.
+std::uint64_t PeakResidentBytes()
+{
+	std::ifstream status("/proc/self/status");
+	std::string line;
+	while(std::getline(status,line))
+		if(line.rfind("VmHWM:",0)==0){
+			std::istringstream fields(line.substr(6));
+			std::uint64_t kilobytes=0;fields>>kilobytes;return 1024*kilobytes;
+		}
+	return 0;
+}
+
+std::string JsonNumber(double value)
+{
+	if(!std::isfinite(value))throw std::runtime_error("native hydraulic summary value is nonfinite");
+	std::ostringstream text;text<<std::setprecision(17)<<value;return text.str();
 }
 
 void RunT7SpeciesGraph(const Case& scenario,const iga::NativeTetMesh& mesh,
@@ -534,6 +719,7 @@ int main(int argc,char** argv)
 	try{
 		Options options;Case scenario;iga::NativeTetMesh mesh;
 		std::string case_text,mesh_text,case_sha256,execution_sha256;
+		std::string full_case_sha256,boundary_values_text;
 		iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native hydraulic inputs",[&]{
 			options=ParseOptions(argc,argv);
 			case_text=FileText(options.case_file);
@@ -554,8 +740,29 @@ int main(int argc,char** argv)
 				throw std::invalid_argument("native hydraulic mesh boundary labels differ from case");
 			if(options.stop_after_step<0||options.stop_after_step>scenario.steps)
 				throw std::invalid_argument("native hydraulic stop step is invalid");
-			iga::Sha256 hash;hash.AppendLittleEndian64(case_text.size());
-			hash.Append(case_text.data(),case_text.size());
+			if(options.accept_boundary_update&&scenario.mutable_boundary_values.empty())
+				throw std::invalid_argument("--accept-boundary-update needs boundary_updates in the case");
+			{
+				iga::Sha256 full;full.AppendLittleEndian64(case_text.size());
+				full.Append(case_text.data(),case_text.size());full_case_sha256=full.Hex();
+			}
+			iga::Sha256 hash;
+			if(scenario.mutable_boundary_values.empty()){
+				hash.AppendLittleEndian64(case_text.size());
+				hash.Append(case_text.data(),case_text.size());
+			}else{
+				// Controlled restart: the checkpoint binds the canonical case with
+				// the declared boundary values masked out.
+				std::string structure;
+				MaskedCaseText(iga::config_detail::JsonParser(case_text).Parse(),"",
+					scenario.mutable_boundary_values,structure,boundary_values_text);
+				for(const auto& path:scenario.mutable_boundary_values)
+					if(boundary_values_text.find(path+"=")==std::string::npos)
+						throw std::invalid_argument("native hydraulic mutable boundary value is absent: "+path);
+				const std::string tag="native-hydraulic-structure/v1";
+				hash.AppendLittleEndian64(tag.size());hash.Append(tag.data(),tag.size());
+				hash.AppendLittleEndian64(structure.size());hash.Append(structure.data(),structure.size());
+			}
 			hash.AppendLittleEndian64(mesh_text.size());
 			hash.Append(mesh_text.data(),mesh_text.size());
 			if(!scenario.source_1d_dir.empty()){
@@ -688,7 +895,7 @@ int main(int argc,char** argv)
 		auto native=std::make_unique<iga::NativeTetAleFlowDomainAdapter>(
 			"tet",mesh,tet_ports,scenario.fluid,initial_flow,provider,motion_id,
 			scenario.wall_labels,scenario.nonlinear_tolerance,
-			scenario.nonlinear_iterations);
+			scenario.nonlinear_iterations,scenario.steady);
 		auto* native_ptr=native.get();
 		std::map<std::string,iga::ZeroDFlowDomainRuntime*> zero_d_ptrs;
 		if(source_ptr)zero_d_ptrs.emplace("source",source_ptr);
@@ -711,20 +918,51 @@ int main(int argc,char** argv)
 			iga::CollectivePressureFlowExecution(PETSC_COMM_WORLD));
 		std::unique_ptr<iga::NativeTetHydraulicGraphCheckpoint> checkpoint;
 		iga::CoupledCheckpointCompatibility identity;
+		std::optional<iga::NativeTetHydraulicBoundaryPolicy> boundary_policy;
+		if(!scenario.mutable_boundary_values.empty()){
+			iga::NativeTetHydraulicBoundaryPolicy policy;
+			const std::string terminal_prefix=scenario.schema_version==1
+				?"terminal_rcr.":"terminal_rcrs[].";
+			for(const auto& item:zero_d_ptrs)
+				policy.zero_d_structural_identity.emplace(item.first,StructuralZeroDIdentity(
+					item.second->Model(),scenario.mutable_boundary_values,
+					item.first=="source"?"source.":terminal_prefix));
+			boundary_policy=std::move(policy);
+		}
 		if(!one_d_source){
 			checkpoint=std::make_unique<iga::NativeTetHydraulicGraphCheckpoint>(
-				PETSC_COMM_WORLD,graph,scenario.coupling,*native_ptr,zero_d_ptrs);
+				PETSC_COMM_WORLD,graph,scenario.coupling,*native_ptr,zero_d_ptrs,boundary_policy);
 			identity=checkpoint->Compatibility(case_sha256,execution_sha256);
 		}else if(!options.checkpoint_root.empty()||!options.restart_root.empty())
 			throw std::invalid_argument("1D/FEM graph checkpoint is unavailable");
 		std::string previous_epoch;
+		std::vector<std::string> updated_domains;
+		std::uint64_t restored_steps=0;
 		if(!options.restart_root.empty()){
 			const auto image=checkpoint->LoadLatest(options.restart_root,identity);
 			if(image.epoch.dt_s!=scenario.dt_s
 				||image.epoch.accepted_steps>static_cast<std::uint64_t>(scenario.steps))
 				throw std::runtime_error("native hydraulic restart horizon differs");
 			checkpoint->RestoreFresh(image);previous_epoch=image.epoch.id;
+			restored_steps=image.epoch.accepted_steps;
+			for(const auto& item:zero_d_ptrs)
+				if(item.second->ModelIdentitySha256()
+					!=iga::BuildZeroDFlowModelIdentitySha256(item.second->AcceptedModel()))
+					updated_domains.push_back(item.first);
+			if(!updated_domains.empty()&&!options.accept_boundary_update){
+				std::string names;
+				for(const auto& name:updated_domains)names+=(names.empty()?"":",")+name;
+				throw std::runtime_error("native hydraulic restart changes declared boundary values of "
+					+names+"; pass --accept-boundary-update to continue from them");
+			}
 		}
+		const auto current_boundary_values=[&]{
+			std::map<std::string,iga::ZeroDFlowModel> models;
+			for(const auto& item:zero_d_ptrs)models.emplace(item.first,item.second->Model());
+			return models;
+		};
+		const std::string boundary_values_sha256=
+			iga::native_tet_hydraulic_checkpoint_detail::BoundaryValuesSha256(current_boundary_values());
 		const int final_step=options.stop_after_step>0
 			?options.stop_after_step:scenario.steps;
 		if(native_ptr->AcceptedSteps()>static_cast<std::uint64_t>(final_step))
@@ -744,13 +982,63 @@ int main(int argc,char** argv)
 			species_outputs.push_back(std::make_unique<iga::NativeTetTemporalOutput>(
 				PETSC_COMM_WORLD,options.output_root,"species_"+species.id,
 				options.visualization_format,scenario.motion_kind!="fixed"));
+		const std::string previous_epoch_at_start=previous_epoch;
+		std::vector<std::string> summary_steps;
+		const auto write_summary=[&]{
+			iga::CollectiveLocalStage(PETSC_COMM_WORLD,"native hydraulic summary",[&]{
+				if(rank!=0)return;
+				std::ostringstream text;
+				text<<"{\n \"schema_version\": 1,\n \"kind\": \"native_tet_hydraulic_summary\",\n"
+					<<" \"case_sha256\": \""<<case_sha256<<"\",\n"
+					<<" \"full_case_sha256\": \""<<full_case_sha256<<"\",\n"
+					<<" \"boundary_values_sha256\": \""<<boundary_values_sha256<<"\",\n"
+					<<" \"mutable_boundary_values\": [";
+				std::size_t mutable_index=0;
+				for(const auto& path:scenario.mutable_boundary_values)
+					text<<(mutable_index++?", ":"")<<"\""<<path<<"\"";
+				text<<"],\n \"restart\": {\"restored_accepted_steps\": "<<restored_steps
+					<<", \"previous_epoch\": \""<<(options.restart_root.empty()?"":previous_epoch_at_start)
+					<<"\", \"boundary_updated_domains\": [";
+				for(std::size_t index=0;index<updated_domains.size();++index)
+					text<<(index?", ":"")<<"\""<<updated_domains[index]<<"\"";
+				text<<"]},\n \"boundary_history\": [";
+				if(checkpoint&&boundary_policy){
+					const auto& history=checkpoint->BoundaryHistory();
+					for(std::size_t index=0;index<history.size();++index)
+						text<<(index?", ":"")<<"{\"first_step\": "<<history[index].first_step
+							<<", \"last_step\": "<<history[index].last_step
+							<<", \"values_sha256\": \""<<history[index].values_sha256<<"\"}";
+				}
+				text<<"],\n"
+					<<" \"execution_sha256\": \""<<execution_sha256<<"\",\n"
+					<<" \"model_sha256\": \""<<native_ptr->ModelIdentitySha256()<<"\",\n"
+					<<" \"ranks\": "<<ranks<<",\n \"tetrahedra\": "<<mesh.cells.size()
+					<<",\n \"physical_dofs\": "<<initial_flow.size()
+					<<",\n \"steady_momentum\": "<<(scenario.steady?"true":"false")
+					<<",\n \"coupling_predictor\": \""<<scenario.predictor<<"\",\n \"steps\": [";
+				for(std::size_t index=0;index<summary_steps.size();++index)
+					text<<(index?",":"")<<"\n  "<<summary_steps[index];
+				text<<"\n ]\n}\n";
+				const auto temporary=options.summary_json.string()+".tmp";
+				{
+					std::ofstream output(temporary,std::ios::binary|std::ios::trunc);
+					output<<text.str();
+					if(!output.flush())throw std::runtime_error("cannot write native hydraulic summary");
+				}
+				std::filesystem::rename(temporary,options.summary_json);
+			});
+		};
 		for(int step=static_cast<int>(native_ptr->AcceptedSteps());step<final_step;++step){
+			const double step_start=MPI_Wtime();
 			const auto previous_mesh=native_ptr->CommittedMesh();
 			const iga::DomainStepContext context{step,native_ptr->CommittedTime(),
 				scenario.dt_s};
 			std::map<std::string,double> edge_guesses{{"source_tet",0.}};
 			for(const auto& outlet:scenario.outlets)
 				edge_guesses.emplace(outlet.edge_id,0.);
+			if(scenario.predictor=="implicit_0d")
+				edge_guesses=PredictImplicit0D(scenario,*native_ptr,*source_ptr,
+					outlet_ptrs,context);
 			iga::PressureFlowStepResult result;
 			try{result=executor.Advance(context,edge_guesses);}
 			catch(const iga::PressureFlowConvergenceError& error){
@@ -878,15 +1166,100 @@ int main(int argc,char** argv)
 				}
 				std::cout<<'\n';
 			}
+			const auto& statistics=native_ptr->CommittedStepStatistics();
+			const double step_wall=MPI_Wtime()-step_start;
+			std::uint64_t local_peak=PeakResidentBytes(),peak_max=0,peak_sum=0;
+			MPI_Allreduce(&local_peak,&peak_max,1,MPI_UINT64_T,MPI_MAX,PETSC_COMM_WORLD);
+			MPI_Allreduce(&local_peak,&peak_sum,1,MPI_UINT64_T,MPI_SUM,PETSC_COMM_WORLD);
+			const auto& inlet_state=result.accepted_ports.at({"tet","inlet"});
+			if(rank==0)std::cout<<std::setprecision(17)
+				<<"native_hydraulic_solver step="<<step+1
+				<<" coupling_iterations="<<result.iterations.size()
+				<<" trial_solves="<<statistics.trial_solves
+				<<" newton_iterations="<<statistics.newton_iterations
+				<<" linear_iterations="<<statistics.linear_iterations
+				<<" predictor="<<(statistics.predictor?1:0)
+				<<" predictor_newton_iterations="<<statistics.predictor_newton_iterations
+				<<" predictor_linear_iterations="<<statistics.predictor_linear_iterations
+				<<" assembly_s="<<statistics.assembly_seconds+statistics.predictor_assembly_seconds
+				<<" linear_solve_s="<<statistics.linear_solve_seconds
+					+statistics.predictor_linear_solve_seconds
+				<<" wall_s="<<step_wall
+				<<" peak_rss_max_bytes="<<peak_max
+				<<" inlet_mean_pressure_pa="<<*inlet_state.mean_pressure_pa<<'\n';
+			if(!options.summary_json.empty()){
+				std::ostringstream record;
+				record<<std::setprecision(17)<<"{\"step\": "<<step+1
+					<<", \"time_s\": "<<JsonNumber(native_ptr->CommittedTime())
+					<<", \"coupling_iterations\": "<<result.iterations.size()
+					<<", \"inlet\": {\"label\": "<<scenario.inlet_label
+					<<", \"outward_flow_m3_s\": "<<JsonNumber(inlet)
+					<<", \"total_inflow_m3_s\": "<<JsonNumber(-inlet)
+					<<", \"mean_pressure_pa\": "<<JsonNumber(*inlet_state.mean_pressure_pa)
+					<<", \"source_stored_pressure_pa\": "<<JsonNumber(one_d_source
+						?*result.accepted_ports.at({"source",source_port.id}).mean_pressure_pa
+						:source_ptr->CommittedState().stored_pressure_pa)
+					<<"}, \"outlets\": [";
+				double outlet_total=0.;
+				for(std::size_t index=0;index<scenario.outlets.size();++index){
+					const auto& outlet=scenario.outlets[index];
+					const auto& state=result.accepted_ports.at({"tet",outlet.port_id});
+					const auto& terminal=result.accepted_ports.at({outlet.domain_id,"port"});
+					outlet_total+=outlet_flows.at(outlet.label);
+					record<<(index?", ":"")<<"{\"label\": "<<outlet.label
+						<<", \"outward_flow_m3_s\": "<<JsonNumber(outlet_flows.at(outlet.label))
+						<<", \"mean_pressure_pa\": "<<JsonNumber(*state.mean_pressure_pa)
+						<<", \"terminal_port_pressure_pa\": "<<JsonNumber(*terminal.mean_pressure_pa)
+						<<", \"terminal_stored_pressure_pa\": "<<JsonNumber(outlet_ptrs.at(outlet.label)
+							->CommittedState().stored_pressure_pa)<<"}";
+				}
+				record<<"], \"total_outlet_flow_m3_s\": "<<JsonNumber(outlet_total)
+					<<", \"solver\": {\"trial_solves\": "<<statistics.trial_solves
+					<<", \"newton_iterations\": "<<statistics.newton_iterations
+					<<", \"linear_iterations\": "<<statistics.linear_iterations
+					<<", \"assembly_s\": "<<JsonNumber(statistics.assembly_seconds)
+					<<", \"linear_solve_s\": "<<JsonNumber(statistics.linear_solve_seconds)
+					<<", \"ksp_type\": \""<<statistics.linear_solver_type
+					<<"\", \"pc_type\": \""<<statistics.preconditioner_type
+					<<"\", \"predictor\": "<<(statistics.predictor?"true":"false")
+					<<", \"predictor_newton_iterations\": "<<statistics.predictor_newton_iterations
+					<<", \"predictor_linear_iterations\": "<<statistics.predictor_linear_iterations
+					<<", \"predictor_assembly_s\": "<<JsonNumber(statistics.predictor_assembly_seconds)
+					<<", \"predictor_linear_solve_s\": "<<JsonNumber(statistics.predictor_linear_solve_seconds)
+					<<"}, \"wall_time_s\": "<<JsonNumber(step_wall)
+					<<", \"peak_rss_bytes_max_rank\": "<<peak_max
+					<<", \"peak_rss_bytes_sum\": "<<peak_sum
+					<<", \"boundary_values\": {\"values_sha256\": \""<<boundary_values_sha256
+					<<"\", \"updated_at_this_step\": "<<(static_cast<std::uint64_t>(step)==restored_steps
+						&&!updated_domains.empty()?"true":"false")
+					<<", \"source_prescribed_flow_m3_s\": "
+					<<JsonNumber(one_d_source?0.0:source_ptr->Model().source.prescribed_flow_m3_s)
+					<<", \"terminals\": [";
+				for(std::size_t index=0;index<scenario.outlets.size();++index){
+					const auto& model=outlet_ptrs.at(scenario.outlets[index].label)->Model().terminal;
+					record<<(index?", ":"")<<"{\"label\": "<<scenario.outlets[index].label
+						<<", \"proximal_resistance_pa_s_m3\": "<<JsonNumber(model.proximal_resistance_pa_s_m3)
+						<<", \"distal_resistance_pa_s_m3\": "<<JsonNumber(model.distal_resistance_pa_s_m3)
+						<<", \"capacitance_m3_pa\": "<<JsonNumber(model.capacitance_m3_pa)
+						<<", \"distal_pressure_pa\": "<<JsonNumber(model.distal_pressure_pa)<<"}";
+				}
+				record<<"]}}";
+				summary_steps.push_back(record.str());
+			}
 			if(!options.checkpoint_root.empty()){
+				// Controlled restarts may branch from one epoch with different
+				// boundary values, so their epoch ids also bind those values.
 				iga::CoupledCheckpointEpoch epoch{
 					iga::coupled_checkpoint_detail::Hash(case_sha256+":"
+						+(boundary_policy?boundary_values_sha256+":":std::string())
 						+std::to_string(step+1)),previous_epoch,identity,
 					static_cast<std::uint64_t>(step+1),native_ptr->CommittedTime(),
 					scenario.dt_s};
 				checkpoint->Save(options.checkpoint_root,epoch);
 				previous_epoch=epoch.id;
 			}
+			if(!options.summary_json.empty())write_summary();
+
 		}
 		flow_output.Close();
 		for(auto& output:species_outputs)output->Close();

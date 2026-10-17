@@ -18,29 +18,51 @@ struct NativeTetAleFlowRateControl
 {
 	int boundary_label = 0;
 	double target_outward_flow_m3_s = 0.0;
+	// Optional affine dependence of the target on the label's area-mean P1
+	// pressure: target + slope*mean_pressure. Zero keeps a fixed target.
+	double target_pressure_slope_m3_s_pa = 0.0;
+};
+
+// Implicit resistive pressure port: the boundary pressure is an extra unknown
+// pi with (absolute outward flow - mesh_flow) - (pi - offset)/resistance = 0,
+// i.e. pi = offset + resistance*relative outward flow. An implicit 0D RCR step
+// reduces to this affine relation, so a monolithic solve needs no outer loop.
+struct NativeTetAleResistanceControl
+{
+	int boundary_label = 0;
+	double resistance_pa_s_m3 = 0.0;
+	double offset_pa = 0.0;
+	double mesh_flow_m3_s = 0.0;
 };
 
 struct NativeTetAleBoundaryConditions
 {
 	std::map<int,double> prescribed_pressure_pa;
 	std::vector<NativeTetAleFlowRateControl> flow_rate_controls;
+	std::vector<NativeTetAleResistanceControl> resistance_controls;
 	// Optional kinetic-energy stabilization on reverse relative flow. This
 	// changes the pressure-port model and is never enabled implicitly.
 	std::map<int,double> backflow_stabilization_beta;
 };
 
+// Sparse, ascending-DOF boundary functionals of one label: the outward flux of
+// the P2 velocity and the area-mean of the P1 pressure (pressure node ids).
 struct NativeTetAleBoundaryFluxOperator
 {
 	double area_m2 = 0.0;
+	std::vector<std::size_t> velocity_dofs;
 	std::vector<double> velocity_coefficients;
+	std::vector<std::size_t> pressure_nodes;
+	std::vector<double> pressure_weights;
 
 	double OutwardFlowM3S(const std::vector<double>& physical_state) const
 	{
-		if(physical_state.size()<velocity_coefficients.size())
-			throw std::invalid_argument("native ALE boundary state is too short");
 		double result=0.0;
-		for(std::size_t dof=0;dof<velocity_coefficients.size();++dof)
-			result+=velocity_coefficients[dof]*physical_state[dof];
+		for(std::size_t entry=0;entry<velocity_dofs.size();++entry){
+			if(velocity_dofs[entry]>=physical_state.size())
+				throw std::invalid_argument("native ALE boundary state is too short");
+			result+=velocity_coefficients[entry]*physical_state[velocity_dofs[entry]];
+		}
 		return result;
 	}
 };
@@ -66,6 +88,7 @@ BuildNativeTetAleBoundaryFluxOperators(const NativeTetMesh& mesh,
 		{{2.0/3.0,1.0/6.0,1.0/6.0}},{{1.0/6.0,2.0/3.0,1.0/6.0}},
 		{{1.0/6.0,1.0/6.0,2.0/3.0}}}};
 	std::map<int,NativeTetAleBoundaryFluxOperator> result;
+	std::map<int,std::map<std::size_t,double>> velocity,pressure;
 	for(const auto& triangle:mesh.boundary_triangles){
 		auto face=triangle.nodes;std::sort(face.begin(),face.end());
 		const auto owner=owners.find(face);
@@ -101,9 +124,10 @@ BuildNativeTetAleBoundaryFluxOperators(const NativeTetMesh& mesh,
 				throw std::runtime_error("native ALE boundary-control vertex is absent from owner");
 		}
 		auto& output=result[triangle.boundary_label];
-		if(output.velocity_coefficients.empty())
-			output.velocity_coefficients.assign(3*velocity_nodes,0.0);
+		auto& coefficients=velocity[triangle.boundary_label];
 		output.area_m2+=area;
+		for(const auto node:triangle.nodes)
+			pressure[triangle.boundary_label][node]+=area/3.0;
 		for(const auto& face_lambda:quadrature){
 			std::array<double,4> lambda{{0,0,0,0}};
 			for(std::size_t vertex=0;vertex<3;++vertex)
@@ -112,9 +136,21 @@ BuildNativeTetAleBoundaryFluxOperators(const NativeTetMesh& mesh,
 			for(std::size_t local=0;local<10;++local){
 				const auto node=topology.cell_velocity_nodes[owner->second.cell][local];
 				for(int component=0;component<3;++component)
-					output.velocity_coefficients[3*node+component]
-						+=basis.velocity[local]*area_vector[component]/3.0;
+					coefficients[3*node+component]+=basis.velocity[local]*area_vector[component]/3.0;
 			}
+		}
+	}
+	for(auto& item:result){
+		for(const auto& entry:velocity.at(item.first)){
+			if(entry.first>=3*velocity_nodes)
+				throw std::runtime_error("native ALE boundary-control DOF is out of range");
+			if(entry.second==0.0)continue;
+			item.second.velocity_dofs.push_back(entry.first);
+			item.second.velocity_coefficients.push_back(entry.second);
+		}
+		for(const auto& entry:pressure.at(item.first)){
+			item.second.pressure_nodes.push_back(entry.first);
+			item.second.pressure_weights.push_back(entry.second/item.second.area_m2);
 		}
 	}
 	return result;
@@ -130,16 +166,29 @@ inline void ValidateNativeTetAleBoundaryConditions(
 			throw std::invalid_argument("native ALE prescribed-pressure boundary is invalid");
 	for(const auto& control:conditions.flow_rate_controls){
 		if(!std::isfinite(control.target_outward_flow_m3_s)
+			||!std::isfinite(control.target_pressure_slope_m3_s_pa)
 			||operators.count(control.boundary_label)==0
 			||!controlled.emplace(control.boundary_label,true).second)
 			throw std::invalid_argument("native ALE flow-rate boundary is invalid");
 		if(conditions.prescribed_pressure_pa.count(control.boundary_label))
 			throw std::invalid_argument("native ALE boundary cannot prescribe pressure and flow");
 	}
-	for(const auto& stabilization:conditions.backflow_stabilization_beta)
+	for(const auto& control:conditions.resistance_controls){
+		if(!(control.resistance_pa_s_m3>0.0)||!std::isfinite(control.resistance_pa_s_m3)
+			||!std::isfinite(control.offset_pa)||!std::isfinite(control.mesh_flow_m3_s)
+			||operators.count(control.boundary_label)==0
+			||!controlled.emplace(control.boundary_label,true).second
+			||conditions.prescribed_pressure_pa.count(control.boundary_label))
+			throw std::invalid_argument("native ALE resistance boundary is invalid");
+	}
+	for(const auto& stabilization:conditions.backflow_stabilization_beta){
+		bool resistance=false;
+		for(const auto& control:conditions.resistance_controls)
+			resistance=resistance||control.boundary_label==stabilization.first;
 		if(!(stabilization.second>=0.0)||!std::isfinite(stabilization.second)
-			||conditions.prescribed_pressure_pa.count(stabilization.first)==0)
+			||(conditions.prescribed_pressure_pa.count(stabilization.first)==0&&!resistance))
 			throw std::invalid_argument("native ALE backflow stabilization needs a pressure port");
+	}
 }
 
 } // namespace iga

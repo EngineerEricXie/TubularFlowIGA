@@ -198,6 +198,7 @@ t7-native-ale-flow-0d-cross-process-test:
 t7-native-tet-hydraulic-cli-test:
 	$(MAKE) -C solvers/cpu native_tet_hydraulic_graph PETSC_DIR=$(PETSC_DIR) $(if $(strip $(PETSC_ARCH)),PETSC_ARCH=$(PETSC_ARCH))
 	python3 scripts/integration/test_native_tet_hydraulic_cli.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
+	python3 scripts/integration/test_native_tet_hydraulic_control.py --ranks $(T7_SPECIES_MPI_RANKS) --binary solvers/cpu/native_tet_hydraulic_graph --case solvers/cpu/tests/data/native_tet_hydraulic_star.json
 	python3 scripts/validate_t7_native_hydraulic_cli_evidence.py
 
 .PHONY: t7-native-tet-ftetwild-smoke
