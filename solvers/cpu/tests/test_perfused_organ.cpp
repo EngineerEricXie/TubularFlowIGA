@@ -320,6 +320,33 @@ void TestSingleCellOxygenAgainstScalarRoot()
 		assert(std::abs(result.balance_defect[s])<=1e-9*std::max(1e-12,std::abs(result.inflow[s])));
 }
 
+// An anoxic, glycogen-fuelled cell with no buffer-base supply consumes buffer
+// base faster than inflow and storage can provide: the species balance has no
+// nonnegative root, the clip blocks every Newton step, and the cell must be
+// reported as a Newton failure with a visible balance defect rather than
+// counted as converged.
+void TestBlockedCellIsReportedAsFailure()
+{
+	const double volume=1e-3,flow=2e-6;
+	// Hypoxic lactate production consumes more buffer base than the inlet
+	// supplies, so the clip pins buffer base at zero. With the Bohr shift off
+	// the other species converge, the clipped step stops moving, and the cell
+	// must still be counted as a Newton failure instead of converged.
+	auto input=TransportInput(1,1e9);
+	input.chemistry.bohr_coefficient=0.;
+	input.inlet[iga::OrganOxygen]*=0.05;
+	input.inlet[iga::OrganBufferBase]=0.1;
+	input.previous[0]=input.inlet;
+	input.state[0].glycogen_mol_m3=500.;
+	const auto result=iga::SolveOrganTransport(SingleCell(volume,flow),input);
+	const auto& rates=result.rates[0];
+	assert(rates.lactate_production>rates.lactate_clearance);
+	assert(result.concentration[0][iga::OrganBufferBase]==0.);
+	assert(result.newton_failures==1);
+	assert(std::abs(result.balance_defect[iga::OrganBufferBase])
+		>0.5*volume*(rates.lactate_production-rates.lactate_clearance));
+}
+
 void TestStagnantCellRelaxes()
 {
 	auto input=TransportInput(1,100.);
@@ -543,6 +570,7 @@ int main(int argc,char** argv)
 	TestAcidBase();
 	TestKineticsLimits();
 	TestSingleCellOxygenAgainstScalarRoot();
+	TestBlockedCellIsReportedAsFailure();
 	TestStagnantCellRelaxes();
 	TestExchangeScaleMatchesConductance();
 	TestLobularZonesAreTanksInSeries();

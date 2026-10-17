@@ -883,6 +883,7 @@ std::string Advance(const Organ& organ,const Object& request,const std::filesyst
 	const std::string resolution=Find(request,"resolution")?RequireString(*Find(request,"resolution"),"resolution"):"cell";
 	const double duration=Number(request,"duration_s","advance");
 	const int substeps=RequireInteger(Field(request,"substeps","advance"),"substeps");
+	if(substeps<1)throw std::invalid_argument("advance substeps must be a positive integer");
 	const auto records=iga::AdvancePerfusedOrganPlant(organ.model,parameters,controls,field("mobility_scale"),
 		field("exchange_scale"),state,duration,static_cast<std::size_t>(substeps),resolution);
 	if(const auto* out=Find(request,"state_out"))SavePlantState(RequireObject(*out,"state_out"),state,organ,base);
@@ -1020,7 +1021,13 @@ int Run(int argc,char** argv)
 		for(std::string line;std::getline(std::cin,line);){
 			if(line.find_first_not_of(" \t\r")==std::string::npos)continue;
 			try{
-				if(line.find("\"command\"")!=std::string::npos&&line.find("\"exit\"")!=std::string::npos)break;
+				// Only a request whose command is "exit" stops the server.
+				const auto parsed=iga::config_detail::JsonParser(line).Parse();
+				if(parsed.type==iga::config_detail::JsonValue::Type::Object){
+					const auto* command=iga::config_detail::Find(parsed.object,"command");
+					if(command&&command->type==iga::config_detail::JsonValue::Type::String
+						&&command->string=="exit")break;
+				}
 				std::cout<<Dispatch(organ,line,std::filesystem::current_path())<<std::endl;
 			}catch(const std::exception& error){
 				std::cout<<Json().Open().Entry("ok",false).Entry("error",std::string(error.what()))

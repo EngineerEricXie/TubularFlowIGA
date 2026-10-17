@@ -328,18 +328,26 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 			double alpha=1.;
 			OrganConcentration trial{},trial_r{};
 			double trial_norm=current;
+			bool decreased=false;
 			for(int search=0;search<30;++search){
 				for(std::size_t s=0;s<OrganSpeciesCount;++s)trial[s]=std::max(c[s]-alpha*delta[s],0.);
 				residual(i,trial,trial_r);
 				trial_norm=norm(trial_r);
-				if(trial_norm<current||trial_norm<=1e-12)break;
+				if(trial_norm<current||trial_norm<=1e-12){decreased=true;break;}
 				alpha*=0.5;
 			}
+			// No descent within the line search: keep the iterate; the cell is
+			// reported as a Newton failure unless its residual is already small.
+			if(!decreased)break;
 			change=0.;
 			for(std::size_t s=0;s<OrganSpeciesCount;++s)
 				change=std::max(change,std::abs(trial[s]-c[s])/scale[s]);
 			c=trial;r=trial_r;current=trial_norm;
-			converged=current<=1e-10||change<=1e-13;
+			converged=current<=1e-10;
+			// A vanishing update (for example a step blocked by the
+			// nonnegativity clip) with a large residual is stagnation, not
+			// convergence.
+			if(change<=1e-13)break;
 		}
 		if(!converged)++result.newton_failures;
 		const double moved=[&]{
