@@ -808,7 +808,7 @@ def main():
 	parser.add_argument("--thickness-factor", type=float, default=0.5,
 		help="remesh size is at most this factor times the local wall-to-wall distance "
 		"(0 disables; catches pinches the centerline misses)")
-	parser.add_argument("--maximum-fold-degrees", type=float, default=150.0,
+	parser.add_argument("--maximum-fold-degrees", type=float, default=170.0,
 		help="reject remeshed surfaces whose adjacent triangle normals differ by more than this")
 	parser.add_argument("--feature-angle-degrees", type=float, default=60.0,
 		help="dihedral angle at which Gmsh splits the wall into reparametrizable patches")

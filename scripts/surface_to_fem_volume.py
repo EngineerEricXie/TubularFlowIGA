@@ -111,6 +111,8 @@ def main():
 	parser.add_argument("--target-size-m", type=float, required=True)
 	parser.add_argument("--minimum-scaled-jacobian", type=float, default=1.0e-3)
 	parser.add_argument("--maximum-volume-relative-error", type=float, default=5.0e-3)
+	parser.add_argument("--optimize-netgen", action="store_true",
+		help="also run Gmsh's Netgen tetrahedron optimizer; the boundary is still preserved")
 	args = parser.parse_args()
 	input_argument = Path(args.input_surface)
 	input_path = input_argument.resolve()
@@ -145,6 +147,8 @@ def main():
 		# Preserve the validated anatomical surface exactly. Only the empty volume
 		# may be meshed; remeshing boundary entities would change the geometry.
 		gmsh.option.setNumber("Mesh.MeshOnlyEmpty", 1)
+		if args.optimize_netgen:
+			gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
 		with tempfile.TemporaryDirectory(prefix="tubularflow-surface-") as directory:
 			canonical_msh = Path(directory)/"canonical-surface.msh"
 			preflight_path = (args.validated_surface_manifest.resolve()
@@ -292,6 +296,7 @@ def main():
 			"geometry_contract": geometry_contract,
 			"mesher": {"name": "Gmsh", "version": gmsh.option.getString("General.Version"),
 				"target_size_m": args.target_size_m,
+				"optimize_netgen": bool(args.optimize_netgen),
 				"wall_s": mesher_wall_s},
 			"resources": {"pipeline_wall_s": time.monotonic()-start_wall,
 				"peak_rss_bytes": peak_rss_bytes},
