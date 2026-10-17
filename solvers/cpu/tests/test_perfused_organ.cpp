@@ -374,6 +374,24 @@ void TestCubeTransport()
 	for(std::size_t i=0;i<mesh.cells.size();++i)
 		if(graph.exchange_in_m3_s[i]>0.)
 			assert(zoned.rates[3*i+2].po2_mmhg<=zoned.rates[3*i].po2_mmhg+1e-9);
+	// Lumping into two pools (x halves) and into one pool conserves species.
+	std::vector<std::size_t> halves(mesh.cells.size());
+	for(std::size_t i=0;i<mesh.cells.size();++i)halves[i]=Centroid(mesh,i)[0]<0.5?0:1;
+	for(const std::size_t groups:{std::size_t(1),std::size_t(2)}){
+		std::vector<std::size_t> group=halves;
+		if(groups==1)std::fill(group.begin(),group.end(),0);
+		const auto pooled_graph=iga::SplitIntoLobularZones(iga::AggregateTransportGraph(graph,group,groups),3);
+		double volume=0.;
+		for(const double v:pooled_graph.volume_m3)volume+=v;
+		Close(volume,1.,1e-12,"pooled volume");
+		auto pooled_input=TransportInput(3*groups,600.);
+		const auto pooled=iga::SolveOrganTransport(pooled_graph,pooled_input);
+		assert(pooled.newton_failures==0);
+		for(std::size_t s=0;s<iga::OrganSpeciesCount;++s){
+			const double scale=std::max({std::abs(pooled.inflow[s]),std::abs(pooled.reaction[s]),1e-30});
+			assert(std::abs(pooled.balance_defect[s])<=1e-6*scale);
+		}
+	}
 	std::cout<<"cube: Q="<<hemodynamics.root_inflow_m3_s[0]<<" components="<<result.components
 		<<" largest="<<result.largest_component<<" sweeps="<<result.gauss_seidel_sweeps<<'\n';
 }

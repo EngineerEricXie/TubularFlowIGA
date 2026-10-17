@@ -410,7 +410,7 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	RequireKnownKeys(request,{"dt_s","viscosity_pa_s","root_pressure_pa",
 		"specific_conductance_inv_pa_s","mobility_m2_pa_s","inlet","initial",
 		"distribution_volume_fraction","chemistry","kinetics","viability","glycogen_mol_m3",
-		"field_input","field_output","vtk_file","hypoxic_po2_mmhg","tag"},"request");
+		"field_input","field_output","vtk_file","hypoxic_po2_mmhg","tag","resolution"},"request");
 	const std::size_t cells=organ.mesh.cells.size(),zones=organ.zones,nodes=cells*zones;
 	Fields fields;
 	if(const auto* spec=Find(request,"field_input"))
@@ -476,10 +476,74 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 			throw std::invalid_argument("viability must be in [0,1] and glycogen nonnegative");
 		transport.state[i]={viability[i],glycogen[i]};
 	}
-	const auto graph=iga::SplitIntoLobularZones(iga::BuildTetTransportGraph(organ.mesh,
+	// Transport resolution: every cell, one well-mixed pool per territory of the
+	// first inflow tree, or one pool for the organ. Per-node inputs are
+	// volume-averaged into pools and pool results are broadcast back.
+	const std::string resolution=Find(request,"resolution")
+		?RequireString(*Find(request,"resolution"),"resolution"):"cell";
+	std::vector<std::size_t> group(cells,0);
+	std::size_t groups=cells;
+	if(resolution=="cell")std::iota(group.begin(),group.end(),0);
+	else if(resolution=="organ")groups=1;
+	else if(resolution=="portal_territory"){
+		const auto inflow=std::find_if(organ.trees.begin(),organ.trees.end(),
+			[](const iga::PerfusedOrganTree& tree){return tree.inflow;});
+		std::vector<char> assigned(cells,0);
+		groups=0;
+		for(const auto& territory:inflow->territories){
+			for(const auto& entry:territory.second){
+				if(assigned[entry.first])throw std::invalid_argument("inflow territories overlap");
+				assigned[entry.first]=1;
+				group[entry.first]=groups;
+			}
+			++groups;
+		}
+		if(std::find(assigned.begin(),assigned.end(),0)!=assigned.end())
+			throw std::invalid_argument("inflow territories do not cover every cell");
+	}else throw std::invalid_argument("resolution must be cell, portal_territory or organ");
+	const auto cell_graph=iga::BuildTetTransportGraph(organ.mesh,
 		hemodynamics.darcy.conservative_face_flow_m3_s,hemodynamics.cell_exchange_in_m3_s,
-		hemodynamics.cell_exchange_out_m3_s),zones);
-	const auto species=iga::SolveOrganTransport(graph,transport);
+		hemodynamics.cell_exchange_out_m3_s);
+	const bool lumped=resolution!="cell";
+	const auto graph=iga::SplitIntoLobularZones(
+		lumped?iga::AggregateTransportGraph(cell_graph,group,groups):cell_graph,zones);
+	if(lumped){
+		iga::OrganTransportInput pooled=transport;
+		pooled.previous.assign(groups*zones,iga::OrganConcentration{});
+		pooled.state.assign(groups*zones,{0.,0.});
+		std::vector<double> pool_volume(groups*zones,0.);
+		for(std::size_t i=0;i<cells;++i)
+			for(std::size_t z=0;z<zones;++z){
+				const std::size_t node=i*zones+z,pool=group[i]*zones+z;
+				const double v=organ.volume[i];
+				pool_volume[pool]+=v;
+				for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+					pooled.previous[pool][s]+=v*transport.previous[node][s];
+				pooled.state[pool].viability+=v*transport.state[node].viability;
+				pooled.state[pool].glycogen_mol_m3+=v*transport.state[node].glycogen_mol_m3;
+			}
+		for(std::size_t pool=0;pool<groups*zones;++pool){
+			for(auto& value:pooled.previous[pool])value/=pool_volume[pool];
+			pooled.state[pool].viability/=pool_volume[pool];
+			pooled.state[pool].glycogen_mol_m3/=pool_volume[pool];
+		}
+		transport=pooled;
+	}
+	const auto pooled_species=iga::SolveOrganTransport(graph,transport);
+	// Per-node view (cell-major, zone-minor) for outputs and summaries.
+	iga::OrganTransportResult species=pooled_species;
+	std::vector<double> node_volume(nodes);
+	for(std::size_t i=0;i<cells;++i)
+		for(std::size_t z=0;z<zones;++z)node_volume[i*zones+z]=organ.volume[i]/double(zones);
+	if(lumped){
+		species.concentration.resize(nodes);
+		species.rates.resize(nodes);
+		for(std::size_t i=0;i<cells;++i)
+			for(std::size_t z=0;z<zones;++z){
+				species.concentration[i*zones+z]=pooled_species.concentration[group[i]*zones+z];
+				species.rates[i*zones+z]=pooled_species.rates[group[i]*zones+z];
+			}
+	}
 	const auto transport_finished=std::chrono::steady_clock::now();
 
 	// Cell output fields.
@@ -520,8 +584,8 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	const double hypoxic_threshold=NumberOr(request,"hypoxic_po2_mmhg",5.,"request");
 	double hypoxic=0.,o2_uptake=0.;
 	for(std::size_t i=0;i<nodes;++i){
-		if(species.rates[i].po2_mmhg<hypoxic_threshold)hypoxic+=graph.volume_m3[i];
-		o2_uptake+=graph.volume_m3[i]*species.rates[i].o2_uptake;
+		if(species.rates[i].po2_mmhg<hypoxic_threshold)hypoxic+=node_volume[i];
+		o2_uptake+=node_volume[i]*species.rates[i].o2_uptake;
 	}
 	// Last-zone (pericentral) values, one per cell.
 	const auto last_zone=[&](const std::string& name){
@@ -533,7 +597,8 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	Json json;
 	json.Open().Entry("ok",true);
 	if(const auto* tag=Find(request,"tag"))json.Entry("tag",RequireString(*tag,"tag"));
-	json.Entry("cells",cells).Entry("lobular_zones",zones).Entry("volume_m3",organ.total_volume);
+	json.Entry("cells",cells).Entry("lobular_zones",zones).Entry("resolution",resolution)
+		.Entry("transport_pools",groups).Entry("volume_m3",organ.total_volume);
 	json.Key("trees").Open();
 	for(std::size_t t=0;t<organ.trees.size();++t){
 		const auto& tree=organ.trees[t];
@@ -573,7 +638,7 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 	json.Close();
 	json.Key("tissue").Open();
 	for(const char* name:{"po2_mmHg","ph","pco2_mmHg","energy_deficit","lactate_mol_m3","glucose_mol_m3"})
-		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),graph.volume_m3));
+		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),node_volume));
 	for(const char* name:{"perfusion_s_inv","tissue_pressure_pa"})
 		WriteQuantiles(json,name,VolumeQuantiles(out.at(name),organ.volume));
 	WriteQuantiles(json,"last_zone_po2_mmHg",VolumeQuantiles(last_zone("po2_mmHg"),organ.volume));
@@ -749,6 +814,8 @@ int Run(int argc,char** argv)
 int main(int argc,char** argv)
 {
 	if(PetscInitialize(&argc,&argv,nullptr,nullptr))return 1;
+	// Our own --flags are not PETSc options; keep stdout pure JSON.
+	PetscOptionsSetValue(nullptr,"-options_left","no");
 	int status=0;
 	try{status=Run(argc,argv);}
 	catch(const std::exception& error){

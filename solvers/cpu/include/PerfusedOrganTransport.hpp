@@ -83,6 +83,45 @@ inline OrganTransportGraph BuildTetTransportGraph(const NativeTetMesh& mesh,
 	return graph;
 }
 
+// Lumps cells into well-mixed groups (e.g. one per portal territory, or one for
+// the whole organ). Volumes and exchange flows add; flows between different
+// groups add per ordered pair, flows inside a group vanish. Continuity per
+// group follows from continuity per cell.
+inline OrganTransportGraph AggregateTransportGraph(const OrganTransportGraph& cells,
+	const std::vector<std::size_t>& group,std::size_t groups)
+{
+	const std::size_t n=cells.volume_m3.size();
+	if(group.size()!=n||groups==0)throw std::invalid_argument("organ transport grouping is invalid");
+	OrganTransportGraph graph;
+	graph.volume_m3.assign(groups,0.);
+	graph.face_outflow_m3_s.assign(groups,0.);
+	graph.boundary_outflow_m3_s.assign(groups,0.);
+	graph.exchange_in_m3_s.assign(groups,0.);
+	graph.exchange_out_m3_s.assign(groups,0.);
+	graph.upstream.assign(groups,{});
+	std::vector<std::map<std::size_t,double>> inflow(groups);
+	for(std::size_t i=0;i<n;++i){
+		const std::size_t g=group[i];
+		if(g>=groups)throw std::invalid_argument("organ transport group index is invalid");
+		graph.volume_m3[g]+=cells.volume_m3[i];
+		graph.exchange_in_m3_s[g]+=cells.exchange_in_m3_s[i];
+		graph.exchange_out_m3_s[g]+=cells.exchange_out_m3_s[i];
+		graph.boundary_outflow_m3_s[g]+=cells.boundary_outflow_m3_s[i];
+		graph.face_outflow_m3_s[g]+=cells.boundary_outflow_m3_s[i];
+		for(const auto& edge:cells.upstream[i]){
+			const std::size_t from=group[edge.first];
+			if(from==g)continue;
+			inflow[g][from]+=edge.second;
+			graph.face_outflow_m3_s[from]+=edge.second;
+		}
+	}
+	for(std::size_t g=0;g<groups;++g){
+		if(!(graph.volume_m3[g]>0.))throw std::invalid_argument("organ transport group is empty");
+		for(const auto& item:inflow[g])graph.upstream[g].push_back(item);
+	}
+	return graph;
+}
+
 // Splits every cell into `zones` well-mixed lobular zones in series (tanks in
 // series for the sinusoidal path; zones = 3 mirrors hepatic zones 1-3). Node
 // i*zones+z is zone z of cell i with volume V_i/zones. Exchange inflow and
