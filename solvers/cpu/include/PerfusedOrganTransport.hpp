@@ -315,6 +315,10 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 		};
 		double current=norm(r),change=0.;
 		bool converged=current<=1e-12;
+		// The inner pO2 and acid-base solves leave a round-off floor near 1e-10
+		// in this scaled residual: a stall below stall_tolerance is convergence,
+		// a stall above it is a failure.
+		const double stall_tolerance=1e-8;
 		for(int iteration=0;iteration<60&&!converged;++iteration){
 			std::array<std::array<double,OrganSpeciesCount>,OrganSpeciesCount> jacobian{};
 			for(std::size_t s=0;s<OrganSpeciesCount;++s){
@@ -338,9 +342,8 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 				if(trial_norm<current||trial_norm<=1e-12){decreased=true;break;}
 				alpha*=0.5;
 			}
-			// No descent within the line search: keep the iterate; the cell is
-			// reported as a Newton failure unless its residual is already small.
-			if(!decreased)break;
+			// No descent within the line search: keep the iterate.
+			if(!decreased){converged=current<=stall_tolerance;break;}
 			change=0.;
 			for(std::size_t s=0;s<OrganSpeciesCount;++s)
 				change=std::max(change,std::abs(trial[s]-c[s])/scale[s]);
@@ -349,7 +352,7 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 			// A vanishing update (for example a step blocked by the
 			// nonnegativity clip) with a large residual is stagnation, not
 			// convergence.
-			if(change<=1e-13)break;
+			if(change<=1e-13){converged=current<=stall_tolerance;break;}
 		}
 		if(!converged)++result.newton_failures;
 		const double moved=[&]{

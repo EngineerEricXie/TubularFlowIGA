@@ -120,6 +120,10 @@ inline PerfusateAcidBase SolveAcidBase(double buffer_base,double co2_total,
 //    lactate clearance consumes it. Aerobic metabolism adds total CO2 at the
 //    respiratory quotient. pH, HCO3- and pCO2 follow from buffer base and total
 //    CO2 with a linear non-bicarbonate buffer (SolveAcidBase).
+//  - Optional acid inhibition of glycolysis: with glycolysis_ph50 set, lactate
+//    production is scaled by 1/(1 + 10^(n (pH50 - pH))), n = glycolysis_ph_hill.
+//    Without it nothing slows proton release as buffer base runs out, so
+//    anoxic tissue can exhaust buffer base and have no nonnegative solution.
 struct HepaticKinetics
 {
 	double vmax_o2_mol_m3_s=0.;
@@ -145,6 +149,10 @@ struct HepaticKinetics
 	// oxidises other substrate at respiratory_quotient. Zero keeps the
 	// original substrate-free aerobic metabolism.
 	double aerobic_glucose_fraction=0.;
+	// pH of half-maximal glycolysis and the steepness of its acid inhibition;
+	// NaN (the default) disables the inhibition.
+	double glycolysis_ph50=std::numeric_limits<double>::quiet_NaN();
+	double glycolysis_ph_hill=1.;
 	double q10=2.;
 	double temperature_c=37.;
 };
@@ -221,6 +229,12 @@ inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChem
 		throw std::invalid_argument("gluconeogenic fraction must be in [0,1]");
 	if(!std::isfinite(k.temperature_c))
 		throw std::invalid_argument("hepatic kinetics temperature is invalid");
+	if(!std::isnan(k.glycolysis_ph50)){
+		if(!(k.glycolysis_ph50>=5.5&&k.glycolysis_ph50<=9.))
+			throw std::invalid_argument("glycolysis pH50 must lie in the acid-base range [5.5, 9]");
+		if(!(k.glycolysis_ph_hill>0.)||!std::isfinite(k.glycolysis_ph_hill))
+			throw std::invalid_argument("glycolysis pH Hill coefficient must be positive");
+	}
 }
 
 inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration,
@@ -247,7 +261,10 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	const double glucose_share=(1.-glycogen_share)
 		*c[OrganGlucose]/(k.km_glucose_mol_m3+c[OrganGlucose]);
 	const double fuel=glycogen_share+glucose_share;
-	rates.lactate_production=std::min(shortfall,v*k.glycolysis_capacity_mol_m3_s*thermal)*fuel;
+	const double acid_inhibition=std::isnan(k.glycolysis_ph50)?1.
+		:1./(1.+std::pow(10.,k.glycolysis_ph_hill*(k.glycolysis_ph50-rates.ph)));
+	rates.lactate_production=std::min(shortfall,v*k.glycolysis_capacity_mol_m3_s*thermal)*fuel
+		*acid_inhibition;
 	rates.energy_deficit=demand>0.?std::clamp((shortfall-rates.lactate_production)/demand,0.,1.):0.;
 	const double glycolysis_glucose=fuel>0.?0.5*rates.lactate_production*glucose_share/fuel:0.;
 	const double glycolysis_glycogen=fuel>0.?0.5*rates.lactate_production*glycogen_share/fuel:0.;
