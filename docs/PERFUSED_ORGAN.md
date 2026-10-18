@@ -261,7 +261,9 @@ Three optional costs of aggressive control are off by default:
 | Oxidative injury | node pO₂ above `oxidative_injury_threshold_mmhg` | viability decays |
 | Shear injury | tissue pressure above `shear_injury_threshold_pa` | viability decays |
 
-Without them, maximal oxygenation and pressure carry no penalty.
+Without them, maximal oxygenation and pressure carry no penalty. The optional control `gas_co2_fraction` sets the sweep-gas CO₂
+independently of FiO₂. Without it, the Model41 air/carbogen blend is used, in
+which gas CO₂ follows FiO₂.
 
 ## Geometry from a DICOM SEG
 

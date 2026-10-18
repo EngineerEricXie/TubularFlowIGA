@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -176,6 +177,9 @@ struct OrganPlantControls
 	double bolus_volume_m3=0.;
 	double vasodilator_bolus_mg=0.;
 	double temperature_c=37.;
+	// Optional independent CO2 fraction of the dry sweep gas. NaN keeps the
+	// Model41 air/carbogen blend, in which gas CO2 follows FiO2.
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN();
 };
 
 struct OrganPlantState
@@ -237,13 +241,18 @@ inline double Co2TotalAtPco2(double buffer_base,double pco2_mmhg,const Perfusate
 }
 
 inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2,
-	const OrganPlantParameters& p,const PerfusateChemistry& chemistry)
+	const OrganPlantParameters& p,const PerfusateChemistry& chemistry,
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN())
 {
 	if(!(fio2>=p.air_o2_fraction-1e-12&&fio2<=p.carbogen_o2_fraction+1e-12))
 		throw std::invalid_argument("FiO2 must lie between air and carbogen");
 	const double dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
 	const double carbogen=(fio2-p.air_o2_fraction)/(p.carbogen_o2_fraction-p.air_o2_fraction);
-	const double gas_po2=fio2*dry,gas_pco2=std::max(carbogen,0.)*p.carbogen_co2_fraction*dry;
+	const double gas_po2=fio2*dry;
+	if(!std::isnan(gas_co2_fraction)&&!(gas_co2_fraction>=0.&&gas_co2_fraction<=0.2))
+		throw std::invalid_argument("gas CO2 fraction must be in [0, 0.2]");
+	const double gas_pco2=std::isnan(gas_co2_fraction)
+		?std::max(carbogen,0.)*p.carbogen_co2_fraction*dry:gas_co2_fraction*dry;
 	OrganConcentration arterial=venous;
 	const double eta=std::clamp(p.oxygenator_efficiency,0.,1.);
 	const double co2_equilibrium=Co2TotalAtPco2(venous[OrganBufferBase],gas_pco2,chemistry);
@@ -316,7 +325,7 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		chemistry.oxygen.hematocrit_percent=reservoir.hematocrit_percent;
 		chemistry.oxygen.hemoglobin_g_dl=reservoir.hematocrit_percent*p.hemoglobin_per_hematocrit;
 		const auto venous_in=ReservoirComposition(reservoir);
-		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry);
+		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry,controls.gas_co2_fraction);
 		const double drug=state.vasodilator_mg_l;
 		const double dilation=1.+p.vasodilator_emax*drug/(p.vasodilator_ec50_mg_l+drug);
 		const double arterial_po2=PartialPressureO2(arterial[OrganOxygen],

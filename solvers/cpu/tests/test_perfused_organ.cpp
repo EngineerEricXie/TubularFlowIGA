@@ -530,6 +530,17 @@ void TestPlantAdvance()
 		assert(copy.reservoir.species.at(names[iga::OrganGlucose])>inlet[iga::OrganGlucose]);
 		for(const double v:copy.viability)assert(v>0.&&v<=1.);
 	}
+	// An independent sweep-gas CO2 decouples arterial pCO2 from FiO2.
+	{
+		const auto chemistry=Perfusate();
+		const auto venous=Inlet();
+		const auto low=iga::Oxygenate(venous,0.3,p,chemistry,0.05);
+		const auto high=iga::Oxygenate(venous,0.9,p,chemistry,0.05);
+		Close(iga::ReadPerfusate(low,chemistry).pco2_mmhg,iga::ReadPerfusate(high,chemistry).pco2_mmhg,1e-9,
+			"decoupled gas CO2");
+		const auto blended=iga::Oxygenate(venous,0.3,p,chemistry);
+		assert(iga::ReadPerfusate(blended,chemistry).pco2_mmhg<iga::ReadPerfusate(low,chemistry).pco2_mmhg);
+	}
 	// Costs of aggressive control: hyperoxic vasoconstriction lowers flow and
 	// oxidative and shear injury lower viability; all are off by default.
 	{

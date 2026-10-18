@@ -724,7 +724,8 @@ iga::OrganPlantControls ParseControls(const Object& object)
 {
 	using namespace iga::config_detail;
 	RequireKnownKeys(object,{"inlet_pressure_pa","fio2","dialysis_in_m3_s","dialysis_out_m3_s",
-		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c"},"controls");
+		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c",
+		"gas_co2_fraction"},"controls");
 	iga::OrganPlantControls controls;
 	const std::string c="controls";
 	controls.inlet_pressure_pa=Number(object,"inlet_pressure_pa",c);
@@ -740,6 +741,7 @@ iga::OrganPlantControls ParseControls(const Object& object)
 	controls.bolus_volume_m3=NumberOr(object,"bolus_volume_m3",0.,c);
 	controls.vasodilator_bolus_mg=NumberOr(object,"vasodilator_bolus_mg",0.,c);
 	controls.temperature_c=NumberOr(object,"temperature_c",37.,c);
+	controls.gas_co2_fraction=NumberOr(object,"gas_co2_fraction",controls.gas_co2_fraction,c);
 	if(controls.dialysis_in_m3_s>0.){
 		const auto& names=iga::PerfusedOrganSpeciesNames();
 		for(const auto* name:names)
