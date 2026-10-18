@@ -797,6 +797,86 @@ void TestDecoupledGasCo2()
 	assert(!Rejects([&]{iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.1);}));
 }
 
+void TestSweepOxygenator()
+{
+	// A finite sweep gas flow: the exhaust gas closes both gas-side balances,
+	// CO2 removal rises with sweep, and a very large sweep recovers the
+	// infinite-sweep exchanger.
+	const auto plant=MakePlantCase(1.,1.);
+	const auto& p=plant.parameters;
+	const auto chemistry=Perfusate();
+	auto venous=Inlet();
+	venous[iga::OrganOxygen]=1.5;
+	venous[iga::OrganCarbonDioxide]+=3.;
+	const double q=1e-5,fio2=0.21,dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
+	const auto molar=[&](double sweep){
+		return sweep*p.atmospheric_pressure_mmhg*133.322387415/(8.314462618*p.sweep_gas_temperature_k);};
+	double previous_pco2=1e9;
+	for(const double sweep:{2e-6,8e-6,3e-5,1e-4}){
+		const auto out=iga::OxygenateWithSweep(venous,fio2,sweep,q,p,chemistry);
+		const auto inlet=iga::InletGasPartialPressures(fio2,p);
+		const double co2_to_gas=molar(sweep)*(out.exhaust_pco2_mmhg-inlet.second)/dry;
+		Close(co2_to_gas,q*(venous[iga::OrganCarbonDioxide]-out.arterial[iga::OrganCarbonDioxide]),
+			1e-9,"sweep CO2 balance");
+		Close(out.co2_removal_mol_s,co2_to_gas,1e-9,"reported CO2 removal");
+		const double o2_from_gas=molar(sweep)*(inlet.first-out.exhaust_po2_mmhg)/dry;
+		Close(o2_from_gas,q*(out.arterial[iga::OrganOxygen]-venous[iga::OrganOxygen]),
+			1e-9,"sweep O2 balance");
+		const double pco2=iga::ReadPerfusate(out.arterial,chemistry).pco2_mmhg;
+		assert(pco2<previous_pco2);
+		previous_pco2=pco2;
+	}
+	// Compared on a carbogen blend: with CO2-free gas the equilibrium content
+	// is singular at pCO2 = 0.
+	const auto large=iga::OxygenateWithSweep(venous,0.6,1e3,q,p,chemistry);
+	const auto infinite=iga::Oxygenate(venous,0.6,p,chemistry);
+	for(const auto s:{iga::OrganOxygen,iga::OrganCarbonDioxide})
+		Close(large.arterial[s],infinite[s],1e-6,"large sweep recovers the equilibrium exchanger");
+	assert(Rejects([&]{iga::OxygenateWithSweep(venous,fio2,0.,q,p,chemistry);}));
+	// Through the plant: a lower sweep keeps more CO2 in the arterial perfusate.
+	auto low=plant,high=plant;
+	low.controls.fio2=high.controls.fio2=0.21;
+	low.controls.sweep_gas_flow_m3_s=1e-7;
+	high.controls.sweep_gas_flow_m3_s=1e-4;
+	auto low_state=plant.state,high_state=plant.state;
+	const auto low_records=iga::AdvancePerfusedOrganPlant(low.model,low.parameters,low.controls,{},{},
+		low_state,600.,1,"organ");
+	const auto high_records=iga::AdvancePerfusedOrganPlant(high.model,high.parameters,high.controls,{},{},
+		high_state,600.,1,"organ");
+	assert(low_records[0].arterial.pco2_mmhg>high_records[0].arterial.pco2_mmhg);
+	assert(low_records[0].exhaust_pco2_mmhg>high_records[0].exhaust_pco2_mmhg);
+}
+
+void TestInjuryModifiers()
+{
+	// The anoxic cube with acid inhibition: the pH paradox term protects the
+	// acidotic energy-depleted tissue, and hyperglycaemia amplifies its injury.
+	auto plant=MakePlantCase(1.,1.);
+	plant.parameters.kinetics.glycolysis_ph50=6.8;
+	plant.parameters.kinetics.glycolysis_ph_hill=4.;
+	const auto viability=[&](const iga::OrganPlantParameters& parameters){
+		auto state=plant.state;
+		return iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},state,3600.,3,
+			"organ").back().mean_viability;};
+	const double base=viability(plant.parameters);
+	auto acid=plant.parameters;
+	acid.injury_ph50=7.2;
+	assert(viability(acid)>base);
+	auto sugar=plant.parameters;
+	sugar.injury_glucose_threshold_mol_m3=0.;
+	sugar.injury_glucose_gain_per_mol_m3=0.14;
+	assert(viability(sugar)<base);
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantParameters&)>>{
+		[](iga::OrganPlantParameters& q){q.injury_ph50=10.;},
+		[](iga::OrganPlantParameters& q){q.injury_ph50=7.2;q.injury_ph_hill=0.;},
+		[](iga::OrganPlantParameters& q){q.injury_glucose_gain_per_mol_m3=-1.;},
+		[](iga::OrganPlantParameters& q){q.sweep_gas_temperature_k=0.;}}){
+		auto bad=plant.parameters;
+		change(bad);
+		assert(Rejects([&]{viability(bad);}));
+	}
+}
+
 } // namespace
 
 int main(int argc,char** argv)
@@ -822,6 +902,8 @@ int main(int argc,char** argv)
 	TestOxygenatedPlantConserves();
 	TestPlantControlCosts();
 	TestDecoupledGasCo2();
+	TestSweepOxygenator();
+	TestInjuryModifiers();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;

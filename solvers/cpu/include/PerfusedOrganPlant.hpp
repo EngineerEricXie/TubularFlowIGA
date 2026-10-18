@@ -69,12 +69,13 @@ struct OrganStepResult
 // One quasi-steady organ solve at the requested transport resolution
 // ("cell", "portal_territory" or "organ"). Lumped resolutions volume-average
 // the node inputs into pools and broadcast pool results back.
+// The overload taking a flow result reuses hemodynamics the caller already solved.
 inline OrganStepResult StepPerfusedOrgan(const PerfusedOrganModel& model,
-	const PerfusedOrganFlowInput& flow,OrganTransportInput transport,const std::string& resolution)
+	PerfusedOrganFlowResult hemodynamics,OrganTransportInput transport,const std::string& resolution)
 {
 	const std::size_t cells=model.mesh.cells.size(),zones=model.zones,nodes=cells*zones;
 	OrganStepResult result;
-	result.hemodynamics=SolvePerfusedOrganFlow(model.mesh,model.trees,flow);
+	result.hemodynamics=std::move(hemodynamics);
 	std::vector<std::size_t> group(cells,0);
 	std::size_t groups=cells;
 	if(resolution=="cell")std::iota(group.begin(),group.end(),0);
@@ -127,6 +128,12 @@ inline OrganStepResult StepPerfusedOrgan(const PerfusedOrganModel& model,
 	return result;
 }
 
+inline OrganStepResult StepPerfusedOrgan(const PerfusedOrganModel& model,
+	const PerfusedOrganFlowInput& flow,OrganTransportInput transport,const std::string& resolution)
+{
+	return StepPerfusedOrgan(model,SolvePerfusedOrganFlow(model.mesh,model.trees,flow),std::move(transport),resolution);
+}
+
 // Physical parameters of the plant (hidden in the truth, guessed by tools).
 struct OrganPlantParameters
 {
@@ -145,8 +152,19 @@ struct OrganPlantParameters
 	double atmospheric_pressure_mmhg=760.,water_vapour_mmhg=47.;
 	double carbogen_o2_fraction=0.95,carbogen_co2_fraction=0.05,air_o2_fraction=0.21;
 	double oxygenator_efficiency=0.95;
+	// Sweep gas temperature for the molar gas flow when controls set a sweep
+	// flow (see OxygenateWithSweep).
+	double sweep_gas_temperature_k=293.15;
 	// Injury: viable fraction falls while the energy deficit exceeds a threshold.
 	double injury_deficit_threshold=0.2,injury_rate_s_inv=2e-4;
+	// Optional modifiers of the energy-deficit injury rate (off by default):
+	//  - pH paradox: acidosis protects energy-depleted hepatocytes, so the rate
+	//    is scaled by (1 + 10^(n (pH50 - 7.4))) / (1 + 10^(n (pH50 - pH))) at the
+	//    node pH (1 at pH 7.4); NaN pH50 disables it;
+	//  - hyperglycaemia amplifies ischaemic injury: the rate is scaled by
+	//    1 + gain (glucose - threshold)_+.
+	double injury_ph50=std::numeric_limits<double>::quiet_NaN(),injury_ph_hill=5.;
+	double injury_glucose_threshold_mol_m3=10.,injury_glucose_gain_per_mol_m3=0.;
 	// Sinusoidal oedema (per cell) grows with energy deficit and with tissue
 	// pressure above a threshold, resolves first-order, and scales exchange
 	// conductance and mobility by (1 - E)^exponent.
@@ -180,6 +198,10 @@ struct OrganPlantControls
 	// Optional independent CO2 fraction of the dry sweep gas. NaN keeps the
 	// Model41 air/carbogen blend, in which gas CO2 follows FiO2.
 	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN();
+	// Optional sweep gas flow [m^3/s at the sweep gas temperature and
+	// atmospheric pressure]. NaN keeps the infinite-sweep exchanger, whose
+	// blood leaves equilibrated (weighted by efficiency) with the inlet gas.
+	double sweep_gas_flow_m3_s=std::numeric_limits<double>::quiet_NaN();
 };
 
 struct OrganPlantState
@@ -203,6 +225,9 @@ struct OrganPlantRecord
 	double time_s=0.,flow_m3_s=0.,inlet_pressure_pa=0.,reservoir_volume_m3=0.,hematocrit_percent=0.;
 	double vasodilator_mg_l=0.;
 	PerfusateReading arterial,venous;
+	// Oxygenator exhaust gas partial pressures (the inlet gas values without a
+	// sweep flow) and the CO2 the exchanger removed from the blood [mol/s].
+	double exhaust_po2_mmhg=0.,exhaust_pco2_mmhg=0.,oxygenator_co2_removal_mol_s=0.;
 	double hypoxic_volume_fraction=0.,mean_viability=0.,mean_oedema=0.;
 	double last_zone_po2_p05=0.,energy_deficit_mean=0.,energy_deficit_p95=0.,o2_uptake_mol_s=0.;
 	OrganConcentration organ_uptake{};
@@ -244,6 +269,13 @@ inline void ValidatePerfusedOrganPlantParameters(const OrganPlantParameters& p)
 	if(!std::isfinite(p.hyperoxic_constriction_threshold_mmhg)||!std::isfinite(p.oxidative_injury_threshold_mmhg)
 		||!std::isfinite(p.shear_injury_threshold_pa))
 		throw std::invalid_argument("plant control-cost thresholds must be finite");
+	if(!(p.sweep_gas_temperature_k>0.)||!std::isfinite(p.sweep_gas_temperature_k))
+		throw std::invalid_argument("sweep gas temperature must be positive");
+	if(!std::isnan(p.injury_ph50)&&(!(p.injury_ph50>=5.5&&p.injury_ph50<=9.)
+		||!(p.injury_ph_hill>0.)||!std::isfinite(p.injury_ph_hill)))
+		throw std::invalid_argument("injury pH50 must lie in [5.5, 9] with a positive Hill coefficient");
+	if(!nonnegative(p.injury_glucose_gain_per_mol_m3)||!std::isfinite(p.injury_glucose_threshold_mol_m3))
+		throw std::invalid_argument("injury glucose gain must be nonnegative and the threshold finite");
 }
 
 // Restored or initial states must be ones the advance itself can produce.
@@ -296,21 +328,27 @@ inline double Co2TotalAtPco2(double buffer_base,double pco2_mmhg,const Perfusate
 	return std::max(buffer_base-anion-beta*(ph-7.4),0.)+dissolved;
 }
 
-inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2,
-	const OrganPlantParameters& p,const PerfusateChemistry& chemistry,
+// Partial pressures [mmHg] of O2 and CO2 in the dry inlet sweep gas.
+inline std::pair<double,double> InletGasPartialPressures(double fio2,const OrganPlantParameters& p,
 	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN())
 {
 	if(!(fio2>=p.air_o2_fraction-1e-12&&fio2<=p.carbogen_o2_fraction+1e-12))
 		throw std::invalid_argument("FiO2 must lie between air and carbogen");
-	const double dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
-	const double carbogen=(fio2-p.air_o2_fraction)/(p.carbogen_o2_fraction-p.air_o2_fraction);
-	const double gas_po2=fio2*dry;
 	if(!std::isnan(gas_co2_fraction)&&!(gas_co2_fraction>=0.&&gas_co2_fraction<=0.2))
 		throw std::invalid_argument("gas CO2 fraction must be in [0, 0.2]");
 	if(!std::isnan(gas_co2_fraction)&&fio2+gas_co2_fraction>1.+1e-12)
 		throw std::invalid_argument("FiO2 plus the gas CO2 fraction must not exceed 1");
-	const double gas_pco2=std::isnan(gas_co2_fraction)
-		?std::max(carbogen,0.)*p.carbogen_co2_fraction*dry:gas_co2_fraction*dry;
+	const double dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
+	const double carbogen=(fio2-p.air_o2_fraction)/(p.carbogen_o2_fraction-p.air_o2_fraction);
+	return {fio2*dry,std::isnan(gas_co2_fraction)?std::max(carbogen,0.)*p.carbogen_co2_fraction*dry
+		:gas_co2_fraction*dry};
+}
+
+inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2,
+	const OrganPlantParameters& p,const PerfusateChemistry& chemistry,
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN())
+{
+	const auto [gas_po2,gas_pco2]=InletGasPartialPressures(fio2,p,gas_co2_fraction);
 	OrganConcentration arterial=venous;
 	const double eta=std::clamp(p.oxygenator_efficiency,0.,1.);
 	const double co2_equilibrium=Co2TotalAtPco2(venous[OrganBufferBase],gas_pco2,chemistry);
@@ -318,6 +356,64 @@ inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2
 	const double ph=SolveAcidBase(arterial[OrganBufferBase],arterial[OrganCarbonDioxide],chemistry).ph;
 	arterial[OrganOxygen]=eta*OxygenContent(gas_po2,ph,chemistry)+(1.-eta)*venous[OrganOxygen];
 	return arterial;
+}
+
+// Membrane exchanger with a finite sweep gas flow. The gas side is well mixed,
+// so blood leaves equilibrated, weighted by the efficiency eta, with the
+// exhaust gas, whose partial pressures follow from the gas-side balances
+//   pCO2_out = pCO2_in + D q (C_v - C_a) / G,  pO2_out = pO2_in - D q (C_a - C_v) / G,
+// with D the dry gas pressure, q the blood flow and G the molar sweep flow.
+// Each balance is monotone in its exhaust pressure and is solved by bisection,
+// CO2 first and then O2 at the arterial pH. As G grows the exhaust approaches
+// the inlet gas and the result approaches Oxygenate. CO2 removal is mostly
+// sweep-limited, O2 uptake mostly membrane-limited (de Villiers Hugo et al.,
+// J Extra Corpor Technol 2017).
+struct SweepOxygenation
+{
+	OrganConcentration arterial{};
+	double exhaust_po2_mmhg=0.,exhaust_pco2_mmhg=0.,co2_removal_mol_s=0.;
+};
+
+inline SweepOxygenation OxygenateWithSweep(const OrganConcentration& venous,double fio2,double sweep_m3_s,
+	double blood_flow_m3_s,const OrganPlantParameters& p,const PerfusateChemistry& chemistry,
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN())
+{
+	if(!(sweep_m3_s>0.)||!std::isfinite(sweep_m3_s))throw std::invalid_argument("sweep gas flow must be positive");
+	if(!(blood_flow_m3_s>=0.)||!std::isfinite(blood_flow_m3_s))
+		throw std::invalid_argument("oxygenator blood flow must be finite and nonnegative");
+	const auto [po2_in,pco2_in]=InletGasPartialPressures(fio2,p,gas_co2_fraction);
+	const double dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
+	const double molar_sweep=sweep_m3_s*p.atmospheric_pressure_mmhg*133.322387415/(8.314462618*p.sweep_gas_temperature_k);
+	const double scale=dry*blood_flow_m3_s/molar_sweep;     // mmHg per (mol/m^3) of content change
+	const double eta=std::clamp(p.oxygenator_efficiency,0.,1.);
+	const auto bisect=[](auto&& f,double low,double high){
+		for(int i=0;i<200&&high-low>1e-12*std::max(1.,high);++i){
+			const double mid=0.5*(low+high);
+			(f(mid)>0.?high:low)=mid;
+		}
+		return 0.5*(low+high);
+	};
+	SweepOxygenation result;
+	auto& arterial=result.arterial;
+	arterial=venous;
+	const double bb=venous[OrganBufferBase],cv_co2=venous[OrganCarbonDioxide];
+	const double pco2_v=SolveAcidBase(bb,cv_co2,chemistry).pco2_mmhg;
+	const auto arterial_co2=[&](double exhaust){
+		return eta*Co2TotalAtPco2(bb,exhaust,chemistry)+(1.-eta)*cv_co2;};
+	result.exhaust_pco2_mmhg=bisect([&](double exhaust){
+		return exhaust-pco2_in-scale*(cv_co2-arterial_co2(exhaust));},
+		std::min(pco2_in,pco2_v),std::max(pco2_in,pco2_v));
+	arterial[OrganCarbonDioxide]=arterial_co2(result.exhaust_pco2_mmhg);
+	result.co2_removal_mol_s=blood_flow_m3_s*(cv_co2-arterial[OrganCarbonDioxide]);
+	const double ph=SolveAcidBase(bb,arterial[OrganCarbonDioxide],chemistry).ph;
+	const double cv_o2=venous[OrganOxygen];
+	const auto arterial_o2=[&](double exhaust){return eta*OxygenContent(exhaust,ph,chemistry)+(1.-eta)*cv_o2;};
+	const double po2_v=PartialPressureO2(cv_o2,ph,chemistry);
+	result.exhaust_po2_mmhg=bisect([&](double exhaust){
+		return exhaust-po2_in+scale*(arterial_o2(exhaust)-cv_o2);},
+		0.,2.*std::max(po2_in,po2_v)+10.);
+	arterial[OrganOxygen]=arterial_o2(result.exhaust_po2_mmhg);
+	return result;
 }
 
 inline OrganConcentration ReservoirComposition(const ReservoirState& reservoir)
@@ -385,7 +481,8 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		chemistry.oxygen.hematocrit_percent=reservoir.hematocrit_percent;
 		chemistry.oxygen.hemoglobin_g_dl=reservoir.hematocrit_percent*p.hemoglobin_per_hematocrit;
 		const auto venous_in=ReservoirComposition(reservoir);
-		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry,controls.gas_co2_fraction);
+		auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry,controls.gas_co2_fraction);
+		const bool sweep=!std::isnan(controls.sweep_gas_flow_m3_s);
 		const double drug=state.vasodilator_mg_l;
 		const double dilation=1.+p.vasodilator_emax*drug/(p.vasodilator_ec50_mg_l+drug);
 		const double arterial_po2=PartialPressureO2(arterial[OrganOxygen],
@@ -424,10 +521,24 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		transport.kinetics=p.kinetics;
 		transport.kinetics.temperature_c=controls.temperature_c;
 		transport.chemistry=chemistry;
-		auto organ=StepPerfusedOrgan(model,flow,transport,resolution);
+		// With a sweep flow the exchanger depends on the blood flow, so the flow
+		// is solved first; the optional hyperoxic constriction above still uses
+		// the gas-equilibrium arterial pO2.
+		auto hemodynamics=SolvePerfusedOrganFlow(model.mesh,model.trees,flow);
+		const double q=std::accumulate(hemodynamics.cell_exchange_in_m3_s.begin(),
+			hemodynamics.cell_exchange_in_m3_s.end(),0.);
+		const auto inlet_gas=InletGasPartialPressures(controls.fio2,p,controls.gas_co2_fraction);
+		double exhaust_po2=inlet_gas.first,exhaust_pco2=inlet_gas.second;
+		if(sweep){
+			const auto exchanged=OxygenateWithSweep(venous_in,controls.fio2,controls.sweep_gas_flow_m3_s,q,p,
+				chemistry,controls.gas_co2_fraction);
+			arterial=exchanged.arterial;
+			exhaust_po2=exchanged.exhaust_po2_mmhg;
+			exhaust_pco2=exchanged.exhaust_pco2_mmhg;
+			transport.inlet=arterial;
+		}
+		auto organ=StepPerfusedOrgan(model,std::move(hemodynamics),transport,resolution);
 		const auto& species=organ.species;
-		const double q=std::accumulate(organ.hemodynamics.cell_exchange_in_m3_s.begin(),
-			organ.hemodynamics.cell_exchange_in_m3_s.end(),0.);
 
 		// Reservoir: organ uptake at the arterial composition; O2 and CO2 are
 		// reset by the gas exchanger on every pass.
@@ -449,7 +560,12 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		std::vector<double> cell_deficit(cells,0.);
 		for(std::size_t n=0;n<nodes;++n){
 			const auto& rates=species.rates[n];
-			const double excess=std::max(rates.energy_deficit-p.injury_deficit_threshold,0.);
+			double excess=std::max(rates.energy_deficit-p.injury_deficit_threshold,0.);
+			if(!std::isnan(p.injury_ph50))
+				excess*=(1.+std::pow(10.,p.injury_ph_hill*(p.injury_ph50-7.4)))
+					/(1.+std::pow(10.,p.injury_ph_hill*(p.injury_ph50-rates.ph)));
+			excess*=1.+p.injury_glucose_gain_per_mol_m3
+				*std::max(species.concentration[n][OrganGlucose]-p.injury_glucose_threshold_mol_m3,0.);
 			const double hyperoxia=std::max(rates.po2_mmhg-p.oxidative_injury_threshold_mmhg,0.)/100.;
 			const double shear=std::max(organ.hemodynamics.cell_mean_pressure_pa[n/model.zones]
 				-p.shear_injury_threshold_pa,0.);
@@ -479,6 +595,9 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		record.hematocrit_percent=circuit.State().hematocrit_percent;
 		record.vasodilator_mg_l=state.vasodilator_mg_l;
 		record.arterial=ReadPerfusate(arterial,chemistry);
+		record.exhaust_po2_mmhg=exhaust_po2;
+		record.exhaust_pco2_mmhg=exhaust_pco2;
+		record.oxygenator_co2_removal_mol_s=q*(venous_in[OrganCarbonDioxide]-arterial[OrganCarbonDioxide]);
 		// Venous effluent: the organ outflow mixed (before the reservoir).
 		OrganConcentration venous{};
 		double out=0.;

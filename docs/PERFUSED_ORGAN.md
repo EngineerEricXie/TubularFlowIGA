@@ -221,18 +221,36 @@ solves.
 
 Each substep runs in this order:
 
-1. The reservoir perfusate passes the gas exchanger. The gas is air blended with
-   carbogen (95 % O₂, 5 % CO₂), so the gas pCO₂ rises with FiO₂, matching
-   Model41. Arterial O₂ and total CO₂ are efficiency-weighted blends of the gas
-   equilibrium and the venous values.
-2. The organ is solved at the controlled portal pressure. Oedema and
+1. The organ flow is solved at the controlled portal pressure. Oedema and
    vasodilator scale the per-cell conductances.
-3. `AdvanceWithUptake` integrates the reservoir. It linearises organ uptake as
+2. The reservoir perfusate passes the gas exchanger. The gas is air blended with
+   carbogen (95 % O₂, 5 % CO₂), so the gas pCO₂ rises with FiO₂, matching
+   Model41. Arterial O₂ and total CO₂ are efficiency-weighted blends of the
+   equilibrium with the exhaust gas and the venous values.
+   - Without `sweep_gas_flow_m3_s` the sweep is infinite: the exhaust equals
+     the inlet gas.
+   - With it, the gas side is well mixed. The exhaust pCO₂ and pO₂ close the
+     gas-side balances `pCO₂_out = pCO₂_in + D·q·(C_v − C_a)/G` and
+     `pO₂_out = pO₂_in − D·q·(C_a − C_v)/G`, where `D` is the dry gas
+     pressure, `q` the organ flow and `G` the molar sweep flow at
+     `sweep_gas_temperature_k`. Both are solved by bisection, CO₂ first.
+   - CO₂ removal then rises with sweep and saturates at the membrane
+     efficiency, while O₂ uptake depends little on sweep. This matches the
+     sweep-driven CO₂ removal measured in membrane oxygenators (de Villiers
+     Hugo et al., J Extra Corpor Technol 2017).
+3. The organ transport is solved with that arterial inflow.
+4. `AdvanceWithUptake` integrates the reservoir. It linearises organ uptake as
    first-order clearance and treats production as a constant source, then
    solves each species' linear ODE exactly, including volume change from
    dialysis. The update is therefore stable for any step.
-4. The slow tissue states advance:
-   - viability falls while the energy deficit exceeds a threshold;
+5. The slow tissue states advance:
+   - viability falls while the energy deficit exceeds a threshold. Two
+     optional modifiers scale that rate. The pH paradox factor
+     `(1 + 10^(n(pH50 − 7.4)))/(1 + 10^(n(pH50 − pH)))`, at the node pH, lets
+     acidosis protect energy-depleted hepatocytes (Gores et al., Am J Physiol
+     1988; Currin et al., FASEB J 1991). The factor `1 + gain·(glucose −
+     threshold)₊` lets hyperglycaemia amplify ischaemic injury (Behrends et
+     al., J Gastrointest Surg 2010);
    - glycogen integrates its rate;
    - sinusoidal oedema grows with the energy deficit and with tissue pressure
      above a threshold, resolves first-order, and compresses conductance by
@@ -245,7 +263,8 @@ Each request carries:
   guessed by the tools;
 - `controls`: `inlet_pressure_pa`, `fio2`, dialysis in/out flows and
   dialysate, `infusion_rates`, `bolus`, `vasodilator_bolus_mg`,
-  `temperature_c`;
+  `temperature_c`, and the optional `gas_co2_fraction` and
+  `sweep_gas_flow_m3_s`;
 - the state: either `initial_state`, or `state_in` with `json` and `fields`
   paths;
 - optional `state_out` and `heterogeneity` (per-cell `mobility_scale` and
@@ -311,9 +330,15 @@ Without them, maximal oxygenation and pressure carry no penalty. The shear
 injury is driven by mean cell tissue pressure, a proxy for sinusoidal shear;
 no wall shear stress is computed.
 
+The injury modifiers are also off by default: `injury_ph50` is NaN, and
+`injury_glucose_gain_per_mol_m3` is 0.
+
 The optional control `gas_co2_fraction`, in [0, 0.2], sets the sweep-gas CO₂
 independently of FiO₂. FiO₂ plus the fraction must not exceed 1. Without it,
 the Model41 air/carbogen blend is used, in which gas CO₂ follows FiO₂.
+
+Each record also reports `oxygenator`: the exhaust pO₂ and pCO₂, and
+`co2_removal_mol_s`.
 
 ## Geometry from a DICOM SEG
 
@@ -374,6 +399,12 @@ checks the following:
     its inflow at every resolution.
   - On that variant the control costs lower flow and viability without
     Newton failures.
+  - The sweep exchanger closes both gas-side balances to 1e-9.
+    - CO₂ removal rises with sweep.
+    - A very large sweep reproduces the infinite-sweep exchanger.
+    - In the plant, a lower sweep raises arterial and exhaust pCO₂.
+  - With acid inhibition, the pH-paradox factor raises viability and the
+    glucose factor lowers it.
   - Invalid parameters and states are rejected.
 
 `cpu.native_tet_perfused_organ_cli_test`
@@ -389,6 +420,9 @@ organ that it builds with the standard library. It checks:
   control-cost rate;
 - that `gas_co2_fraction` fixes arterial pCO₂ whatever the FiO₂, and that an
   out-of-range fraction is rejected;
+- that a lower `sweep_gas_flow_m3_s` raises arterial and exhaust pCO₂, that a
+  nonpositive sweep is rejected, and that the injury-modifier keys are
+  accepted;
 - the `--serve` exit protocol.
 
 ## Limitations
