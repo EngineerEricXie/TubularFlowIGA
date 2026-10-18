@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -25,13 +26,41 @@ struct NativeTetWallExchange
 	double external_concentration_mol_m3=0.;
 };
 
+enum class NativeTetSpeciesTimeIntegration
+{
+	BackwardEuler,
+	// Second-order backward differentiation on a mesh that does not move. The
+	// caller supplies the concentration two steps back and uses backward Euler
+	// for the first step.
+	Bdf2,
+};
+
+// Optional per-step settings. Defaults reproduce the backward-Euler scheme.
+struct NativeTetMovingSpeciesStepOptions
+{
+	NativeTetSpeciesTimeIntegration time_integration=
+		NativeTetSpeciesTimeIntegration::BackwardEuler;
+	// Concentration two steps back (BDF2 only), one value per vertex.
+	std::vector<double> older_concentration_mol_m3;
+	// Galerkin transport can undershoot slightly. When true, finite negative
+	// concentrations are accepted as input history instead of rejected.
+	bool allow_negative_concentration=false;
+	// Boundary labels whose vertices are fixed to the label's inflow
+	// concentration (strong Dirichlet inflow). The default treats inflow
+	// weakly through the prescribed advective flux.
+	std::set<int> dirichlet_labels;
+};
+
 // Concentration is mol/m^3. Boundary flux and source budgets are mol/s.
-// The conservative backward-Euler inventory uses each step's own geometry.
+// The conservative inventory uses each step's own geometry; with BDF2 the
+// inventory time derivative is (3 I^{n+1} - 4 I^n + I^{n-1}) / (2 dt).
 struct NativeTetMovingSpeciesStep
 {
 	std::vector<double> concentration_mol_m3;
+	double older_inventory_mol=0.;
 	double previous_inventory_mol=0.;
 	double current_inventory_mol=0.;
+	double inventory_rate_mol_s=0.;
 	double outward_advective_flux_mol_s=0.;
 	std::map<int,double> outward_advective_flux_by_label_mol_s;
 	std::map<int,double> outward_relative_flow_by_label_m3_s;
@@ -41,6 +70,10 @@ struct NativeTetMovingSpeciesStep
 	double reaction_sink_mol_s=0.;
 	double outward_wall_exchange_mol_s=0.;
 	std::map<int,double> outward_wall_exchange_by_label_mol_s;
+	// Constraint reaction of strong Dirichlet labels (mol/s): the residual of
+	// their unconstrained rows. Outward transfer on such a label is its weak
+	// advective flux minus this reaction (advection plus diffusion).
+	std::map<int,double> dirichlet_reaction_by_label_mol_s;
 	double balance_defect_mol_s=0.;
 };
 
@@ -60,6 +93,11 @@ struct NativeTetMovingSpeciesAssembly
 	double first_order_decay_rate_s_inv=0.;
 	std::map<int,std::vector<double>> wall_exchange_coefficients_by_label;
 	std::map<int,double> wall_exchange_constant_by_label_mol_s;
+	// Strong Dirichlet vertices: value and owning label (first label wins at a
+	// shared rim). The solver fills the global constraint reaction per label.
+	std::map<std::uint32_t,double> dirichlet_value_by_node;
+	std::map<std::uint32_t,int> dirichlet_label_by_node;
+	std::map<int,double> dirichlet_reaction_by_label_mol_s;
 };
 
 namespace native_tet_moving_species_detail {
@@ -122,6 +160,24 @@ inline std::map<Face,FaceOwner> BoundaryOwners(const NativeTetMesh& mesh)
 				throw std::invalid_argument("native moving species mesh is nonmanifold");
 		}
 	return owners;
+}
+
+// This rank's part of the constraint reaction sum_j A_ij c_j - b_i over the
+// unconstrained Dirichlet rows, by label. Ranks' parts add to the global value.
+inline std::map<int,double> DirichletReaction(const NativeTetMovingSpeciesAssembly& assembly,
+	const std::vector<double>& concentration)
+{
+	std::map<int,double> reaction;
+	for(const auto& item:assembly.dirichlet_label_by_node)
+		reaction.try_emplace(item.second,0.);
+	for(const auto& entry:assembly.matrix){
+		const auto found=assembly.dirichlet_label_by_node.find(entry.first.first);
+		if(found!=assembly.dirichlet_label_by_node.end())
+			reaction[found->second]+=entry.second*concentration[entry.first.second];
+	}
+	for(const auto& item:assembly.dirichlet_label_by_node)
+		reaction[item.second]-=assembly.rhs[item.first];
+	return reaction;
 }
 
 inline std::vector<double> SolveDense(std::vector<double> matrix,
@@ -190,7 +246,8 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
 	const std::vector<double>& cell_source_mol_m3_s={},
-	const std::vector<std::uint8_t>& cell_owned={})
+	const std::vector<std::uint8_t>& cell_owned={},
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
 	// This rank assembles the cells of `cell_owned` (one flag per cell, for
 	// example a mesh partition's owned cells); empty takes cells round-robin.
@@ -230,9 +287,24 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 			||previous_mesh.boundary_triangles[face].boundary_label
 				!=current_mesh.boundary_triangles[face].boundary_label)
 			throw std::invalid_argument("native moving species boundary changed during the step");
+	const bool bdf2=options.time_integration==NativeTetSpeciesTimeIntegration::Bdf2;
+	const auto valid_history=[&](double concentration){
+		return std::isfinite(concentration)
+			&&(options.allow_negative_concentration||concentration>=0.);};
 	for(const double concentration:previous_concentration_mol_m3)
-		if(!std::isfinite(concentration)||concentration<0.)
+		if(!valid_history(concentration))
 			throw std::invalid_argument("native moving species previous concentration is invalid");
+	if(bdf2){
+		if(options.older_concentration_mol_m3.size()!=nodes)
+			throw std::invalid_argument("native moving species BDF2 needs the older concentration");
+		for(const double concentration:options.older_concentration_mol_m3)
+			if(!valid_history(concentration))
+				throw std::invalid_argument("native moving species older concentration is invalid");
+		for(std::size_t node=0;node<nodes;++node)
+			if(previous_mesh.points[node]!=current_mesh.points[node])
+				throw std::invalid_argument("native moving species BDF2 needs a mesh that does not move");
+	}else if(!options.older_concentration_mol_m3.empty())
+		throw std::invalid_argument("native moving species older concentration needs BDF2");
 	for(std::size_t node=0;node<nodes;++node)
 		for(int component=0;component<3;++component){
 			const double velocity=mesh_velocity_nodes_m_s[node][component];
@@ -304,6 +376,21 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 			std::vector<double>(nodes,0.));
 		assembly.wall_exchange_constant_by_label_mol_s.emplace(item.first,0.);
 	}
+	for(const int label:options.dirichlet_labels){
+		if(!assembly.outward_coefficients_by_label.count(label))
+			throw std::invalid_argument("native moving species Dirichlet label is missing");
+		if(!inflow_concentration_mol_m3.count(label))
+			throw std::invalid_argument("native moving species Dirichlet label has no inflow concentration");
+		if(wall_exchange.count(label))
+			throw std::invalid_argument("native moving species Dirichlet label also has wall exchange");
+		assembly.dirichlet_reaction_by_label_mol_s.emplace(label,0.);
+	}
+	for(const auto& triangle:current_mesh.boundary_triangles)
+		if(options.dirichlet_labels.count(triangle.boundary_label))
+			for(const auto node:triangle.nodes)
+				if(assembly.dirichlet_label_by_node.emplace(node,triangle.boundary_label).second)
+					assembly.dirichlet_value_by_node.emplace(node,
+						inflow_concentration_mol_m3.at(triangle.boundary_label));
 	auto& matrix=assembly.matrix;
 	auto& rhs=assembly.rhs;
 	auto& outward_coefficients=assembly.outward_coefficients;
@@ -328,12 +415,15 @@ inline NativeTetMovingSpeciesAssembly AssembleNativeTetMovingSpeciesStep(
 			for(std::size_t column=0;column<4;++column){
 				const auto global_column=cell.nodes[column];
 				const double factor=row==column?2.:1.;
+				// Consistent mass. BDF2: 3/2 at n+1, 2 at n and -1/2 at n-1.
 				matrix[{global_row,global_column}]
-					+=current_volume*factor/(20.*dt_s);
+					+=(bdf2?1.5:1.)*current_volume*factor/(20.*dt_s);
 				matrix[{global_row,global_column}]
 					+=first_order_decay_rate_s_inv*current_volume*factor/20.;
 				rhs[global_row]+=previous_volume*factor/(20.*dt_s)
-					*previous_concentration_mol_m3[global_column];
+					*(bdf2?2.*previous_concentration_mol_m3[global_column]
+						-0.5*options.older_concentration_mol_m3[global_column]
+						:previous_concentration_mol_m3[global_column]);
 				const auto& a=geometry.barycentric_gradients[row];
 				const auto& b=geometry.barycentric_gradients[column];
 				matrix[{global_row,global_column}]+=diffusivity_m2_s
@@ -538,8 +628,13 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 	const std::vector<double>& previous_concentration_mol_m3,
 	std::vector<double> current_concentration_mol_m3,
 	const NativeTetMovingSpeciesAssembly& assembly,double dt_s,
-	bool require_nonnegative=false)
+	bool require_nonnegative=false,
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
+	const bool bdf2=options.time_integration==NativeTetSpeciesTimeIntegration::Bdf2;
+	// Monotone graph diffusion bounds backward Euler only; BDF2 and signed
+	// Galerkin histories are reported as computed.
+	require_nonnegative=require_nonnegative&&!bdf2&&!options.allow_negative_concentration;
 	if(current_concentration_mol_m3.size()!=current_mesh.points.size()
 		||assembly.outward_coefficients.size()!=current_mesh.points.size()
 		||!(dt_s>0.))
@@ -561,6 +656,15 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 		previous_mesh,previous_concentration_mol_m3);
 	result.current_inventory_mol=native_tet_moving_species_detail::Inventory(
 		current_mesh,result.concentration_mol_m3);
+	if(bdf2){
+		if(options.older_concentration_mol_m3.size()!=current_mesh.points.size())
+			throw std::invalid_argument("native moving species BDF2 needs the older concentration");
+		result.older_inventory_mol=native_tet_moving_species_detail::Inventory(
+			previous_mesh,options.older_concentration_mol_m3);
+		result.inventory_rate_mol_s=(1.5*result.current_inventory_mol
+			-2.*result.previous_inventory_mol+0.5*result.older_inventory_mol)/dt_s;
+	}else result.inventory_rate_mol_s=(result.current_inventory_mol
+		-result.previous_inventory_mol)/dt_s;
 	result.outward_advective_flux_mol_s=assembly.incoming_flux_mol_s;
 	result.outward_relative_flow_by_label_m3_s=
 		assembly.outward_relative_flow_by_label_m3_s;
@@ -579,6 +683,18 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 	for(std::size_t node=0;node<assembly.nodes;++node)
 		result.outward_advective_flux_mol_s+=assembly.outward_coefficients[node]
 			*result.concentration_mol_m3[node];
+	if(!assembly.dirichlet_label_by_node.empty()){
+		for(const auto& item:assembly.dirichlet_value_by_node){
+			const double actual=result.concentration_mol_m3[item.first];
+			if(std::abs(actual-item.second)>1e-8*std::max(1.,std::abs(item.second)))
+				throw std::runtime_error("native moving species Dirichlet value was not imposed");
+		}
+		result.dirichlet_reaction_by_label_mol_s=assembly.dirichlet_reaction_by_label_mol_s;
+		for(const auto& item:assembly.dirichlet_reaction_by_label_mol_s){
+			result.outward_advective_flux_by_label_mol_s.at(item.first)-=item.second;
+			result.outward_advective_flux_mol_s-=item.second;
+		}
+	}
 	result.source_mol_s=assembly.source_mol_s;
 	result.reaction_sink_mol_s=assembly.first_order_decay_rate_s_inv
 		*result.current_inventory_mol;
@@ -591,8 +707,7 @@ inline NativeTetMovingSpeciesStep FinishNativeTetMovingSpeciesStep(
 		result.outward_wall_exchange_by_label_mol_s.emplace(item.first,flux);
 		result.outward_wall_exchange_mol_s+=flux;
 	}
-	result.balance_defect_mol_s=(result.current_inventory_mol
-		-result.previous_inventory_mol)/dt_s
+	result.balance_defect_mol_s=result.inventory_rate_mol_s
 		+result.outward_advective_flux_mol_s+result.reaction_sink_mol_s
 		+result.outward_wall_exchange_mol_s
 		-result.source_mol_s;
@@ -611,7 +726,8 @@ inline NativeTetMovingSpeciesStep SolveNativeTetMovingSpeciesDenseStep(
 	bool monotone=false,double first_order_decay_rate_s_inv=0.,
 	const std::map<int,NativeTetWallExchange>& wall_exchange={},
 	const std::vector<std::array<double,4>>& rt0_face_flow_m3_s={},
-	const std::vector<double>& cell_source_mol_m3_s={})
+	const std::vector<double>& cell_source_mol_m3_s={},
+	const NativeTetMovingSpeciesStepOptions& options={})
 {
 	if(current_mesh.points.size()>128)
 		throw std::invalid_argument("native moving species dense limit is 128 vertices");
@@ -620,16 +736,25 @@ inline NativeTetMovingSpeciesStep SolveNativeTetMovingSpeciesDenseStep(
 		previous_concentration_mol_m3,inflow_concentration_mol_m3,
 		diffusivity_m2_s,source_mol_m3_s,dt_s,0,1,monotone,
 		first_order_decay_rate_s_inv,wall_exchange,rt0_face_flow_m3_s,
-		cell_source_mol_m3_s);
+		cell_source_mol_m3_s,{},options);
 	std::vector<double> matrix(assembly.nodes*assembly.nodes,0.);
 	for(const auto& entry:assembly.matrix)
 		matrix[static_cast<std::size_t>(entry.first.first)*assembly.nodes
 			+entry.first.second]=entry.second;
+	auto right=assembly.rhs;
+	for(const auto& item:assembly.dirichlet_value_by_node){
+		std::fill_n(matrix.begin()+static_cast<std::ptrdiff_t>(item.first*assembly.nodes),
+			assembly.nodes,0.);
+		matrix[item.first*assembly.nodes+item.first]=1.;
+		right[item.first]=item.second;
+	}
 	auto solution=native_tet_moving_species_detail::SolveDense(
-		std::move(matrix),assembly.rhs);
+		std::move(matrix),right);
+	assembly.dirichlet_reaction_by_label_mol_s=
+		native_tet_moving_species_detail::DirichletReaction(assembly,solution);
 	return FinishNativeTetMovingSpeciesStep(previous_mesh,current_mesh,
 		previous_concentration_mol_m3,std::move(solution),assembly,dt_s,
-		monotone);
+		monotone,options);
 }
 
 // Adapter for the native Taylor-Hood flow state, whose pressure tail is not

@@ -349,30 +349,43 @@ public:
 		RequirePhase(Phase::Committed, "capture checkpoint");
 		if (!committed_step_count_ || !committed_port_ || !committed_accounting_)
 			throw std::runtime_error("0D checkpoint requires an accepted step");
-		ZeroDFlowCheckpointState result{domain_id_, ModelIdentitySha256(), committed_step_,
-			committed_state_, *committed_port_, *committed_accounting_};
-		ValidateCheckpointState(result);
+		const auto& accepted = AcceptedModel();
+		ZeroDFlowCheckpointState result{domain_id_, BuildZeroDFlowModelIdentitySha256(accepted),
+			committed_step_, committed_state_, *committed_port_, *committed_accounting_};
+		ValidateCheckpointState(result, accepted);
 		return result;
 	}
+
+	// Model under which the committed step was accepted. It differs from
+	// Model() only after RestoreCheckpointStateUnderModel and until the next
+	// commit.
+	const ZeroDFlowModel& AcceptedModel() const noexcept
+	{ return restored_model_ ? *restored_model_ : model_; }
 
 	// Local candidate initialization. The graph coordinator must restore all
 	// domains into unpublished owners, agree on success, then publish together.
 	// Validation/copies finish before the first accepted datum is changed.
 	void RestoreCheckpointState(ZeroDFlowCheckpointState value)
 	{
-		RequirePhase(Phase::Committed, "restore checkpoint");
-		if (committed_step_count_)
-			throw std::runtime_error("0D checkpoint restore requires a fresh runtime");
-		ValidateCheckpointState(value);
-		Staged restored{value.state, std::move(value.port), value.accounting};
-		static_assert(noexcept(committed_port_.swap(restored.port)) && noexcept(committed_accounting_.swap(restored.accounting)),
-			"validated 0D checkpoint publication must not throw");
-		committed_port_.swap(restored.port); committed_accounting_.swap(restored.accounting);
-		committed_state_ = restored.state;
-		committed_step_ = value.accepted_step;
-		committed_time_s_ = committed_step_.EndTime();
-		committed_step_index_ = committed_step_.step_index;
-		committed_step_count_ = static_cast<std::size_t>(committed_step_index_)+1;
+		RestoreValidated(std::move(value), model_, std::nullopt);
+	}
+
+	// Explicit boundary-value update across a restart: `value` was accepted
+	// under `accepted_model`, which must share this runtime's role and
+	// capacitance (so the stored volume C*p stays continuous). The committed
+	// state is validated against `accepted_model`; the next step uses Model().
+	void RestoreCheckpointStateUnderModel(ZeroDFlowCheckpointState value,
+		const ZeroDFlowModel& accepted_model)
+	{
+		ValidateZeroDFlowModel(accepted_model);
+		const bool source = model_.role == ZeroDFlowRole::SourceReservoir;
+		if (accepted_model.role != model_.role
+			|| (source ? accepted_model.source.capacitance_m3_pa != model_.source.capacitance_m3_pa
+				: accepted_model.terminal.capacitance_m3_pa != model_.terminal.capacitance_m3_pa))
+			throw std::runtime_error("0D boundary update cannot change the role or capacitance");
+		const bool same = BuildZeroDFlowModelIdentitySha256(accepted_model) == ModelIdentitySha256();
+		RestoreValidated(std::move(value), accepted_model,
+			same ? std::nullopt : std::optional<ZeroDFlowModel>(accepted_model));
 	}
 
 	void BeginStep(const DomainStepContext& step) override
@@ -489,11 +502,32 @@ public:
 		committed_step_index_ = step_.step_index;
 		++committed_step_count_;
 		input_.reset(); trial_.reset(); trial_accounting_.reset(); staged_.reset();
+		restored_model_.reset();
 		phase_ = Phase::Committed;
 	}
 
 private:
 	enum class Phase { Committed, TrialReady, TrialSolved, Prepared };
+
+	void RestoreValidated(ZeroDFlowCheckpointState value, const ZeroDFlowModel& model,
+		std::optional<ZeroDFlowModel> restored_model)
+	{
+		RequirePhase(Phase::Committed, "restore checkpoint");
+		if (committed_step_count_)
+			throw std::runtime_error("0D checkpoint restore requires a fresh runtime");
+		ValidateCheckpointState(value, model);
+		Staged restored{value.state, std::move(value.port), value.accounting};
+		static_assert(noexcept(committed_port_.swap(restored.port)) && noexcept(committed_accounting_.swap(restored.accounting))
+			&& noexcept(restored_model_.swap(restored_model)),
+			"validated 0D checkpoint publication must not throw");
+		committed_port_.swap(restored.port); committed_accounting_.swap(restored.accounting);
+		restored_model_.swap(restored_model);
+		committed_state_ = restored.state;
+		committed_step_ = value.accepted_step;
+		committed_time_s_ = committed_step_.EndTime();
+		committed_step_index_ = committed_step_.step_index;
+		committed_step_count_ = static_cast<std::size_t>(committed_step_index_)+1;
+	}
 
 	struct Staged {
 		ZeroDFlowState state;
@@ -501,9 +535,11 @@ private:
 		std::optional<ZeroDFlowStepAccounting> accounting;
 	};
 
-	void ValidateCheckpointState(const ZeroDFlowCheckpointState& value) const
+	void ValidateCheckpointState(const ZeroDFlowCheckpointState& value,
+		const ZeroDFlowModel& model) const
 	{
-		if (value.domain_id != domain_id_ || value.model_identity_sha256 != ModelIdentitySha256())
+		if (value.domain_id != domain_id_
+			|| value.model_identity_sha256 != BuildZeroDFlowModelIdentitySha256(model))
 			throw std::runtime_error("0D checkpoint domain or model differs");
 		value.accepted_step.Validate(); ValidateZeroDFlowState(value.state);
 		ValidatePortState(value.port); ValidateZeroDFlowStepAccounting(value.accounting);
@@ -514,20 +550,20 @@ private:
 			throw std::runtime_error("0D checkpoint accepted port is inconsistent");
 		const double dt = value.accepted_step.dt_s, pressure = value.state.stored_pressure_pa;
 		const double flow = *port.outward_flow_m3_s;
-		const bool source = model_.role == ZeroDFlowRole::SourceReservoir;
-		const double capacitance = source ? model_.source.capacitance_m3_pa : model_.terminal.capacitance_m3_pa;
+		const bool source = model.role == ZeroDFlowRole::SourceReservoir;
+		const double capacitance = source ? model.source.capacitance_m3_pa : model.terminal.capacitance_m3_pa;
 		if (accounting.final_stored_volume_m3 != capacitance*pressure
 			|| accounting.outward_graph_port_amount_m3 != flow*dt)
 			throw std::runtime_error("0D checkpoint state and accounting differ");
 		if (source) {
-			if (flow != (pressure-*port.mean_pressure_pa)/model_.source.resistance_pa_s_m3
-				|| accounting.prescribed_source_amount_m3 != model_.source.prescribed_flow_m3_s*dt
+			if (flow != (pressure-*port.mean_pressure_pa)/model.source.resistance_pa_s_m3
+				|| accounting.prescribed_source_amount_m3 != model.source.prescribed_flow_m3_s*dt
 				|| accounting.distal_sink_amount_m3 != 0.0)
 				throw std::runtime_error("0D source checkpoint is inconsistent with its model");
 		} else {
-			if (*port.mean_pressure_pa != pressure+model_.terminal.proximal_resistance_pa_s_m3*(-flow)
-				|| accounting.distal_sink_amount_m3 != ((pressure-model_.terminal.distal_pressure_pa)
-					/model_.terminal.distal_resistance_pa_s_m3)*dt
+			if (*port.mean_pressure_pa != pressure+model.terminal.proximal_resistance_pa_s_m3*(-flow)
+				|| accounting.distal_sink_amount_m3 != ((pressure-model.terminal.distal_pressure_pa)
+					/model.terminal.distal_resistance_pa_s_m3)*dt
 				|| accounting.prescribed_source_amount_m3 != 0.0)
 				throw std::runtime_error("0D terminal checkpoint is inconsistent with its model");
 		}
@@ -570,6 +606,7 @@ private:
 	std::optional<Staged> staged_;
 	std::optional<PortState> committed_port_;
 	std::optional<ZeroDFlowStepAccounting> committed_accounting_;
+	std::optional<ZeroDFlowModel> restored_model_;
 };
 
 } // namespace iga

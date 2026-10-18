@@ -24,7 +24,7 @@ The earlier immersed-flow and pre-tensioned-membrane path was removed on
 | Interface transfer | [`NativeTetMatchingFsiInterface.hpp`](../../solvers/cpu/include/NativeTetMatchingFsiInterface.hpp) | Matching-vertex kinematics and traction transfer |
 | Fluid adapter | [`NativeTetAleFsiRuntime.hpp`](../../solvers/cpu/include/NativeTetAleFsiRuntime.hpp) | Harmonic ALE mesh motion and P2/P1 flow |
 | Structure adapter | [`NativeTetSolidFsiRuntime.hpp`](../../solvers/cpu/include/NativeTetSolidFsiRuntime.hpp) | Hyperelastic tetrahedral solid |
-| Checkpoint | [`NativeTetFsiCheckpoint.hpp`](../../solvers/cpu/include/NativeTetFsiCheckpoint.hpp) | Single-payload checkpoint of the single-partition pair |
+| Checkpoint | [`NativeTetFsiCheckpoint.hpp`](../../solvers/cpu/include/NativeTetFsiCheckpoint.hpp) | Single-payload checkpoint of the pair (tested; not exposed by the executables) |
 
 The CPU executable is `solvers/cpu/native_tet_fsi_steps`. Its PETSc solves use
 LU with MUMPS for the P2/P1 fluid (unprefixed KSP options) and the solid
@@ -157,10 +157,11 @@ use. Declared surfaces may not be orphaned. `MakeFluidStructurePairPlan`
 returns the two directional field exchanges without changing scalar
 pressure/flow ordering or cycle checks.
 
-No graph domain kind implements an FSI endpoint yet:
-`IsSupportedFsiDomainPair` accepts no pair, so every FSI edge is rejected at
-graph construction. Adding native tetrahedral ALE-fluid and solid domain kinds
-is the integration step that will enable graph FSI.
+`IsSupportedFsiDomainPair` accepts exactly one pair: a `NativeTetAleFlow`
+fluid domain with a `NativeTetSolidStructure` structure domain. Every other
+pair is rejected at graph construction. `native_tet_fsi_graph` runs such a
+graph (see [Graph case](#graph-case)); scalar pressure/flow ports on the FSI
+pair are not accepted yet.
 
 ## Weighted Aitken
 
@@ -263,12 +264,24 @@ belong on allocated resources rather than login nodes.
 
 ## Current limitations
 
-- The reference runtime is single-partition. Both the ALE fluid
-  (`NativeTetAleDenseRuntime`) and the solid static solver use dense direct
-  solves, so it is suitable only for small reference cases. The distributed
-  PETSc ALE flow runtime (`NativeTetAlePetscRuntime`) is not yet connected to
-  the FSI adapter.
-- The multidomain graph has no FSI-capable domain kinds.
+- The adapters' default solves are the dense reference runtimes
+  (`NativeTetAleDenseRuntime` and the dense solid static solver), meant for
+  unit-sized cases. `native_tet_fsi_steps` and `native_tet_fsi_graph` inject
+  PETSc solves through `NativeTetAleFsiSolvers`: replicated or ParMETIS
+  partitioned (`-fsi_distributed_fluid`), with MUMPS or the iterative Schur
+  fieldsplit below. Every rank still keeps a copy of both meshes, the P2
+  topology and the state vectors, so memory per rank does not shrink with
+  ranks.
+- A graph may hold only the FSI pair. It cannot carry 0D/1D pressure–flow
+  ports on the FSI domains, so FSI cannot yet share a graph with source or
+  RCR boundary models.
+- `NativeTetFsiCheckpoint.hpp` is exercised by tests, but neither executable
+  exposes checkpoint/restart, and the coupled graph bundle has no FSI shard.
+- The partitioned fluid path does not support flow-rate or resistance
+  controllers.
+- The single-GPU route (`native_tet_fsi_cuda`, see
+  [solver entry](../SOLVER_ENTRY.md)) uses explicit sequential coupling, not
+  the strong coordinator.
 - Nonmatching interface transfer, contact, remeshing, and monolithic coupling
   are not implemented.
 

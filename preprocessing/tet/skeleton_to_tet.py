@@ -10,6 +10,16 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+# Stage reporter; replaced in a supervised child process (see run_supervised).
+_progress_sink = None
+
+
+def progress(stage, **details):
+	"""Report a generation stage, so long OCC/Gmsh calls are attributable."""
+	text = " ".join(f"{key}={value}" for key, value in details.items())
+	if _progress_sink is not None:
+		_progress_sink(stage, text)
 from preprocessing.tet.skeleton_geometry import (clean_surface_triangles, cross,
 	dot, fit_terminal_caps, fit_tree_radii, smooth_surface_groups,
 	spline_capsule_paths, sub)
@@ -158,7 +168,12 @@ def add_capsule_tree(gmsh, tree, geometry):
 		if index not in tree["terminals"] and (index != tree["root"] or len(children[index]) > 1):
 			radius = radii[index] if len(children[index]) > 1 else min(incident[index])
 			parts.append((3, gmsh.model.occ.addSphere(*tree["nodes_m"][index], radius)))
+	# OCC boolean fragmentation of every overlapping primitive is the step
+	# that can fail or run for hours on dense real trees; it is reported
+	# explicitly and can be bounded with --timeout-s.
+	progress("occ_fragment", parts=len(parts))
 	fragmented, _ = gmsh.model.occ.fragment([parts[0]], parts[1:])
+	progress("occ_fragment_done", volumes=sum(1 for entity in fragmented if entity[0] == 3))
 	return [entity for entity in fragmented if entity[0] == 3]
 
 
@@ -256,6 +271,7 @@ def generate(tree, output_prefix, controls):
 		gmsh.option.setNumber("Mesh.MeshSizeMin", controls["surface_target_size_m"])
 		gmsh.option.setNumber("Mesh.MeshSizeMax", controls["surface_target_size_m"])
 		gmsh.option.setNumber("Mesh.ElementOrder", 1)
+		progress("surface_mesh", surfaces=len(signs))
 		gmsh.model.mesh.generate(2)
 		node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
 		nodes = {int(tag): tuple(coordinates[3*index:3*index+3])
@@ -272,6 +288,7 @@ def generate(tree, output_prefix, controls):
 						if signs[surface] < 0:
 							face = (face[0], face[2], face[1])
 						triangles[name].append(face)
+		progress("surface_cleanup", nodes=len(nodes))
 		points, triangles, collapsed, dropped = clean_surface_triangles(nodes,
 			triangles, controls["join_cleanup_tolerance_m"],
 			{"fluid": list(labels)})
@@ -316,6 +333,7 @@ def generate(tree, output_prefix, controls):
 		gmsh.option.setNumber("Mesh.MeshSizeMin", controls["volume_target_size_m"])
 		gmsh.option.setNumber("Mesh.MeshSizeMax", controls["volume_target_size_m"])
 		gmsh.option.setNumber("Mesh.Algorithm3D", 1)
+		progress("volume_mesh")
 		gmsh.model.mesh.generate(3)
 		types, element_tags, blocks = gmsh.model.mesh.getElements(3)
 		if list(types) != [4]:
@@ -365,6 +383,62 @@ def compact_surface_nodes(points, triangles):
 	return {tag: points[tag] for tag in sorted(referenced)}, len(points)-len(referenced)
 
 
+def run_supervised(tree, output_prefix, controls, timeout_s, interval_s):
+	"""Run generate() in a child process with stage reports and a wall-clock
+	limit. A Python signal cannot interrupt a running OCC operation, so the
+	timeout kills the child process and names the stage it was in."""
+	import multiprocessing
+	import queue
+	import time
+	context = multiprocessing.get_context("fork")
+	messages = context.Queue()
+	start = time.monotonic()
+
+	def child():
+		global _progress_sink
+		_progress_sink = lambda stage, text: messages.put(("stage", stage, text))
+		try:
+			messages.put(("result", generate(tree, output_prefix, controls), ""))
+		except Exception as error:  # reported to, and re-raised by, the parent
+			messages.put(("error", f"{type(error).__name__}: {error}", ""))
+
+	worker = context.Process(target=child, daemon=True)
+	worker.start()
+	stage, stage_start, last_report = "start", start, start
+	result = None
+	print(f"skeleton_to_tet: stage=start nodes={len(tree['nodes_m'])} outlets={len(tree['terminals'])}",
+		file=sys.stderr, flush=True)
+	while True:
+		now = time.monotonic()
+		if timeout_s is not None and now-start > timeout_s:
+			worker.kill()
+			worker.join()
+			raise RuntimeError(f"timed out after {now-start:.0f} s in stage {stage} "
+				f"(stage running for {now-stage_start:.0f} s)")
+		try:
+			kind, value, text = messages.get(timeout=1.)
+		except queue.Empty:
+			if not worker.is_alive() and messages.empty():
+				raise RuntimeError(f"generation process exited with code {worker.exitcode} in stage {stage}")
+			if now-last_report >= interval_s:
+				print(f"skeleton_to_tet: stage={stage} running={now-stage_start:.0f}s "
+					f"elapsed={now-start:.0f}s", file=sys.stderr, flush=True)
+				last_report = now
+			continue
+		if kind == "stage":
+			stage, stage_start, last_report = value, time.monotonic(), time.monotonic()
+			print(f"skeleton_to_tet: stage={stage} {text} elapsed={stage_start-start:.0f}s".rstrip(),
+				file=sys.stderr, flush=True)
+		elif kind == "error":
+			worker.join()
+			raise ValueError(f"{value} (stage {stage})")
+		else:
+			result = value
+			break
+	worker.join()
+	return result
+
+
 def main():
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument("input_skeleton", type=Path)
@@ -381,6 +455,10 @@ def main():
 	parser.add_argument("--surface-smoothing-pass-band", type=float, default=.01)
 	parser.add_argument("--minimum-scaled-jacobian", type=float, default=.001)
 	parser.add_argument("--centerline-search", choices=("linear", "exact_kdtree"), default="linear")
+	parser.add_argument("--timeout-s", type=float,
+		help="kill the generation (including a running OCC boolean) after this wall time")
+	parser.add_argument("--progress-interval-s", type=float, default=60.,
+		help="report the current stage at least this often while it runs")
 	args = parser.parse_args()
 	path = args.input_skeleton.resolve()
 	output_prefix = args.output_prefix.resolve()
@@ -403,7 +481,11 @@ def main():
 		"surface_smoothing_iterations": args.surface_smoothing_iterations,
 		"surface_smoothing_pass_band": args.surface_smoothing_pass_band,
 		"minimum_scaled_jacobian": args.minimum_scaled_jacobian}
-	result = generate(tree, output_prefix, controls)
+	if args.timeout_s is not None and not args.timeout_s > 0.:
+		raise ValueError("timeout must be positive")
+	if not args.progress_interval_s > 0.:
+		raise ValueError("progress interval must be positive")
+	result = run_supervised(tree, output_prefix, controls, args.timeout_s, args.progress_interval_s)
 	print("skeleton_to_tet: PASS nodes={} tetrahedra={} outlets={} minSJ={:.8g}".format(
 		result["volume_nodes"], result["tetrahedra"], result["outlets"],
 		result["minimum_scaled_jacobian"]))

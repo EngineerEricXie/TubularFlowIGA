@@ -8,7 +8,7 @@ flow. This Voronoi rule is organ-agnostic; it ignores tissue geodesics, so for
 strongly non-convex organs check the reported distances.
 
     python3 scripts/organ/build_territories.py liver_h5.msh territories.json \
-        --mesh-scale 1 --tree portal=portal.swc --tree hepatic=hepatic.swc
+        --tree portal=portal.swc --tree hepatic=hepatic.swc
 """
 import argparse
 import json

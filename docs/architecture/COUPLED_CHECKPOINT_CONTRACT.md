@@ -169,13 +169,16 @@ checksummed time series rather than a process-local file cursor.
 
 ### 4.5 Structures and FSI
 
-The native tetrahedral ALE-fluid/solid pair is single-partition.
+The native tetrahedral ALE-fluid/solid pair keeps replicated state on every
+rank, even when its fluid and solid assembly is partitioned.
 `NativeTetFsiCheckpoint.hpp` captures one payload between macro steps: the
 accepted step count and time, the fluid and solid model and committed-state
 identities, the fluid state, solid displacement and velocity, ALE mesh
 displacement, and interface displacement. Every scalar must be finite, and the
-model identities bind the payload to its configuration. It is not yet part of
-the graph bundle because the graph has no FSI-capable domain kinds.
+model identities bind the payload to its configuration. It is exercised by
+tests only. `native_tet_fsi_steps` and `native_tet_fsi_graph` do not expose
+restart, and the graph bundle has no FSI shard yet, although the graph accepts
+the native FSI pair.
 
 ## 5. Restore sequence
 

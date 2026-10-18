@@ -51,6 +51,7 @@ tfi_executable(native_tet_matching_solved_roi_smoke
 	PETSC)
 tfi_executable(native_tet_mesh_inspect SOURCES src/native_tet_mesh_inspect.cpp)
 tfi_executable(native_tet_species_transport SOURCES src/native_tet_species_transport.cpp PETSC HDF5)
+tfi_executable(native_tet_transient_transport SOURCES src/native_tet_transient_transport.cpp PETSC HDF5)
 tfi_executable(surface_fem_preflight SOURCES src/surface_fem_preflight.cpp)
 
 # Test executables.
@@ -252,6 +253,13 @@ tfi_executable(native_tet_moving_species_spatial_convergence_test
 tfi_executable(native_tet_moving_species_transport_test
 	SOURCES tests/test_native_tet_moving_species_transport.cpp
 	OPTIONS -UNDEBUG)
+tfi_executable(native_tet_species_bdf2_test
+	SOURCES tests/test_native_tet_species_bdf2.cpp
+	OPTIONS -UNDEBUG)
+tfi_executable(native_tet_species_dirichlet_inflow_test
+	SOURCES tests/test_native_tet_species_dirichlet_inflow.cpp
+	PETSC
+	OPTIONS -UNDEBUG)
 tfi_executable(native_tet_solid_fsi_runtime_test
 	SOURCES tests/test_native_tet_solid_fsi_runtime.cpp
 	OPTIONS -UNDEBUG)
@@ -431,6 +439,8 @@ tfi_test(native_tet_moving_species_ports_test COMMAND [==[./native_tet_moving_sp
 	REQUIRES native_tet_moving_species_ports_test MAKE native-tet-moving-species-ports-test LABELS unit)
 tfi_test(native_tet_moving_species_transport_test COMMAND [==[./native_tet_moving_species_transport_test]==]
 	REQUIRES native_tet_moving_species_transport_test MAKE native-tet-moving-species-transport-test LABELS unit)
+tfi_test(native_tet_species_bdf2_test COMMAND [==[./native_tet_species_bdf2_test]==]
+	REQUIRES native_tet_species_bdf2_test MAKE native-tet-species-bdf2-test LABELS unit)
 tfi_test(native_tet_solid_fsi_runtime_test COMMAND [==[./native_tet_solid_fsi_runtime_test]==]
 	REQUIRES native_tet_solid_fsi_runtime_test MAKE native-tet-solid-fsi-runtime-test test LABELS unit)
 tfi_test(native_tet_solid_prestress_test COMMAND [==[./native_tet_solid_prestress_test]==]
@@ -556,12 +566,22 @@ tfi_test(native_tet_darcy_petsc_test COMMAND [==[./native_tet_darcy_petsc_test]=
 	REQUIRES native_tet_darcy_petsc_test MAKE petsc-test native-tet-darcy-petsc-test LABELS petsc)
 tfi_test(perfused_organ_test COMMAND [==[./perfused_organ_test]==]
 	REQUIRES perfused_organ_test MAKE petsc-test perfused-organ-test LABELS petsc)
+tfi_test(native_tet_perfused_organ_cli_test COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_perfused_organ.py ./native_tet_perfused_organ]==]
+	REQUIRES native_tet_perfused_organ MAKE petsc-test native-tet-perfused-organ-cli-test LABELS petsc)
 tfi_test(native_tet_mesh_components_test COMMAND [==[./native_tet_mesh_components_test]==]
 	REQUIRES native_tet_mesh_components_test MAKE test native-tet-mesh-components-test LABELS unit)
 tfi_test(native_tet_moving_species_checkpoint_test COMMAND [==[./native_tet_moving_species_checkpoint_test]==]
 	REQUIRES native_tet_moving_species_checkpoint_test MAKE petsc-test native-tet-moving-species-checkpoint-test LABELS petsc)
 tfi_test(native_tet_moving_species_petsc_runtime_test COMMAND [==[./native_tet_moving_species_petsc_runtime_test]==]
 	REQUIRES native_tet_moving_species_petsc_runtime_test MAKE petsc-test native-tet-moving-species-petsc-runtime-test LABELS petsc)
+tfi_test(native_tet_species_dirichlet_inflow_test COMMAND [==[./native_tet_species_dirichlet_inflow_test]==]
+	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc)
+tfi_test(native_tet_species_dirichlet_inflow_test.mpi COMMAND [==[timeout --kill-after=5s 180s mpiexec -np 2 ./native_tet_species_dirichlet_inflow_test]==]
+	REQUIRES native_tet_species_dirichlet_inflow_test MAKE petsc-test native-tet-species-dirichlet-inflow-test LABELS petsc mpi)
+tfi_test(native_tet_transient_transport_test COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_transient_transport.py ./native_tet_transient_transport tests/data/native_tet_transient_y.json 1]==]
+	REQUIRES native_tet_transient_transport MAKE petsc-test native-tet-transient-transport-test LABELS petsc)
+tfi_test(native_tet_transient_transport_test.mpi COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_transient_transport.py ./native_tet_transient_transport tests/data/native_tet_transient_y.json 2]==]
+	REQUIRES native_tet_transient_transport MAKE petsc-test native-tet-transient-transport-test LABELS petsc mpi)
 tfi_test(native_tet_moving_species_spatial_convergence_test COMMAND [==[./native_tet_moving_species_spatial_convergence_test]==]
 	REQUIRES native_tet_moving_species_spatial_convergence_test MAKE petsc-test native-tet-moving-species-spatial-convergence-test LABELS petsc)
 tfi_test(native_tet_wall_reservoir_exchange_test COMMAND [==[./native_tet_wall_reservoir_exchange_test]==]

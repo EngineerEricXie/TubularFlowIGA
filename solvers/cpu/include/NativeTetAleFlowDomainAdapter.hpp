@@ -18,10 +18,25 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace iga {
+
+// Solver work of one accepted step, summed over its coupling trials, plus the
+// optional monolithic predictor that supplied their initial guess.
+struct NativeTetAleFlowStepStatistics
+{
+	std::size_t trial_solves=0,newton_iterations=0;
+	long long linear_iterations=0;
+	double assembly_seconds=0.,linear_solve_seconds=0.;
+	bool predictor=false;
+	std::size_t predictor_newton_iterations=0;
+	long long predictor_linear_iterations=0;
+	double predictor_assembly_seconds=0.,predictor_linear_solve_seconds=0.;
+	std::string linear_solver_type,preconditioner_type;
+};
 
 // Hydraulic-only graph owner. FEM basis, assembly and nonlinear residuals
 // remain in the native tetra implementation; PETSc supplies algebra/MPI.
@@ -36,7 +51,7 @@ public:
 		std::vector<double> initial_flow_state,MeshProvider mesh_provider={},
 		std::string motion_model_id={},
 		std::set<int> no_slip_wall_labels={},double nonlinear_tolerance=1e-8,
-		std::size_t maximum_iterations=12)
+		std::size_t maximum_iterations=12,bool steady=false)
 		:domain_id_(std::move(domain_id)),ports_(std::move(ports)),
 		 parameters_(parameters),reference_mesh_(reference_mesh),
 		 committed_mesh_(std::move(reference_mesh)),
@@ -45,7 +60,8 @@ public:
 		 mesh_provider_(std::move(mesh_provider)),
 		 motion_model_id_(std::move(motion_model_id)),
 		 wall_labels_(std::move(no_slip_wall_labels)),
-		 nonlinear_tolerance_(nonlinear_tolerance),maximum_iterations_(maximum_iterations)
+		 nonlinear_tolerance_(nonlinear_tolerance),maximum_iterations_(maximum_iterations),
+		 steady_(steady)
 	{
 		const auto topology=BuildNativeTaylorHoodTopology(committed_mesh_);
 		const std::size_t velocity_nodes=committed_mesh_.points.size()+topology.edges.size();
@@ -68,9 +84,11 @@ public:
 		}
 		if(mesh_provider_&&motion_model_id_.empty())
 			throw std::invalid_argument("native tetra flow graph motion model id is required");
+		if(steady_&&mesh_provider_)
+			throw std::invalid_argument("native tetra flow graph steady momentum needs a fixed mesh");
 		model_identity_sha256_=NativeTetAleFlowModelIdentitySha256(domain_id_,
 			reference_mesh_,ports_,parameters_,wall_labels_,motion_model_id_,
-			nonlinear_tolerance_,maximum_iterations_);
+			nonlinear_tolerance_,maximum_iterations_,steady_);
 	}
 
 	const std::string& DomainId()const noexcept override{return domain_id_;}
@@ -82,6 +100,41 @@ public:
 	double CommittedTime()const noexcept{return committed_time_s_;}
 	std::uint64_t AcceptedSteps()const noexcept{return accepted_steps_;}
 	const std::string& ModelIdentitySha256()const noexcept{return model_identity_sha256_;}
+	bool Steady()const noexcept{return steady_;}
+	// Statistics of the most recently committed step.
+	const NativeTetAleFlowStepStatistics& CommittedStepStatistics()const noexcept
+	{return committed_statistics_;}
+
+	// Opt-in monolithic predictor, called before the coupling executor begins
+	// a step. Each port's neighbor is replaced by its implicit affine relation
+	// and the bordered system is solved once from the committed state. The
+	// solution only seeds the next SolveTrial of the same step; acceptance is
+	// still decided by the executor's port residuals, so a wrong prediction
+	// costs iterations, never a silently different accepted state.
+	std::map<std::string,PortState> PredictImplicit(const DomainStepContext& step,
+		const std::map<std::string,NativeTetAleImplicitPortRelation>& relations,
+		double control_absolute_tolerance_m3_s)
+	{
+		RequirePhase(Phase::Committed,"predict");
+		std::vector<std::array<double,3>> velocity;
+		const auto mesh=TrialMesh(step,velocity);
+		const auto conditions=graph_ports_.ImplicitBoundaryConditions(mesh,velocity,relations);
+		NativeTetAlePetscSolveControls controls;
+		controls.control_absolute_tolerance_m3_s=control_absolute_tolerance_m3_s;
+		controls.scaled_line_search=true;
+		const auto result=Solve(mesh,velocity,committed_flow_state_,WallVelocity(mesh,velocity),
+			conditions,step.dt_s,controls);
+		auto states=graph_ports_.Observe(mesh,velocity,result.replicated_state,step.EndTime());
+		warm_start_=WarmStart{step.step_index,result.replicated_state,
+			result.flow_controller_multipliers_pa};
+		pending_statistics_=NativeTetAleFlowStepStatistics{};
+		pending_statistics_.predictor=true;
+		pending_statistics_.predictor_newton_iterations=result.newton_iterations;
+		pending_statistics_.predictor_linear_iterations=result.total_linear_iterations;
+		pending_statistics_.predictor_assembly_seconds=result.assembly_seconds;
+		pending_statistics_.predictor_linear_solve_seconds=result.linear_solve_seconds;
+		return states;
+	}
 
 	NativeTetAleFlowCheckpoint CaptureCheckpoint()const
 	{
@@ -129,18 +182,10 @@ public:
 				1e-12*std::max({1.,std::abs(step.start_time_s),
 					std::abs(committed_time_s_)}))
 			throw std::invalid_argument("native tetra flow graph step clock differs");
-		auto mesh=mesh_provider_?mesh_provider_(step,committed_mesh_):committed_mesh_;
-		if(!SameTopology(mesh,committed_mesh_))
-			throw std::invalid_argument("native tetra flow graph trial topology changed");
-		std::vector<std::array<double,3>> velocity(mesh.points.size());
-		for(std::size_t node=0;node<mesh.points.size();++node)
-			for(int axis=0;axis<3;++axis){
-				velocity[node][axis]=(mesh.points[node][axis]
-					-committed_mesh_.points[node][axis])/step.dt_s;
-				if(!std::isfinite(velocity[node][axis]))
-					throw std::invalid_argument("native tetra flow graph mesh velocity is nonfinite");
-			}
-		for(const auto& cell:mesh.cells)EvaluateNativeTetGeometry(mesh,cell);
+		std::vector<std::array<double,3>> velocity;
+		auto mesh=TrialMesh(step,velocity);
+		if(warm_start_&&warm_start_->step_index!=step.step_index)warm_start_.reset();
+		if(!warm_start_)pending_statistics_=NativeTetAleFlowStepStatistics{};
 		trial_mesh_=std::move(mesh);mesh_velocity_=std::move(velocity);
 		step_=step;inputs_.clear();phase_=Phase::Open;
 	}
@@ -161,10 +206,24 @@ public:
 		RequirePhase(Phase::Open,"solve trial");
 		const auto conditions=graph_ports_.BoundaryConditions(trial_mesh_,
 			mesh_velocity_,inputs_,step_.EndTime());
-		const auto result=SolveNativeTetAlePetscTransient(trial_mesh_,mesh_velocity_,
-			committed_flow_state_,committed_flow_state_,WallVelocity(),
-			std::numeric_limits<std::uint32_t>::max(),parameters_,step_.dt_s,
-			nonlinear_tolerance_,maximum_iterations_,conditions);
+		NativeTetAlePetscSolveControls controls;
+		const auto* initial=&committed_flow_state_;
+		if(warm_start_&&warm_start_->step_index==step_.step_index){
+			// Predictor runs opted into the scaled merit as well.
+			controls.scaled_line_search=true;
+			initial=&warm_start_->state;
+			if(warm_start_->flow_multipliers.size()==conditions.flow_rate_controls.size())
+				controls.initial_control_values=warm_start_->flow_multipliers;
+		}
+		const auto result=Solve(trial_mesh_,mesh_velocity_,*initial,
+			WallVelocity(trial_mesh_,mesh_velocity_),conditions,step_.dt_s,controls);
+		++pending_statistics_.trial_solves;
+		pending_statistics_.newton_iterations+=result.newton_iterations;
+		pending_statistics_.linear_iterations+=result.total_linear_iterations;
+		pending_statistics_.assembly_seconds+=result.assembly_seconds;
+		pending_statistics_.linear_solve_seconds+=result.linear_solve_seconds;
+		pending_statistics_.linear_solver_type=result.linear_solver_type;
+		pending_statistics_.preconditioner_type=result.preconditioner_type;
 		auto states=graph_ports_.Observe(trial_mesh_,mesh_velocity_,
 			result.replicated_state,step_.EndTime());
 		trial_result_=result;trial_states_=std::move(states);phase_=Phase::Solved;
@@ -209,6 +268,9 @@ public:
 		committed_flow_state_.swap(prepared_->flow);
 		committed_time_s_=prepared_->time_s;
 		accepted_steps_=prepared_->accepted_steps;
+		static_assert(std::is_nothrow_move_assignable<NativeTetAleFlowStepStatistics>::value,
+			"step statistics publication must not throw");
+		committed_statistics_=std::move(pending_statistics_);
 		ClearTrial();phase_=Phase::Committed;
 	}
 
@@ -235,6 +297,42 @@ private:
 					!=b.boundary_triangles[i].boundary_label)return false;
 		return true;
 	}
+	struct WarmStart
+	{
+		int step_index=-1;
+		std::vector<double> state;
+		std::vector<double> flow_multipliers;
+	};
+	NativeTetMesh TrialMesh(const DomainStepContext& step,
+		std::vector<std::array<double,3>>& velocity)const
+	{
+		auto mesh=mesh_provider_?mesh_provider_(step,committed_mesh_):committed_mesh_;
+		if(!SameTopology(mesh,committed_mesh_))
+			throw std::invalid_argument("native tetra flow graph trial topology changed");
+		velocity.assign(mesh.points.size(),{});
+		for(std::size_t node=0;node<mesh.points.size();++node)
+			for(int axis=0;axis<3;++axis){
+				velocity[node][axis]=(mesh.points[node][axis]
+					-committed_mesh_.points[node][axis])/step.dt_s;
+				if(!std::isfinite(velocity[node][axis]))
+					throw std::invalid_argument("native tetra flow graph mesh velocity is nonfinite");
+			}
+		for(const auto& cell:mesh.cells)EvaluateNativeTetGeometry(mesh,cell);
+		return mesh;
+	}
+	NativeTetAlePetscSolveResult Solve(const NativeTetMesh& mesh,
+		const std::vector<std::array<double,3>>& velocity,const std::vector<double>& initial,
+		const std::map<std::uint32_t,std::array<double,3>>& walls,
+		const NativeTetAleBoundaryConditions& conditions,double dt_s,
+		const NativeTetAlePetscSolveControls& controls)const
+	{
+		if(steady_)return SolveNativeTetAlePetscSteady(mesh,velocity,initial,walls,
+			std::numeric_limits<std::uint32_t>::max(),parameters_,nonlinear_tolerance_,
+			maximum_iterations_,conditions,controls);
+		return SolveNativeTetAlePetsc(mesh,velocity,committed_flow_state_,initial,walls,
+			std::numeric_limits<std::uint32_t>::max(),parameters_,dt_s,false,
+			nonlinear_tolerance_,maximum_iterations_,conditions,controls);
+	}
 	void RequirePhase(Phase phase,const char* operation)const
 	{
 		if(phase_!=phase)
@@ -246,16 +344,17 @@ private:
 		for(const auto& port:ports_)if(port.id==id)return true;
 		return false;
 	}
-	std::map<std::uint32_t,std::array<double,3>> WallVelocity()const
+	std::map<std::uint32_t,std::array<double,3>> WallVelocity(const NativeTetMesh& mesh,
+		const std::vector<std::array<double,3>>& mesh_velocity)const
 	{
 		std::map<std::uint32_t,std::array<double,3>> result;
-		const auto topology=BuildNativeTaylorHoodTopology(trial_mesh_);
-		std::vector<std::array<double,3>> p2=mesh_velocity_;
+		const auto topology=BuildNativeTaylorHoodTopology(mesh);
+		std::vector<std::array<double,3>> p2=mesh_velocity;
 		for(const auto& edge:topology.edges){
 			std::array<double,3> average{};
 			for(int axis=0;axis<3;++axis)
-				average[axis]=0.5*(mesh_velocity_[edge[0]][axis]
-					+mesh_velocity_[edge[1]][axis]);
+				average[axis]=0.5*(mesh_velocity[edge[0]][axis]
+					+mesh_velocity[edge[1]][axis]);
 			p2.push_back(average);
 		}
 		for(const int label:wall_labels_)
@@ -266,7 +365,7 @@ private:
 	void ClearTrial()noexcept
 	{
 		inputs_.clear();trial_states_.clear();trial_result_.reset();prepared_.reset();
-		trial_mesh_=NativeTetMesh{};mesh_velocity_.clear();
+		trial_mesh_=NativeTetMesh{};mesh_velocity_.clear();warm_start_.reset();
 	}
 	std::string domain_id_;
 	std::vector<CouplingPort> ports_;
@@ -279,6 +378,9 @@ private:
 	std::set<int> wall_labels_;
 	double nonlinear_tolerance_;
 	std::size_t maximum_iterations_;
+	bool steady_=false;
+	std::optional<WarmStart> warm_start_;
+	NativeTetAleFlowStepStatistics pending_statistics_,committed_statistics_;
 	double committed_time_s_=0.;
 	std::uint64_t accepted_steps_=0;
 	DomainStepContext step_;

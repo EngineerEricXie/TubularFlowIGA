@@ -285,13 +285,13 @@ public:
 	{
 		if (!(volume_m3 >= 0.0) || !std::isfinite(volume_m3))
 			throw std::runtime_error("VCA bolus volume must be finite and nonnegative");
-		const double new_volume = state_.volume_m3+volume_m3;
-		for (auto& item : state_.species) item.second *= state_.volume_m3/new_volume;
-		for (const auto& item : amount) {
+		// Validate every amount first so a rejected bolus leaves the state untouched.
+		for (const auto& item : amount)
 			if (!(item.second >= 0.0) || !std::isfinite(item.second))
 				throw std::runtime_error("VCA bolus amounts must be finite and nonnegative");
-			state_.species[item.first] += item.second/new_volume;
-		}
+		const double new_volume = state_.volume_m3+volume_m3;
+		for (auto& item : state_.species) item.second *= state_.volume_m3/new_volume;
+		for (const auto& item : amount) state_.species[item.first] += item.second/new_volume;
 		state_.hematocrit_percent *= state_.volume_m3/new_volume;
 		state_.volume_m3 = new_volume;
 		ValidateState();

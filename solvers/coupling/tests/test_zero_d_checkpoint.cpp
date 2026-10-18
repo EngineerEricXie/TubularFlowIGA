@@ -126,6 +126,50 @@ void StateTests(bool source)
 	Reject([&] { exhausted.BeginStep({std::numeric_limits<int>::max(), exhausted.CommittedTime(), 0.1}); });
 }
 
+// Controlled restart: a state accepted under the case model is restored, and
+// validated, under that model into a runtime with changed boundary values; the
+// next step then uses the new values. Role or capacitance changes are rejected.
+void BoundaryUpdateTests(bool source)
+{
+	auto original = Runtime(source); for (int i = 0; i < 4; ++i) Advance(original, i);
+	const auto state = original.CaptureCheckpointState(); const auto encoded = SerializeZeroDFlowCheckpoint(state);
+	auto updated_model = Model(source);
+	if (source) updated_model.source.prescribed_flow_m3_s *= 2.0;
+	else {
+		updated_model.terminal.proximal_resistance_pa_s_m3 *= 3.0;
+		updated_model.terminal.distal_resistance_pa_s_m3 *= 0.5;
+		updated_model.terminal.distal_pressure_pa += 1.0;
+	}
+	const std::string id = source ? "source" : "terminal";
+	const auto make = [&](const ZeroDFlowModel& model) {
+		return ZeroDFlowDomainRuntime(id, model, {source ? 11.0 : 9.0}, {MakeZeroDFlowPort(id, model.role)});
+	};
+	auto plain = make(updated_model); Reject([&] { plain.RestoreCheckpointState(state); });
+	auto capacitance = updated_model;
+	(source ? capacitance.source.capacitance_m3_pa : capacitance.terminal.capacitance_m3_pa) *= 2.0;
+	auto changed_capacitance = make(capacitance);
+	Reject([&] { changed_capacitance.RestoreCheckpointStateUnderModel(state, Model(source)); });
+	auto wrong_previous = make(updated_model);
+	Reject([&] { wrong_previous.RestoreCheckpointStateUnderModel(state, updated_model); });
+	Require(wrong_previous.CommittedStepCount() == 0 && !wrong_previous.CommittedPortState(),
+		"failed boundary-update restore changed accepted state");
+	auto updated = make(updated_model);
+	updated.RestoreCheckpointStateUnderModel(ParseZeroDFlowCheckpoint(encoded), Model(source));
+	Require(SerializeZeroDFlowCheckpoint(updated.CaptureCheckpointState()) == encoded
+		&& BuildZeroDFlowModelIdentitySha256(updated.AcceptedModel()) == state.model_identity_sha256
+		&& updated.ModelIdentitySha256() == BuildZeroDFlowModelIdentitySha256(updated_model),
+		"restore under the previous model differs");
+	const double input = source ? 4.0+4*0.2 : -2.0-4*0.1;
+	const auto expected = EvaluateZeroDFlowTrial(updated_model, state.state, input, 0.1, updated.CommittedTime());
+	Advance(updated, 4);
+	const auto next = updated.CaptureCheckpointState();
+	Require(next.model_identity_sha256 == BuildZeroDFlowModelIdentitySha256(updated_model)
+		&& next.state.stored_pressure_pa == expected.state.stored_pressure_pa
+		&& *next.port.mean_pressure_pa == *expected.port.mean_pressure_pa
+		&& *next.port.outward_flow_m3_s == *expected.port.outward_flow_m3_s,
+		"continuation after a boundary update does not use the new values");
+}
+
 void Save(const fs::path& root)
 {
 	Require(fs::create_directory(root), "test needs an unused directory"); const auto epoch = Epoch();
@@ -163,7 +207,8 @@ int main(int argc, char** argv)
 	try {
 		if (argc == 3 && std::string(argv[1]) == "--resume") { Resume(argv[2]); return 0; }
 		Require(argc == 2, "test requires an unused output directory");
-		CodecTests(); StateTests(true); StateTests(false); Save(argv[1]);
+		CodecTests(); StateTests(true); StateTests(false); BoundaryUpdateTests(true); BoundaryUpdateTests(false);
+		Save(argv[1]);
 		const auto pid = ::fork(); Require(pid >= 0, "fork failed");
 		if (pid == 0) { ::execl(argv[0], argv[0], "--resume", argv[1], static_cast<char*>(nullptr)); ::_exit(99); }
 		int status = 0; Require(::waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0, "fresh executable restart failed");

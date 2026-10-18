@@ -1,6 +1,6 @@
 # CoupledFlow technology matrix
 
-Updated 2026-10-08.
+Updated 2026-10-17.
 
 This matrix maps physical problems to the numerical routes available in the
 repository. It is an implementation index, not a development roadmap or a
@@ -23,8 +23,8 @@ moving volume mesh that follows the moving boundary.
 
 | Physical domain | Primary route | Required geometry/data | Status |
 |---|---|---|---|
-| Rigid vascular flow | Body-fitted IGA Navier--Stokes or tetrahedral P2/P1 FEM | IGA control mesh and Bezier extraction, or labeled tetrahedral lumen mesh | **Supported** IGA CPU/CUDA workflow; **Functional** native FEM workflow with manufactured and idealized tube/Y evidence |
-| Deforming vascular flow | Tetrahedral ALE coupled to a tetrahedral solid | Fluid and wall volume meshes with matching interface, motion or material data | **Functional** prescribed-motion ALE and single-partition matching ALE--solid routes |
+| Rigid vascular flow | Body-fitted IGA Navier--Stokes or tetrahedral P2/P1 FEM | IGA control mesh and Bezier extraction, or labeled tetrahedral lumen mesh | **Supported** IGA CPU/CUDA workflow; **Functional** native FEM workflow with manufactured and idealized tube/Y evidence, and a patient-derived portal-vein tree (15 RCR outlets, transient or steady momentum) with the implicit 0D predictor |
+| Deforming vascular flow | Tetrahedral ALE coupled to a tetrahedral solid | Fluid and wall volume meshes with matching interface, motion or material data | **Functional** prescribed-motion ALE, and matching ALE--solid FSI on any MPI rank count and on one GPU |
 | Thick vessel wall or local stress | Nonlinear tetrahedral solid FEM | Wall volume mesh, material, loads, and constraints | **Functional** compressible neo-Hookean and stabilized mixed P1/P1 formulations |
 | Prescribed chamber flow | ALE flow with supplied wall motion | Chamber volume mesh, motion law, and labeled ports | **Functional** idealized LV cases |
 | Myocardium and active tissue | Nonlinear anisotropic solid with activation | Tissue volume, fibers, material, prestress, support, activation | **Planned**; current solids cover isotropic reference problems only |
@@ -75,27 +75,30 @@ See the [0D guide](ZERO_D.md),
 | Radius-annotated centerline | 1D network | **Supported** SWC and line-OBJ validation |
 | Radius-annotated centerline | Body-fitted 3D IGA | **Supported** smoothing, hexahedral control mesh, spline/Bezier extraction, METIS, and `.ntiga` packing |
 | Closed triangulated surface | Body-fitted tetrahedral FEM | **Functional** Gmsh exact-boundary and fTetWild envelope-remesh adapters producing labeled Gmsh 4.1 meshes |
+| Closed lumen surface plus explicit port planes | Labeled, capped, optionally remeshed surface for the FEM adapters | **Functional** [`cap_vessel_ports.py`](../scripts/cap_vessel_ports.py) (local plane cuts, planar caps, radius- and thickness-bounded Gmsh remesh); exercised on a synthetic Y and the CRLM-CT-1072 portal tree |
+| Radius-annotated centerline | Tetrahedral FEM via OCC capsules | **Functional** for sparse trees; `skeleton_to_tet.py` OCC booleans fail on dense real trees (now bounded by `--timeout-s` with stage reports) |
 | Organ exterior surface | Complete tissue/vessel model | **Planned**; an exterior alone does not define internal regions, ports, fibers, or materials |
 | Arbitrary surface | Body-fitted volume IGA | **Planned** general patch decomposition and positive-Jacobian parameterization |
 
 The centerline pipeline targets tubular rooted trees and supported
 bifurcations. Surface-to-FEM adapters require labeled, closed geometry and do
-not infer missing caps or boundary conditions.
+not infer missing caps or boundary conditions; the capping step cuts only the
+port planes it is given.
 
 ## Coupling and execution
 
 | Layer | Available route | Status |
 |---|---|---|
-| 0D/1D/3D pressure and flow | Named outward-positive SI ports; explicit or partitioned strong coupling | **Supported** for validated acyclic graph topologies |
+| 0D/1D/3D pressure and flow | Named outward-positive SI ports; explicit or partitioned strong coupling | **Supported** for validated acyclic graph topologies; **Functional** opt-in implicit 0D predictor for native tetra source→FEM→RCR graphs (one coupling iteration at high terminal impedance, up to 1024 outlets) |
 | 1D/3D species | Flow-direction-aware concentration and conservative mass transfer | **Supported** for native 1D/body-fitted 3D; **Functional** native tetra moving chains |
-| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** single-partition native matching reference workflow; not yet a graph edge |
+| Fluid/structure | Dirichlet--Neumann iteration with Aitken relaxation; matching ALE--solid transfer | **Functional** native P2/P1 ALE fluid with a hyperelastic tetra solid. Strong coupling runs on any MPI rank count, with a replicated or ParMETIS-partitioned fluid; the graph case is FSI-only (`native_tet_fsi_graph`); explicit sequential coupling runs on one GPU. Not yet combinable with 0D/1D ports or restartable. |
 | Vessel/tissue | Matching-face or named-port source transfer | **Functional** conservative flow and selected species exchange workflows |
 | Geometry motion | Fixed or ALE | **Supported/Functional** by route; remeshing and general history transfer are not yet common services |
 | Time integration | Backward Euler plus formulation-specific 1D explicit/implicit schemes | **Supported**; no framework-wide multirate integrator |
 | CPU | C++, MPI/PETSc, and selected OpenMP assembly | **Supported** |
 | GPU | Single-GPU CUDA for the body-fitted IGA subset and native FEM workflows exposed by the shared entry | **Functional** by solver/case; no general multi-GPU graph runtime |
-| Checkpoint/restart | Standalone and graph-specific accepted-state formats | **Supported** where listed in [coupled restart](COUPLED_RESTART.md) |
-| Output | Text fields, VTU/PVTU/PVD, VTKHDF, QoI, and conservation ledgers | **Supported** by backend |
+| Checkpoint/restart | Standalone and graph-specific accepted-state formats | **Supported** where listed in [coupled restart](COUPLED_RESTART.md); **Functional** declared 0D boundary-value updates on native hydraulic restarts (`boundary_updates`, `--accept-boundary-update`) |
+| Output | Text fields, VTU/PVTU/PVD, VTKHDF, QoI, and conservation ledgers | **Supported** by backend; native hydraulic CLI also writes a per-step `--summary-json` (port flows/pressures, Newton/Krylov counts, wall time, peak RSS) |
 
 ## Choosing a route
 

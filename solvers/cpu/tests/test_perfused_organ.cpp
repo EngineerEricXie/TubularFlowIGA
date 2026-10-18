@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <filesystem>
 #include <iomanip>
 #include <fstream>
@@ -320,6 +321,118 @@ void TestSingleCellOxygenAgainstScalarRoot()
 		assert(std::abs(result.balance_defect[s])<=1e-9*std::max(1e-12,std::abs(result.inflow[s])));
 }
 
+// An anoxic, glycogen-fuelled cell with no buffer-base supply consumes buffer
+// base faster than inflow and storage can provide: the species balance has no
+// nonnegative root, the clip blocks every Newton step, and the cell must be
+// reported as a Newton failure with a visible balance defect rather than
+// counted as converged.
+void TestBlockedCellIsReportedAsFailure()
+{
+	const double volume=1e-3,flow=2e-6;
+	// Hypoxic lactate production consumes more buffer base than the inlet
+	// supplies, so the clip pins buffer base at zero. With the Bohr shift off
+	// the other species converge, the clipped step stops moving, and the cell
+	// must still be counted as a Newton failure instead of converged.
+	auto input=TransportInput(1,1e9);
+	input.chemistry.bohr_coefficient=0.;
+	input.inlet[iga::OrganOxygen]*=0.05;
+	input.inlet[iga::OrganBufferBase]=0.1;
+	input.previous[0]=input.inlet;
+	input.state[0].glycogen_mol_m3=500.;
+	const auto result=iga::SolveOrganTransport(SingleCell(volume,flow),input);
+	const auto& rates=result.rates[0];
+	assert(rates.lactate_production>rates.lactate_clearance);
+	assert(result.concentration[0][iga::OrganBufferBase]==0.);
+	assert(result.newton_failures==1);
+	assert(std::abs(result.balance_defect[iga::OrganBufferBase])
+		>0.5*volume*(rates.lactate_production-rates.lactate_clearance));
+}
+
+// A recirculating two-cell loop: Gauss-Seidel contracts by about F/(F+X) per
+// sweep, so a large recirculation cannot settle within the sweep cap and must
+// be reported rather than returned as converged.
+iga::OrganTransportResult SolveTwoCellLoop(double recirculation)
+{
+	const double exchange=1e-6;
+	iga::OrganTransportGraph graph;
+	graph.volume_m3={1e-3,1e-3};
+	graph.face_outflow_m3_s={recirculation+exchange,recirculation};
+	graph.boundary_outflow_m3_s={0.,0.};
+	graph.exchange_in_m3_s={exchange,0.};
+	graph.exchange_out_m3_s={0.,exchange};
+	graph.upstream={{{1,recirculation}},{{0,recirculation+exchange}}};
+	// A long step makes storage negligible against the 1e-6 m^3/s exchange.
+	auto input=TransportInput(2,1e15);
+	input.kinetics=iga::HepaticKinetics{};
+	input.previous.assign(2,iga::OrganConcentration{});
+	return iga::SolveOrganTransport(graph,input);
+}
+
+void TestGaussSeidelNonConvergenceIsReported()
+{
+	const auto settled=SolveTwoCellLoop(1e-6);
+	assert(settled.largest_component==2&&settled.gauss_seidel_unconverged==0);
+	Close(settled.concentration[1][iga::OrganGlucose],8.,1e-9,"settled loop outflow");
+	const auto stalled=SolveTwoCellLoop(1e-1);
+	assert(stalled.gauss_seidel_sweeps==500&&stalled.gauss_seidel_unconverged==1);
+}
+
+template<typename Function>
+bool Rejects(Function function)
+{
+	try{function();}catch(const std::invalid_argument&){return true;}
+	return false;
+}
+
+void TestGlycolysisAcidInhibition()
+{
+	// Anoxic tissue at a lowered buffer base: glycolysis runs at its cap.
+	auto c=Inlet();
+	c[iga::OrganOxygen]=0.;
+	c[iga::OrganBufferBase]-=12.;
+	const iga::HepaticCellState state{1.,100.};
+	const auto chemistry=Perfusate();
+	auto k=Liver();
+	const auto free=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	k.glycolysis_ph50=std::nan("");
+	const auto disabled=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	assert(disabled.lactate_production==free.lactate_production&&disabled.reaction==free.reaction);
+	k.glycolysis_ph50=6.8;
+	k.glycolysis_ph_hill=4.;
+	const auto inhibited=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	Close(inhibited.ph,free.ph,0.,"inhibition leaves the acid-base state");
+	Close(inhibited.lactate_production,free.lactate_production/(1.+std::pow(10.,4.*(6.8-free.ph))),1e-14,
+		"acid-inhibited lactate production");
+	Close(inhibited.reaction[iga::OrganBufferBase],-inhibited.lactate_production,1e-14,
+		"buffer base follows the inhibited production");
+	assert(inhibited.energy_deficit>free.energy_deficit);
+	for(const auto& bad:std::vector<std::pair<double,double>>{{5.,4.},{9.5,4.},{7.,0.},{7.,-1.}}){
+		k.glycolysis_ph50=bad.first;
+		k.glycolysis_ph_hill=bad.second;
+		assert(Rejects([&]{iga::ValidateHepaticKinetics(k,chemistry);}));
+	}
+}
+
+void TestAcidInhibitionKeepsBufferBase()
+{
+	// The clip-blocked cell of TestBlockedCellIsReportedAsFailure: with acid
+	// inhibition, production falls with pH before buffer base runs out.
+	const double volume=1e-3,flow=2e-6;
+	auto input=TransportInput(1,1e9);
+	input.chemistry.bohr_coefficient=0.;
+	input.inlet[iga::OrganOxygen]*=0.05;
+	input.inlet[iga::OrganBufferBase]=0.1;
+	input.previous[0]=input.inlet;
+	input.state[0].glycogen_mol_m3=500.;
+	input.kinetics.glycolysis_ph50=6.8;
+	input.kinetics.glycolysis_ph_hill=4.;
+	const auto result=iga::SolveOrganTransport(SingleCell(volume,flow),input);
+	assert(result.newton_failures==0);
+	assert(result.concentration[0][iga::OrganBufferBase]>0.);
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+		assert(std::abs(result.balance_defect[s])<=1e-8*flow*std::max(input.inlet[s],1e-3));
+}
+
 void TestStagnantCellRelaxes()
 {
 	auto input=TransportInput(1,100.);
@@ -483,26 +596,47 @@ void TestCircuitExtensions()
 		bolus.ApplyBolus({{"x",1e-3}},volume);
 		Close(bolus.State().species.at("x"),(2.0*volume+1e-3)/(2.*volume),1e-12,"bolus mass");
 		Close(bolus.State().volume_m3,2.*volume,1e-15,"bolus volume");
+		// A rejected bolus must leave the reservoir untouched.
+		iga::VcaExternalCircuit rejected(ReservoirCircuit(volume));
+		bool threw=false;
+		try{rejected.ApplyBolus({{"x",1e-3},{"z",-1.}},volume);}catch(const std::runtime_error&){threw=true;}
+		assert(threw);
+		Close(rejected.State().species.at("x"),2.0,1e-15,"rejected bolus keeps composition");
+		Close(rejected.State().volume_m3,volume,1e-15,"rejected bolus keeps volume");
 	}
 }
 
-void TestPlantAdvance()
+struct PlantCase
 {
 	iga::PerfusedOrganModel model;
+	iga::OrganPlantParameters parameters;
+	iga::OrganPlantState state;
+	iga::OrganPlantControls controls;
+};
+
+// The unit-cube plant. `perfusion` scales both exchange conductances and the
+// mobility; `metabolism` scales every Vmax of the liver kinetics.
+PlantCase MakePlantCase(double perfusion,double metabolism)
+{
+	PlantCase plant;
+	auto& model=plant.model;
 	model.mesh=Cube(3);
 	model.trees=CubeTrees(model.mesh,3e-3);
 	model.zones=3;
 	iga::FinalizePerfusedOrganModel(model);
 	const std::size_t cells=model.mesh.cells.size(),nodes=3*cells;
-	iga::OrganPlantParameters p;
+	auto& p=plant.parameters;
 	p.viscosity_pa_s=3e-3;
 	p.outflow_pressure_pa={{"outflow",0.}};
-	p.specific_conductance_inv_pa_s={{"inflow",2e-8},{"outflow",6e-8}};
-	p.mobility_m2_pa_s=1e-8;
+	p.specific_conductance_inv_pa_s={{"inflow",2e-8*perfusion},{"outflow",6e-8*perfusion}};
+	p.mobility_m2_pa_s=1e-8*perfusion;
 	p.distribution_volume_fraction={{0.2,0.7,0.7,0.3,0.5,0.25}};
 	p.kinetics=Liver();
+	for(double* rate:{&p.kinetics.vmax_o2_mol_m3_s,&p.kinetics.glycolysis_capacity_mol_m3_s,
+		&p.kinetics.lactate_vmax_mol_m3_s,&p.kinetics.glycogenolysis_vmax_mol_m3_s,
+		&p.kinetics.glucose_uptake_vmax_mol_m3_s})*rate*=metabolism;
 	p.chemistry=Perfusate();
-	iga::OrganPlantState state;
+	auto& state=plant.state;
 	state.reservoir.volume_m3=2.0;
 	state.reservoir.hematocrit_percent=18.;
 	const auto& names=iga::PerfusedOrganSpeciesNames();
@@ -512,51 +646,152 @@ void TestPlantAdvance()
 	state.viability.assign(nodes,1.);
 	state.glycogen_mol_m3.assign(nodes,100.);
 	state.oedema.assign(cells,0.);
-	iga::OrganPlantControls controls;
+	auto& controls=plant.controls;
 	controls.inlet_pressure_pa=1000.;
 	controls.fio2=0.6;
 	controls.bolus={{names[iga::OrganGlucose],5.0}};
 	controls.dialysis_in_m3_s=1e-8;
+	return plant;
+}
+
+void TestPlantAdvance()
+{
+	// The baseline cube is anoxic: lactate production exhausts buffer base,
+	// which the clip pins at zero, so every substep must report Newton
+	// failures instead of committing silently.
+	const auto plant=MakePlantCase(1.,1.);
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	const auto inlet=Inlet();
 	for(const std::string resolution:{"cell","portal_territory","organ"}){
-		auto copy=state;
-		const auto records=iga::AdvancePerfusedOrganPlant(model,p,controls,{},{},copy,3600.,3,resolution);
+		auto copy=plant.state;
+		const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+			copy,3600.,3,resolution);
 		assert(records.size()==3);
 		Close(copy.time_s,3600.,1e-12,"plant time");
 		Close(copy.reservoir.volume_m3,2.0+1e-8*3600.,1e-9,"plant volume");
 		for(const auto& record:records){
 			assert(record.flow_m3_s>0.&&record.arterial.po2_mmhg>record.venous.po2_mmhg);
 			assert(record.arterial.pco2_mmhg>0.&&record.mean_viability<=1.);
+			assert(record.newton_failures>0&&record.gauss_seidel_unconverged==0);
+			assert(std::isfinite(record.flow_residual_norm)&&record.flow_residual_norm<1e-12);
 		}
 		assert(copy.reservoir.species.at(names[iga::OrganGlucose])>inlet[iga::OrganGlucose]);
 		for(const double v:copy.viability)assert(v>0.&&v<=1.);
 	}
+	const auto advance=[&](const iga::OrganPlantParameters& parameters,iga::OrganPlantState trial){
+		iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},trial,60.,1,"organ");};
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantParameters&)>>{
+		[](iga::OrganPlantParameters& q){q.oedema_maximum=1.;},
+		[](iga::OrganPlantParameters& q){q.oxygenator_efficiency=1.5;},
+		[](iga::OrganPlantParameters& q){q.carbogen_o2_fraction=q.air_o2_fraction;},
+		[](iga::OrganPlantParameters& q){q.injury_rate_s_inv=-1.;},
+		[](iga::OrganPlantParameters& q){q.vasodilator_ec50_mg_l=0.;}}){
+		auto bad=plant.parameters;
+		change(bad);
+		assert(Rejects([&]{advance(bad,plant.state);}));
+	}
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantState&)>>{
+		[](iga::OrganPlantState& q){q.viability[0]=1.5;},
+		[](iga::OrganPlantState& q){q.glycogen_mol_m3[0]=-1.;},
+		[](iga::OrganPlantState& q){q.oedema[0]=1.;},
+		[](iga::OrganPlantState& q){q.tissue[0][iga::OrganLactate]=std::nan("");},
+		[](iga::OrganPlantState& q){q.vasodilator_mg_l=-1.;}}){
+		auto bad=plant.state;
+		change(bad);
+		assert(Rejects([&]{advance(plant.parameters,bad);}));
+	}
+	assert(!Rejects([&]{advance(plant.parameters,plant.state);}));
+}
+
+void TestAcidInhibitedPlantConserves()
+{
+	// The anoxic cube of TestPlantAdvance with acid inhibition of glycolysis:
+	// buffer base stays positive, and every substep converges and conserves.
+	const auto inlet=Inlet();
+	for(const auto& setting:std::vector<std::pair<double,double>>{{6.8,4.},{6.6,6.}}){
+		auto plant=MakePlantCase(1.,1.);
+		plant.parameters.kinetics.glycolysis_ph50=setting.first;
+		plant.parameters.kinetics.glycolysis_ph_hill=setting.second;
+		for(const std::string resolution:{"cell","portal_territory","organ"}){
+			auto copy=plant.state;
+			const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+				copy,3600.,3,resolution);
+			for(const auto& record:records){
+				assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+				for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+					assert(std::abs(record.balance_defect[s])<=1e-8*record.flow_m3_s*inlet[s]);
+			}
+			for(const auto& c:copy.tissue)assert(c[iga::OrganBufferBase]>0.);
+		}
+	}
+}
+
+void TestOxygenatedPlantConserves()
+{
+	// Thirtyfold perfusion and a hundredth of the metabolism keep every node
+	// oxygenated; then every substep converges and conserves every species.
+	const auto plant=MakePlantCase(30.,0.01);
+	const auto inlet=Inlet();
+	for(const std::string resolution:{"cell","portal_territory","organ"}){
+		auto copy=plant.state;
+		const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+			copy,3600.,3,resolution);
+		for(const auto& record:records){
+			assert(record.hypoxic_volume_fraction==0.&&record.venous.ph>7.3);
+			assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+			for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+				assert(std::abs(record.balance_defect[s])<=1e-8*record.flow_m3_s*inlet[s]);
+		}
+	}
+}
+
+void TestPlantControlCosts()
+{
+	// Costs of aggressive control on the oxygenated cube: hyperoxic
+	// vasoconstriction lowers flow and oxidative and shear injury lower
+	// viability; all are off by default.
+	auto plant=MakePlantCase(30.,0.01);
+	plant.controls.fio2=0.95;
+	plant.controls.inlet_pressure_pa=2000.;
+	auto baseline=plant.state,costly=plant.state;
+	const auto plain=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+		baseline,3600.,2,"cell");
+	auto harsh=plant.parameters;
+	harsh.hyperoxic_constriction_per_100mmhg=0.2;
+	harsh.oxidative_injury_rate_s_inv=1e-5;
+	harsh.shear_injury_rate_inv_pa_s=1e-8;
+	harsh.shear_injury_threshold_pa=100.;
+	const auto penalised=iga::AdvancePerfusedOrganPlant(plant.model,harsh,plant.controls,{},{},
+		costly,3600.,2,"cell");
+	for(const auto& record:penalised)assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+	assert(penalised.back().flow_m3_s<plain.back().flow_m3_s);
+	assert(penalised.back().mean_viability<plain.back().mean_viability);
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantParameters&)>>{
+		[](iga::OrganPlantParameters& q){q.hyperoxic_constriction_per_100mmhg=-1.;},
+		[](iga::OrganPlantParameters& q){q.oxidative_injury_rate_s_inv=-1.;},
+		[](iga::OrganPlantParameters& q){q.shear_injury_rate_inv_pa_s=std::nan("");},
+		[](iga::OrganPlantParameters& q){q.oxidative_injury_threshold_mmhg=std::nan("");}}){
+		auto bad=plant.parameters;
+		change(bad);
+		auto trial=plant.state;
+		assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,bad,plant.controls,{},{},trial,60.,1,
+			"organ");}));
+	}
+}
+
+void TestDecoupledGasCo2()
+{
 	// An independent sweep-gas CO2 decouples arterial pCO2 from FiO2.
-	{
-		const auto chemistry=Perfusate();
-		const auto venous=Inlet();
-		const auto low=iga::Oxygenate(venous,0.3,p,chemistry,0.05);
-		const auto high=iga::Oxygenate(venous,0.9,p,chemistry,0.05);
-		Close(iga::ReadPerfusate(low,chemistry).pco2_mmhg,iga::ReadPerfusate(high,chemistry).pco2_mmhg,1e-9,
-			"decoupled gas CO2");
-		const auto blended=iga::Oxygenate(venous,0.3,p,chemistry);
-		assert(iga::ReadPerfusate(blended,chemistry).pco2_mmhg<iga::ReadPerfusate(low,chemistry).pco2_mmhg);
-	}
-	// Costs of aggressive control: hyperoxic vasoconstriction lowers flow and
-	// oxidative and shear injury lower viability; all are off by default.
-	{
-		auto baseline=state,costly=state;
-		controls.fio2=0.95;
-		controls.inlet_pressure_pa=2000.;
-		const auto plain=iga::AdvancePerfusedOrganPlant(model,p,controls,{},{},baseline,3600.,2,"cell");
-		auto harsh=p;
-		harsh.hyperoxic_constriction_per_100mmhg=0.2;
-		harsh.oxidative_injury_rate_s_inv=1e-5;
-		harsh.shear_injury_rate_inv_pa_s=1e-8;
-		harsh.shear_injury_threshold_pa=100.;
-		const auto penalised=iga::AdvancePerfusedOrganPlant(model,harsh,controls,{},{},costly,3600.,2,"cell");
-		assert(penalised.back().flow_m3_s<plain.back().flow_m3_s);
-		assert(penalised.back().mean_viability<plain.back().mean_viability);
-	}
+	const auto plant=MakePlantCase(1.,1.);
+	const auto chemistry=Perfusate();
+	const auto venous=Inlet();
+	const auto low=iga::Oxygenate(venous,0.3,plant.parameters,chemistry,0.05);
+	const auto high=iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.05);
+	Close(iga::ReadPerfusate(low,chemistry).pco2_mmhg,iga::ReadPerfusate(high,chemistry).pco2_mmhg,1e-9,
+		"decoupled gas CO2");
+	const auto blended=iga::Oxygenate(venous,0.3,plant.parameters,chemistry);
+	assert(iga::ReadPerfusate(blended,chemistry).pco2_mmhg<iga::ReadPerfusate(low,chemistry).pco2_mmhg);
+	assert(Rejects([&]{iga::Oxygenate(venous,0.3,plant.parameters,chemistry,0.5);}));
 }
 
 } // namespace
@@ -570,12 +805,20 @@ int main(int argc,char** argv)
 	TestAcidBase();
 	TestKineticsLimits();
 	TestSingleCellOxygenAgainstScalarRoot();
+	TestBlockedCellIsReportedAsFailure();
+	TestGaussSeidelNonConvergenceIsReported();
+	TestGlycolysisAcidInhibition();
+	TestAcidInhibitionKeepsBufferBase();
 	TestStagnantCellRelaxes();
 	TestExchangeScaleMatchesConductance();
 	TestLobularZonesAreTanksInSeries();
 	TestCubeTransport();
 	TestCircuitExtensions();
 	TestPlantAdvance();
+	TestAcidInhibitedPlantConserves();
+	TestOxygenatedPlantConserves();
+	TestPlantControlCosts();
+	TestDecoupledGasCo2();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;

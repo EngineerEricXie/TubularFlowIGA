@@ -91,6 +91,48 @@ def tetra_minimum_scaled_jacobian(a, b, c, d):
 		normalized_jacobian(vector(d, c), vector(d, b), vector(d, a)))
 
 
+def split_boundary_locked_tetrahedra(gmsh, volume, split):
+	"""Count tetrahedra whose six edges are all boundary-surface edges and,
+	when requested, split each at its centroid. The boundary is unchanged."""
+	boundary_edges = set()
+	for dimension, surface in gmsh.model.getEntities(2):
+		_, _, nodes = gmsh.model.mesh.getElements(2, surface)
+		for block in nodes:
+			for start in range(0, len(block), 3):
+				a, b, c = (int(block[start+corner]) for corner in range(3))
+				boundary_edges.update({(min(a, b), max(a, b)), (min(b, c), max(b, c)), (min(a, c), max(a, c))})
+	types, tags, nodes = gmsh.model.mesh.getElements(3, volume)
+	if list(types) != [4]:
+		reject(f"expected only first-order tetrahedra, got Gmsh element types {types}")
+	cells = [[int(tag) for tag in nodes[0][4*index:4*index+4]] for index in range(len(tags[0]))]
+	locked = [index for index, cell in enumerate(cells) if all(
+		(min(cell[i], cell[j]), max(cell[i], cell[j])) in boundary_edges
+		for i in range(4) for j in range(i+1, 4))]
+	if not split or not locked:
+		return len(locked), 0
+	node_tags, flat, _ = gmsh.model.mesh.getNodes(3, volume)
+	all_tags, all_flat, _ = gmsh.model.mesh.getNodes()
+	coordinates = {int(tag): all_flat[3*index:3*index+3] for index, tag in enumerate(all_tags)}
+	next_node = int(gmsh.model.mesh.getMaxNodeTag())+1
+	new_nodes, new_coordinates = [int(tag) for tag in node_tags], list(flat)
+	replaced = set(locked)
+	connectivity = [cell for index, cell in enumerate(cells) if index not in replaced]
+	for index in locked:
+		cell = cells[index]
+		centroid = [sum(coordinates[tag][axis] for tag in cell)/4.0 for axis in range(3)]
+		new_nodes.append(next_node)
+		new_coordinates.extend(centroid)
+		a, b, c, d = cell
+		# Each child replaces one vertex by the centroid, keeping orientation.
+		connectivity.extend([[next_node, b, c, d], [a, next_node, c, d], [a, b, next_node, d],
+			[a, b, c, next_node]])
+		next_node += 1
+	gmsh.model.mesh.clear([(3, volume)])
+	gmsh.model.mesh.addNodes(3, volume, new_nodes, new_coordinates)
+	gmsh.model.mesh.addElementsByType(volume, 4, [], [tag for cell in connectivity for tag in cell])
+	return len(locked), len(locked)
+
+
 def main():
 	start_wall = time.monotonic()
 	parser = argparse.ArgumentParser(description=__doc__)
@@ -111,6 +153,11 @@ def main():
 	parser.add_argument("--target-size-m", type=float, required=True)
 	parser.add_argument("--minimum-scaled-jacobian", type=float, default=1.0e-3)
 	parser.add_argument("--maximum-volume-relative-error", type=float, default=5.0e-3)
+	parser.add_argument("--split-boundary-locked-tetrahedra", action="store_true",
+		help="split every tetrahedron whose six edges all lie on the boundary surface at its "
+		"centroid; with no-slip walls such a cell leaves a P2/P1 pressure vertex decoupled")
+	parser.add_argument("--optimize-netgen", action="store_true",
+		help="also run Gmsh's Netgen tetrahedron optimizer; the boundary is still preserved")
 	args = parser.parse_args()
 	input_argument = Path(args.input_surface)
 	input_path = input_argument.resolve()
@@ -145,6 +192,8 @@ def main():
 		# Preserve the validated anatomical surface exactly. Only the empty volume
 		# may be meshed; remeshing boundary entities would change the geometry.
 		gmsh.option.setNumber("Mesh.MeshOnlyEmpty", 1)
+		if args.optimize_netgen:
+			gmsh.option.setNumber("Mesh.OptimizeNetgen", 1)
 		with tempfile.TemporaryDirectory(prefix="tubularflow-surface-") as directory:
 			canonical_msh = Path(directory)/"canonical-surface.msh"
 			preflight_path = (args.validated_surface_manifest.resolve()
@@ -200,6 +249,8 @@ def main():
 		volume_group = gmsh.model.addPhysicalGroup(3, [volume_entity])
 		gmsh.model.setPhysicalName(3, volume_group, "fluid")
 		gmsh.model.mesh.generate(3)
+		boundary_locked, boundary_locked_split = split_boundary_locked_tetrahedra(gmsh,
+			volume_entity, args.split_boundary_locked_tetrahedra)
 		types, element_tags, element_nodes = gmsh.model.mesh.getElements(3)
 		if types != [4] or len(element_tags) != 1:
 			reject(f"expected only first-order tetrahedra, got Gmsh element types {types}")
@@ -292,6 +343,7 @@ def main():
 			"geometry_contract": geometry_contract,
 			"mesher": {"name": "Gmsh", "version": gmsh.option.getString("General.Version"),
 				"target_size_m": args.target_size_m,
+				"optimize_netgen": bool(args.optimize_netgen),
 				"wall_s": mesher_wall_s},
 			"resources": {"pipeline_wall_s": time.monotonic()-start_wall,
 				"peak_rss_bytes": peak_rss_bytes},
@@ -315,6 +367,8 @@ def main():
 				"boundary_surface_area_relative_error": 0.0,
 				"maximum_source_surface_distance_m": 0.0,
 				"boundary_remeshed": False,
+				"boundary_locked_tetrahedra": boundary_locked,
+				"boundary_locked_tetrahedra_split": boundary_locked_split,
 				"implicit_surface_repair": False,
 				"boundary_labels": output_label_counts,
 				"boundary_physical_group_tags": {str(label): physical_group_for_label[label]

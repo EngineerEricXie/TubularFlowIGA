@@ -206,7 +206,63 @@ struct OrganPlantRecord
 	double hypoxic_volume_fraction=0.,mean_viability=0.,mean_oedema=0.;
 	double last_zone_po2_p05=0.,energy_deficit_mean=0.,energy_deficit_p95=0.,o2_uptake_mol_s=0.;
 	OrganConcentration organ_uptake{};
+	// Diagnostics of the substep's organ solve; the substep is committed either
+	// way, so callers decide whether a nonzero failure count is acceptable.
+	std::size_t newton_failures=0,gauss_seidel_sweeps=0,gauss_seidel_unconverged=0;
+	double flow_residual_norm=0.,exchange_imbalance_m3_s=0.;
+	OrganConcentration balance_defect{};
 };
+
+// Rejects parameters that would otherwise be clamped or turn into NaN silently.
+inline void ValidatePerfusedOrganPlantParameters(const OrganPlantParameters& p)
+{
+	const auto nonnegative=[](double value){return value>=0.&&std::isfinite(value);};
+	if(!(p.air_o2_fraction>0.&&p.air_o2_fraction<p.carbogen_o2_fraction&&p.carbogen_o2_fraction<=1.))
+		throw std::invalid_argument("plant gas fractions need 0 < air O2 < carbogen O2 <= 1");
+	if(!nonnegative(p.carbogen_co2_fraction)||p.carbogen_o2_fraction+p.carbogen_co2_fraction>1.+1e-12)
+		throw std::invalid_argument("plant carbogen CO2 fraction is invalid");
+	if(!nonnegative(p.water_vapour_mmhg)||!(p.atmospheric_pressure_mmhg>p.water_vapour_mmhg)
+		||!std::isfinite(p.atmospheric_pressure_mmhg))
+		throw std::invalid_argument("plant gas pressures need atmospheric > water vapour >= 0");
+	if(!(p.oxygenator_efficiency>=0.&&p.oxygenator_efficiency<=1.))
+		throw std::invalid_argument("oxygenator efficiency must lie in [0,1]");
+	if(!(p.injury_deficit_threshold>=0.&&p.injury_deficit_threshold<=1.))
+		throw std::invalid_argument("injury deficit threshold must lie in [0,1]");
+	if(!(p.oedema_maximum>=0.&&p.oedema_maximum<1.))
+		throw std::invalid_argument("oedema maximum must lie in [0,1)");
+	for(const double value:{p.hemoglobin_per_hematocrit,p.injury_rate_s_inv,p.oedema_deficit_rate_s_inv,
+		p.oedema_pressure_rate_inv_pa_s,p.oedema_resolution_s_inv,p.oedema_exponent,
+		p.vasodilator_elimination_s_inv,p.vasodilator_emax})
+		if(!nonnegative(value))throw std::invalid_argument("plant rates and exponents must be finite and nonnegative");
+	if(!std::isfinite(p.oedema_pressure_threshold_pa))
+		throw std::invalid_argument("oedema pressure threshold must be finite");
+	if(!(p.vasodilator_ec50_mg_l>0.)||!std::isfinite(p.vasodilator_ec50_mg_l))
+		throw std::invalid_argument("vasodilator EC50 must be positive");
+	if(!nonnegative(p.hyperoxic_constriction_per_100mmhg)||!nonnegative(p.oxidative_injury_rate_s_inv)
+		||!nonnegative(p.shear_injury_rate_inv_pa_s))
+		throw std::invalid_argument("plant control-cost rates must be finite and nonnegative");
+	if(!std::isfinite(p.hyperoxic_constriction_threshold_mmhg)||!std::isfinite(p.oxidative_injury_threshold_mmhg)
+		||!std::isfinite(p.shear_injury_threshold_pa))
+		throw std::invalid_argument("plant control-cost thresholds must be finite");
+}
+
+// Restored or initial states must be ones the advance itself can produce.
+inline void ValidatePerfusedOrganPlantState(const OrganPlantState& state)
+{
+	if(!std::isfinite(state.time_s)||!(state.vasodilator_mg_l>=0.)||!std::isfinite(state.vasodilator_mg_l))
+		throw std::invalid_argument("plant state time or vasodilator is invalid");
+	for(const auto& c:state.tissue)
+		for(const double value:c)
+			if(!(value>=0.)||!std::isfinite(value))
+				throw std::invalid_argument("plant tissue concentrations must be finite and nonnegative");
+	for(const double value:state.viability)
+		if(!(value>=0.&&value<=1.))throw std::invalid_argument("plant viability must lie in [0,1]");
+	for(const double value:state.glycogen_mol_m3)
+		if(!(value>=0.)||!std::isfinite(value))
+			throw std::invalid_argument("plant glycogen must be finite and nonnegative");
+	for(const double value:state.oedema)
+		if(!(value>=0.&&value<1.))throw std::invalid_argument("plant oedema must lie in [0,1)");
+}
 
 inline PerfusateReading ReadPerfusate(const OrganConcentration& c,const PerfusateChemistry& chemistry)
 {
@@ -310,6 +366,8 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 	if(state.tissue.size()!=nodes||state.viability.size()!=nodes||state.glycogen_mol_m3.size()!=nodes
 		||state.oedema.size()!=cells)
 		throw std::invalid_argument("plant state does not match the model");
+	ValidatePerfusedOrganPlantParameters(p);
+	ValidatePerfusedOrganPlantState(state);
 	if(!mobility_scale.empty()&&mobility_scale.size()!=cells)throw std::invalid_argument("mobility scale size");
 	if(!exchange_scale.empty()&&exchange_scale.size()!=cells)throw std::invalid_argument("exchange scale size");
 	VcaExternalCircuit circuit(PerfusedOrganCircuitDefinition(state,controls));
@@ -459,6 +517,12 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t i=0;i<cells;++i){oedema+=model.cell_volume[i]*state.oedema[i];volume+=model.cell_volume[i];}
 		record.mean_oedema=oedema/volume;
 		record.organ_uptake=organ_uptake;
+		record.newton_failures=species.newton_failures;
+		record.gauss_seidel_sweeps=species.gauss_seidel_sweeps;
+		record.gauss_seidel_unconverged=species.gauss_seidel_unconverged;
+		record.flow_residual_norm=organ.hemodynamics.residual_norm;
+		record.exchange_imbalance_m3_s=organ.hemodynamics.exchange_imbalance_m3_s;
+		record.balance_defect=species.balance_defect;
 		records.push_back(record);
 		if(last_step&&step+1==substeps)*last_step=std::move(organ);
 	}

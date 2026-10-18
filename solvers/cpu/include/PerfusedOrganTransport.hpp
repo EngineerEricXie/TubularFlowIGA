@@ -177,7 +177,9 @@ struct OrganTransportResult
 	// Per-species totals over the organ [mol/s or mU L^-1 m^3 s^-1].
 	OrganConcentration inflow{},outflow{},storage_rate{},reaction{},balance_defect{};
 	std::size_t components=0,largest_component=0,newton_failures=0;
-	std::size_t gauss_seidel_sweeps=0;
+	// Total Gauss-Seidel sweeps, and cyclic components that reached the
+	// 500-sweep cap without settling.
+	std::size_t gauss_seidel_sweeps=0,gauss_seidel_unconverged=0;
 };
 
 namespace organ_transport_detail {
@@ -313,6 +315,10 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 		};
 		double current=norm(r),change=0.;
 		bool converged=current<=1e-12;
+		// The inner pO2 and acid-base solves leave a round-off floor near 1e-10
+		// in this scaled residual: a stall below stall_tolerance is convergence,
+		// a stall above it is a failure.
+		const double stall_tolerance=1e-8;
 		for(int iteration=0;iteration<60&&!converged;++iteration){
 			std::array<std::array<double,OrganSpeciesCount>,OrganSpeciesCount> jacobian{};
 			for(std::size_t s=0;s<OrganSpeciesCount;++s){
@@ -328,18 +334,25 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 			double alpha=1.;
 			OrganConcentration trial{},trial_r{};
 			double trial_norm=current;
+			bool decreased=false;
 			for(int search=0;search<30;++search){
 				for(std::size_t s=0;s<OrganSpeciesCount;++s)trial[s]=std::max(c[s]-alpha*delta[s],0.);
 				residual(i,trial,trial_r);
 				trial_norm=norm(trial_r);
-				if(trial_norm<current||trial_norm<=1e-12)break;
+				if(trial_norm<current||trial_norm<=1e-12){decreased=true;break;}
 				alpha*=0.5;
 			}
+			// No descent within the line search: keep the iterate.
+			if(!decreased){converged=current<=stall_tolerance;break;}
 			change=0.;
 			for(std::size_t s=0;s<OrganSpeciesCount;++s)
 				change=std::max(change,std::abs(trial[s]-c[s])/scale[s]);
 			c=trial;r=trial_r;current=trial_norm;
-			converged=current<=1e-10||change<=1e-13;
+			converged=current<=1e-10;
+			// A vanishing update (for example a step blocked by the
+			// nonnegativity clip) with a large residual is stagnation, not
+			// convergence.
+			if(change<=1e-13){converged=current<=stall_tolerance;break;}
 		}
 		if(!converged)++result.newton_failures;
 		const double moved=[&]{
@@ -356,12 +369,14 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 	for(const auto& component:components){
 		result.largest_component=std::max(result.largest_component,component.size());
 		if(component.size()==1){solve_cell(component.front());continue;}
-		for(int sweep=0;sweep<500;++sweep){
+		bool settled=false;
+		for(int sweep=0;sweep<500&&!settled;++sweep){
 			double moved=0.;
 			for(const auto cell:component)moved=std::max(moved,solve_cell(cell));
 			++result.gauss_seidel_sweeps;
-			if(moved<=1e-11)break;
+			settled=moved<=1e-11;
 		}
+		if(!settled)++result.gauss_seidel_unconverged;
 	}
 
 	for(std::size_t i=0;i<n;++i){

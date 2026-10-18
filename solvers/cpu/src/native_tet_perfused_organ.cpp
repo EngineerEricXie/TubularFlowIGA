@@ -229,8 +229,11 @@ Organ LoadOrgan(const std::filesystem::path& case_path)
 			auto& list=tree.territories[node->second];
 			for(std::size_t k=0;k<ids.size();++k){
 				const double id=RequireNumber(ids[k],"cell_ids");
+				// Range-check before the cast: converting a negative or huge double is undefined.
+				if(!(id>=1.&&id<18446744073709551616.)||std::floor(id)!=id)
+					throw std::invalid_argument("territory cell id is not in the tissue mesh");
 				const auto cell=cell_index.find(static_cast<std::uint64_t>(id));
-				if(id<1.||std::floor(id)!=id||cell==cell_index.end())
+				if(cell==cell_index.end())
 					throw std::invalid_argument("territory cell id is not in the tissue mesh");
 				list.push_back({cell->second,RequireNumber(weights[k],"weights")});
 			}
@@ -303,7 +306,8 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 		"glycolysis_capacity_mol_m3_s","glycogen_half_saturation_mol_m3","km_glucose_mol_m3",
 		"lactate_vmax_mol_m3_s","lactate_km_mol_m3","gluconeogenic_fraction",
 		"glycogenolysis_vmax_mol_m3_s","glucose_uptake_vmax_mol_m3_s","insulin_half_effect_mU_L",
-		"insulin_clearance_s_inv","respiratory_quotient","aerobic_glucose_fraction","q10","temperature_c"},"kinetics");
+		"insulin_clearance_s_inv","respiratory_quotient","aerobic_glucose_fraction","glycolysis_ph50",
+		"glycolysis_ph_hill","q10","temperature_c"},"kinetics");
 	iga::HepaticKinetics k;
 	const std::string c="kinetics";
 	k.vmax_o2_mol_m3_s=Number(object,"vmax_o2_mol_m3_s",c);
@@ -324,6 +328,8 @@ iga::HepaticKinetics ParseKinetics(const Object& object)
 	k.insulin_half_effect_mU_L=NumberOr(object,"insulin_half_effect_mU_L",k.insulin_half_effect_mU_L,c);
 	k.respiratory_quotient=NumberOr(object,"respiratory_quotient",k.respiratory_quotient,c);
 	k.aerobic_glucose_fraction=NumberOr(object,"aerobic_glucose_fraction",k.aerobic_glucose_fraction,c);
+	k.glycolysis_ph50=NumberOr(object,"glycolysis_ph50",k.glycolysis_ph50,c);
+	k.glycolysis_ph_hill=NumberOr(object,"glycolysis_ph_hill",k.glycolysis_ph_hill,c);
 	k.q10=NumberOr(object,"q10",k.q10,c);
 	return k;
 }
@@ -596,6 +602,7 @@ std::string Solve(const Organ& organ,const std::string& request_text,const std::
 		.Entry("transport_components",species.components)
 		.Entry("transport_largest_component",species.largest_component)
 		.Entry("gauss_seidel_sweeps",species.gauss_seidel_sweeps)
+		.Entry("gauss_seidel_unconverged",species.gauss_seidel_unconverged)
 		.Entry("newton_failures",species.newton_failures)
 		.Entry("step_seconds",seconds(step_started,step_finished))
 		.Entry("total_seconds",seconds(started,std::chrono::steady_clock::now())).Close();
@@ -893,6 +900,7 @@ std::string Advance(const Organ& organ,const Object& request,const std::filesyst
 	const std::string resolution=Find(request,"resolution")?RequireString(*Find(request,"resolution"),"resolution"):"cell";
 	const double duration=Number(request,"duration_s","advance");
 	const int substeps=RequireInteger(Field(request,"substeps","advance"),"substeps");
+	if(substeps<1)throw std::invalid_argument("advance substeps must be a positive integer");
 	const auto records=iga::AdvancePerfusedOrganPlant(organ.model,parameters,controls,field("mobility_scale"),
 		field("exchange_scale"),state,duration,static_cast<std::size_t>(substeps),resolution);
 	if(const auto* out=Find(request,"state_out"))SavePlantState(RequireObject(*out,"state_out"),state,organ,base);
@@ -914,9 +922,19 @@ std::string Advance(const Organ& organ,const Object& request,const std::filesyst
 			.Entry("energy_deficit_p95",r.energy_deficit_p95).Entry("o2_uptake_mol_s",r.o2_uptake_mol_s).Close();
 		json.Key("organ_uptake").Open();
 		for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)json.Entry(names[s],r.organ_uptake[s]);
-		json.Close().Close();
+		json.Close();
+		json.Key("diagnostics").Open().Entry("newton_failures",r.newton_failures)
+			.Entry("gauss_seidel_sweeps",r.gauss_seidel_sweeps)
+			.Entry("gauss_seidel_unconverged",r.gauss_seidel_unconverged)
+			.Entry("flow_residual_norm",r.flow_residual_norm)
+			.Entry("exchange_imbalance_m3_s",r.exchange_imbalance_m3_s).Key("balance_defect").Open();
+		for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)json.Entry(names[s],r.balance_defect[s]);
+		json.Close().Close().Close();
 	}
 	json.CloseArray();
+	std::size_t newton_failures=0,unconverged=0;
+	for(const auto& r:records){newton_failures+=r.newton_failures;unconverged+=r.gauss_seidel_unconverged;}
+	json.Entry("newton_failures",newton_failures).Entry("gauss_seidel_unconverged",unconverged);
 	json.Key("reservoir").Open().Entry("volume_m3",state.reservoir.volume_m3)
 		.Entry("hematocrit_percent",state.reservoir.hematocrit_percent).Key("species").Open();
 	for(const auto& item:state.reservoir.species)json.Entry(item.first,item.second);
@@ -1030,7 +1048,13 @@ int Run(int argc,char** argv)
 		for(std::string line;std::getline(std::cin,line);){
 			if(line.find_first_not_of(" \t\r")==std::string::npos)continue;
 			try{
-				if(line.find("\"command\"")!=std::string::npos&&line.find("\"exit\"")!=std::string::npos)break;
+				// Only a request whose command is "exit" stops the server.
+				const auto parsed=iga::config_detail::JsonParser(line).Parse();
+				if(parsed.type==iga::config_detail::JsonValue::Type::Object){
+					const auto* command=iga::config_detail::Find(parsed.object,"command");
+					if(command&&command->type==iga::config_detail::JsonValue::Type::String
+						&&command->string=="exit")break;
+				}
 				std::cout<<Dispatch(organ,line,std::filesystem::current_path())<<std::endl;
 			}catch(const std::exception& error){
 				std::cout<<Json().Open().Entry("ok",false).Entry("error",std::string(error.what()))

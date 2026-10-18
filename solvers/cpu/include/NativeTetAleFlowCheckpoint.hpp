@@ -96,7 +96,7 @@ inline std::string NativeTetAleFlowModelIdentitySha256(
 	const std::string& domain_id,const NativeTetMesh& reference_mesh,
 	const std::vector<CouplingPort>& ports,const NativeNavierStokesParameters& parameters,
 	const std::set<int>& wall_labels,const std::string& motion_model_id,
-	double nonlinear_tolerance,std::size_t maximum_iterations)
+	double nonlinear_tolerance,std::size_t maximum_iterations,bool steady=false)
 {
 	if(domain_id.empty()||reference_mesh.points.empty()||reference_mesh.cells.empty()
 		||!(parameters.density>0.)||!std::isfinite(parameters.density)
@@ -153,6 +153,8 @@ inline std::string NativeTetAleFlowModelIdentitySha256(
 	hash.AppendLittleEndian64(wall_labels.size());
 	for(const int label:wall_labels)
 		hash.AppendLittleEndian32(static_cast<std::uint32_t>(label));
+	// Appended only when set, so transient model identities are unchanged.
+	if(steady)AppendText(hash,"steady-momentum/v1");
 	return hash.Hex();
 }
 

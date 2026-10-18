@@ -61,7 +61,17 @@ Unperfused nodes relax over `Δt` instead of having no steady state.
 
 The upwind graph is ordered by strongly connected components. Each node is
 solved by a local Newton iteration on the six species with a nonnegativity line
-search. Cyclic components fall back to Gauss–Seidel.
+search. Cyclic components fall back to Gauss–Seidel, capped at 500 sweeps.
+
+A node counts in `newton_failures` when its Newton iteration ends without
+reaching the residual tolerance. That includes a step blocked by the
+nonnegativity clip.
+
+The inner pO₂ and acid–base solves leave a round-off floor near 1e-10 in the
+scaled residual. So when the iteration stalls, through no descent or a
+vanishing update, it counts as converged only below 1e-8. A cyclic component that reaches the sweep cap is counted in
+`gauss_seidel_unconverged`. Both solutions are still returned, so callers must
+check the counts.
 
 ### Species and acid–base
 
@@ -100,6 +110,16 @@ and with `Q10^((T−37)/10)`.
   glycolysis, up to `v · glycolysis_capacity`, at one ATP per lactate. Glycogen
   is used first, then perfusate glucose. The part still unmet is reported per
   node as `energy_deficit`, an input to the caller's injury model.
+- **Acid inhibition of glycolysis (opt-in).** Setting `glycolysis_ph50` scales
+  lactate production by `1/(1 + 10^(n (pH50 − pH)))`, where
+  `n = glycolysis_ph_hill` (default 1).
+  - The inhibition is off by default, which leaves `hepatic_v1` unchanged.
+  - `glycolysis_ph50` must lie in the acid–base range [5.5, 9], and `n` must be
+    positive.
+  - Production unmet by inhibition is added to `energy_deficit`.
+  - Without the inhibition, anoxic tissue can exhaust buffer base (see
+    Limitations).
+  - No values are built in; choose them and record their provenance.
 - **Lactate clearance** needs O₂: `v Vmax_L f_O₂ L/(Km_L + L)`. A fraction of the
   cleared lactate becomes glucose.
 - **Glycogen flux.** Glycogenolysis releases glucose and is suppressed by
@@ -151,6 +171,7 @@ Required keys:
 - `kinetics {vmax_o2_mol_m3_s, glycolysis_capacity_mol_m3_s,
   lactate_vmax_mol_m3_s, glycogenolysis_vmax_mol_m3_s,
   glucose_uptake_vmax_mol_m3_s, insulin_clearance_s_inv, temperature_c, ...}`.
+  The optional keys include `glycolysis_ph50` and `glycolysis_ph_hill`.
 
 Optional keys:
 
@@ -178,7 +199,9 @@ The response is one JSON object. It contains:
     pressure;
   - the last zone's pO₂ and energy deficit;
   - the hypoxic volume fraction.
-- **Diagnostics**, including timings.
+- **Diagnostics**, including timings: the flow residual and exchange
+  imbalance, the transport component counts, `gauss_seidel_sweeps`,
+  `gauss_seidel_unconverged` and `newton_failures`.
 
 Modes:
 
@@ -242,7 +265,30 @@ The response holds one record per substep, each with:
 - the arterial and venous O₂, saturation, pH, pCO₂, HCO₃⁻ and species;
 - the hypoxic volume fraction, mean viability, mean oedema, zone-3 pO₂ and
   energy-deficit quantiles;
-- the organ uptake per species.
+- the organ uptake per species;
+- `diagnostics` for that substep's organ solve: `newton_failures`,
+  `gauss_seidel_sweeps`, `gauss_seidel_unconverged`, `flow_residual_norm`,
+  `exchange_imbalance_m3_s`, and the species `balance_defect`.
+
+The response also totals `newton_failures` and `gauss_seidel_unconverged` over
+the substeps. A substep is committed, and written to `state_out`, even when
+these counts are nonzero.
+
+The advance rejects a plant state that it could not have produced itself:
+- non-finite or negative tissue concentrations;
+- viability outside [0, 1];
+- negative glycogen;
+- oedema outside [0, 1);
+- a negative vasodilator concentration.
+
+It also rejects plant parameters that would otherwise be clamped silently or
+become NaN:
+- gas fractions outside `0 < air O₂ < carbogen O₂ ≤ 1`;
+- an oxygenator efficiency or injury threshold outside [0, 1];
+- an oedema maximum outside [0, 1);
+- negative rates or exponents, including the control-cost rates below;
+- non-finite control-cost thresholds;
+- a non-positive vasodilator EC50.
 
 `VcaExternalCircuit` extensions (defaults keep previous behaviour):
 
@@ -309,6 +355,37 @@ checks the following:
   - Three zones reproduce tanks in series exactly.
   - Inert species stay at the inlet value.
   - Species balance holds for cell, zone, and pooled graphs.
+  - A cell whose buffer base is pinned by the clip counts as a Newton failure.
+  - With acid inhibition, the same cell converges with positive buffer base.
+  - A strongly recirculating loop that reaches the sweep cap counts as unconverged.
+- **Kinetics.** Acid inhibition scales lactate production by exactly its
+  factor, leaves the rates unchanged when disabled, and rejects invalid
+  parameters.
+- **Plant.**
+  - The anoxic unit-cube plant reports Newton failures in every substep.
+  - With acid inhibition (pH50 6.8, n = 4; and pH50 6.6, n = 6) the same cube
+    keeps buffer base positive. Every substep converges and conserves every
+    species to 1e-8 of its inflow at every resolution.
+  - An oxygenated variant converges and conserves every species to 1e-8 of
+    its inflow at every resolution.
+  - On that variant the control costs lower flow and viability without
+    Newton failures.
+  - Invalid parameters and states are rejected.
+
+`cpu.native_tet_perfused_organ_cli_test`
+(`tests/check_native_tet_perfused_organ.py`) runs the CLI on a synthetic box
+organ that it builds with the standard library. It checks:
+- the input check and the geometry file;
+- solve conservation and diagnostics at every resolution;
+- the acid-inhibition keys and the rejection of an out-of-range `glycolysis_ph50`;
+- that an advance split through `state_out`/`state_in` reproduces one advance
+  bit for bit;
+- the per-substep diagnostics;
+- rejection of invalid states and parameters, including a negative
+  control-cost rate;
+- that `gas_co2_fraction` fixes arterial pCO₂ whatever the FiO₂, and that an
+  out-of-range fraction is rejected;
+- the `--serve` exit protocol.
 
 ## Limitations
 
@@ -321,3 +398,14 @@ checks the following:
 - **Temperature is a rate scale only.** No heat transport is solved.
 - **Uncalibrated parameters.** The kinetic constants must be supplied, and
   their provenance must be recorded by the caller.
+- **Buffer base can be exhausted.** By default `hepatic_v1` releases one H⁺ per
+  lactate regardless of pH. Anoxic tissue can therefore consume buffer base
+  faster than perfusion supplies it.
+  - Once buffer base reaches zero, the node has no nonnegative solution. The
+    clip holds buffer base at zero, the node counts as a Newton failure, and
+    the species balance no longer closes.
+  - `glycolysis_ph50` lets production fall with pH first. It lowers production
+    sharply as pH falls but never stops it, so tissue with almost no
+    buffer-base supply can still run out.
+  - Treat results with nonzero `newton_failures` as outside the model's
+    validity.
