@@ -286,7 +286,8 @@ become NaN:
 - gas fractions outside `0 < air O₂ < carbogen O₂ ≤ 1`;
 - an oxygenator efficiency or injury threshold outside [0, 1];
 - an oedema maximum outside [0, 1);
-- negative rates or exponents;
+- negative rates or exponents, including the control-cost rates below;
+- non-finite control-cost thresholds;
 - a non-positive vasodilator EC50.
 
 `VcaExternalCircuit` extensions (defaults keep previous behaviour):
@@ -297,6 +298,22 @@ become NaN:
 - `AdvanceWithUptake`.
 
 `Advance` rejects the new modes rather than integrating them explicitly.
+
+Three optional costs of aggressive control are off by default:
+
+| Cost | Trigger | Effect |
+|---|---|---|
+| Hyperoxic vasoconstriction | arterial pO₂ above `hyperoxic_constriction_threshold_mmhg` | exchange conductance divided by `1 + c·excess/100 mmHg` |
+| Oxidative injury | node pO₂ above `oxidative_injury_threshold_mmhg` | viability decays |
+| Shear injury | tissue pressure above `shear_injury_threshold_pa` | viability decays |
+
+Without them, maximal oxygenation and pressure carry no penalty. The shear
+injury is driven by mean cell tissue pressure, a proxy for sinusoidal shear;
+no wall shear stress is computed.
+
+The optional control `gas_co2_fraction`, in [0, 0.2], sets the sweep-gas CO₂
+independently of FiO₂. FiO₂ plus the fraction must not exceed 1. Without it,
+the Model41 air/carbogen blend is used, in which gas CO₂ follows FiO₂.
 
 ## Geometry from a DICOM SEG
 
@@ -355,6 +372,8 @@ checks the following:
     species to 1e-8 of its inflow at every resolution.
   - An oxygenated variant converges and conserves every species to 1e-8 of
     its inflow at every resolution.
+  - On that variant the control costs lower flow and viability without
+    Newton failures.
   - Invalid parameters and states are rejected.
 
 `cpu.native_tet_perfused_organ_cli_test`
@@ -366,7 +385,10 @@ organ that it builds with the standard library. It checks:
 - that an advance split through `state_out`/`state_in` reproduces one advance
   bit for bit;
 - the per-substep diagnostics;
-- rejection of invalid states and parameters;
+- rejection of invalid states and parameters, including a negative
+  control-cost rate;
+- that `gas_co2_fraction` fixes arterial pCO₂ whatever the FiO₂, and that an
+  out-of-range fraction is rejected;
 - the `--serve` exit protocol.
 
 ## Limitations

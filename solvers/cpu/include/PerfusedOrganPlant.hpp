@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -155,6 +156,14 @@ struct OrganPlantParameters
 	// Vasodilator in the reservoir [mg/L]: first-order elimination and an
 	// Emax effect on exchange conductance.
 	double vasodilator_elimination_s_inv=2e-4,vasodilator_emax=0.5,vasodilator_ec50_mg_l=5.;
+	// Optional costs of aggressive control (all off by default):
+	//  - hyperoxic vasoconstriction: exchange conductance divided by
+	//    1 + c (pO2_arterial - threshold)_+ / 100 mmHg;
+	//  - oxidative injury: viability decays at k (pO2_node - threshold)_+ / 100 mmHg;
+	//  - shear injury: viability decays at k (tissue pressure - threshold)_+ per Pa.
+	double hyperoxic_constriction_per_100mmhg=0.,hyperoxic_constriction_threshold_mmhg=150.;
+	double oxidative_injury_rate_s_inv=0.,oxidative_injury_threshold_mmhg=200.;
+	double shear_injury_rate_inv_pa_s=0.,shear_injury_threshold_pa=1000.;
 };
 
 struct OrganPlantControls
@@ -168,6 +177,9 @@ struct OrganPlantControls
 	double bolus_volume_m3=0.;
 	double vasodilator_bolus_mg=0.;
 	double temperature_c=37.;
+	// Optional independent CO2 fraction of the dry sweep gas. NaN keeps the
+	// Model41 air/carbogen blend, in which gas CO2 follows FiO2.
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN();
 };
 
 struct OrganPlantState
@@ -226,6 +238,12 @@ inline void ValidatePerfusedOrganPlantParameters(const OrganPlantParameters& p)
 		throw std::invalid_argument("oedema pressure threshold must be finite");
 	if(!(p.vasodilator_ec50_mg_l>0.)||!std::isfinite(p.vasodilator_ec50_mg_l))
 		throw std::invalid_argument("vasodilator EC50 must be positive");
+	if(!nonnegative(p.hyperoxic_constriction_per_100mmhg)||!nonnegative(p.oxidative_injury_rate_s_inv)
+		||!nonnegative(p.shear_injury_rate_inv_pa_s))
+		throw std::invalid_argument("plant control-cost rates must be finite and nonnegative");
+	if(!std::isfinite(p.hyperoxic_constriction_threshold_mmhg)||!std::isfinite(p.oxidative_injury_threshold_mmhg)
+		||!std::isfinite(p.shear_injury_threshold_pa))
+		throw std::invalid_argument("plant control-cost thresholds must be finite");
 }
 
 // Restored or initial states must be ones the advance itself can produce.
@@ -279,13 +297,20 @@ inline double Co2TotalAtPco2(double buffer_base,double pco2_mmhg,const Perfusate
 }
 
 inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2,
-	const OrganPlantParameters& p,const PerfusateChemistry& chemistry)
+	const OrganPlantParameters& p,const PerfusateChemistry& chemistry,
+	double gas_co2_fraction=std::numeric_limits<double>::quiet_NaN())
 {
 	if(!(fio2>=p.air_o2_fraction-1e-12&&fio2<=p.carbogen_o2_fraction+1e-12))
 		throw std::invalid_argument("FiO2 must lie between air and carbogen");
 	const double dry=p.atmospheric_pressure_mmhg-p.water_vapour_mmhg;
 	const double carbogen=(fio2-p.air_o2_fraction)/(p.carbogen_o2_fraction-p.air_o2_fraction);
-	const double gas_po2=fio2*dry,gas_pco2=std::max(carbogen,0.)*p.carbogen_co2_fraction*dry;
+	const double gas_po2=fio2*dry;
+	if(!std::isnan(gas_co2_fraction)&&!(gas_co2_fraction>=0.&&gas_co2_fraction<=0.2))
+		throw std::invalid_argument("gas CO2 fraction must be in [0, 0.2]");
+	if(!std::isnan(gas_co2_fraction)&&fio2+gas_co2_fraction>1.+1e-12)
+		throw std::invalid_argument("FiO2 plus the gas CO2 fraction must not exceed 1");
+	const double gas_pco2=std::isnan(gas_co2_fraction)
+		?std::max(carbogen,0.)*p.carbogen_co2_fraction*dry:gas_co2_fraction*dry;
 	OrganConcentration arterial=venous;
 	const double eta=std::clamp(p.oxygenator_efficiency,0.,1.);
 	const double co2_equilibrium=Co2TotalAtPco2(venous[OrganBufferBase],gas_pco2,chemistry);
@@ -360,9 +385,13 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		chemistry.oxygen.hematocrit_percent=reservoir.hematocrit_percent;
 		chemistry.oxygen.hemoglobin_g_dl=reservoir.hematocrit_percent*p.hemoglobin_per_hematocrit;
 		const auto venous_in=ReservoirComposition(reservoir);
-		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry);
+		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry,controls.gas_co2_fraction);
 		const double drug=state.vasodilator_mg_l;
 		const double dilation=1.+p.vasodilator_emax*drug/(p.vasodilator_ec50_mg_l+drug);
+		const double arterial_po2=PartialPressureO2(arterial[OrganOxygen],
+			SolveAcidBase(arterial[OrganBufferBase],arterial[OrganCarbonDioxide],chemistry).ph,chemistry);
+		const double constriction=1./(1.+p.hyperoxic_constriction_per_100mmhg
+			*std::max(arterial_po2-p.hyperoxic_constriction_threshold_mmhg,0.)/100.);
 
 		PerfusedOrganFlowInput flow;
 		flow.viscosity_pa_s=p.viscosity_pa_s;
@@ -382,7 +411,8 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t i=0;i<cells;++i){
 			const double compression=std::pow(1.-std::clamp(state.oedema[i],0.,p.oedema_maximum),p.oedema_exponent);
 			flow.mobility_by_cell_m2_pa_s[i]=p.mobility_m2_pa_s*(mobility_scale.empty()?1.:mobility_scale[i])*compression;
-			flow.exchange_scale_by_cell[i]=(exchange_scale.empty()?1.:exchange_scale[i])*compression*dilation;
+			flow.exchange_scale_by_cell[i]=(exchange_scale.empty()?1.:exchange_scale[i])*compression*dilation
+				*constriction;
 		}
 		OrganTransportInput transport;
 		transport.dt_s=dt;
@@ -420,7 +450,11 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t n=0;n<nodes;++n){
 			const auto& rates=species.rates[n];
 			const double excess=std::max(rates.energy_deficit-p.injury_deficit_threshold,0.);
-			state.viability[n]*=std::exp(-p.injury_rate_s_inv*excess*dt);
+			const double hyperoxia=std::max(rates.po2_mmhg-p.oxidative_injury_threshold_mmhg,0.)/100.;
+			const double shear=std::max(organ.hemodynamics.cell_mean_pressure_pa[n/model.zones]
+				-p.shear_injury_threshold_pa,0.);
+			state.viability[n]*=std::exp(-(p.injury_rate_s_inv*excess+p.oxidative_injury_rate_s_inv*hyperoxia
+				+p.shear_injury_rate_inv_pa_s*shear)*dt);
 			state.glycogen_mol_m3[n]=std::max(state.glycogen_mol_m3[n]+dt*rates.glycogen_rate,0.);
 			cell_deficit[n/model.zones]+=rates.energy_deficit/double(model.zones);
 		}

@@ -197,6 +197,20 @@ def main():
         error = request(root, "bad_parameters", dict(advance(60.0, 1, plain, {"initial_state": initial}, "unused"),
             parameters=dict(parameters, oedema_maximum=1.0)), expect_success=False)
         assert "oedema maximum" in error, error
+        error = request(root, "bad_cost", dict(advance(60.0, 1, plain, {"initial_state": initial}, "unused"),
+            parameters=dict(parameters, shear_injury_rate_inv_pa_s=-1.0)), expect_success=False)
+        assert "control-cost" in error, error
+
+        # An independent sweep-gas CO2 fixes arterial pCO2 whatever the FiO2.
+        pco2 = lambda fio2: request(root, "gas_co2_%g" % fio2, advance(60.0, 1, dict(plain, fio2=fio2,
+            gas_co2_fraction=0.05), {"initial_state": initial}, "unused_gas"))["records"][0]["arterial"]["pco2_mmHg"]
+        assert math.isclose(pco2(0.3), pco2(0.9), rel_tol=1e-9), (pco2(0.3), pco2(0.9))
+        error = request(root, "bad_gas_co2", advance(60.0, 1, dict(plain, gas_co2_fraction=0.5),
+            {"initial_state": initial}, "unused"), expect_success=False)
+        assert "gas CO2" in error, error
+        error = request(root, "bad_gas_sum", advance(60.0, 1, dict(plain, fio2=0.95, gas_co2_fraction=0.1),
+            {"initial_state": initial}, "unused"), expect_success=False)
+        assert "must not exceed 1" in error, error
 
         lines = [json.dumps(dict(solve, tag="a")), "{", json.dumps(dict(advance(60.0, 1, plain,
             {"initial_state": initial}, "served"), substeps=0)), json.dumps({"tag": "exit"}),

@@ -745,6 +745,58 @@ void TestOxygenatedPlantConserves()
 	}
 }
 
+void TestPlantControlCosts()
+{
+	// Costs of aggressive control on the oxygenated cube: hyperoxic
+	// vasoconstriction lowers flow and oxidative and shear injury lower
+	// viability; all are off by default.
+	auto plant=MakePlantCase(30.,0.01);
+	plant.controls.fio2=0.95;
+	plant.controls.inlet_pressure_pa=2000.;
+	auto baseline=plant.state,costly=plant.state;
+	const auto plain=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+		baseline,3600.,2,"cell");
+	auto harsh=plant.parameters;
+	harsh.hyperoxic_constriction_per_100mmhg=0.2;
+	harsh.oxidative_injury_rate_s_inv=1e-5;
+	harsh.shear_injury_rate_inv_pa_s=1e-8;
+	harsh.shear_injury_threshold_pa=100.;
+	const auto penalised=iga::AdvancePerfusedOrganPlant(plant.model,harsh,plant.controls,{},{},
+		costly,3600.,2,"cell");
+	for(const auto& record:penalised)assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+	assert(penalised.back().flow_m3_s<plain.back().flow_m3_s);
+	assert(penalised.back().mean_viability<plain.back().mean_viability);
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantParameters&)>>{
+		[](iga::OrganPlantParameters& q){q.hyperoxic_constriction_per_100mmhg=-1.;},
+		[](iga::OrganPlantParameters& q){q.oxidative_injury_rate_s_inv=-1.;},
+		[](iga::OrganPlantParameters& q){q.shear_injury_rate_inv_pa_s=std::nan("");},
+		[](iga::OrganPlantParameters& q){q.oxidative_injury_threshold_mmhg=std::nan("");}}){
+		auto bad=plant.parameters;
+		change(bad);
+		auto trial=plant.state;
+		assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,bad,plant.controls,{},{},trial,60.,1,
+			"organ");}));
+	}
+}
+
+void TestDecoupledGasCo2()
+{
+	// An independent sweep-gas CO2 decouples arterial pCO2 from FiO2.
+	const auto plant=MakePlantCase(1.,1.);
+	const auto chemistry=Perfusate();
+	const auto venous=Inlet();
+	const auto low=iga::Oxygenate(venous,0.3,plant.parameters,chemistry,0.05);
+	const auto high=iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.05);
+	Close(iga::ReadPerfusate(low,chemistry).pco2_mmhg,iga::ReadPerfusate(high,chemistry).pco2_mmhg,1e-9,
+		"decoupled gas CO2");
+	const auto blended=iga::Oxygenate(venous,0.3,plant.parameters,chemistry);
+	assert(iga::ReadPerfusate(blended,chemistry).pco2_mmhg<iga::ReadPerfusate(low,chemistry).pco2_mmhg);
+	assert(Rejects([&]{iga::Oxygenate(venous,0.3,plant.parameters,chemistry,0.5);}));
+	// The dry sweep gas cannot hold more than all of itself.
+	assert(Rejects([&]{iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.15);}));
+	assert(!Rejects([&]{iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.1);}));
+}
+
 } // namespace
 
 int main(int argc,char** argv)
@@ -768,6 +820,8 @@ int main(int argc,char** argv)
 	TestPlantAdvance();
 	TestAcidInhibitedPlantConserves();
 	TestOxygenatedPlantConserves();
+	TestPlantControlCosts();
+	TestDecoupledGasCo2();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;

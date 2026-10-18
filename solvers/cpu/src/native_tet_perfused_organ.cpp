@@ -680,7 +680,9 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 		"air_o2_fraction","oxygenator_efficiency","injury_deficit_threshold","injury_rate_s_inv",
 		"oedema_deficit_rate_s_inv","oedema_pressure_threshold_pa","oedema_pressure_rate_inv_pa_s",
 		"oedema_resolution_s_inv","oedema_maximum","oedema_exponent","vasodilator_elimination_s_inv",
-		"vasodilator_emax","vasodilator_ec50_mg_l"},"parameters");
+		"vasodilator_emax","vasodilator_ec50_mg_l","hyperoxic_constriction_per_100mmhg",
+		"hyperoxic_constriction_threshold_mmhg","oxidative_injury_rate_s_inv","oxidative_injury_threshold_mmhg",
+		"shear_injury_rate_inv_pa_s","shear_injury_threshold_pa"},"parameters");
 	iga::OrganPlantParameters p;
 	const std::string c="parameters";
 	p.viscosity_pa_s=Number(object,"viscosity_pa_s",c);
@@ -716,6 +718,12 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 	optional("vasodilator_elimination_s_inv",p.vasodilator_elimination_s_inv);
 	optional("vasodilator_emax",p.vasodilator_emax);
 	optional("vasodilator_ec50_mg_l",p.vasodilator_ec50_mg_l);
+	optional("hyperoxic_constriction_per_100mmhg",p.hyperoxic_constriction_per_100mmhg);
+	optional("hyperoxic_constriction_threshold_mmhg",p.hyperoxic_constriction_threshold_mmhg);
+	optional("oxidative_injury_rate_s_inv",p.oxidative_injury_rate_s_inv);
+	optional("oxidative_injury_threshold_mmhg",p.oxidative_injury_threshold_mmhg);
+	optional("shear_injury_rate_inv_pa_s",p.shear_injury_rate_inv_pa_s);
+	optional("shear_injury_threshold_pa",p.shear_injury_threshold_pa);
 	return p;
 }
 
@@ -723,7 +731,8 @@ iga::OrganPlantControls ParseControls(const Object& object)
 {
 	using namespace iga::config_detail;
 	RequireKnownKeys(object,{"inlet_pressure_pa","fio2","dialysis_in_m3_s","dialysis_out_m3_s",
-		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c"},"controls");
+		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c",
+		"gas_co2_fraction"},"controls");
 	iga::OrganPlantControls controls;
 	const std::string c="controls";
 	controls.inlet_pressure_pa=Number(object,"inlet_pressure_pa",c);
@@ -739,6 +748,7 @@ iga::OrganPlantControls ParseControls(const Object& object)
 	controls.bolus_volume_m3=NumberOr(object,"bolus_volume_m3",0.,c);
 	controls.vasodilator_bolus_mg=NumberOr(object,"vasodilator_bolus_mg",0.,c);
 	controls.temperature_c=NumberOr(object,"temperature_c",37.,c);
+	controls.gas_co2_fraction=NumberOr(object,"gas_co2_fraction",controls.gas_co2_fraction,c);
 	if(controls.dialysis_in_m3_s>0.){
 		const auto& names=iga::PerfusedOrganSpeciesNames();
 		for(const auto* name:names)
