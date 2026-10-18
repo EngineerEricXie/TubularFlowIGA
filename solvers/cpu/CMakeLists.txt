@@ -566,6 +566,8 @@ tfi_test(native_tet_darcy_petsc_test COMMAND [==[./native_tet_darcy_petsc_test]=
 	REQUIRES native_tet_darcy_petsc_test MAKE petsc-test native-tet-darcy-petsc-test LABELS petsc)
 tfi_test(perfused_organ_test COMMAND [==[./perfused_organ_test]==]
 	REQUIRES perfused_organ_test MAKE petsc-test perfused-organ-test LABELS petsc)
+tfi_test(native_tet_perfused_organ_cli_test COMMAND [==[timeout --kill-after=5s 600s python3 tests/check_native_tet_perfused_organ.py ./native_tet_perfused_organ]==]
+	REQUIRES native_tet_perfused_organ MAKE petsc-test native-tet-perfused-organ-cli-test LABELS petsc)
 tfi_test(native_tet_mesh_components_test COMMAND [==[./native_tet_mesh_components_test]==]
 	REQUIRES native_tet_mesh_components_test MAKE test native-tet-mesh-components-test LABELS unit)
 tfi_test(native_tet_moving_species_checkpoint_test COMMAND [==[./native_tet_moving_species_checkpoint_test]==]
