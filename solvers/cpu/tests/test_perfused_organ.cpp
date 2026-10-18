@@ -792,6 +792,9 @@ void TestDecoupledGasCo2()
 	const auto blended=iga::Oxygenate(venous,0.3,plant.parameters,chemistry);
 	assert(iga::ReadPerfusate(blended,chemistry).pco2_mmhg<iga::ReadPerfusate(low,chemistry).pco2_mmhg);
 	assert(Rejects([&]{iga::Oxygenate(venous,0.3,plant.parameters,chemistry,0.5);}));
+	// The dry sweep gas cannot hold more than all of itself.
+	assert(Rejects([&]{iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.15);}));
+	assert(!Rejects([&]{iga::Oxygenate(venous,0.9,plant.parameters,chemistry,0.1);}));
 }
 
 } // namespace

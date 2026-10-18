@@ -307,6 +307,8 @@ inline OrganConcentration Oxygenate(const OrganConcentration& venous,double fio2
 	const double gas_po2=fio2*dry;
 	if(!std::isnan(gas_co2_fraction)&&!(gas_co2_fraction>=0.&&gas_co2_fraction<=0.2))
 		throw std::invalid_argument("gas CO2 fraction must be in [0, 0.2]");
+	if(!std::isnan(gas_co2_fraction)&&fio2+gas_co2_fraction>1.+1e-12)
+		throw std::invalid_argument("FiO2 plus the gas CO2 fraction must not exceed 1");
 	const double gas_pco2=std::isnan(gas_co2_fraction)
 		?std::max(carbogen,0.)*p.carbogen_co2_fraction*dry:gas_co2_fraction*dry;
 	OrganConcentration arterial=venous;

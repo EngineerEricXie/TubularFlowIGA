@@ -208,6 +208,9 @@ def main():
         error = request(root, "bad_gas_co2", advance(60.0, 1, dict(plain, gas_co2_fraction=0.5),
             {"initial_state": initial}, "unused"), expect_success=False)
         assert "gas CO2" in error, error
+        error = request(root, "bad_gas_sum", advance(60.0, 1, dict(plain, fio2=0.95, gas_co2_fraction=0.1),
+            {"initial_state": initial}, "unused"), expect_success=False)
+        assert "must not exceed 1" in error, error
 
         lines = [json.dumps(dict(solve, tag="a")), "{", json.dumps(dict(advance(60.0, 1, plain,
             {"initial_state": initial}, "served"), substeps=0)), json.dumps({"tag": "exit"}),
