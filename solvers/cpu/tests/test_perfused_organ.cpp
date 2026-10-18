@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <filesystem>
 #include <iomanip>
 #include <fstream>
@@ -347,6 +348,42 @@ void TestBlockedCellIsReportedAsFailure()
 		>0.5*volume*(rates.lactate_production-rates.lactate_clearance));
 }
 
+// A recirculating two-cell loop: Gauss-Seidel contracts by about F/(F+X) per
+// sweep, so a large recirculation cannot settle within the sweep cap and must
+// be reported rather than returned as converged.
+iga::OrganTransportResult SolveTwoCellLoop(double recirculation)
+{
+	const double exchange=1e-6;
+	iga::OrganTransportGraph graph;
+	graph.volume_m3={1e-3,1e-3};
+	graph.face_outflow_m3_s={recirculation+exchange,recirculation};
+	graph.boundary_outflow_m3_s={0.,0.};
+	graph.exchange_in_m3_s={exchange,0.};
+	graph.exchange_out_m3_s={0.,exchange};
+	graph.upstream={{{1,recirculation}},{{0,recirculation+exchange}}};
+	// A long step makes storage negligible against the 1e-6 m^3/s exchange.
+	auto input=TransportInput(2,1e15);
+	input.kinetics=iga::HepaticKinetics{};
+	input.previous.assign(2,iga::OrganConcentration{});
+	return iga::SolveOrganTransport(graph,input);
+}
+
+void TestGaussSeidelNonConvergenceIsReported()
+{
+	const auto settled=SolveTwoCellLoop(1e-6);
+	assert(settled.largest_component==2&&settled.gauss_seidel_unconverged==0);
+	Close(settled.concentration[1][iga::OrganGlucose],8.,1e-9,"settled loop outflow");
+	const auto stalled=SolveTwoCellLoop(1e-1);
+	assert(stalled.gauss_seidel_sweeps==500&&stalled.gauss_seidel_unconverged==1);
+}
+
+template<typename Function>
+bool Rejects(Function function)
+{
+	try{function();}catch(const std::invalid_argument&){return true;}
+	return false;
+}
+
 void TestStagnantCellRelaxes()
 {
 	auto input=TransportInput(1,100.);
@@ -510,26 +547,47 @@ void TestCircuitExtensions()
 		bolus.ApplyBolus({{"x",1e-3}},volume);
 		Close(bolus.State().species.at("x"),(2.0*volume+1e-3)/(2.*volume),1e-12,"bolus mass");
 		Close(bolus.State().volume_m3,2.*volume,1e-15,"bolus volume");
+		// A rejected bolus must leave the reservoir untouched.
+		iga::VcaExternalCircuit rejected(ReservoirCircuit(volume));
+		bool threw=false;
+		try{rejected.ApplyBolus({{"x",1e-3},{"z",-1.}},volume);}catch(const std::runtime_error&){threw=true;}
+		assert(threw);
+		Close(rejected.State().species.at("x"),2.0,1e-15,"rejected bolus keeps composition");
+		Close(rejected.State().volume_m3,volume,1e-15,"rejected bolus keeps volume");
 	}
 }
 
-void TestPlantAdvance()
+struct PlantCase
 {
 	iga::PerfusedOrganModel model;
+	iga::OrganPlantParameters parameters;
+	iga::OrganPlantState state;
+	iga::OrganPlantControls controls;
+};
+
+// The unit-cube plant. `perfusion` scales both exchange conductances and the
+// mobility; `metabolism` scales every Vmax of the liver kinetics.
+PlantCase MakePlantCase(double perfusion,double metabolism)
+{
+	PlantCase plant;
+	auto& model=plant.model;
 	model.mesh=Cube(3);
 	model.trees=CubeTrees(model.mesh,3e-3);
 	model.zones=3;
 	iga::FinalizePerfusedOrganModel(model);
 	const std::size_t cells=model.mesh.cells.size(),nodes=3*cells;
-	iga::OrganPlantParameters p;
+	auto& p=plant.parameters;
 	p.viscosity_pa_s=3e-3;
 	p.outflow_pressure_pa={{"outflow",0.}};
-	p.specific_conductance_inv_pa_s={{"inflow",2e-8},{"outflow",6e-8}};
-	p.mobility_m2_pa_s=1e-8;
+	p.specific_conductance_inv_pa_s={{"inflow",2e-8*perfusion},{"outflow",6e-8*perfusion}};
+	p.mobility_m2_pa_s=1e-8*perfusion;
 	p.distribution_volume_fraction={{0.2,0.7,0.7,0.3,0.5,0.25}};
 	p.kinetics=Liver();
+	for(double* rate:{&p.kinetics.vmax_o2_mol_m3_s,&p.kinetics.glycolysis_capacity_mol_m3_s,
+		&p.kinetics.lactate_vmax_mol_m3_s,&p.kinetics.glycogenolysis_vmax_mol_m3_s,
+		&p.kinetics.glucose_uptake_vmax_mol_m3_s})*rate*=metabolism;
 	p.chemistry=Perfusate();
-	iga::OrganPlantState state;
+	auto& state=plant.state;
 	state.reservoir.volume_m3=2.0;
 	state.reservoir.hematocrit_percent=18.;
 	const auto& names=iga::PerfusedOrganSpeciesNames();
@@ -539,23 +597,79 @@ void TestPlantAdvance()
 	state.viability.assign(nodes,1.);
 	state.glycogen_mol_m3.assign(nodes,100.);
 	state.oedema.assign(cells,0.);
-	iga::OrganPlantControls controls;
+	auto& controls=plant.controls;
 	controls.inlet_pressure_pa=1000.;
 	controls.fio2=0.6;
 	controls.bolus={{names[iga::OrganGlucose],5.0}};
 	controls.dialysis_in_m3_s=1e-8;
+	return plant;
+}
+
+void TestPlantAdvance()
+{
+	// The baseline cube is anoxic: lactate production exhausts buffer base,
+	// which the clip pins at zero, so every substep must report Newton
+	// failures instead of committing silently.
+	const auto plant=MakePlantCase(1.,1.);
+	const auto& names=iga::PerfusedOrganSpeciesNames();
+	const auto inlet=Inlet();
 	for(const std::string resolution:{"cell","portal_territory","organ"}){
-		auto copy=state;
-		const auto records=iga::AdvancePerfusedOrganPlant(model,p,controls,{},{},copy,3600.,3,resolution);
+		auto copy=plant.state;
+		const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+			copy,3600.,3,resolution);
 		assert(records.size()==3);
 		Close(copy.time_s,3600.,1e-12,"plant time");
 		Close(copy.reservoir.volume_m3,2.0+1e-8*3600.,1e-9,"plant volume");
 		for(const auto& record:records){
 			assert(record.flow_m3_s>0.&&record.arterial.po2_mmhg>record.venous.po2_mmhg);
 			assert(record.arterial.pco2_mmhg>0.&&record.mean_viability<=1.);
+			assert(record.newton_failures>0&&record.gauss_seidel_unconverged==0);
+			assert(std::isfinite(record.flow_residual_norm)&&record.flow_residual_norm<1e-12);
 		}
 		assert(copy.reservoir.species.at(names[iga::OrganGlucose])>inlet[iga::OrganGlucose]);
 		for(const double v:copy.viability)assert(v>0.&&v<=1.);
+	}
+	const auto advance=[&](const iga::OrganPlantParameters& parameters,iga::OrganPlantState trial){
+		iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},trial,60.,1,"organ");};
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantParameters&)>>{
+		[](iga::OrganPlantParameters& q){q.oedema_maximum=1.;},
+		[](iga::OrganPlantParameters& q){q.oxygenator_efficiency=1.5;},
+		[](iga::OrganPlantParameters& q){q.carbogen_o2_fraction=q.air_o2_fraction;},
+		[](iga::OrganPlantParameters& q){q.injury_rate_s_inv=-1.;},
+		[](iga::OrganPlantParameters& q){q.vasodilator_ec50_mg_l=0.;}}){
+		auto bad=plant.parameters;
+		change(bad);
+		assert(Rejects([&]{advance(bad,plant.state);}));
+	}
+	for(const auto& change:std::vector<std::function<void(iga::OrganPlantState&)>>{
+		[](iga::OrganPlantState& q){q.viability[0]=1.5;},
+		[](iga::OrganPlantState& q){q.glycogen_mol_m3[0]=-1.;},
+		[](iga::OrganPlantState& q){q.oedema[0]=1.;},
+		[](iga::OrganPlantState& q){q.tissue[0][iga::OrganLactate]=std::nan("");},
+		[](iga::OrganPlantState& q){q.vasodilator_mg_l=-1.;}}){
+		auto bad=plant.state;
+		change(bad);
+		assert(Rejects([&]{advance(plant.parameters,bad);}));
+	}
+	assert(!Rejects([&]{advance(plant.parameters,plant.state);}));
+}
+
+void TestOxygenatedPlantConserves()
+{
+	// Thirtyfold perfusion and a hundredth of the metabolism keep every node
+	// oxygenated; then every substep converges and conserves every species.
+	const auto plant=MakePlantCase(30.,0.01);
+	const auto inlet=Inlet();
+	for(const std::string resolution:{"cell","portal_territory","organ"}){
+		auto copy=plant.state;
+		const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+			copy,3600.,3,resolution);
+		for(const auto& record:records){
+			assert(record.hypoxic_volume_fraction==0.&&record.venous.ph>7.3);
+			assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+			for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+				assert(std::abs(record.balance_defect[s])<=1e-8*record.flow_m3_s*inlet[s]);
+		}
 	}
 }
 
@@ -571,12 +685,14 @@ int main(int argc,char** argv)
 	TestKineticsLimits();
 	TestSingleCellOxygenAgainstScalarRoot();
 	TestBlockedCellIsReportedAsFailure();
+	TestGaussSeidelNonConvergenceIsReported();
 	TestStagnantCellRelaxes();
 	TestExchangeScaleMatchesConductance();
 	TestLobularZonesAreTanksInSeries();
 	TestCubeTransport();
 	TestCircuitExtensions();
 	TestPlantAdvance();
+	TestOxygenatedPlantConserves();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;

@@ -177,7 +177,9 @@ struct OrganTransportResult
 	// Per-species totals over the organ [mol/s or mU L^-1 m^3 s^-1].
 	OrganConcentration inflow{},outflow{},storage_rate{},reaction{},balance_defect{};
 	std::size_t components=0,largest_component=0,newton_failures=0;
-	std::size_t gauss_seidel_sweeps=0;
+	// Total Gauss-Seidel sweeps, and cyclic components that reached the
+	// 500-sweep cap without settling.
+	std::size_t gauss_seidel_sweeps=0,gauss_seidel_unconverged=0;
 };
 
 namespace organ_transport_detail {
@@ -364,12 +366,14 @@ inline OrganTransportResult SolveOrganTransport(const OrganTransportGraph& graph
 	for(const auto& component:components){
 		result.largest_component=std::max(result.largest_component,component.size());
 		if(component.size()==1){solve_cell(component.front());continue;}
-		for(int sweep=0;sweep<500;++sweep){
+		bool settled=false;
+		for(int sweep=0;sweep<500&&!settled;++sweep){
 			double moved=0.;
 			for(const auto cell:component)moved=std::max(moved,solve_cell(cell));
 			++result.gauss_seidel_sweeps;
-			if(moved<=1e-11)break;
+			settled=moved<=1e-11;
 		}
+		if(!settled)++result.gauss_seidel_unconverged;
 	}
 
 	for(std::size_t i=0;i<n;++i){

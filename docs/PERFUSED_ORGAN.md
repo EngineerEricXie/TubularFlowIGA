@@ -61,7 +61,13 @@ Unperfused nodes relax over `Δt` instead of having no steady state.
 
 The upwind graph is ordered by strongly connected components. Each node is
 solved by a local Newton iteration on the six species with a nonnegativity line
-search. Cyclic components fall back to Gauss–Seidel.
+search. Cyclic components fall back to Gauss–Seidel, capped at 500 sweeps.
+
+A node whose Newton iteration ends without reaching the residual tolerance is
+counted in `newton_failures`, including a step blocked by the nonnegativity
+clip. A cyclic component that reaches the sweep cap is counted in
+`gauss_seidel_unconverged`. Both solutions are still returned, so callers must
+check the counts.
 
 ### Species and acid–base
 
@@ -178,7 +184,9 @@ The response is one JSON object. It contains:
     pressure;
   - the last zone's pO₂ and energy deficit;
   - the hypoxic volume fraction.
-- **Diagnostics**, including timings.
+- **Diagnostics**, including timings: the flow residual and exchange
+  imbalance, the transport component counts, `gauss_seidel_sweeps`,
+  `gauss_seidel_unconverged` and `newton_failures`.
 
 Modes:
 
@@ -242,7 +250,29 @@ The response holds one record per substep, each with:
 - the arterial and venous O₂, saturation, pH, pCO₂, HCO₃⁻ and species;
 - the hypoxic volume fraction, mean viability, mean oedema, zone-3 pO₂ and
   energy-deficit quantiles;
-- the organ uptake per species.
+- the organ uptake per species;
+- `diagnostics` for that substep's organ solve: `newton_failures`,
+  `gauss_seidel_sweeps`, `gauss_seidel_unconverged`, `flow_residual_norm`,
+  `exchange_imbalance_m3_s`, and the species `balance_defect`.
+
+The response also totals `newton_failures` and `gauss_seidel_unconverged` over
+the substeps. A substep is committed, and written to `state_out`, even when
+these counts are nonzero.
+
+The advance rejects a plant state that it could not have produced itself:
+- non-finite or negative tissue concentrations;
+- viability outside [0, 1];
+- negative glycogen;
+- oedema outside [0, 1);
+- a negative vasodilator concentration.
+
+It also rejects plant parameters that would otherwise be clamped silently or
+become NaN:
+- gas fractions outside `0 < air O₂ < carbogen O₂ ≤ 1`;
+- an oxygenator efficiency or injury threshold outside [0, 1];
+- an oedema maximum outside [0, 1);
+- negative rates or exponents;
+- a non-positive vasodilator EC50.
 
 `VcaExternalCircuit` extensions (defaults keep previous behaviour):
 
@@ -297,6 +327,24 @@ checks the following:
   - Three zones reproduce tanks in series exactly.
   - Inert species stay at the inlet value.
   - Species balance holds for cell, zone, and pooled graphs.
+  - A cell whose buffer base is pinned by the clip counts as a Newton failure.
+  - A strongly recirculating loop that reaches the sweep cap counts as unconverged.
+- **Plant.**
+  - The anoxic unit-cube plant reports Newton failures in every substep.
+  - An oxygenated variant converges and conserves every species to 1e-8 of
+    its inflow at every resolution.
+  - Invalid parameters and states are rejected.
+
+`cpu.native_tet_perfused_organ_cli_test`
+(`tests/check_native_tet_perfused_organ.py`) runs the CLI on a synthetic box
+organ that it builds with the standard library. It checks:
+- the input check and the geometry file;
+- solve conservation and diagnostics at every resolution;
+- that an advance split through `state_out`/`state_in` reproduces one advance
+  bit for bit;
+- the per-substep diagnostics;
+- rejection of invalid states and parameters;
+- the `--serve` exit protocol.
 
 ## Limitations
 
@@ -309,3 +357,10 @@ checks the following:
 - **Temperature is a rate scale only.** No heat transport is solved.
 - **Uncalibrated parameters.** The kinetic constants must be supplied, and
   their provenance must be recorded by the caller.
+- **Buffer base can be exhausted.** `hepatic_v1` releases one H⁺ per lactate
+  regardless of pH, and nothing inhibits glycolysis under acidosis. Anoxic
+  tissue can therefore consume buffer base faster than perfusion supplies it.
+  Once buffer base reaches zero, the node has no nonnegative solution. The clip
+  holds buffer base at zero, the node counts as a Newton failure, and the species
+  balance no longer closes. Treat results with nonzero `newton_failures` as
+  outside the model's validity.
