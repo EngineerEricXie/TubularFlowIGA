@@ -384,6 +384,55 @@ bool Rejects(Function function)
 	return false;
 }
 
+void TestGlycolysisAcidInhibition()
+{
+	// Anoxic tissue at a lowered buffer base: glycolysis runs at its cap.
+	auto c=Inlet();
+	c[iga::OrganOxygen]=0.;
+	c[iga::OrganBufferBase]-=12.;
+	const iga::HepaticCellState state{1.,100.};
+	const auto chemistry=Perfusate();
+	auto k=Liver();
+	const auto free=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	k.glycolysis_ph50=std::nan("");
+	const auto disabled=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	assert(disabled.lactate_production==free.lactate_production&&disabled.reaction==free.reaction);
+	k.glycolysis_ph50=6.8;
+	k.glycolysis_ph_hill=4.;
+	const auto inhibited=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	Close(inhibited.ph,free.ph,0.,"inhibition leaves the acid-base state");
+	Close(inhibited.lactate_production,free.lactate_production/(1.+std::pow(10.,4.*(6.8-free.ph))),1e-14,
+		"acid-inhibited lactate production");
+	Close(inhibited.reaction[iga::OrganBufferBase],-inhibited.lactate_production,1e-14,
+		"buffer base follows the inhibited production");
+	assert(inhibited.energy_deficit>free.energy_deficit);
+	for(const auto& bad:std::vector<std::pair<double,double>>{{5.,4.},{9.5,4.},{7.,0.},{7.,-1.}}){
+		k.glycolysis_ph50=bad.first;
+		k.glycolysis_ph_hill=bad.second;
+		assert(Rejects([&]{iga::ValidateHepaticKinetics(k,chemistry);}));
+	}
+}
+
+void TestAcidInhibitionKeepsBufferBase()
+{
+	// The clip-blocked cell of TestBlockedCellIsReportedAsFailure: with acid
+	// inhibition, production falls with pH before buffer base runs out.
+	const double volume=1e-3,flow=2e-6;
+	auto input=TransportInput(1,1e9);
+	input.chemistry.bohr_coefficient=0.;
+	input.inlet[iga::OrganOxygen]*=0.05;
+	input.inlet[iga::OrganBufferBase]=0.1;
+	input.previous[0]=input.inlet;
+	input.state[0].glycogen_mol_m3=500.;
+	input.kinetics.glycolysis_ph50=6.8;
+	input.kinetics.glycolysis_ph_hill=4.;
+	const auto result=iga::SolveOrganTransport(SingleCell(volume,flow),input);
+	assert(result.newton_failures==0);
+	assert(result.concentration[0][iga::OrganBufferBase]>0.);
+	for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+		assert(std::abs(result.balance_defect[s])<=1e-8*flow*std::max(input.inlet[s],1e-3));
+}
+
 void TestStagnantCellRelaxes()
 {
 	auto input=TransportInput(1,100.);
@@ -654,6 +703,29 @@ void TestPlantAdvance()
 	assert(!Rejects([&]{advance(plant.parameters,plant.state);}));
 }
 
+void TestAcidInhibitedPlantConserves()
+{
+	// The anoxic cube of TestPlantAdvance with acid inhibition of glycolysis:
+	// buffer base stays positive, and every substep converges and conserves.
+	const auto inlet=Inlet();
+	for(const auto& setting:std::vector<std::pair<double,double>>{{6.8,4.},{6.6,6.}}){
+		auto plant=MakePlantCase(1.,1.);
+		plant.parameters.kinetics.glycolysis_ph50=setting.first;
+		plant.parameters.kinetics.glycolysis_ph_hill=setting.second;
+		for(const std::string resolution:{"cell","portal_territory","organ"}){
+			auto copy=plant.state;
+			const auto records=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+				copy,3600.,3,resolution);
+			for(const auto& record:records){
+				assert(record.newton_failures==0&&record.gauss_seidel_unconverged==0);
+				for(std::size_t s=0;s<iga::OrganSpeciesCount;++s)
+					assert(std::abs(record.balance_defect[s])<=1e-8*record.flow_m3_s*inlet[s]);
+			}
+			for(const auto& c:copy.tissue)assert(c[iga::OrganBufferBase]>0.);
+		}
+	}
+}
+
 void TestOxygenatedPlantConserves()
 {
 	// Thirtyfold perfusion and a hundredth of the metabolism keep every node
@@ -686,12 +758,15 @@ int main(int argc,char** argv)
 	TestSingleCellOxygenAgainstScalarRoot();
 	TestBlockedCellIsReportedAsFailure();
 	TestGaussSeidelNonConvergenceIsReported();
+	TestGlycolysisAcidInhibition();
+	TestAcidInhibitionKeepsBufferBase();
 	TestStagnantCellRelaxes();
 	TestExchangeScaleMatchesConductance();
 	TestLobularZonesAreTanksInSeries();
 	TestCubeTransport();
 	TestCircuitExtensions();
 	TestPlantAdvance();
+	TestAcidInhibitedPlantConserves();
 	TestOxygenatedPlantConserves();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();

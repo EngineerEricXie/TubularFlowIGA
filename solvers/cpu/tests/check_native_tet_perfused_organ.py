@@ -3,6 +3,7 @@
 Builds a Kuhn-split box of tissue, an inflow and an outflow SWC tree and
 nearest-terminal territories with the standard library only, then checks:
 input checks and the geometry file, flow conservation and solve diagnostics,
+the opt-in acid inhibition of glycolysis and its validation,
 that an advance split in two through state_out/state_in reproduces one
 uninterrupted advance bit for bit, per-substep advance diagnostics, rejection
 of invalid restored states and plant parameters, and the --serve protocol
@@ -135,8 +136,9 @@ def main():
             "mobility_m2_pa_s": 1e-8, "inlet": inlet, "distribution_volume_fraction": fractions,
             "chemistry": {"hemoglobin_g_dl": 4.6}, "kinetics": kinetics, "glycogen_mol_m3": 100.0,
             "field_output": {"file": "fields.f64", "names": ["po2_mmHg", "tissue_pressure_pa"]}}
+        responses = {}
         for resolution in ("cell", "portal_territory", "organ"):
-            solved = request(root, "solve_"+resolution, dict(solve, resolution=resolution))
+            solved = responses[resolution] = request(root, "solve_"+resolution, dict(solve, resolution=resolution))
             trees = solved["trees"]
             inflow = trees["portal"]["root_inflow_m3_s"]
             assert inflow > 0 and math.isclose(-trees["hepatic"]["root_inflow_m3_s"], inflow, rel_tol=1e-9), trees
@@ -145,6 +147,14 @@ def main():
             for name, totals in solved["species_totals"].items():
                 assert abs(totals["balance_defect"]) <= 1e-9*abs(totals["inflow"]), (resolution, name, totals)
         assert (root/"fields.f64").stat().st_size == 8*(3*len(cells)+len(cells))
+        inhibited = request(root, "solve_inhibited", dict(solve, kinetics=dict(kinetics, glycolysis_ph50=6.8,
+            glycolysis_ph_hill=4.0)))
+        assert inhibited["diagnostics"]["newton_failures"] == 0, inhibited["diagnostics"]
+        lactate = lambda response: response["species_totals"]["lactate_mol_m3"]["reaction"]
+        assert lactate(inhibited) <= lactate(responses["cell"]), (lactate(inhibited), lactate(responses["cell"]))
+        error = request(root, "solve_bad_ph50", dict(solve, kinetics=dict(kinetics, glycolysis_ph50=5.0)),
+            expect_success=False)
+        assert "pH50" in error, error
 
         parameters = {"viscosity_pa_s": 3e-3, "outflow_pressure_pa": {"hepatic": 0.0},
             "specific_conductance_inv_pa_s": conductance, "mobility_m2_pa_s": 1e-8,
