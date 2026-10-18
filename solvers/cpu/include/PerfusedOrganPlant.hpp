@@ -155,6 +155,14 @@ struct OrganPlantParameters
 	// Vasodilator in the reservoir [mg/L]: first-order elimination and an
 	// Emax effect on exchange conductance.
 	double vasodilator_elimination_s_inv=2e-4,vasodilator_emax=0.5,vasodilator_ec50_mg_l=5.;
+	// Optional costs of aggressive control (all off by default):
+	//  - hyperoxic vasoconstriction: exchange conductance divided by
+	//    1 + c (pO2_arterial - threshold)_+ / 100 mmHg;
+	//  - oxidative injury: viability decays at k (pO2_node - threshold)_+ / 100 mmHg;
+	//  - shear injury: viability decays at k (tissue pressure - threshold)_+ per Pa.
+	double hyperoxic_constriction_per_100mmhg=0.,hyperoxic_constriction_threshold_mmhg=150.;
+	double oxidative_injury_rate_s_inv=0.,oxidative_injury_threshold_mmhg=200.;
+	double shear_injury_rate_inv_pa_s=0.,shear_injury_threshold_pa=1000.;
 };
 
 struct OrganPlantControls
@@ -311,6 +319,10 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		const auto arterial=Oxygenate(venous_in,controls.fio2,p,chemistry);
 		const double drug=state.vasodilator_mg_l;
 		const double dilation=1.+p.vasodilator_emax*drug/(p.vasodilator_ec50_mg_l+drug);
+		const double arterial_po2=PartialPressureO2(arterial[OrganOxygen],
+			SolveAcidBase(arterial[OrganBufferBase],arterial[OrganCarbonDioxide],chemistry).ph,chemistry);
+		const double constriction=1./(1.+p.hyperoxic_constriction_per_100mmhg
+			*std::max(arterial_po2-p.hyperoxic_constriction_threshold_mmhg,0.)/100.);
 
 		PerfusedOrganFlowInput flow;
 		flow.viscosity_pa_s=p.viscosity_pa_s;
@@ -330,7 +342,8 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t i=0;i<cells;++i){
 			const double compression=std::pow(1.-std::clamp(state.oedema[i],0.,p.oedema_maximum),p.oedema_exponent);
 			flow.mobility_by_cell_m2_pa_s[i]=p.mobility_m2_pa_s*(mobility_scale.empty()?1.:mobility_scale[i])*compression;
-			flow.exchange_scale_by_cell[i]=(exchange_scale.empty()?1.:exchange_scale[i])*compression*dilation;
+			flow.exchange_scale_by_cell[i]=(exchange_scale.empty()?1.:exchange_scale[i])*compression*dilation
+				*constriction;
 		}
 		OrganTransportInput transport;
 		transport.dt_s=dt;
@@ -368,7 +381,11 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t n=0;n<nodes;++n){
 			const auto& rates=species.rates[n];
 			const double excess=std::max(rates.energy_deficit-p.injury_deficit_threshold,0.);
-			state.viability[n]*=std::exp(-p.injury_rate_s_inv*excess*dt);
+			const double hyperoxia=std::max(rates.po2_mmhg-p.oxidative_injury_threshold_mmhg,0.)/100.;
+			const double shear=std::max(organ.hemodynamics.cell_mean_pressure_pa[n/model.zones]
+				-p.shear_injury_threshold_pa,0.);
+			state.viability[n]*=std::exp(-(p.injury_rate_s_inv*excess+p.oxidative_injury_rate_s_inv*hyperoxia
+				+p.shear_injury_rate_inv_pa_s*shear)*dt);
 			state.glycogen_mol_m3[n]=std::max(state.glycogen_mol_m3[n]+dt*rates.glycogen_rate,0.);
 			cell_deficit[n/model.zones]+=rates.energy_deficit/double(model.zones);
 		}

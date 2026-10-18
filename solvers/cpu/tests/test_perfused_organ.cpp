@@ -530,6 +530,22 @@ void TestPlantAdvance()
 		assert(copy.reservoir.species.at(names[iga::OrganGlucose])>inlet[iga::OrganGlucose]);
 		for(const double v:copy.viability)assert(v>0.&&v<=1.);
 	}
+	// Costs of aggressive control: hyperoxic vasoconstriction lowers flow and
+	// oxidative and shear injury lower viability; all are off by default.
+	{
+		auto baseline=state,costly=state;
+		controls.fio2=0.95;
+		controls.inlet_pressure_pa=2000.;
+		const auto plain=iga::AdvancePerfusedOrganPlant(model,p,controls,{},{},baseline,3600.,2,"cell");
+		auto harsh=p;
+		harsh.hyperoxic_constriction_per_100mmhg=0.2;
+		harsh.oxidative_injury_rate_s_inv=1e-5;
+		harsh.shear_injury_rate_inv_pa_s=1e-8;
+		harsh.shear_injury_threshold_pa=100.;
+		const auto penalised=iga::AdvancePerfusedOrganPlant(model,harsh,controls,{},{},costly,3600.,2,"cell");
+		assert(penalised.back().flow_m3_s<plain.back().flow_m3_s);
+		assert(penalised.back().mean_viability<plain.back().mean_viability);
+	}
 }
 
 } // namespace

@@ -253,6 +253,16 @@ The response holds one record per substep, each with:
 
 `Advance` rejects the new modes rather than integrating them explicitly.
 
+Three optional costs of aggressive control are off by default:
+
+| Cost | Trigger | Effect |
+|---|---|---|
+| Hyperoxic vasoconstriction | arterial pO₂ above `hyperoxic_constriction_threshold_mmhg` | exchange conductance divided by `1 + c·excess/100 mmHg` |
+| Oxidative injury | node pO₂ above `oxidative_injury_threshold_mmhg` | viability decays |
+| Shear injury | tissue pressure above `shear_injury_threshold_pa` | viability decays |
+
+Without them, maximal oxygenation and pressure carry no penalty.
+
 ## Geometry from a DICOM SEG
 
 ```bash
