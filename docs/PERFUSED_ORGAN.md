@@ -258,9 +258,10 @@ Each substep runs in this order:
    - the vasodilator is eliminated first-order. With
      `vasodilator_respiration_ic50_mg_l` finite, it also scales the
      mitochondrial respiratory capacity (O₂ uptake and the O₂-dependent lactate
-     clearance, not the ATP demand) by `1/(1 + C/IC50)`, as papaverine inhibits
-     complex I at low micromolar concentrations (Benej et al., PNAS 2018). The
-     unmet demand appears as glycolysis and energy deficit.
+     clearance, not the ATP demand) by `1 − Imax·C/(C + IC50)`, as papaverine
+     inhibits complex I (Benej et al., PNAS 2018). `vasodilator_respiration_imax`
+     (default 1) is the share of respiration that passes complex I. The unmet
+     demand appears as glycolysis and energy deficit.
 
 Each request carries:
 

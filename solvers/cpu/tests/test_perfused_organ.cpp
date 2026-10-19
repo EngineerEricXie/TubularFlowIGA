@@ -907,6 +907,17 @@ void TestRespiratoryInhibition()
 	assert(with_effect.back().o2_uptake_mol_s<plain.back().o2_uptake_mol_s);
 	assert(with_effect.back().deficit_volume_fraction>=plain.back().deficit_volume_fraction);
 	assert(plain.back().deficit_volume_fraction>=0.&&plain.back().deficit_volume_fraction<=1.);
+	// A smaller Imax leaves more respiration at the same concentration.
+	auto partial=parameters;
+	partial.vasodilator_respiration_imax=0.5;
+	auto partial_state=plant.state;
+	const auto partial_records=iga::AdvancePerfusedOrganPlant(plant.model,partial,plant.controls,{},{},
+		partial_state,600.,1,"organ");
+	assert(partial_records.back().o2_uptake_mol_s>with_effect.back().o2_uptake_mol_s);
+	partial.vasodilator_respiration_imax=1.5;
+	auto bad_imax=plant.state;
+	assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,partial,plant.controls,{},{},
+		bad_imax,600.,1,"organ");}));
 	parameters.vasodilator_respiration_ic50_mg_l=0.;
 	auto rejected=plant.state;
 	assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},

@@ -175,9 +175,11 @@ struct OrganPlantParameters
 	// Emax effect on exchange conductance.
 	double vasodilator_elimination_s_inv=2e-4,vasodilator_emax=0.5,vasodilator_ec50_mg_l=5.;
 	// Optional mitochondrial side effect of the vasodilator (papaverine inhibits
-	// complex I at low micromolar concentrations; Benej et al., PNAS 2018):
-	// respiratory capacity is scaled by 1/(1 + C/IC50). Infinity disables it.
+	// complex I; Benej et al., PNAS 2018): respiratory capacity is scaled by
+	// 1 - Imax C/(C + IC50), where Imax is the share of respiration that passes
+	// complex I. An infinite IC50 (the default) disables it.
 	double vasodilator_respiration_ic50_mg_l=std::numeric_limits<double>::infinity();
+	double vasodilator_respiration_imax=1.;
 	// Optional costs of aggressive control (all off by default):
 	//  - hyperoxic vasoconstriction: exchange conductance divided by
 	//    1 + c (pO2_arterial - threshold)_+ / 100 mmHg;
@@ -272,6 +274,8 @@ inline void ValidatePerfusedOrganPlantParameters(const OrganPlantParameters& p)
 		throw std::invalid_argument("vasodilator EC50 must be positive");
 	if(!(p.vasodilator_respiration_ic50_mg_l>0.))
 		throw std::invalid_argument("vasodilator respiration IC50 must be positive");
+	if(!(p.vasodilator_respiration_imax>=0.&&p.vasodilator_respiration_imax<=1.))
+		throw std::invalid_argument("vasodilator respiration Imax must lie in [0,1]");
 	if(!nonnegative(p.hyperoxic_constriction_per_100mmhg)||!nonnegative(p.oxidative_injury_rate_s_inv)
 		||!nonnegative(p.shear_injury_rate_inv_pa_s))
 		throw std::invalid_argument("plant control-cost rates must be finite and nonnegative");
@@ -529,7 +533,9 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		for(std::size_t n=0;n<nodes;++n)transport.state[n]={state.viability[n],state.glycogen_mol_m3[n]};
 		transport.kinetics=p.kinetics;
 		transport.kinetics.temperature_c=controls.temperature_c;
-		transport.kinetics.respiration_capacity_scale*=1./(1.+drug/p.vasodilator_respiration_ic50_mg_l);
+		if(std::isfinite(p.vasodilator_respiration_ic50_mg_l))
+			transport.kinetics.respiration_capacity_scale*=
+				1.-p.vasodilator_respiration_imax*drug/(drug+p.vasodilator_respiration_ic50_mg_l);
 		transport.chemistry=chemistry;
 		// With a sweep flow the exchanger depends on the blood flow, so the flow
 		// is solved first; the optional hyperoxic constriction above still uses
