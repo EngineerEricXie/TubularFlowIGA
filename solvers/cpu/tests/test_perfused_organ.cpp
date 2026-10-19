@@ -905,6 +905,8 @@ void TestRespiratoryInhibition()
 	const auto with_effect=iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},
 		inhibited_state,600.,1,"organ");
 	assert(with_effect.back().o2_uptake_mol_s<plain.back().o2_uptake_mol_s);
+	assert(with_effect.back().deficit_volume_fraction>=plain.back().deficit_volume_fraction);
+	assert(plain.back().deficit_volume_fraction>=0.&&plain.back().deficit_volume_fraction<=1.);
 	parameters.vasodilator_respiration_ic50_mg_l=0.;
 	auto rejected=plant.state;
 	assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},

@@ -930,6 +930,7 @@ std::string Advance(const Organ& organ,const Object& request,const std::filesyst
 		json.Key("oxygenator").Open().Entry("exhaust_po2_mmHg",r.exhaust_po2_mmhg)
 			.Entry("exhaust_pco2_mmHg",r.exhaust_pco2_mmhg).Entry("co2_removal_mol_s",r.oxygenator_co2_removal_mol_s).Close();
 		json.Key("tissue").Open().Entry("hypoxic_volume_fraction",r.hypoxic_volume_fraction)
+			.Entry("deficit_volume_fraction",r.deficit_volume_fraction)
 			.Entry("mean_viability",r.mean_viability).Entry("mean_oedema",r.mean_oedema)
 			.Entry("last_zone_po2_p05_mmHg",r.last_zone_po2_p05).Entry("energy_deficit_mean",r.energy_deficit_mean)
 			.Entry("energy_deficit_p95",r.energy_deficit_p95).Entry("o2_uptake_mol_s",r.o2_uptake_mol_s).Close();

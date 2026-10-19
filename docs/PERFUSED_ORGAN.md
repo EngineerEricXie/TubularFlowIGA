@@ -287,8 +287,10 @@ The response holds one record per substep, each with:
 
 - flow, pressure, reservoir volume and haematocrit;
 - the arterial and venous O₂, saturation, pH, pCO₂, HCO₃⁻ and species;
-- the hypoxic volume fraction, mean viability, mean oedema, zone-3 pO₂ and
-  energy-deficit quantiles;
+- the hypoxic volume fraction (pO₂ < 5 mmHg), the deficit volume fraction
+  (energy deficit above `injury_deficit_threshold`, which also counts tissue
+  whose respiration is inhibited), mean viability, mean oedema, zone-3 pO₂
+  and energy-deficit quantiles;
 - the organ uptake per species;
 - `diagnostics` for that substep's organ solve: `newton_failures`,
   `gauss_seidel_sweeps`, `gauss_seidel_unconverged`, `flow_residual_norm`,

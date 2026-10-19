@@ -233,6 +233,9 @@ struct OrganPlantRecord
 	// sweep flow) and the CO2 the exchanger removed from the blood [mol/s].
 	double exhaust_po2_mmhg=0.,exhaust_pco2_mmhg=0.,oxygenator_co2_removal_mol_s=0.;
 	double hypoxic_volume_fraction=0.,mean_viability=0.,mean_oedema=0.;
+	// Volume fraction whose energy deficit exceeds the injury threshold: the
+	// tissue being injured, whether from low pO2 or from inhibited respiration.
+	double deficit_volume_fraction=0.;
 	double last_zone_po2_p05=0.,energy_deficit_mean=0.,energy_deficit_p95=0.,o2_uptake_mol_s=0.;
 	OrganConcentration organ_uptake{};
 	// Diagnostics of the substep's organ solve; the substep is committed either
@@ -616,12 +619,13 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 		}
 		for(auto& value:venous)value=out>0.?value/out:0.;
 		record.venous=ReadPerfusate(venous,chemistry);
-		double hypoxic=0.,total=0.,viable=0.,deficit=0.,uptake_o2=0.;
+		double hypoxic=0.,total=0.,viable=0.,deficit=0.,uptake_o2=0.,deficient=0.;
 		std::vector<std::pair<double,double>> deficits,last_zone;
 		for(std::size_t n=0;n<nodes;++n){
 			const double v=organ.node_volume[n];
 			total+=v;
 			if(species.rates[n].po2_mmhg<5.)hypoxic+=v;
+			if(species.rates[n].energy_deficit>p.injury_deficit_threshold)deficient+=v;
 			viable+=v*state.viability[n];
 			deficit+=v*species.rates[n].energy_deficit;
 			uptake_o2+=v*species.rates[n].o2_uptake;
@@ -636,6 +640,7 @@ inline std::vector<OrganPlantRecord> AdvancePerfusedOrganPlant(const PerfusedOrg
 			return values.back().first;
 		};
 		record.hypoxic_volume_fraction=hypoxic/total;
+		record.deficit_volume_fraction=deficient/total;
 		record.mean_viability=viable/total;
 		record.energy_deficit_mean=deficit/total;
 		record.energy_deficit_p95=quantile(deficits,0.95);
