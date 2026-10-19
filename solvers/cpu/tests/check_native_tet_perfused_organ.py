@@ -216,7 +216,8 @@ def main():
         # and the exhaust gas is reported.
         swept = lambda sweep: request(root, "sweep_%g" % sweep, dict(advance(60.0, 1, dict(plain, fio2=0.21,
             sweep_gas_flow_m3_s=sweep), {"initial_state": initial}, "unused_sweep"),
-            parameters=dict(parameters, injury_ph50=7.2, injury_glucose_gain_per_mol_m3=0.14)))["records"][0]
+            parameters=dict(parameters, injury_ph50=7.2, injury_glucose_gain_per_mol_m3=0.14,
+            vasodilator_respiration_ic50_mg_l=3.4)))["records"][0]
         low, high = swept(1e-7), swept(1e-4)
         assert low["arterial"]["pco2_mmHg"] > high["arterial"]["pco2_mmHg"], (low["arterial"], high["arterial"])
         assert low["oxygenator"]["exhaust_pco2_mmHg"] > high["oxygenator"]["exhaust_pco2_mmHg"] >= 0.0

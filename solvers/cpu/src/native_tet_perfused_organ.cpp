@@ -683,7 +683,8 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 		"vasodilator_emax","vasodilator_ec50_mg_l","hyperoxic_constriction_per_100mmhg",
 		"hyperoxic_constriction_threshold_mmhg","oxidative_injury_rate_s_inv","oxidative_injury_threshold_mmhg",
 		"shear_injury_rate_inv_pa_s","shear_injury_threshold_pa","sweep_gas_temperature_k","injury_ph50",
-		"injury_ph_hill","injury_glucose_threshold_mol_m3","injury_glucose_gain_per_mol_m3"},"parameters");
+		"injury_ph_hill","injury_glucose_threshold_mol_m3","injury_glucose_gain_per_mol_m3",
+		"vasodilator_respiration_ic50_mg_l"},"parameters");
 	iga::OrganPlantParameters p;
 	const std::string c="parameters";
 	p.viscosity_pa_s=Number(object,"viscosity_pa_s",c);
@@ -730,6 +731,7 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 	optional("injury_ph_hill",p.injury_ph_hill);
 	optional("injury_glucose_threshold_mol_m3",p.injury_glucose_threshold_mol_m3);
 	optional("injury_glucose_gain_per_mol_m3",p.injury_glucose_gain_per_mol_m3);
+	optional("vasodilator_respiration_ic50_mg_l",p.vasodilator_respiration_ic50_mg_l);
 	return p;
 }
 

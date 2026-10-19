@@ -255,7 +255,12 @@ Each substep runs in this order:
    - sinusoidal oedema grows with the energy deficit and with tissue pressure
      above a threshold, resolves first-order, and compresses conductance by
      `(1 − E)^n`;
-   - the vasodilator is eliminated first-order.
+   - the vasodilator is eliminated first-order. With
+     `vasodilator_respiration_ic50_mg_l` finite, it also scales the
+     mitochondrial respiratory capacity (O₂ uptake and the O₂-dependent lactate
+     clearance, not the ATP demand) by `1/(1 + C/IC50)`, as papaverine inhibits
+     complex I at low micromolar concentrations (Benej et al., PNAS 2018). The
+     unmet demand appears as glycolysis and energy deficit.
 
 Each request carries:
 
@@ -405,6 +410,9 @@ checks the following:
     - In the plant, a lower sweep raises arterial and exhaust pCO₂.
   - With acid inhibition, the pH-paradox factor raises viability and the
     glucose factor lowers it.
+  - Respiratory inhibition halves O₂ uptake and lactate clearance at a scale
+    of 0.5 and raises lactate production. A vasodilator bolus with a finite
+    IC50 lowers the plant's O₂ uptake, and a nonpositive IC50 is rejected.
   - Invalid parameters and states are rejected.
 
 `cpu.native_tet_perfused_organ_cli_test`

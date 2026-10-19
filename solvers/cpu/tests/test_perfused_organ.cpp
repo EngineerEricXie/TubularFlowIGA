@@ -877,6 +877,40 @@ void TestInjuryModifiers()
 	}
 }
 
+void TestRespiratoryInhibition()
+{
+	// Inhibited respiration lowers O2 uptake and lactate clearance by its factor
+	// and leaves the ATP demand, so glycolysis and the deficit rise.
+	const auto chemistry=Perfusate();
+	auto k=Liver();
+	const iga::HepaticCellState state{1.,100.};
+	auto c=Inlet();
+	c[iga::OrganOxygen]=iga::OxygenContent(500.,7.4,chemistry);
+	const auto intact=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	k.respiration_capacity_scale=0.5;
+	const auto inhibited=iga::EvaluateHepaticRates(c,state,k,chemistry);
+	Close(inhibited.o2_uptake,0.5*intact.o2_uptake,1e-12,"inhibited O2 uptake");
+	Close(inhibited.lactate_clearance,0.5*intact.lactate_clearance,1e-12,"inhibited lactate clearance");
+	assert(inhibited.lactate_production>intact.lactate_production);
+	k.respiration_capacity_scale=1.5;
+	assert(Rejects([&]{iga::ValidateHepaticKinetics(k,chemistry);}));
+	// Through the plant: a vasodilator bolus with a finite respiratory IC50 lowers O2 uptake.
+	auto plant=MakePlantCase(30.,0.01);
+	plant.controls.vasodilator_bolus_mg=20.;
+	auto plain_state=plant.state,inhibited_state=plant.state;
+	const auto plain=iga::AdvancePerfusedOrganPlant(plant.model,plant.parameters,plant.controls,{},{},
+		plain_state,600.,1,"organ");
+	auto parameters=plant.parameters;
+	parameters.vasodilator_respiration_ic50_mg_l=3.4;
+	const auto with_effect=iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},
+		inhibited_state,600.,1,"organ");
+	assert(with_effect.back().o2_uptake_mol_s<plain.back().o2_uptake_mol_s);
+	parameters.vasodilator_respiration_ic50_mg_l=0.;
+	auto rejected=plant.state;
+	assert(Rejects([&]{iga::AdvancePerfusedOrganPlant(plant.model,parameters,plant.controls,{},{},
+		rejected,600.,1,"organ");}));
+}
+
 } // namespace
 
 int main(int argc,char** argv)
@@ -904,6 +938,7 @@ int main(int argc,char** argv)
 	TestDecoupledGasCo2();
 	TestSweepOxygenator();
 	TestInjuryModifiers();
+	TestRespiratoryInhibition();
 	std::cout<<"perfused organ tests passed\n";
 	PetscFinalize();
 	return 0;
