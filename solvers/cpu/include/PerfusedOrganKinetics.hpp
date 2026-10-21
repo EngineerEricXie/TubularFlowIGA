@@ -153,6 +153,10 @@ struct HepaticKinetics
 	// NaN (the default) disables the inhibition.
 	double glycolysis_ph50=std::numeric_limits<double>::quiet_NaN();
 	double glycolysis_ph_hill=1.;
+	// Fraction of mitochondrial respiratory capacity available (1 = intact). It
+	// scales O2 uptake and the O2-dependent lactate clearance but not the ATP
+	// demand, so inhibited respiration shows as glycolysis and energy deficit.
+	double respiration_capacity_scale=1.;
 	double q10=2.;
 	double temperature_c=37.;
 };
@@ -229,6 +233,8 @@ inline void ValidateHepaticKinetics(const HepaticKinetics& k,const PerfusateChem
 		throw std::invalid_argument("gluconeogenic fraction must be in [0,1]");
 	if(!std::isfinite(k.temperature_c))
 		throw std::invalid_argument("hepatic kinetics temperature is invalid");
+	if(!(k.respiration_capacity_scale>=0.&&k.respiration_capacity_scale<=1.))
+		throw std::invalid_argument("respiration capacity scale must lie in [0,1]");
 	if(!std::isnan(k.glycolysis_ph50)){
 		if(!(k.glycolysis_ph50>=5.5&&k.glycolysis_ph50<=9.))
 			throw std::invalid_argument("glycolysis pH50 must lie in the acid-base range [5.5, 9]");
@@ -254,7 +260,7 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	const double o2_power=std::pow(rates.po2_mmhg/k.km_o2_mmhg,k.o2_hill_coefficient);
 	const double oxygen_fraction=o2_power/(1.+o2_power);
 	const double vmax=v*k.vmax_o2_mol_m3_s*thermal;
-	rates.o2_uptake=vmax*oxygen_fraction;
+	rates.o2_uptake=vmax*k.respiration_capacity_scale*oxygen_fraction;
 	const double demand=vmax*k.atp_per_o2;
 	const double shortfall=demand-rates.o2_uptake*k.atp_per_o2;
 	const double glycogen_share=glycogen/(glycogen+k.glycogen_half_saturation_mol_m3);
@@ -273,7 +279,7 @@ inline HepaticRates EvaluateHepaticRates(const OrganConcentration& concentration
 	const double oxidation=oxidised_fraction*rates.o2_uptake/6.;
 	const double oxidation_glucose=fuel>0.?oxidation*glucose_share/fuel:0.;
 	const double oxidation_glycogen=fuel>0.?oxidation*glycogen_share/fuel:0.;
-	rates.lactate_clearance=v*k.lactate_vmax_mol_m3_s*thermal*oxygen_fraction
+	rates.lactate_clearance=v*k.lactate_vmax_mol_m3_s*thermal*k.respiration_capacity_scale*oxygen_fraction
 		*c[OrganLactate]/(k.lactate_km_mol_m3+c[OrganLactate]);
 	const double insulin_effect=c[OrganInsulin]/(c[OrganInsulin]+k.insulin_half_effect_mU_L);
 	const double release=v*k.glycogenolysis_vmax_mol_m3_s*thermal*glycogen

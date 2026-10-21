@@ -682,7 +682,9 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 		"oedema_resolution_s_inv","oedema_maximum","oedema_exponent","vasodilator_elimination_s_inv",
 		"vasodilator_emax","vasodilator_ec50_mg_l","hyperoxic_constriction_per_100mmhg",
 		"hyperoxic_constriction_threshold_mmhg","oxidative_injury_rate_s_inv","oxidative_injury_threshold_mmhg",
-		"shear_injury_rate_inv_pa_s","shear_injury_threshold_pa"},"parameters");
+		"shear_injury_rate_inv_pa_s","shear_injury_threshold_pa","sweep_gas_temperature_k","injury_ph50",
+		"injury_ph_hill","injury_glucose_threshold_mol_m3","injury_glucose_gain_per_mol_m3",
+		"vasodilator_respiration_ic50_mg_l","vasodilator_respiration_imax"},"parameters");
 	iga::OrganPlantParameters p;
 	const std::string c="parameters";
 	p.viscosity_pa_s=Number(object,"viscosity_pa_s",c);
@@ -724,6 +726,13 @@ iga::OrganPlantParameters ParsePlantParameters(const Object& object,const Organ&
 	optional("oxidative_injury_threshold_mmhg",p.oxidative_injury_threshold_mmhg);
 	optional("shear_injury_rate_inv_pa_s",p.shear_injury_rate_inv_pa_s);
 	optional("shear_injury_threshold_pa",p.shear_injury_threshold_pa);
+	optional("sweep_gas_temperature_k",p.sweep_gas_temperature_k);
+	optional("injury_ph50",p.injury_ph50);
+	optional("injury_ph_hill",p.injury_ph_hill);
+	optional("injury_glucose_threshold_mol_m3",p.injury_glucose_threshold_mol_m3);
+	optional("injury_glucose_gain_per_mol_m3",p.injury_glucose_gain_per_mol_m3);
+	optional("vasodilator_respiration_ic50_mg_l",p.vasodilator_respiration_ic50_mg_l);
+	optional("vasodilator_respiration_imax",p.vasodilator_respiration_imax);
 	return p;
 }
 
@@ -732,7 +741,7 @@ iga::OrganPlantControls ParseControls(const Object& object)
 	using namespace iga::config_detail;
 	RequireKnownKeys(object,{"inlet_pressure_pa","fio2","dialysis_in_m3_s","dialysis_out_m3_s",
 		"dialysate","infusion_rates","bolus","bolus_volume_m3","vasodilator_bolus_mg","temperature_c",
-		"gas_co2_fraction"},"controls");
+		"gas_co2_fraction","sweep_gas_flow_m3_s"},"controls");
 	iga::OrganPlantControls controls;
 	const std::string c="controls";
 	controls.inlet_pressure_pa=Number(object,"inlet_pressure_pa",c);
@@ -749,6 +758,9 @@ iga::OrganPlantControls ParseControls(const Object& object)
 	controls.vasodilator_bolus_mg=NumberOr(object,"vasodilator_bolus_mg",0.,c);
 	controls.temperature_c=NumberOr(object,"temperature_c",37.,c);
 	controls.gas_co2_fraction=NumberOr(object,"gas_co2_fraction",controls.gas_co2_fraction,c);
+	controls.sweep_gas_flow_m3_s=NumberOr(object,"sweep_gas_flow_m3_s",controls.sweep_gas_flow_m3_s,c);
+	if(!std::isnan(controls.sweep_gas_flow_m3_s)&&!(controls.sweep_gas_flow_m3_s>0.&&std::isfinite(controls.sweep_gas_flow_m3_s)))
+		throw std::invalid_argument("controls.sweep_gas_flow_m3_s must be positive");
 	if(controls.dialysis_in_m3_s>0.){
 		const auto& names=iga::PerfusedOrganSpeciesNames();
 		for(const auto* name:names)
@@ -916,7 +928,10 @@ std::string Advance(const Organ& organ,const Object& request,const std::filesyst
 			.Entry("hematocrit_percent",r.hematocrit_percent).Entry("vasodilator_mg_l",r.vasodilator_mg_l);
 		WriteReading(json,"arterial",r.arterial);
 		WriteReading(json,"venous",r.venous);
+		json.Key("oxygenator").Open().Entry("exhaust_po2_mmHg",r.exhaust_po2_mmhg)
+			.Entry("exhaust_pco2_mmHg",r.exhaust_pco2_mmhg).Entry("co2_removal_mol_s",r.oxygenator_co2_removal_mol_s).Close();
 		json.Key("tissue").Open().Entry("hypoxic_volume_fraction",r.hypoxic_volume_fraction)
+			.Entry("deficit_volume_fraction",r.deficit_volume_fraction)
 			.Entry("mean_viability",r.mean_viability).Entry("mean_oedema",r.mean_oedema)
 			.Entry("last_zone_po2_p05_mmHg",r.last_zone_po2_p05).Entry("energy_deficit_mean",r.energy_deficit_mean)
 			.Entry("energy_deficit_p95",r.energy_deficit_p95).Entry("o2_uptake_mol_s",r.o2_uptake_mol_s).Close();
