@@ -68,6 +68,18 @@ int main()
 	const auto configuration = iga::ParseSimulationConfiguration(json);
 	assert(configuration.equation_systems[1].stabilization[0].diffusion_weighting == "consistent");
 	assert(configuration.equation_systems[1].stabilization[0].tau == "advective_diffusive");
+	assert(configuration.boundaries[1].conditions[0].dirichlet_dofs == "face_support");
+	for (const std::string selection : {"node_label", "nodes"}) {
+		auto selected = json;
+		const std::string dirichlet = "{\"field\": \"oxygen\", \"type\": \"dirichlet\",";
+		selected.insert(selected.find(dirichlet) + dirichlet.size(), " \"dirichlet_dofs\": \"" + selection + "\",");
+		bool rejected = false;
+		try {
+			const auto parsed = iga::ParseSimulationConfiguration(selected);
+			assert(parsed.boundaries[1].conditions[0].dirichlet_dofs == selection);
+		} catch (const std::runtime_error&) { rejected = true; }
+		assert(rejected == (selection != "node_label"));
+	}
 	for (const std::string tau : {"advective", "diffusive"}) {
 		auto limited = json;
 		const std::string supg = "\"method\": \"supg\",";

@@ -357,6 +357,43 @@ int main()
 	const auto resolved = iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
 	assert(resolved.constrained_dofs == 0);
 	std::cout << "scalar flux and Robin surface assembly passed\n";
+	{
+		// Rim nodes labelled wall (0) whose basis touches the inlet face (1) are constrained by
+		// the inlet Dirichlet value with "face_support" and left free with "node_label"; a node
+		// whose own label sets a Dirichlet value keeps it.
+		iga::SimulationConfiguration rim;
+		rim.fields = {{"c", iga::FieldKind::Scalar, 0.0}};
+		rim.time = {0.02, 1};
+		iga::EquationSystemDefinition definition;
+		definition.name = "rim";
+		definition.kind = iga::EquationKind::LinearTransport;
+		definition.unknowns = {"c"};
+		definition.terms = {{iga::TermKind::TimeDerivative, "c", "c", 1.0, ""}};
+		rim.equation_systems.push_back(definition);
+		iga::FieldBoundaryCondition no_flux, inlet, outlet;
+		no_flux.field = inlet.field = outlet.field = "c";
+		no_flux.kind = iga::FieldBoundaryKind::NoFlux;
+		inlet.value = {2.0};
+		outlet.value = {5.0};
+		rim.boundaries = {{0, "wall", {no_flux}}, {1, "inlet", {inlet}}, {2, "outlet", {outlet}}};
+		std::vector<int> labels(64, 0);
+		labels[0] = 1;
+		labels[63] = 2;
+		std::vector<std::vector<int>> face_labels(64);
+		for (std::size_t node = 0; node < 16; ++node) face_labels[node] = {0, 1};
+		face_labels[63] = {1, 2};
+		const auto rim_system = iga::CompileLinearSystem(rim, "rim");
+		const auto by_face = iga::ResolveScalarBoundaries(rim, rim_system, labels, &face_labels);
+		assert(by_face.constrained_dofs == 17);
+		for (std::size_t node = 0; node < 16; ++node)
+			assert(by_face.constrained[node] == 1 && by_face.value[node] == 2.0);
+		assert(by_face.value[63] == 5.0);
+		assert(iga::ResolveScalarBoundaries(rim, rim_system, labels).constrained_dofs == 2);
+		auto by_label = rim;
+		by_label.boundaries[1].conditions[0].dirichlet_dofs = "node_label";
+		assert(iga::ResolveScalarBoundaries(by_label, rim_system, labels, &face_labels).constrained_dofs == 2);
+	}
+	std::cout << "scalar Dirichlet face support passed\n";
 
 	// BDF2 scales only the implicit mass: left(3/2) - left(1) equals half of
 	// the history mass, and the history mass itself is unchanged.

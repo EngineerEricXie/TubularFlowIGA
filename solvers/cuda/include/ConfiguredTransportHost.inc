@@ -158,6 +158,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		options.visualization_format, true);
 	BezierVtkHdfOutput vtkhdf;
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
+	const auto face_labels = iga::NodeFaceLabels(database);
 	std::vector<std::array<double, 3>> prescribed_velocity;
 	std::vector<iga::VelocitySnapshot> velocity_snapshots;
 	const iga::VelocitySourceDefinition* velocity_source = nullptr;
@@ -170,7 +171,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		velocity_snapshots = iga::ReadVelocityManifest(case_dir/velocity_source->manifest);
 	}
 	const auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration, case_dir, 0.0);
-	const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
+	const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels, &face_labels);
 	const auto initial = iga::InitialScalarValues(configuration, system);
 
 	std::vector<DeviceWeakTerm> host_terms;
@@ -385,7 +386,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		if (velocity_source) assemble_operators(velocity_at((step+1)*system.dt));
 		const auto step_configuration = iga::MaterializeBoundaryWaveforms(
 			configuration, case_dir, (step+1)*system.dt);
-		const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels);
+		const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels, &face_labels);
 		boundary_value.CopyFromHost(step_boundaries.value.data(), step_boundaries.value.size());
 		BlockSpmvKernel<Fields><<<node_blocks,256>>>(pattern.view(), previous.values(), current.data(), rhs.data());
 		CheckKernel("configured transport previous MatMult");

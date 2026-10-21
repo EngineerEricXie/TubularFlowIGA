@@ -156,6 +156,7 @@ struct TransportInput {
 	iga::SimulationConfiguration configuration;
 	iga::CompiledLinearSystem system;
 	std::vector<int> labels;
+	std::vector<std::vector<int>> face_labels;
 	std::vector<std::array<double, 3>> prescribed_velocity;
 	std::vector<iga::VelocitySnapshot> velocity_snapshots;
 	const iga::VelocitySourceDefinition* velocity_source = nullptr;
@@ -431,6 +432,7 @@ int main(int argc, char** argv)
 		auto& configuration = input->configuration;
 		auto& system = input->system;
 		auto& labels = input->labels;
+		auto& face_labels = input->face_labels;
 		auto& prescribed_velocity = input->prescribed_velocity;
 		auto& velocity_snapshots = input->velocity_snapshots;
 		auto& velocity_source = input->velocity_source;
@@ -451,6 +453,7 @@ int main(int argc, char** argv)
 			run_end_step = options.stop_after_step > 0 ? options.stop_after_step : system.steps;
 			visualization_format = iga::ResolveVisualizationFormat(options.visualization_format, true);
 			labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
+			face_labels = iga::NodeFaceLabels(database);
 			if (system.velocity_source == "prescribed")
 				forcing_assets.emplace("transport asset velocity", !options.velocity.empty()
 					? options.velocity : case_dir/"initial_velocityfield.txt");
@@ -473,7 +476,7 @@ int main(int argc, char** argv)
 			if (velocity_source) velocity_snapshots = iga::ReadVelocityManifest(case_dir/velocity_source->manifest);
 			else prescribed_velocity = iga::ReadVelocity(forcing_assets.at("transport asset velocity").string(), database.header().nodes);
 			const auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration, case_dir, 0.0);
-			boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
+			boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels, &face_labels);
 			initial = iga::InitialScalarValues(configuration, system);
 			coupling_patterns = iga::BuildTransportCouplingPatterns(system, configuration);
 		});
@@ -780,7 +783,7 @@ int main(int argc, char** argv)
 			iga::CollectiveLocalStage(PETSC_COMM_WORLD, "transport step input", [&] {
 				const auto step_configuration = iga::MaterializeBoundaryWaveforms(
 					configuration, case_dir, (step+1)*system.dt);
-				step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels);
+				step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels, &face_labels);
 				for (const auto value : step_boundaries.value)
 					if (!std::isfinite(value)) throw std::runtime_error("transport boundary value is not finite");
 			});

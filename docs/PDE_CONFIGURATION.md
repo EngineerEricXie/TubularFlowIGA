@@ -67,8 +67,9 @@ Analytic plug-flow checks, cubic mesh with element Péclet number about 0.5:
 | `consistent` + `advective_diffusive` | 0.34% | 0.13% |
 
 To reproduce results from before these options, set `"diffusion_weighting":
-"supg_test"` and `"tau": "advective"`. The legacy neuron-transport converter
-sets both.
+"supg_test"` and `"tau": "advective"`, and set `"dirichlet_dofs": "node_label"` on
+each scalar Dirichlet condition (see Boundary conditions). The legacy
+neuron-transport converter sets all three.
 
 Navier–Stokes is selected with `kind: "navier_stokes"`. Its two unknowns are a
 `vector3` velocity followed by pressure. `viscosity` is the positive dynamic
@@ -114,6 +115,19 @@ conditions. Supported schema values are `dirichlet`, `no_flux`, `flux`, `robin`,
 Dirichlet conditions and treats `no_flux` and `advective_outflow` as natural
 conditions. CPU and CUDA also assemble matching `flux` and `robin` surface
 terms from packed element-face labels.
+
+**Which scalar DOFs a Dirichlet condition constrains.** Each control point
+carries one label in `controlmesh.vtk`. Points on the rim where an inlet meets
+the wall carry the wall label. With `"dirichlet_dofs": "face_support"` (the
+default), a scalar Dirichlet condition also constrains every node whose basis
+function has a nonzero trace on a face with that condition's label.
+- Without this, 16 of the 41 inlet-face DOFs of a typical tube are left free.
+  The inlet value then holds only away from the rim.
+- A node keeps the Dirichlet value of its own label when that label has one.
+- `"dirichlet_dofs": "node_label"` constrains labelled nodes only, which was the
+  behaviour before this option.
+- Velocity Dirichlet conditions are unchanged, and the wall label still wins
+  for no-slip.
 A velocity Dirichlet condition may provide a three-component `value`, or set
 `"profile": "initial_velocityfield.txt"` plus a numeric `scale`. The latter
 preserves the case-generated vessel inlet profile, as in the HexSim workflow.

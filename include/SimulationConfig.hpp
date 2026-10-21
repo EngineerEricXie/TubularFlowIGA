@@ -81,6 +81,10 @@ struct FieldBoundaryCondition {
 	double reference_pressure = 0.0;
 	double initial_pressure = 0.0;
 	bool pressure_gauge = false;
+	// Scalar Dirichlet DOFs: "face_support" also constrains nodes whose basis has a nonzero
+	// trace on a face with this label (for example inlet-wall rim nodes labelled wall);
+	// "node_label" constrains only nodes carrying this label in controlmesh.vtk.
+	std::string dirichlet_dofs = "face_support";
 };
 
 struct TemporalFunctionDefinition {
@@ -520,7 +524,7 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient",
 				"exterior_value", "profile", "scale", "waveform", "resistance",
 				"proximal_resistance", "distal_resistance", "capacitance",
-				"reference_pressure", "initial_pressure", "pressure_gauge"}, condition_context);
+				"reference_pressure", "initial_pressure", "pressure_gauge", "dirichlet_dofs"}, condition_context);
 			FieldBoundaryCondition condition;
 			condition.field = RequireString(Required(condition_object, "field", condition_context), condition_context + ".field");
 			condition.kind = ParseFieldBoundaryKind(RequireString(Required(condition_object, "type", condition_context), condition_context + ".type"));
@@ -529,6 +533,10 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			if (const auto* value = Find(condition_object, "value")) condition.value = ParseValueVector(*value, condition_context + ".value");
 			if (const auto* coefficient = Find(condition_object, "coefficient")) condition.coefficient = RequireNumber(*coefficient, condition_context + ".coefficient");
 			if (const auto* exterior = Find(condition_object, "exterior_value")) condition.exterior_value = RequireNumber(*exterior, condition_context + ".exterior_value");
+			if (const auto* selection = Find(condition_object, "dirichlet_dofs"))
+				condition.dirichlet_dofs = RequireString(*selection, condition_context + ".dirichlet_dofs");
+			if (condition.dirichlet_dofs != "face_support" && condition.dirichlet_dofs != "node_label")
+				throw std::runtime_error("simulation_config.json: dirichlet_dofs must be 'face_support' or 'node_label'");
 			if (const auto* profile = Find(condition_object, "profile")) condition.profile = RequireString(*profile, condition_context + ".profile");
 			if (const auto* scale = Find(condition_object, "scale")) condition.scale = RequireNumber(*scale, condition_context + ".scale");
 			if (const auto* waveform = Find(condition_object, "waveform"))

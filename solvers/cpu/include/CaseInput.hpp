@@ -153,6 +153,9 @@ inline SimulationConfiguration ConvertLegacyNeuronTransport(const TransportParam
 		{2, "outlet", {{"N0", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""},
 			{"Nplus", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""}}}
 	};
+	// The legacy model constrains labelled inlet nodes only.
+	for (auto& boundary : configuration.boundaries)
+		for (auto& condition : boundary.conditions) condition.dirichlet_dofs = "node_label";
 	return configuration;
 }
 
