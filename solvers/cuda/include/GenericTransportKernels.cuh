@@ -94,7 +94,7 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 					local_left[entry] += mass;
 					local_previous[entry] += mass;
 				} else if (term.kind == static_cast<int>(TermKind::Diffusion)) {
-					const double weak_gradient = supg[term.equation] ? test*gradient_dot : gradient_dot;
+					const double weak_gradient = supg[term.equation] == 2 ? test*gradient_dot : gradient_dot;
 					local_left[entry] += dt*term.coefficient*weak_gradient*measure;
 				} else if (term.kind == static_cast<int>(TermKind::Advection)) {
 					local_left[entry] += dt*term.coefficient*test*adv_b*measure;

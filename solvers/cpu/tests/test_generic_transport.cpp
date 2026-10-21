@@ -89,6 +89,43 @@ int main()
 	RequireEqual(Expand(generic.previous), Expand(explicit_generic.previous),
 		"explicit generic previous");
 	std::cout << "generic neuron transport regression passed\n";
+	{
+		// SUPG weights the time, advection and source terms only: with the default
+		// "galerkin" weighting the diffusion block equals the unstabilized D grad(N_a).grad(N_b).
+		iga::SimulationConfiguration diffusion;
+		diffusion.fields = {{"c", iga::FieldKind::Scalar, 0.0}};
+		diffusion.time = {0.02, 1};
+		iga::EquationSystemDefinition definition;
+		definition.name = "diffusion";
+		definition.kind = iga::EquationKind::LinearTransport;
+		definition.unknowns = {"c"};
+		definition.terms = {{iga::TermKind::Diffusion, "c", "c", 0.3, ""}};
+		diffusion.equation_systems.push_back(definition);
+		auto galerkin = diffusion;
+		galerkin.equation_systems[0].stabilization = {{"c", "supg", "prescribed"}};
+		auto weighted = galerkin;
+		weighted.equation_systems[0].stabilization[0].diffusion_weighting = "supg_test";
+		const auto build = [&](const iga::SimulationConfiguration& value) {
+			return Expand(iga::BuildGenericTransportElement(element, velocity,
+				iga::CompileLinearSystem(value, "diffusion"), value).left);
+		};
+		const auto plain = build(diffusion);
+		const auto supg = build(galerkin);
+		const auto legacy_weighting = build(weighted);
+		RequireEqual(plain, supg, "SUPG Galerkin diffusion");
+		double asymmetry = 0.0;
+		double weighted_difference = 0.0;
+		for (std::size_t a = 0; a < 64; ++a)
+			for (std::size_t b = 0; b < 64; ++b) {
+				asymmetry = std::max(asymmetry,
+					std::abs(PetscRealPart(supg[a*64+b]-supg[b*64+a])));
+				weighted_difference = std::max(weighted_difference,
+					std::abs(PetscRealPart(legacy_weighting[a*64+b]-plain[a*64+b])));
+			}
+		assert(asymmetry < 2e-14);
+		assert(weighted_difference > 1e-6);
+	}
+	std::cout << "SUPG diffusion weighting passed\n";
 	iga::SimulationConfiguration custom;
 	custom.fields = {{"oxygen", iga::FieldKind::Scalar, 0.0},
 		{"drug", iga::FieldKind::Scalar, 0.0}, {"metabolite", iga::FieldKind::Scalar, 0.0}};

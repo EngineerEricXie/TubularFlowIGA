@@ -33,6 +33,18 @@ field. Coefficients are numeric and already include any products of physical
 parameters. SUPG can be enabled per equation. Unsupported operator names and
 unknown field references are rejected before assembly.
 
+A `stabilization` entry is `{"equation": <field>, "method": "supg", "velocity":
+<source>}`. SUPG weights the time-derivative, advection, coupling and
+`volume_source` terms with N_a + tau u.grad(N_a). The diffusion term stays the
+Galerkin form D grad(N_a).grad(N_b) (`"diffusion_weighting": "galerkin"`, the
+default). Before this option existed, the diffusion term was also multiplied by
+the SUPG test function, D (N_a + tau u.grad(N_a)) grad(N_a).grad(N_b). That form
+is not a consistent weak form of the diffusion operator: on an analytic
+plug-flow Robin (Graetz) case it underestimates the wall-uptake decay rate by
+42%. Set `"diffusion_weighting": "supg_test"` only to reproduce results made with
+that older behaviour. The legacy neuron-transport converter keeps it for its
+artificial diffusion, so that model is unchanged.
+
 Navier–Stokes is selected with `kind: "navier_stokes"`. Its two unknowns are a
 `vector3` velocity followed by pressure. `viscosity` is the positive dynamic
 viscosity and is required; `density` is positive and defaults to `1`. The
