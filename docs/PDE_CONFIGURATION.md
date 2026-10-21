@@ -34,16 +34,41 @@ parameters. SUPG can be enabled per equation. Unsupported operator names and
 unknown field references are rejected before assembly.
 
 A `stabilization` entry is `{"equation": <field>, "method": "supg", "velocity":
-<source>}`. SUPG weights the time-derivative, advection, coupling and
-`volume_source` terms with N_a + tau u.grad(N_a). The diffusion term stays the
-Galerkin form D grad(N_a).grad(N_b) (`"diffusion_weighting": "galerkin"`, the
-default). Before this option existed, the diffusion term was also multiplied by
-the SUPG test function, D (N_a + tau u.grad(N_a)) grad(N_a).grad(N_b). That form
-is not a consistent weak form of the diffusion operator: on an analytic
-plug-flow Robin (Graetz) case it underestimates the wall-uptake decay rate by
-42%. Set `"diffusion_weighting": "supg_test"` only to reproduce results made with
-that older behaviour. The legacy neuron-transport converter keeps it for its
-artificial diffusion, so that model is unchanged.
+<source>}` with two optional keys.
+
+`diffusion_weighting` selects how the diffusion term enters a stabilized equation:
+- `"consistent"` (default): the Galerkin term D grad(N_a).grad(N_b), plus the
+  SUPG term of the diffusive residual, -tau (u.grad(N_a)) D lap(N_b), with the
+  physical basis Laplacian. Together with the SUPG-weighted time, advection,
+  coupling and `volume_source` terms, this weights the full strong residual.
+- `"galerkin"`: the Galerkin term only. Dropping the diffusive residual adds
+  streamline diffusion tau |u|^2.
+- `"supg_test"`: the historical form, D (N_a + tau u.grad(N_a))
+  grad(N_a).grad(N_b). It is not a weak form of the diffusion operator.
+
+`tau` selects the stabilization parameter, tau = (1/tau_a^2 + 1/tau_t^2 +
+1/tau_d^2)^(-1/2):
+- tau_a = 1/S is the advective limit, with S = sum_a |u.grad(N_a)|;
+- tau_t = dt/2 is the time-step limit;
+- tau_d = |u|^2/(D S^2) is the diffusive limit, equal to h^2/(4D) with
+  h = 2|u|/S, where D is the sum of the equation's own diffusion coefficients.
+
+`"advective_diffusive"` (default) uses all three limits; `"advective"` omits
+tau_d.
+
+Analytic plug-flow checks, cubic mesh with element Péclet number about 0.5:
+
+| Setting | Mean age, rel. L2 | Robin decay rate error |
+|---|---|---|
+| no SUPG | 0.15% | 0.02% |
+| `supg_test` + `advective` | 2.0% | 42% |
+| `galerkin` + `advective` | 0.13% | 1.8% |
+| `galerkin` + `advective_diffusive` | 0.13% | 1.7% |
+| `consistent` + `advective_diffusive` | 0.34% | 0.13% |
+
+To reproduce results from before these options, set `"diffusion_weighting":
+"supg_test"` and `"tau": "advective"`. The legacy neuron-transport converter
+sets both.
 
 Navier–Stokes is selected with `kind: "navier_stokes"`. Its two unknowns are a
 `vector3` velocity followed by pressure. `viscosity` is the positive dynamic

@@ -66,8 +66,20 @@ int main()
 		]
 	})json";
 	const auto configuration = iga::ParseSimulationConfiguration(json);
-	assert(configuration.equation_systems[1].stabilization[0].diffusion_weighting == "galerkin");
-	for (const std::string weighting : {"supg_test", "streamline"}) {
+	assert(configuration.equation_systems[1].stabilization[0].diffusion_weighting == "consistent");
+	assert(configuration.equation_systems[1].stabilization[0].tau == "advective_diffusive");
+	for (const std::string tau : {"advective", "diffusive"}) {
+		auto limited = json;
+		const std::string supg = "\"method\": \"supg\",";
+		limited.insert(limited.find(supg) + supg.size(), " \"tau\": \"" + tau + "\",");
+		bool rejected = false;
+		try {
+			const auto parsed = iga::ParseSimulationConfiguration(limited);
+			assert(parsed.equation_systems[1].stabilization[0].tau == tau);
+		} catch (const std::runtime_error&) { rejected = true; }
+		assert(rejected == (tau != "advective"));
+	}
+	for (const std::string weighting : {"galerkin", "supg_test", "streamline"}) {
 		auto weighted = json;
 		const std::string supg = "\"method\": \"supg\",";
 		weighted.insert(weighted.find(supg) + supg.size(), " \"diffusion_weighting\": \"" + weighting + "\",");
@@ -76,7 +88,7 @@ int main()
 			const auto parsed = iga::ParseSimulationConfiguration(weighted);
 			assert(parsed.equation_systems[1].stabilization[0].diffusion_weighting == weighting);
 		} catch (const std::runtime_error&) { rejected = true; }
-		assert(rejected == (weighting != "supg_test"));
+		assert(rejected == (weighting == "streamline"));
 	}
 	auto v3_json = json;
 	const auto version_position = v3_json.find("\"schema_version\": 2,");

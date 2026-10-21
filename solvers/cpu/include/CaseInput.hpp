@@ -140,8 +140,9 @@ inline SimulationConfiguration ConvertLegacyNeuronTransport(const TransportParam
 		{TermKind::LinearCoupling, "Nplus", "N0", -p.kplus, ""},
 		{TermKind::LinearCoupling, "Nplus", "Nplus", p.detach_plus, ""}
 	};
-	// The legacy neuron model (TransportElement.hpp) weights its artificial diffusion by the SUPG test function.
-	system.stabilization = {{"Nplus", "supg", "prescribed", "supg_test"}};
+	// The legacy neuron model (TransportElement.hpp) weights its artificial diffusion by the SUPG test
+	// function and uses the advective tau.
+	system.stabilization = {{"Nplus", "supg", "prescribed", "supg_test", "advective"}};
 	configuration.equation_systems.push_back(std::move(system));
 	configuration.time = {p.dt, p.steps};
 	configuration.boundaries = {
