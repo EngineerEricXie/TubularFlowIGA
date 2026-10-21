@@ -89,7 +89,8 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 		if (found == system.field_index.end()) throw std::runtime_error("stabilization references an unknown equation");
 		if (definition.method != "supg" || definition.velocity != system.velocity_source)
 			throw std::runtime_error("CPU linear transport requires SUPG and advection to use the same velocity source");
-		matrices.supg[found->second] = 1;
+		// 1: SUPG with Galerkin diffusion; 2: SUPG with test-weighted (legacy) diffusion.
+		matrices.supg[found->second] = definition.diffusion_weighting == "supg_test" ? 2 : 1;
 	}
 	for (const auto& term : system.terms)
 		if ((term.kind == TermKind::Advection) && term.velocity != system.velocity_source)
@@ -137,7 +138,7 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 									left_block[index] += system.time_derivative_scale * mass;
 									previous_block[index] += mass;
 								} else if (term.kind == TermKind::Diffusion) {
-								const auto weak_gradient = matrices.supg[term.equation]
+								const auto weak_gradient = matrices.supg[term.equation] == 2
 									? test*gradient_dot : gradient_dot;
 									left_block[index] += system.dt * term.coefficient * weak_gradient * measure;
 								} else if (term.kind == TermKind::Advection) {

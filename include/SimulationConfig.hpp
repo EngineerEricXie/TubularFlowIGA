@@ -45,6 +45,9 @@ struct StabilizationDefinition {
 	std::string equation;
 	std::string method;
 	std::string velocity;
+	// "galerkin" keeps the diffusion term D grad(N_a).grad(N_b) unweighted; "supg_test"
+	// reproduces the historical weighting of that term by the SUPG test function.
+	std::string diffusion_weighting = "galerkin";
 };
 
 struct EquationSystemDefinition {
@@ -469,11 +472,15 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			for (std::size_t j = 0; j < array.size(); ++j) {
 				const auto item_context = context + ".stabilization[" + std::to_string(j) + "]";
 				const auto& item = RequireObject(array[j], item_context);
-				RequireKnownKeys(item, {"equation", "method", "velocity"}, item_context);
+				RequireKnownKeys(item, {"equation", "method", "velocity", "diffusion_weighting"}, item_context);
 				StabilizationDefinition definition;
 				definition.equation = RequireString(Required(item, "equation", item_context), item_context + ".equation");
 				definition.method = RequireString(Required(item, "method", item_context), item_context + ".method");
 				definition.velocity = RequireString(Required(item, "velocity", item_context), item_context + ".velocity");
+				if (const auto* weighting = Find(item, "diffusion_weighting"))
+					definition.diffusion_weighting = RequireString(*weighting, item_context + ".diffusion_weighting");
+				if (definition.diffusion_weighting != "galerkin" && definition.diffusion_weighting != "supg_test")
+					throw std::runtime_error("simulation_config.json: stabilization diffusion_weighting must be 'galerkin' or 'supg_test'");
 				if (!local_fields.count(definition.equation) || definition.method != "supg")
 					throw std::runtime_error("simulation_config.json: stabilization requires a system equation and supported method 'supg'");
 				if (definition.velocity != "prescribed"

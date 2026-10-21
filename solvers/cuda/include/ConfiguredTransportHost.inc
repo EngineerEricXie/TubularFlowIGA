@@ -185,7 +185,8 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	for (const auto& stabilization : system.stabilization) {
 		if (stabilization.method != "supg" || stabilization.velocity != system.velocity_source)
 			throw std::runtime_error("CUDA transport requires SUPG and advection to use the same velocity source");
-		host_supg[system.field_index.at(stabilization.equation)] = 1;
+		host_supg[system.field_index.at(stabilization.equation)]
+			= stabilization.diffusion_weighting == "supg_test" ? 2 : 1;
 	}
 
 	input_phase.Stop();
