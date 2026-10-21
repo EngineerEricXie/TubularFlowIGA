@@ -140,8 +140,9 @@ inline SimulationConfiguration ConvertLegacyNeuronTransport(const TransportParam
 		{TermKind::LinearCoupling, "Nplus", "N0", -p.kplus, ""},
 		{TermKind::LinearCoupling, "Nplus", "Nplus", p.detach_plus, ""}
 	};
-	// The legacy neuron model (TransportElement.hpp) weights its artificial diffusion by the SUPG test function.
-	system.stabilization = {{"Nplus", "supg", "prescribed", "supg_test"}};
+	// The legacy neuron model (TransportElement.hpp) weights its artificial diffusion by the SUPG test
+	// function and uses the advective tau.
+	system.stabilization = {{"Nplus", "supg", "prescribed", "supg_test", "advective"}};
 	configuration.equation_systems.push_back(std::move(system));
 	configuration.time = {p.dt, p.steps};
 	configuration.boundaries = {
@@ -152,6 +153,9 @@ inline SimulationConfiguration ConvertLegacyNeuronTransport(const TransportParam
 		{2, "outlet", {{"N0", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""},
 			{"Nplus", FieldBoundaryKind::AdvectiveOutflow, {}, 0.0, 0.0, "", 1.0, ""}}}
 	};
+	// The legacy model constrains labelled inlet nodes only.
+	for (auto& boundary : configuration.boundaries)
+		for (auto& condition : boundary.conditions) condition.dirichlet_dofs = "node_label";
 	return configuration;
 }
 

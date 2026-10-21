@@ -158,6 +158,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		options.visualization_format, true);
 	BezierVtkHdfOutput vtkhdf;
 	const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
+	const auto face_labels = iga::NodeFaceLabels(database);
 	std::vector<std::array<double, 3>> prescribed_velocity;
 	std::vector<iga::VelocitySnapshot> velocity_snapshots;
 	const iga::VelocitySourceDefinition* velocity_source = nullptr;
@@ -170,7 +171,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		velocity_snapshots = iga::ReadVelocityManifest(case_dir/velocity_source->manifest);
 	}
 	const auto initial_configuration = iga::MaterializeBoundaryWaveforms(configuration, case_dir, 0.0);
-	const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels);
+	const auto boundaries = iga::ResolveScalarBoundaries(initial_configuration, system, labels, &face_labels);
 	const auto initial = iga::InitialScalarValues(configuration, system);
 
 	std::vector<DeviceWeakTerm> host_terms;
@@ -186,8 +187,14 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		if (stabilization.method != "supg" || stabilization.velocity != system.velocity_source)
 			throw std::runtime_error("CUDA transport requires SUPG and advection to use the same velocity source");
 		host_supg[system.field_index.at(stabilization.equation)]
-			= stabilization.diffusion_weighting == "supg_test" ? 2 : 1;
+			= stabilization.diffusion_weighting == "supg_test" ? 2
+			: stabilization.diffusion_weighting == "consistent" ? 3 : 1;
 	}
+	// The consistent SUPG diffusion term needs basis Laplacians, hence the geometry Hessian.
+	bool diffusive_residual = false;
+	for (const auto& term : system.terms)
+		diffusive_residual = diffusive_residual
+			|| (term.kind == iga::TermKind::Diffusion && host_supg[term.equation] == 3);
 
 	input_phase.Stop();
 	PhaseScope geometry_phase(ProfilePhase::Geometry);
@@ -251,7 +258,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	DeviceMesh mesh(host);
 	DevicePattern pattern(pattern_host);
 	ReferenceData reference;
-	GeometryData geometry(mesh, reference, false);
+	GeometryData geometry(mesh, reference, diffusive_residual);
 	RequireGeometry(geometry);
 	geometry_phase.Stop();
 	ElementTiles tiles(host);
@@ -259,6 +266,9 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 	terms.CopyFromHost(host_terms.data(), host_terms.size());
 	DeviceBuffer<int> supg(host_supg.size());
 	supg.CopyFromHost(host_supg.data(), host_supg.size());
+	const auto host_tau_diffusivity = iga::SupgTauDiffusivity(system);
+	DeviceBuffer<double> tau_diffusivity(host_tau_diffusivity.size());
+	tau_diffusivity.CopyFromHost(host_tau_diffusivity.data(), host_tau_diffusivity.size());
 	DeviceBuffer<int> boundary_mask(boundaries.constrained.size());
 	boundary_mask.CopyFromHost(boundaries.constrained.data(), boundaries.constrained.size());
 	DeviceBuffer<double> boundary_value(boundaries.value.size());
@@ -319,7 +329,8 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		left.Clear(); previous.Clear(); forcing.Clear();
 		AssembleGenericTransportKernel<Fields><<<tiles.view().count,kPairTile>>>(
 			mesh.view(), reference.view(), geometry.view(), tiles.view(), pattern.view(), velocity.data(),
-			terms.data(), static_cast<int>(host_terms.size()), supg.data(), system.dt,
+			terms.data(), static_cast<int>(host_terms.size()), supg.data(), tau_diffusivity.data(),
+			diffusive_residual ? 1 : 0, system.dt,
 			left.values(), previous.values(), forcing.data());
 		CheckKernel("AssembleGenericTransportKernel");
 		if (surfaces.count) {
@@ -375,7 +386,7 @@ int ConfiguredTransport(iga::Database& database, const fs::path& case_dir,
 		if (velocity_source) assemble_operators(velocity_at((step+1)*system.dt));
 		const auto step_configuration = iga::MaterializeBoundaryWaveforms(
 			configuration, case_dir, (step+1)*system.dt);
-		const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels);
+		const auto step_boundaries = iga::ResolveScalarBoundaries(step_configuration, system, labels, &face_labels);
 		boundary_value.CopyFromHost(step_boundaries.value.data(), step_boundaries.value.size());
 		BlockSpmvKernel<Fields><<<node_blocks,256>>>(pattern.view(), previous.values(), current.data(), rhs.data());
 		CheckKernel("configured transport previous MatMult");

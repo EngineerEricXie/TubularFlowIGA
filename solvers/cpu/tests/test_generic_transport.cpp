@@ -90,8 +90,8 @@ int main()
 		"explicit generic previous");
 	std::cout << "generic neuron transport regression passed\n";
 	{
-		// SUPG weights the time, advection and source terms only: with the default
-		// "galerkin" weighting the diffusion block equals the unstabilized D grad(N_a).grad(N_b).
+		// With "galerkin" weighting SUPG leaves the diffusion block equal to the
+		// unstabilized D grad(N_a).grad(N_b).
 		iga::SimulationConfiguration diffusion;
 		diffusion.fields = {{"c", iga::FieldKind::Scalar, 0.0}};
 		diffusion.time = {0.02, 1};
@@ -102,7 +102,7 @@ int main()
 		definition.terms = {{iga::TermKind::Diffusion, "c", "c", 0.3, ""}};
 		diffusion.equation_systems.push_back(definition);
 		auto galerkin = diffusion;
-		galerkin.equation_systems[0].stabilization = {{"c", "supg", "prescribed"}};
+		galerkin.equation_systems[0].stabilization = {{"c", "supg", "prescribed", "galerkin"}};
 		auto weighted = galerkin;
 		weighted.equation_systems[0].stabilization[0].diffusion_weighting = "supg_test";
 		const auto build = [&](const iga::SimulationConfiguration& value) {
@@ -124,6 +124,50 @@ int main()
 			}
 		assert(asymmetry < 2e-14);
 		assert(weighted_difference > 1e-6);
+
+		// "consistent" (the default) adds the SUPG term of the diffusive residual,
+		// -dt D tau (u.grad N_a) lap(N_b), checked at one quadrature point.
+		auto consistent = diffusion;
+		consistent.equation_systems[0].stabilization = {{"c", "supg", "prescribed"}};
+		assert(consistent.equation_systems[0].stabilization[0].diffusion_weighting == "consistent");
+		const std::array<double, 3> point{{0.27, 0.58, 0.41}};
+		const iga::VolumeQuadratureRule rule(std::vector<iga::VolumeQuadraturePoint>{{point, 0.37}});
+		const auto at_point = [&](const iga::SimulationConfiguration& value) {
+			return Expand(iga::BuildGenericTransportElement(element, velocity,
+				iga::CompileLinearSystem(value, "diffusion"), value, rule,
+				iga::SurfaceQuadratureRule{}).left);
+		};
+		const auto consistent_left = at_point(consistent);
+		const auto galerkin_left = at_point(galerkin);
+		const auto basis = iga::EvaluateBasis(element, point[0], point[1], point[2], true);
+		std::array<double, 3> u{};
+		for (std::size_t a = 0; a < 64; ++a)
+			for (int d = 0; d < 3; ++d) u[d] += basis.value[a]*velocity[a][d];
+		double sum = 0.0;
+		std::array<double, 64> streamline{}, laplacian{};
+		for (std::size_t a = 0; a < 64; ++a) {
+			streamline[a] = u[0]*basis.gradient[a][0] + u[1]*basis.gradient[a][1] + u[2]*basis.gradient[a][2];
+			laplacian[a] = basis.hessian[a][0][0] + basis.hessian[a][1][1] + basis.hessian[a][2][2];
+			sum += std::abs(streamline[a]);
+		}
+		const auto speed_squared = u[0]*u[0] + u[1]*u[1] + u[2]*u[2];
+		const auto tau_diffusion = speed_squared/(0.3*sum*sum);
+		const auto tau = 1.0/std::sqrt(sum*sum + 4.0/(0.02*0.02) + 1.0/(tau_diffusion*tau_diffusion));
+		double largest = 0.0;
+		for (std::size_t a = 0; a < 64; ++a)
+			for (std::size_t b = 0; b < 64; ++b) {
+				const auto expected = -0.02*0.3*tau*streamline[a]*laplacian[b]*0.37*basis.raw_determinant;
+				largest = std::max(largest, std::abs(PetscRealPart(
+					consistent_left[a*64+b]-galerkin_left[a*64+b])-expected));
+			}
+		assert(largest < 1e-12);
+		// On the unit element x^2 has Bernstein coefficients i(i-1)/6 in x, so lap = 2.
+		double quadratic_laplacian = 0.0;
+		for (int k = 0; k < 4; ++k)
+			for (int j = 0; j < 4; ++j)
+				for (int i = 0; i < 4; ++i)
+					quadratic_laplacian += i*(i-1)/6.0*laplacian[(k*4+j)*4+i];
+		assert(std::abs(quadratic_laplacian-2.0) < 1e-12);
 	}
 	std::cout << "SUPG diffusion weighting passed\n";
 	iga::SimulationConfiguration custom;
@@ -256,6 +300,37 @@ int main()
 			*off_center_basis.raw_determinant;
 		assert(std::abs(PetscRealPart(off_center_matrices.source[2*a+1])-expected) < 2e-13);
 	}
+	{
+		// The default tau adds the diffusive limit |u|^2/(D (sum_a |u.grad N_a|)^2), with D the
+		// field's own diffusion coefficient, raised here so that the limit is active.
+		auto diffusive = supg_source_configuration;
+		diffusive.equation_systems[0].stabilization[0].tau = "advective_diffusive";
+		for (auto& term : diffusive.equation_systems[0].terms)
+			if (term.kind == iga::TermKind::Diffusion && term.equation == "Nplus") term.coefficient = 50.0;
+		const auto diffusive_system = iga::CompileLinearSystem(diffusive, "neuron_transport");
+		const auto diffusivity = iga::SupgTauDiffusivity(diffusive_system);
+		assert(diffusivity[0] == 0.0);
+		assert(diffusivity[1] == 50.0);
+		assert(iga::SupgTauDiffusivity(supg_source_system)[1] == 0.0);
+		const auto diffusive_matrices = iga::BuildGenericTransportElement(element, velocity,
+			diffusive_system, diffusive, off_center_rule, iga::SurfaceQuadratureRule{});
+		const auto speed_squared = off_center_velocity[0]*off_center_velocity[0]
+			+off_center_velocity[1]*off_center_velocity[1]+off_center_velocity[2]*off_center_velocity[2];
+		const auto tau_diffusion = speed_squared/(diffusivity[1]*inverse_length*inverse_length);
+		const auto diffusive_tau = 1.0/std::sqrt(1.0/(tau_space*tau_space)
+			+1.0/(tau_time*tau_time)+1.0/(tau_diffusion*tau_diffusion));
+		assert(diffusive_tau < 0.99*tau);
+		for (std::size_t a = 0; a < 64; ++a) {
+			const auto streamline = off_center_velocity[0]*off_center_basis.gradient[a][0]
+				+off_center_velocity[1]*off_center_basis.gradient[a][1]
+				+off_center_velocity[2]*off_center_basis.gradient[a][2];
+			const auto expected = supg_source_system.dt*0.7
+				*(off_center_basis.value[a] + diffusive_tau*streamline)*0.41
+				*off_center_basis.raw_determinant;
+			assert(std::abs(PetscRealPart(diffusive_matrices.source[2*a+1])-expected) < 2e-13);
+		}
+	}
+	std::cout << "SUPG diffusive tau passed\n";
 	const auto surface_basis = iga::EvaluateBasis(element, off_center[0], off_center[1],
 		off_center[2]);
 	iga::SurfaceQuadraturePoint interior_surface_point;
@@ -282,6 +357,43 @@ int main()
 	const auto resolved = iga::ResolveScalarBoundaries(custom, custom_system, std::vector<int>(64, 0));
 	assert(resolved.constrained_dofs == 0);
 	std::cout << "scalar flux and Robin surface assembly passed\n";
+	{
+		// Rim nodes labelled wall (0) whose basis touches the inlet face (1) are constrained by
+		// the inlet Dirichlet value with "face_support" and left free with "node_label"; a node
+		// whose own label sets a Dirichlet value keeps it.
+		iga::SimulationConfiguration rim;
+		rim.fields = {{"c", iga::FieldKind::Scalar, 0.0}};
+		rim.time = {0.02, 1};
+		iga::EquationSystemDefinition definition;
+		definition.name = "rim";
+		definition.kind = iga::EquationKind::LinearTransport;
+		definition.unknowns = {"c"};
+		definition.terms = {{iga::TermKind::TimeDerivative, "c", "c", 1.0, ""}};
+		rim.equation_systems.push_back(definition);
+		iga::FieldBoundaryCondition no_flux, inlet, outlet;
+		no_flux.field = inlet.field = outlet.field = "c";
+		no_flux.kind = iga::FieldBoundaryKind::NoFlux;
+		inlet.value = {2.0};
+		outlet.value = {5.0};
+		rim.boundaries = {{0, "wall", {no_flux}}, {1, "inlet", {inlet}}, {2, "outlet", {outlet}}};
+		std::vector<int> labels(64, 0);
+		labels[0] = 1;
+		labels[63] = 2;
+		std::vector<std::vector<int>> face_labels(64);
+		for (std::size_t node = 0; node < 16; ++node) face_labels[node] = {0, 1};
+		face_labels[63] = {1, 2};
+		const auto rim_system = iga::CompileLinearSystem(rim, "rim");
+		const auto by_face = iga::ResolveScalarBoundaries(rim, rim_system, labels, &face_labels);
+		assert(by_face.constrained_dofs == 17);
+		for (std::size_t node = 0; node < 16; ++node)
+			assert(by_face.constrained[node] == 1 && by_face.value[node] == 2.0);
+		assert(by_face.value[63] == 5.0);
+		assert(iga::ResolveScalarBoundaries(rim, rim_system, labels).constrained_dofs == 2);
+		auto by_label = rim;
+		by_label.boundaries[1].conditions[0].dirichlet_dofs = "node_label";
+		assert(iga::ResolveScalarBoundaries(by_label, rim_system, labels, &face_labels).constrained_dofs == 2);
+	}
+	std::cout << "scalar Dirichlet face support passed\n";
 
 	// BDF2 scales only the implicit mass: left(3/2) - left(1) equals half of
 	// the history mass, and the history mass itself is unchanged.

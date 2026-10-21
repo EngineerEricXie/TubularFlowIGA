@@ -100,6 +100,7 @@ public:
 				checkpoint_identity_sha256_ = checkpoint_identity_sha256;
 				if (!checkpoint_identity_sha256_.empty()) ValidateCheckpointConfigurationIdentity(checkpoint_identity_sha256_);
 				labels_ = labels;
+				face_labels_ = NodeFaceLabels(database);
 				if (system_.velocity_source != "prescribed")
 					throw std::runtime_error("in-process VCA transport requires velocity_source prescribed");
 				if (labels_.size() != database.header().nodes)
@@ -107,7 +108,7 @@ public:
 				coupling_patterns_ = BuildTransportCouplingPatterns(system_, configuration_);
 				element_matrices_ = GenericTransportMatrices(coupling_patterns_);
 				BindVolumeRules(volume_rules);
-				boundaries = ResolveScalarBoundaries(configuration_, system_, labels_);
+				boundaries = ResolveScalarBoundaries(configuration_, system_, labels_, &face_labels_);
 				initial = InitialScalarValues(configuration_, system_);
 			});
 			left_ = assembler_.CreateMatrix(coupling_patterns_.left);
@@ -222,7 +223,7 @@ public:
 		ResolvedScalarBoundaries boundaries;
 		std::vector<PetscInt> boundary_rows;
 		CollectiveLocalStage(communicator_, "transport trial boundaries", [&] {
-			boundaries = ResolveScalarBoundaries(step_configuration, system_, labels_);
+			boundaries = ResolveScalarBoundaries(step_configuration, system_, labels_, &face_labels_);
 			for (std::uint64_t node = assembler_.node_begin(); node < assembler_.node_end(); ++node)
 				for (std::size_t field = 0; field < system_.fields.size(); ++field)
 					if (boundaries.constrained[static_cast<std::size_t>(node)*system_.fields.size()+field])
@@ -651,6 +652,7 @@ private:
 	GenericTransportMatrices element_matrices_;
 	std::map<std::uint64_t, VolumeQuadratureRule> volume_rules_;
 	std::vector<int> labels_;
+	std::vector<std::vector<int>> face_labels_;
 	std::vector<std::int32_t> ghost_nodes_;
 	std::unordered_map<std::int32_t, std::size_t> ghost_position_;
 	Mat left_ = nullptr, previous_ = nullptr;

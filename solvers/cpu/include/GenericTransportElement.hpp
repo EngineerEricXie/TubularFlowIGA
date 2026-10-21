@@ -55,14 +55,18 @@ struct GenericTransportMatrices {
 		std::fill(source.begin(), source.end(), PetscScalar{0.0});
 		supg.resize(fields);
 		std::fill(supg.begin(), supg.end(), 0);
+		tau.resize(fields);
 		streamline.resize(nodes);
+		laplacian.resize(nodes);
 	}
 
 	FieldBlockElementMatrix left;
 	FieldBlockElementMatrix previous;
 	std::vector<PetscScalar> source;
 	std::vector<int> supg;
+	std::vector<double> tau;
 	std::vector<double> streamline;
+	std::vector<double> laplacian;
 };
 
 template <class VelocityAt>
@@ -89,17 +93,29 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 		if (found == system.field_index.end()) throw std::runtime_error("stabilization references an unknown equation");
 		if (definition.method != "supg" || definition.velocity != system.velocity_source)
 			throw std::runtime_error("CPU linear transport requires SUPG and advection to use the same velocity source");
-		// 1: SUPG with Galerkin diffusion; 2: SUPG with test-weighted (legacy) diffusion.
-		matrices.supg[found->second] = definition.diffusion_weighting == "supg_test" ? 2 : 1;
+		// 1: SUPG with Galerkin diffusion; 2: SUPG with test-weighted (legacy) diffusion;
+		// 3: SUPG with Galerkin diffusion plus the diffusive residual term.
+		matrices.supg[found->second] = definition.diffusion_weighting == "supg_test" ? 2
+			: definition.diffusion_weighting == "consistent" ? 3 : 1;
 	}
 	for (const auto& term : system.terms)
 		if ((term.kind == TermKind::Advection) && term.velocity != system.velocity_source)
 			throw std::runtime_error("CPU linear transport received inconsistent velocity sources");
 
+	const auto tau_diffusivity = SupgTauDiffusivity(system);
+	bool diffusive_residual = false;
+	for (const auto& term : system.terms)
+		diffusive_residual = diffusive_residual
+			|| (term.kind == TermKind::Diffusion && matrices.supg[term.equation] == 3);
+
 	for (const auto& point : volume_quadrature.Points()) {
 				auto basis = EvaluateBasis(element, point.parametric[0], point.parametric[1],
-					point.parametric[2]);
+					point.parametric[2], diffusive_residual);
 				const auto measure = point.weight*basis.raw_determinant;
+				if (diffusive_residual)
+					for (std::size_t a = 0; a < nen; ++a)
+						matrices.laplacian[a] = basis.hessian[a][0][0] + basis.hessian[a][1][1]
+							+ basis.hessian[a][2][2];
 				std::array<double, 3> velocity{};
 				for (std::size_t a = 0; a < nen; ++a)
 					for (int d = 0; d < 3; ++d)
@@ -110,8 +126,23 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 						+ velocity[1]*basis.gradient[a][1] + velocity[2]*basis.gradient[a][2]);
 				const auto tau_space = inverse_length > 0.0 ? 1.0 / inverse_length : 0.0;
 				const auto tau_time = system.dt / 2.0;
-				const auto tau = tau_space > 0.0
-					? 1.0 / std::sqrt(1.0/(tau_space*tau_space) + 1.0/(tau_time*tau_time)) : 0.0;
+				const auto speed_squared = velocity[0]*velocity[0] + velocity[1]*velocity[1]
+					+ velocity[2]*velocity[2];
+				for (std::size_t field = 0; field < fields; ++field) {
+					if (!(tau_space > 0.0)) {
+						matrices.tau[field] = 0.0;
+						continue;
+					}
+					auto inverse_square = 1.0/(tau_space*tau_space) + 1.0/(tau_time*tau_time);
+					// Diffusive limit |u|^2/(D (sum_a |u.grad N_a|)^2), i.e. h^2/(4D) with
+					// h = 2|u|/sum_a |u.grad N_a|.
+					if (tau_diffusivity[field] > 0.0) {
+						const auto tau_diffusion = speed_squared
+							/ (tau_diffusivity[field]*inverse_length*inverse_length);
+						inverse_square += 1.0/(tau_diffusion*tau_diffusion);
+					}
+					matrices.tau[field] = 1.0 / std::sqrt(inverse_square);
+				}
 				for (std::size_t a = 0; a < nen; ++a)
 					matrices.streamline[a] = velocity[0]*basis.gradient[a][0]
 						+ velocity[1]*basis.gradient[a][1] + velocity[2]*basis.gradient[a][2];
@@ -119,7 +150,7 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 				for (std::size_t a = 0; a < nen; ++a) {
 					for (const auto& term : system.terms) {
 						const double test = basis.value[a]
-							+ (matrices.supg[term.equation] ? tau*matrices.streamline[a] : 0.0);
+							+ (matrices.supg[term.equation] ? matrices.tau[term.equation]*matrices.streamline[a] : 0.0);
 						if (term.kind == TermKind::VolumeSource) {
 							matrices.source[(a*fields)+term.equation] += system.dt * term.coefficient * test * measure;
 							continue;
@@ -138,8 +169,11 @@ inline void BuildGenericTransportElementWithVelocity(const Element& element,
 									left_block[index] += system.time_derivative_scale * mass;
 									previous_block[index] += mass;
 								} else if (term.kind == TermKind::Diffusion) {
-								const auto weak_gradient = matrices.supg[term.equation] == 2
+								auto weak_gradient = matrices.supg[term.equation] == 2
 									? test*gradient_dot : gradient_dot;
+								if (matrices.supg[term.equation] == 3)
+									weak_gradient -= matrices.tau[term.equation]*matrices.streamline[a]
+										*matrices.laplacian[b];
 									left_block[index] += system.dt * term.coefficient * weak_gradient * measure;
 								} else if (term.kind == TermKind::Advection) {
 									left_block[index] += system.dt * term.coefficient * test

@@ -89,7 +89,8 @@ int main(int argc, char** argv)
 		if (system.fields.empty() || nodes > std::numeric_limits<std::size_t>::max()/system.fields.size())
 			throw std::overflow_error("budget field dimensions overflow");
 		const auto labels = iga::ReadPointLabels((directory/"controlmesh.vtk").string(), nodes);
-		const auto boundaries = iga::ResolveScalarBoundaries(configuration, system, labels);
+		const auto face_labels = iga::NodeFaceLabels(database);
+		const auto boundaries = iga::ResolveScalarBoundaries(configuration, system, labels, &face_labels);
 		const auto previous = ReadField(argv[4], nodes, system.fields.size());
 		const auto current = ReadField(argv[5], nodes, system.fields.size());
 		const auto velocity = iga::ReadVelocity((directory/"initial_velocityfield.txt").string(), nodes);

@@ -2,10 +2,13 @@
 #define GENERIC_CASE_INPUT_HPP
 
 #include "CaseInput.hpp"
+#include "IgaDatabase.hpp"
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <set>
+#include <utility>
 #include <stdexcept>
 #include <vector>
 
@@ -32,10 +35,39 @@ inline std::string FirstLinearTransportSystem(const SimulationConfiguration& con
 	throw std::runtime_error("simulation configuration has no linear_transport equation system");
 }
 
+// Boundary labels of the element faces on which each node's basis function has a nonzero
+// trace. Bernstein index p = i + 4j + 16k; faces as in Quadrature.hpp.
+inline std::vector<std::vector<int>> NodeFaceLabels(Database& database)
+{
+	constexpr int fixed_axis[6] = {2, 1, 0, 1, 0, 2};
+	constexpr int fixed_index[6] = {0, 0, 3, 3, 0, 3};
+	std::vector<std::vector<int>> result(database.header().nodes);
+	for (std::uint64_t index = 0; index < database.header().elements; ++index) {
+		const auto element = database.Load(index);
+		for (int face = 0; face < 6; ++face) {
+			const int label = element.boundary_labels[face];
+			if (label < 0) continue;
+			for (std::size_t a = 0; a < element.connectivity.size(); ++a)
+				for (int p = 0; p < 64; ++p) {
+					const int ijk[3] = {p%4, (p/4)%4, p/16};
+					if (ijk[fixed_axis[face]] != fixed_index[face] || element.extraction[a][p] == 0.0) continue;
+					auto& labels = result.at(static_cast<std::size_t>(element.connectivity[a]));
+					if (std::find(labels.begin(), labels.end(), label) == labels.end()) labels.push_back(label);
+					break;
+				}
+		}
+	}
+	return result;
+}
+
+// Scalar Dirichlet DOFs come from the nodal labels. With face_labels, a "face_support"
+// condition also constrains nodes whose basis touches a face of its label, unless the node's
+// own label already sets a Dirichlet value for that field.
 inline ResolvedScalarBoundaries ResolveScalarBoundaries(
 	const SimulationConfiguration& configuration,
 	const CompiledLinearSystem& system,
-	const std::vector<int>& labels)
+	const std::vector<int>& labels,
+	const std::vector<std::vector<int>>* face_labels = nullptr)
 {
 	for (const auto& field_name : system.fields) {
 		const auto found = std::find_if(configuration.fields.begin(), configuration.fields.end(),
@@ -78,6 +110,31 @@ inline ResolvedScalarBoundaries ResolveScalarBoundaries(
 		if (!configured_labels.count(label))
 			throw std::runtime_error("mesh boundary label " + std::to_string(label)
 				+ " has no simulation_config.json boundary definition");
+	if (face_labels) {
+		if (face_labels->size() != labels.size())
+			throw std::runtime_error("face labels do not match the control mesh nodes");
+		std::set<std::pair<int, std::size_t>> labelled_dirichlet;
+		for (const auto& boundary : configuration.boundaries)
+			for (const auto& condition : boundary.conditions) {
+				const auto field = system.field_index.find(condition.field);
+				if (field != system.field_index.end() && condition.kind == FieldBoundaryKind::Dirichlet)
+					labelled_dirichlet.insert({boundary.label, field->second});
+			}
+		for (const auto& boundary : configuration.boundaries)
+			for (const auto& condition : boundary.conditions) {
+				const auto field = system.field_index.find(condition.field);
+				if (field == system.field_index.end() || condition.kind != FieldBoundaryKind::Dirichlet
+					|| condition.dirichlet_dofs != "face_support") continue;
+				for (std::size_t node = 0; node < labels.size(); ++node) {
+					const auto dof = node*fields + field->second;
+					const auto& touched = (*face_labels)[node];
+					if (result.constrained[dof] || labelled_dirichlet.count({labels[node], field->second})
+						|| std::find(touched.begin(), touched.end(), boundary.label) == touched.end()) continue;
+					result.constrained[dof] = 1;
+					result.value[dof] = condition.value[0];
+				}
+			}
+	}
 	result.constrained_dofs = static_cast<std::size_t>(std::count(
 		result.constrained.begin(), result.constrained.end(), 1));
 	return result;

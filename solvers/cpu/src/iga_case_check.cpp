@@ -19,6 +19,7 @@ int main(int argc, char** argv)
 		iga::Database database(argv[1]);
 		const fs::path case_dir(argv[2]);
 		const auto labels = iga::ReadPointLabels((case_dir/"controlmesh.vtk").string(), database.header().nodes);
+		const auto face_labels = iga::NodeFaceLabels(database);
 		const auto velocity = iga::ReadVelocity((case_dir/"initial_velocityfield.txt").string(), database.header().nodes);
 		std::map<int, std::size_t> label_counts;
 		for (int label : labels) ++label_counts[label];
@@ -35,7 +36,7 @@ int main(int argc, char** argv)
 					const auto at_first_step = iga::MaterializeBoundaryWaveforms(
 						configuration, case_dir.string(), configuration.time.dt);
 					const auto boundaries = iga::ResolveScalarBoundaries(
-						at_first_step, compiled, labels);
+						at_first_step, compiled, labels, &face_labels);
 					std::cout << "system=" << system.name << " kind=linear_transport fields="
 						<< compiled.fields.size() << " constrained_dofs="
 						<< boundaries.constrained_dofs << '\n';

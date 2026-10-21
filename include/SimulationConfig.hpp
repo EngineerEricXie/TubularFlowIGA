@@ -45,9 +45,13 @@ struct StabilizationDefinition {
 	std::string equation;
 	std::string method;
 	std::string velocity;
-	// "galerkin" keeps the diffusion term D grad(N_a).grad(N_b) unweighted; "supg_test"
-	// reproduces the historical weighting of that term by the SUPG test function.
-	std::string diffusion_weighting = "galerkin";
+	// "consistent" assembles D grad(N_a).grad(N_b) plus the SUPG term of the diffusive
+	// residual, -tau (u.grad N_a) D lap(N_b); "galerkin" omits that residual term;
+	// "supg_test" reproduces the historical weighting by the SUPG test function.
+	std::string diffusion_weighting = "consistent";
+	// "advective_diffusive" adds the diffusive limit to tau; "advective" keeps the
+	// historical advective and time-step limits only.
+	std::string tau = "advective_diffusive";
 };
 
 struct EquationSystemDefinition {
@@ -77,6 +81,10 @@ struct FieldBoundaryCondition {
 	double reference_pressure = 0.0;
 	double initial_pressure = 0.0;
 	bool pressure_gauge = false;
+	// Scalar Dirichlet DOFs: "face_support" also constrains nodes whose basis has a nonzero
+	// trace on a face with this label (for example inlet-wall rim nodes labelled wall);
+	// "node_label" constrains only nodes carrying this label in controlmesh.vtk.
+	std::string dirichlet_dofs = "face_support";
 };
 
 struct TemporalFunctionDefinition {
@@ -472,15 +480,20 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			for (std::size_t j = 0; j < array.size(); ++j) {
 				const auto item_context = context + ".stabilization[" + std::to_string(j) + "]";
 				const auto& item = RequireObject(array[j], item_context);
-				RequireKnownKeys(item, {"equation", "method", "velocity", "diffusion_weighting"}, item_context);
+				RequireKnownKeys(item, {"equation", "method", "velocity", "diffusion_weighting", "tau"}, item_context);
 				StabilizationDefinition definition;
 				definition.equation = RequireString(Required(item, "equation", item_context), item_context + ".equation");
 				definition.method = RequireString(Required(item, "method", item_context), item_context + ".method");
 				definition.velocity = RequireString(Required(item, "velocity", item_context), item_context + ".velocity");
 				if (const auto* weighting = Find(item, "diffusion_weighting"))
 					definition.diffusion_weighting = RequireString(*weighting, item_context + ".diffusion_weighting");
-				if (definition.diffusion_weighting != "galerkin" && definition.diffusion_weighting != "supg_test")
-					throw std::runtime_error("simulation_config.json: stabilization diffusion_weighting must be 'galerkin' or 'supg_test'");
+				if (definition.diffusion_weighting != "consistent" && definition.diffusion_weighting != "galerkin"
+					&& definition.diffusion_weighting != "supg_test")
+					throw std::runtime_error("simulation_config.json: stabilization diffusion_weighting must be 'consistent', 'galerkin' or 'supg_test'");
+				if (const auto* tau = Find(item, "tau"))
+					definition.tau = RequireString(*tau, item_context + ".tau");
+				if (definition.tau != "advective_diffusive" && definition.tau != "advective")
+					throw std::runtime_error("simulation_config.json: stabilization tau must be 'advective_diffusive' or 'advective'");
 				if (!local_fields.count(definition.equation) || definition.method != "supg")
 					throw std::runtime_error("simulation_config.json: stabilization requires a system equation and supported method 'supg'");
 				if (definition.velocity != "prescribed"
@@ -511,7 +524,7 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			RequireKnownKeys(condition_object, {"field", "type", "value", "coefficient",
 				"exterior_value", "profile", "scale", "waveform", "resistance",
 				"proximal_resistance", "distal_resistance", "capacitance",
-				"reference_pressure", "initial_pressure", "pressure_gauge"}, condition_context);
+				"reference_pressure", "initial_pressure", "pressure_gauge", "dirichlet_dofs"}, condition_context);
 			FieldBoundaryCondition condition;
 			condition.field = RequireString(Required(condition_object, "field", condition_context), condition_context + ".field");
 			condition.kind = ParseFieldBoundaryKind(RequireString(Required(condition_object, "type", condition_context), condition_context + ".type"));
@@ -520,6 +533,10 @@ inline SimulationConfiguration ParseSimulationConfiguration(const std::string& t
 			if (const auto* value = Find(condition_object, "value")) condition.value = ParseValueVector(*value, condition_context + ".value");
 			if (const auto* coefficient = Find(condition_object, "coefficient")) condition.coefficient = RequireNumber(*coefficient, condition_context + ".coefficient");
 			if (const auto* exterior = Find(condition_object, "exterior_value")) condition.exterior_value = RequireNumber(*exterior, condition_context + ".exterior_value");
+			if (const auto* selection = Find(condition_object, "dirichlet_dofs"))
+				condition.dirichlet_dofs = RequireString(*selection, condition_context + ".dirichlet_dofs");
+			if (condition.dirichlet_dofs != "face_support" && condition.dirichlet_dofs != "node_label")
+				throw std::runtime_error("simulation_config.json: dirichlet_dofs must be 'face_support' or 'node_label'");
 			if (const auto* profile = Find(condition_object, "profile")) condition.profile = RequireString(*profile, condition_context + ".profile");
 			if (const auto* scale = Find(condition_object, "scale")) condition.scale = RequireNumber(*scale, condition_context + ".scale");
 			if (const auto* waveform = Find(condition_object, "waveform"))
@@ -706,6 +723,21 @@ inline SimulationConfiguration ReadSimulationConfiguration(const std::string& pa
 	const auto contents = iga::ReadCheckedText(input);
 	if (!input.good() && !input.eof()) throw std::runtime_error("cannot read simulation configuration: " + path);
 	return ParseSimulationConfiguration(contents);
+}
+
+// Per-field diffusivity entering the SUPG tau: the sum of the field's own diffusion
+// coefficients when its stabilization uses the "advective_diffusive" tau, else zero.
+inline std::vector<double> SupgTauDiffusivity(const CompiledLinearSystem& system)
+{
+	std::vector<double> result(system.fields.size(), 0.0);
+	for (const auto& definition : system.stabilization) {
+		if (definition.tau != "advective_diffusive") continue;
+		const auto field = system.field_index.at(definition.equation);
+		for (const auto& term : system.terms)
+			if (term.kind == TermKind::Diffusion && term.equation == field && term.trial == field)
+				result[field] += term.coefficient;
+	}
+	return result;
 }
 
 inline CompiledLinearSystem CompileLinearSystem(const SimulationConfiguration& configuration,

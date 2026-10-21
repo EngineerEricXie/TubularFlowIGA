@@ -26,7 +26,8 @@ template <int Fields>
 __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceView reference,
 	GeometryView geometry, ElementTilesView tiles, DevicePatternView pattern,
 	const double* velocity, const DeviceWeakTerm* terms, int term_count,
-	const int* supg, double dt, double* left, double* previous, double* source)
+	const int* supg, const double* tau_diffusivity, int with_hessian, double dt, double* left,
+	double* previous, double* source)
 {
 	const int tile = blockIdx.x;
 	if (tile >= tiles.count) return;
@@ -45,17 +46,20 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 	}
 	__shared__ double basis[kMaximumBasis];
 	__shared__ double gradient[kMaximumBasis*3];
+	__shared__ double laplacian[kMaximumBasis];
 	__shared__ double velocity_q[3];
-	__shared__ double tau;
+	__shared__ double tau[Fields];
 	double local_left[Fields*Fields]{};
 	double local_previous[Fields*Fields]{};
 	double local_source[Fields]{};
 	for (int q = 0; q < kQuadraturePoints; ++q) {
 		if (threadIdx.x < nen) {
-			double local_gradient[3];
+			double local_gradient[3], local_hessian[9];
 			EvaluateBasisDevice(mesh, reference, geometry, element, q, threadIdx.x,
-				basis[threadIdx.x], local_gradient, nullptr);
+				basis[threadIdx.x], local_gradient, with_hessian ? local_hessian : nullptr);
 			for (int d = 0; d < 3; ++d) gradient[threadIdx.x*3+d] = local_gradient[d];
+			laplacian[threadIdx.x] = with_hessian
+				? local_hessian[0]+local_hessian[4]+local_hessian[8] : 0.0;
 		}
 		__syncthreads();
 		if (threadIdx.x == 0) {
@@ -70,8 +74,21 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 					+velocity_q[1]*gradient[local*3+1]+velocity_q[2]*gradient[local*3+2]);
 			const double tau_space = inverse_length > 0.0 ? 1.0/inverse_length : 0.0;
 			const double tau_time = dt/2.0;
-			tau = tau_space > 0.0 ? 1.0/sqrt(1.0/(tau_space*tau_space)
-				+1.0/(tau_time*tau_time)) : 0.0;
+			const double speed_squared = velocity_q[0]*velocity_q[0]+velocity_q[1]*velocity_q[1]
+				+velocity_q[2]*velocity_q[2];
+			for (int field = 0; field < Fields; ++field) {
+				if (!(tau_space > 0.0)) {
+					tau[field] = 0.0;
+					continue;
+				}
+				double inverse_square = 1.0/(tau_space*tau_space)+1.0/(tau_time*tau_time);
+				if (tau_diffusivity[field] > 0.0) {
+					const double tau_diffusion = speed_squared
+						/(tau_diffusivity[field]*inverse_length*inverse_length);
+					inverse_square += 1.0/(tau_diffusion*tau_diffusion);
+				}
+				tau[field] = 1.0/sqrt(inverse_square);
+			}
 		}
 		__syncthreads();
 		if (active) {
@@ -83,7 +100,7 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 			const double measure = reference.weight[q]*geometry.determinant[element*kQuadraturePoints+q];
 			for (int t = 0; t < term_count; ++t) {
 				const DeviceWeakTerm term = terms[t];
-				const double test = basis[a]+(supg[term.equation] ? tau*adv_a : 0.0);
+				const double test = basis[a]+(supg[term.equation] ? tau[term.equation]*adv_a : 0.0);
 				if (term.kind == static_cast<int>(TermKind::VolumeSource)) {
 					if (b == 0) local_source[term.equation] += dt*term.coefficient*test*measure;
 					continue;
@@ -94,7 +111,9 @@ __global__ void AssembleGenericTransportKernel(DeviceMeshView mesh, ReferenceVie
 					local_left[entry] += mass;
 					local_previous[entry] += mass;
 				} else if (term.kind == static_cast<int>(TermKind::Diffusion)) {
-					const double weak_gradient = supg[term.equation] == 2 ? test*gradient_dot : gradient_dot;
+					double weak_gradient = supg[term.equation] == 2 ? test*gradient_dot : gradient_dot;
+					if (supg[term.equation] == 3)
+						weak_gradient -= tau[term.equation]*adv_a*laplacian[b];
 					local_left[entry] += dt*term.coefficient*weak_gradient*measure;
 				} else if (term.kind == static_cast<int>(TermKind::Advection)) {
 					local_left[entry] += dt*term.coefficient*test*adv_b*measure;
