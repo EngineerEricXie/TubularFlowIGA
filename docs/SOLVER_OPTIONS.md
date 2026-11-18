@@ -65,7 +65,7 @@ mutate the source database, so `-options_left` can still identify options
 consumed by child solvers.
 
 PETSc 3.15 child KSP objects may retain a prefix while querying the current
-default options database. CoupledFlow therefore installs the private snapshot
+default options database. TubularFlowIGA therefore installs the private snapshot
 during `SetFromOptions`, `SetUp`, and `Solve`, then restores the caller's
 database and error handler before coordinating the result. Fieldsplits are
 created after assigning the prefix. PETSc calls remain single-threaded within

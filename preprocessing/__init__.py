@@ -1,1 +1,1 @@
-"""CoupledFlow preprocessing modules."""
+"""TubularFlowIGA preprocessing modules."""

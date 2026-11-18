@@ -1,4 +1,4 @@
-# CoupledFlow CPU Backend
+# TubularFlowIGA CPU Backend
 
 A project-owned C++17 isogeometric-analysis pipeline for stabilized steady and
 backward-Euler Navier-Stokes flow plus configurable transient multi-field transport. PETSc provides distributed
