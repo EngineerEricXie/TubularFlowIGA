@@ -4,9 +4,9 @@
        width="100%">
 </p>
 
-# CoupledFlow
+# TubularFlowIGA
 
-CoupledFlow is a C++ framework for coupled flow and transport across 0D, 1D,
+TubularFlowIGA is a C++ framework for coupled flow and transport across 0D, 1D,
 and 3D domains.
 
 The framework combines lumped circuits, vascular network models,
@@ -60,7 +60,7 @@ git clone https://github.com/EngineerEricXie/TubularFlowIGA.git
 cd TubularFlowIGA
 
 ./scripts/check_dependencies.sh preprocessing
-VASCULAR_WORK="$(mktemp -d /tmp/coupledflow-vascular.XXXXXX)"
+VASCULAR_WORK="$(mktemp -d /tmp/tubularflowiga-vascular.XXXXXX)"
 RANKS=2 ./scripts/prepare_example.sh \
   vascular_flow/straight_tube "$VASCULAR_WORK"
 ```
@@ -270,4 +270,4 @@ the run.
 
 ## License
 
-CoupledFlow is distributed under the [BSD 3-Clause License](LICENSE).
+TubularFlowIGA is distributed under the [BSD 3-Clause License](LICENSE).
