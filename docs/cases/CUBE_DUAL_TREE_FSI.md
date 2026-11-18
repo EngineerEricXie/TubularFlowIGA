@@ -15,7 +15,7 @@ operations create five disjoint, conforming tetrahedral regions:
 4. venous wall; and
 5. the surrounding Darcy region.
 
-Gmsh supplies geometry and meshing only. CoupledFlow implements the FEM weak
+Gmsh supplies geometry and meshing only. TubularFlowIGA implements the FEM weak
 forms, elements, assembly, transfer, and acceptance checks; PETSc supplies
 sparse algebra and MPI.
 

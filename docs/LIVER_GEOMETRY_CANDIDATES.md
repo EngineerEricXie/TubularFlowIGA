@@ -1,7 +1,7 @@
 # Liver geometry source and feasibility audit
 
 This document records the provenance and geometry checks used to evaluate
-public liver CT/SEG data for CoupledFlow. It separates three distinct results:
+public liver CT/SEG data for TubularFlowIGA. It separates three distinct results:
 
 1. verified source data and licensing;
 2. single-region surface/volume meshing experiments; and

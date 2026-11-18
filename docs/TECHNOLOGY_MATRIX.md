@@ -1,4 +1,4 @@
-# CoupledFlow technology matrix
+# TubularFlowIGA technology matrix
 
 Updated 2026-10-17.
 
